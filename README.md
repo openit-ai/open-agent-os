@@ -1,6 +1,6 @@
 # Open Agent OS by OpenIT
 
-[![Open Agent OS](https://img.shields.io/badge/Open%20Agent%20OS-by%20OpenIT-0A66C2?style=for-the-badge)](https://github.com/openit-mykim/open-agent-os)
+[![Open Agent OS](https://img.shields.io/badge/Open%20Agent%20OS-by%20OpenIT-0A66C2?style=for-the-badge)](https://github.com/openit-ai/open-agent-os)
 [![Fork](https://img.shields.io/badge/fork-deepseek--ai%2Fdeepseek--harness-24292e?logo=github)](https://github.com/deepseek-ai/deepseek-harness)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Cordis](https://img.shields.io/badge/powered%20by-Cordis-7c3aed)](https://github.com/cordiverse/cordis)
@@ -19,7 +19,7 @@ English | [中文](README.zh.md)
 ## Origin & License
 
 - **Upstream**: [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — Copyright (c) 2026 DeepSeek, [MIT](LICENSE)
-- **This fork**: [openit-mykim/open-agent-os](https://github.com/openit-mykim/open-agent-os) — OpenIT이 유지·배포. 라이선스는 **MIT 유지**. 원본 저작권 고지를 삭제하지 않습니다.
+- **This fork**: [openit-mykim/open-agent-os](https://github.com/openit-ai/open-agent-os) — OpenIT이 유지·배포. 라이선스는 **MIT 유지**. 원본 저작권 고지를 삭제하지 않습니다.
 - Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
 DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com). It uses an architecture where **everything is a plugin**, powered by [Cordis](https://github.com/cordiverse/cordis) — see [_A Programming Paradigm for Spatiotemporal Composability_](https://github.com/cordiverse/paper).
@@ -45,7 +45,7 @@ The command starts the Web UI at `http://127.0.0.1:3080` by default and opens it
 ### Run from source
 
 ```sh
-git clone https://github.com/openit-mykim/open-agent-os.git
+git clone https://github.com/openit-ai/open-agent-os.git
 cd open-agent-os
 pnpm install
 pnpm run build
