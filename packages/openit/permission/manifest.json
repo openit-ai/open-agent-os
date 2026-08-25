@@ -1,0 +1,8 @@
+{
+  "name": "openit-permission",
+  "package": "@openit/dsh-openit-permission",
+  "version": "0.1.1-rc.2",
+  "description": "OpenIT permission Cordis plugin",
+  "cordis": { "name": "openit-permission", "service": "permission" },
+  "license": "MIT"
+}

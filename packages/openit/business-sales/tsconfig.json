@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../../vendor/cosmokit" },
+    { "path": "../../../vendor/schemastery" },
+    { "path": "../../runtime-diagnostics/invariants" },
+    { "path": "../../client/runtime" },
+    { "path": "../../client/ui-layout" },
+    { "path": "../../client/ui-slots" }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "openit-business-board",
+  "package": "@openit/dsh-plugin-openit-business-board",
+  "version": "0.1.1-rc.2",
+  "description": "Business Board widget (Notion stub)",
+  "cordis": {
+    "name": "openit-business-board"
+  },
+  "author": "OpenIT",
+  "license": "MIT",
+  "build": {
+    "host": false,
+    "client": true
+  }
+}

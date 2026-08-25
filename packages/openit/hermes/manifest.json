@@ -1,0 +1,8 @@
+{
+  "name": "openit-hermes",
+  "package": "@openit/dsh-openit-hermes",
+  "version": "0.1.1-rc.2",
+  "description": "OpenIT hermes Cordis plugin",
+  "cordis": { "name": "openit-hermes", "service": "hermes" },
+  "license": "MIT"
+}

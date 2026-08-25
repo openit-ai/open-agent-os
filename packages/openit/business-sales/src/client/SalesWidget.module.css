@@ -1,0 +1,130 @@
+.wrapper {
+  padding: 12px;
+  pointer-events: auto;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  line-height: 1.4;
+  word-break: keep-all;
+}
+.card {
+  background: #ffffff;
+  border: 1px solid #e3e8ee;
+  border-radius: 12px;
+  box-shadow: rgba(0,55,112,0.08) 0 1px 3px;
+  overflow: hidden;
+  max-width: 720px;
+}
+.cardWarning {
+  border-color: #F59E0B;
+}
+.cardCritical {
+  border-color: #DC2626;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: rgba(220,38,38,0.15) 0 1px 3px; }
+  50% { box-shadow: rgba(220,38,38,0.35) 0 2px 8px; }
+}
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #ffffff;
+  border-bottom: 1px solid #e3e8ee;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0d253d;
+  word-break: keep-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 9999px;
+  background: #f6f9fc;
+  border: 1px solid #e3e8ee;
+  color: #273951;
+}
+.badgeWarn { background: #fef3c7; border-color: #F59E0B; color: #92400e; }
+.badgeCrit { background: #fee2e2; border-color: #DC2626; color: #7f1d1d; }
+.badgeOk { background: #dcfce7; border-color: #22C55E; color: #14532d; }
+.kpiGrid {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.kpi {
+  border: 1px solid #e3e8ee;
+  border-radius: 12px;
+  padding: 14px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.kpiLabel {
+  font-size: 12px;
+  color: #64748d;
+  word-break: keep-all;
+}
+.kpiValue {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0d253d;
+  font-feature-settings: "tnum";
+  letter-spacing: -0.3px;
+  word-break: keep-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kpiSub {
+  font-size: 11px;
+  color: #64748d;
+}
+.chartWrap {
+  padding: 0 16px 16px;
+}
+.chartTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #273951;
+  margin-bottom: 8px;
+  word-break: keep-all;
+}
+.canvas {
+  width: 100%;
+  height: 110px;
+  display: block;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+}
+.footer {
+  padding: 10px 16px;
+  font-size: 11px;
+  color: #64748d;
+  border-top: 1px solid #f0f3f8;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+@media (max-width: 375px) {
+  .wrapper { padding: 8px; }
+  .kpiGrid { grid-template-columns: 1fr; padding: 12px; }
+  .header { padding: 12px; }
+  .chartWrap { padding: 0 12px 12px; }
+  .kpiValue { font-size: 18px; }
+}

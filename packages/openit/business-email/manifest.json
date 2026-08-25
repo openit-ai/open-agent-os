@@ -1,0 +1,15 @@
+{
+  "name": "openit-business-email",
+  "package": "@openit/dsh-plugin-openit-business-email",
+  "version": "0.1.1-rc.2",
+  "description": "Business Email widget (Gmail stub)",
+  "cordis": {
+    "name": "openit-business-email"
+  },
+  "author": "OpenIT",
+  "license": "MIT",
+  "build": {
+    "host": false,
+    "client": true
+  }
+}

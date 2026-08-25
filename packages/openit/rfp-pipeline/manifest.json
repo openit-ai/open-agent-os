@@ -1,0 +1,8 @@
+{
+  "name": "openit-rfp-pipeline",
+  "package": "@openit/dsh-openit-rfp-pipeline",
+  "version": "0.1.1-rc.2",
+  "description": "OpenIT rfp-pipeline Cordis plugin",
+  "cordis": { "name": "openit-rfp-pipeline", "service": "rfp-pipeline" },
+  "license": "MIT"
+}
