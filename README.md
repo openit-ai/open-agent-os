@@ -8,7 +8,7 @@
 English | [中文](README.zh.md)
 
 > **Open Agent OS**는 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`, MIT)를 포크하여 **OpenIT만의 Agent OS로 제품화**하는 프로젝트입니다.
-> 본 저장소는 `openit-mykim/open-agent-os` 에서 독립적으로 개발·배포되며, 업스트림 `deepseek-ai/deepseek-harness` 변경사항은 선택적으로 병합합니다.
+> 본 저장소는 `openit-ai/open-agent-os` 에서 독립적으로 개발·배포되며, 업스트림 `deepseek-ai/deepseek-harness` 변경사항은 선택적으로 병합합니다.
 
 ## Purpose — 왜 Open Agent OS인가
 
@@ -19,7 +19,7 @@ English | [中文](README.zh.md)
 ## Origin & License
 
 - **Upstream**: [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — Copyright (c) 2026 DeepSeek, [MIT](LICENSE)
-- **This fork**: [openit-mykim/open-agent-os](https://github.com/openit-ai/open-agent-os) — OpenIT이 유지·배포. 라이선스는 **MIT 유지**. 원본 저작권 고지를 삭제하지 않습니다.
+- **This fork**: [openit-ai/open-agent-os](https://github.com/openit-ai/open-agent-os) — OpenIT이 유지·배포. 라이선스는 **MIT 유지**. 원본 저작권 고지를 삭제하지 않습니다.
 - Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
 DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com). It uses an architecture where **everything is a plugin**, powered by [Cordis](https://github.com/cordiverse/cordis) — see [_A Programming Paradigm for Spatiotemporal Composability_](https://github.com/cordiverse/paper).
@@ -68,7 +68,7 @@ git clone https://github.com/deepseek-ai/deepseek-harness.git
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Open Agent OS 관련 이슈/PR은 본 저장소(`openit-mykim/open-agent-os`)에 제출해 주세요.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Open Agent OS 관련 이슈/PR은 본 저장소(`openit-ai/open-agent-os`)에 제출해 주세요.
 
 ## Development
 
