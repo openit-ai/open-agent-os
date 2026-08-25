@@ -1,0 +1,10 @@
+2026-08-25T14:07:22.876+09:00  INFO 334510 --- [aihub-mcp] [main] com.aihub.mcp.McpServerApplication       : Starting McpServerApplication v0.0.1-SNAPSHOT using Java 17.0.19 with PID 334510 (/home/openitsvc/www/aihub-mcp/mcp-server-0.0.1-SNAPSHOT.jar started by openitsvc in /home/openitsvc/data/dev/open-agent-os)
+2026-08-25T14:07:22.877+09:00  INFO 334510 --- [aihub-mcp] [main] com.aihub.mcp.McpServerApplication       : No active profile set, falling back to 1 default profile: "default"
+2026-08-25T14:07:23.452+09:00  INFO 334510 --- [aihub-mcp] [main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable tools capabilities, notification: true
+2026-08-25T14:07:23.484+09:00  INFO 334510 --- [aihub-mcp] [main] o.s.a.m.s.a.McpServerAutoConfiguration   : Registered tools: 5
+2026-08-25T14:07:23.484+09:00  INFO 334510 --- [aihub-mcp] [main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable resources capabilities, notification: true
+2026-08-25T14:07:23.485+09:00  INFO 334510 --- [aihub-mcp] [main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable prompts capabilities, notification: true
+2026-08-25T14:07:23.485+09:00  INFO 334510 --- [aihub-mcp] [main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable completions capabilities
+2026-08-25T14:07:23.543+09:00  INFO 334510 --- [aihub-mcp] [pool-2-thread-1] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null], Info: Implementation[name=mcp, version=0.1.0]
+2026-08-25T14:07:23.545+09:00  WARN 334510 --- [aihub-mcp] [pool-2-thread-1] i.m.server.McpAsyncServer                : Client requested unsupported protocol version: 2025-11-25, so the server will suggest the 2024-11-05 version instead
+2026-08-25T14:07:23.565+09:00  INFO 334510 --- [aihub-mcp] [main] com.aihub.mcp.McpServerApplication       : Started McpServerApplication in 0.961 seconds (process running for 1.202)
