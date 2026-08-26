@@ -1,1 +1,195 @@
-export default function ApprovalsPage(){ return <div className="space-y-4"><h1 className="text-2xl font-semibold">Approvals</h1><p className="text-sm text-muted-foreground">준비 중.</p></div>; }
+"use client";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { getToken, getPendingApprovals, decideApproval, type ApprovalRequestItem, type ApprovalDecisionType } from "@/lib/api";
+import { ClipboardCheck, RefreshCw, ShieldAlert } from "lucide-react";
+
+function riskVariant(risk: string) {
+  const r = risk?.toUpperCase();
+  if (r === "HIGH") return "danger" as const;
+  if (r === "MEDIUM") return "warning" as const;
+  return "success" as const;
+}
+
+function formatTime(iso?: string | null) {
+  if (!iso) return "-";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return iso;
+  }
+}
+
+export default function ApprovalsPage() {
+  const router = useRouter();
+  const [items, setItems] = useState<ApprovalRequestItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const [groupId, setGroupId] = useState("default-group");
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+
+  const fetchList = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await getPendingApprovals();
+      setItems(res.pending ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "조회 실패");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!getToken()) { router.replace("/login"); return; }
+    fetchList();
+  }, [fetchList, router]);
+
+  async function handleDecide(id: string, decision: ApprovalDecisionType) {
+    setDeciding(id + decision);
+    setActionMsg(null);
+    try {
+      if (decision === "APPROVED_GROUP_ALWAYS" && !groupId.trim()) {
+        setActionMsg("그룹 ID를 입력하세요.");
+        return;
+      }
+      await decideApproval({
+        approval_id: id,
+        decision,
+        group_id: decision === "APPROVED_GROUP_ALWAYS" ? groupId.trim() : undefined,
+      });
+      setActionMsg(`${decision} 처리 완료`);
+      await fetchList();
+    } catch (e) {
+      setActionMsg(e instanceof Error ? e.message : "결정 실패");
+    } finally {
+      setDeciding(null);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            <ClipboardCheck className="h-6 w-6" /> Approvals
+          </h1>
+          <p className="text-sm text-muted-foreground">승인 대기 — 위험도 기반 JIT 승인 (Once / Always 사용자·그룹 / Deny)</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchList(); }} disabled={loading}>
+          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> 새로고침
+        </Button>
+      </div>
+
+      {actionMsg && (
+        <div className="rounded-md border bg-card px-3 py-2 text-sm" role="status">
+          {actionMsg}
+        </div>
+      )}
+      {error && (
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+          {error}
+        </div>
+      )}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">승인 대기 목록</CardTitle>
+          <CardDescription>
+            {loading ? "로딩 중..." : `${items.length}건 대기 중`}
+            <span className="ml-3 inline-flex items-center gap-1">
+              <span className="text-xs">그룹 ID:</span>
+              <Input value={groupId} onChange={(e) => setGroupId(e.target.value)} placeholder="group id" className="h-7 w-36 text-xs" />
+            </span>
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="px-6 py-12 text-center text-sm text-muted-foreground">로딩 중...</div>
+          ) : items.length === 0 ? (
+            <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                <ShieldAlert className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <p className="text-sm font-medium">대기 중인 승인이 없습니다</p>
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                새로운 고위험 작업이 요청되면 이 목록에 표시됩니다. 정책에 따라 APPROVAL_REQUIRED가 발생한 요청이 여기에 쌓입니다.
+              </p>
+              <Button variant="outline" size="sm" className="mt-4" onClick={fetchList}>새로고침</Button>
+            </div>
+          ) : (
+            <div className="relative w-full overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[140px]">Approval ID</TableHead>
+                    <TableHead>User</TableHead>
+                    <TableHead>Agent</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead className="min-w-[160px]">Resource</TableHead>
+                    <TableHead>Risk</TableHead>
+                    <TableHead className="min-w-[130px]">요청시각</TableHead>
+                    <TableHead className="min-w-[130px]">만료</TableHead>
+                    <TableHead className="min-w-[360px] text-right">결정</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((it) => {
+                    const aid = (it.approval_id as string) || (it as unknown as { id: string }).id || "-";
+                    // created_at fallback: try to infer from expires? use expires_at minus ttl? just show expires
+                    const reqTime = (it as unknown as { created_at?: string }).created_at || (it.request_hash ? "-" : "-");
+                    // Try to show expires_at as request time is not stored; use expires_at
+                    return (
+                      <TableRow key={aid}>
+                        <TableCell className="font-mono text-xs">
+                          <span className="truncate" title={aid}>{aid}</span>
+                        </TableCell>
+                        <TableCell className="text-xs">{it.user_id}</TableCell>
+                        <TableCell className="text-xs">{it.agent_id}</TableCell>
+                        <TableCell className="text-xs font-medium">{it.action}</TableCell>
+                        <TableCell className="max-w-[200px] truncate text-xs" title={it.resource}>{it.resource}</TableCell>
+                        <TableCell>
+                          <Badge variant={riskVariant(it.risk)}>{it.risk}</Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{formatTime(reqTime !== "-" ? reqTime : undefined)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{formatTime(it.expires_at)}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap justify-end gap-1">
+                            <Button size="sm" variant="default" disabled={!!deciding} onClick={() => handleDecide(aid, "APPROVED_ONCE")} className="h-7 px-2 text-xs">
+                              Approve Once
+                            </Button>
+                            <Button size="sm" variant="secondary" disabled={!!deciding} onClick={() => handleDecide(aid, "APPROVED_USER_ALWAYS")} className="h-7 px-2 text-xs">
+                              Always(사용자)
+                            </Button>
+                            <Button size="sm" variant="outline" disabled={!!deciding} onClick={() => handleDecide(aid, "APPROVED_GROUP_ALWAYS")} className="h-7 px-2 text-xs">
+                              Always(그룹)
+                            </Button>
+                            <Button size="sm" variant="destructive" disabled={!!deciding} onClick={() => handleDecide(aid, "DENIED")} className="h-7 px-2 text-xs">
+                              Deny
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <p className="text-xs text-muted-foreground">
+        * Approve Once: 이번 요청만 승인 · Always(사용자): 동일 사용자·동일 action/resource 영구 승인 · Always(그룹): 그룹 전체 영구 승인 · Deny: 거부. 결정 후 즉시 갱신됩니다.
+      </p>
+    </div>
+  );
+}

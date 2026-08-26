@@ -210,3 +210,21 @@ def me(admin: AdminUser = Depends(get_current_admin)):
 def list_admin_users(admin: AdminUser = Depends(get_current_admin)):
     """List all admin users — any authenticated admin."""
     return [AdminUserPublic(**u.model_dump(exclude={"hashed_password"})) for u in _users_by_id.values()]
+
+
+@router.delete("/users/{user_id}")
+def delete_admin_user(user_id: str, admin: AdminUser = Depends(require_l5)):
+    """Delete admin user — L5 only, self-delete blocked."""
+    if admin.id == user_id:
+        raise HTTPException(status_code=400, detail="자기 자신은 삭제할 수 없습니다")
+    target = _users_by_id.get(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    # prevent deleting last L5? keep allowed but warn — enforce self-block only per spec
+    del _users_by_id[user_id]
+    # remove email mapping
+    for em, u in list(_users_by_email.items()):
+        if u.id == user_id:
+            del _users_by_email[em]
+            break
+    return {"status": "deleted", "id": user_id}

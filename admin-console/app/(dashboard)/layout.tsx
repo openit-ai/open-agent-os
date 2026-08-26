@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, LogOut } from "lucide-react";
+import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { clearToken, getToken } from "@/lib/api";
@@ -14,6 +14,7 @@ const navItems = [
   { href: "/policy", label: "Policy", icon: Shield },
   { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
   { href: "/audit", label: "Audit", icon: ScrollText },
+  { href: "/credentials", label: "Credentials", icon: KeyRound },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

@@ -103,3 +103,166 @@ export function getRecentApprovals(): Promise<{ items: ApprovalItem[] } | Approv
 export function getAuditChain(): Promise<AuditChainStatus> {
   return apiFetch("/v1/audit/chain");
 }
+
+// ---- users ----
+export interface AdminUserPublic {
+  id: string;
+  email: string;
+  display_name: string;
+  role: "L5" | "L4";
+  created_at: string;
+}
+export function listUsers(): Promise<AdminUserPublic[] | { users: AdminUserPublic[] }> {
+  return apiFetch("/v1/auth/users");
+}
+export function getMe(): Promise<AdminUserPublic> {
+  return apiFetch("/v1/auth/me");
+}
+export function registerUser(payload: { email: string; password: string; display_name: string; role: "L5" | "L4" }): Promise<AdminUserPublic> {
+  return apiFetch("/v1/auth/register", { method: "POST", body: JSON.stringify(payload) });
+}
+export function deleteUser(id: string): Promise<{ status: string; id: string }> {
+  return apiFetch(`/v1/auth/users/${id}`, { method: "DELETE" });
+}
+
+// ---- policy ----
+export interface PolicyRule {
+  id: string;
+  source: string;
+  action: string;
+  resource_pattern: string;
+  effect: "ALLOW" | "DENY" | "APPROVAL_REQUIRED";
+  priority: number;
+  description?: string | null;
+}
+export interface PolicyBundle {
+  id: string;
+  tenant_id: string;
+  name: string;
+  version: string;
+  rules: PolicyRule[];
+}
+export function getPolicyBundles(): Promise<{ bundles: PolicyBundle[]; evaluation_order: string[] }> {
+  return apiFetch("/v1/policy/bundles");
+}
+
+// ---- approvals (Section 23-24) ----
+export type ApprovalDecisionType = "DENIED" | "APPROVED_ONCE" | "APPROVED_USER_ALWAYS" | "APPROVED_GROUP_ALWAYS";
+export type RiskLevel = "HIGH" | "MEDIUM" | "LOW";
+
+export interface ApprovalRequestItem {
+  approval_id: string;
+  user_id: string;
+  agent_id: string;
+  action: string;
+  resource: string;
+  risk: RiskLevel | string;
+  request_hash?: string;
+  nonce?: string;
+  expires_at: string;
+  signature?: string | null;
+  decision?: string;
+  status?: string;
+  decided_at?: string | null;
+  decided_by?: string | null;
+  created_at?: string;
+}
+
+export interface ApprovalsPendingResponse {
+  pending: ApprovalRequestItem[];
+  count: number;
+}
+
+export function getPendingApprovals(): Promise<ApprovalsPendingResponse> {
+  return apiFetch<ApprovalsPendingResponse>("/v1/approvals/pending");
+}
+
+export function decideApproval(payload: { approval_id: string; decision: ApprovalDecisionType; decided_by?: string; group_id?: string }): Promise<ApprovalRequestItem> {
+  return apiFetch<ApprovalRequestItem>("/v1/approvals/decide", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ---- audit (Section 30-31) ----
+export interface AuditEventItem {
+  event_id: string;
+  event_type: string;
+  timestamp: string;
+  tenant_id?: string;
+  user_id?: string | null;
+  agent_id?: string | null;
+  resource?: string | null;
+  action?: string | null;
+  decision?: string | null;
+  policy_version?: string | null;
+  delegation_id?: string | null;
+  previous_hash?: string | null;
+  event_hash?: string | null;
+}
+
+export interface AuditEventsResponse {
+  events: AuditEventItem[];
+  count: number;
+  head: string | null;
+}
+
+export interface AuditVerifyResponse {
+  chain_valid: boolean;
+  checkpoint_valid?: boolean;
+  event_count: number;
+  head: string | null;
+  checkpoint?: AuditCheckpoint | null;
+}
+
+export interface AuditCheckpoint {
+  chain_head_hash: string;
+  event_count: number;
+  created_at: string;
+  signature: string;
+}
+
+export function getAuditEvents(): Promise<AuditEventsResponse> {
+  return apiFetch<AuditEventsResponse>("/v1/audit/events");
+}
+
+export function verifyAuditChain(): Promise<AuditVerifyResponse> {
+  return apiFetch<AuditVerifyResponse>("/v1/audit/verify");
+}
+
+export function getAuditCheckpoint(): Promise<AuditCheckpoint> {
+  return apiFetch<AuditCheckpoint>("/v1/audit/checkpoint");
+}
+
+// ---- credentials (delegation) ----
+export interface CredentialProviderStatus {
+  provider: string;
+  total: number;
+  active: number;
+  revoked: number;
+  expired: number;
+  bindings?: number;
+}
+
+export interface CredentialsStatusResponse {
+  providers: CredentialProviderStatus[];
+  total: number;
+  active: number;
+  revoked: number;
+  expired: number;
+  recent: Array<{
+    id: string;
+    user_id: string;
+    agent_id: string;
+    provider: string;
+    scope: string;
+    status: string;
+    created_at: string;
+    expires_at?: string | null;
+    revoked_at?: string | null;
+  }>;
+}
+
+export function getCredentialsStatus(): Promise<CredentialsStatusResponse> {
+  return apiFetch<CredentialsStatusResponse>("/v1/credentials/status");
+}
