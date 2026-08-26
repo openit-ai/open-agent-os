@@ -20,10 +20,12 @@ from .router import route_session
 from .acp_adapter import ACPAdapter
 from .internal_api import CreateSessionRequest, CreateSessionResponse, SendPromptRequest
 from .mattermost_adapter.webhook import router as mattermost_router
+from .demo import router as demo_router
 
 app = FastAPI(title="Open Agent OS — Control Plane", version="1.1.0")
 acp = ACPAdapter(settings.hermes_base_url)
 app.include_router(mattermost_router, prefix="/v1", tags=["mattermost"])
+app.include_router(demo_router, prefix="/v1", tags=["demo"])
 
 def _caller_user(x_user_id: str | None) -> str:
     if not x_user_id:
