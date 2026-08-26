@@ -58,6 +58,19 @@ from audit.audit_ledger.ledger import AuditLedger
 from audit_model import AuditEvent, AuditEventType
 
 # ── FastAPI ────────────────────────────────────────────────────
+# Bare `from app import` resolves via sys.path — ensure security wins even if
+# admin-console/backend was inserted earlier (collection order).
+import sys as _sys
+import pathlib as _pl
+_root = _pl.Path(__file__).resolve().parents[1]
+_backend = _root / "admin-console" / "backend"
+if str(_backend) in _sys.path:
+    _sys.path.remove(str(_backend))
+if str(_root / "security") not in _sys.path:
+    _sys.path.insert(0, str(_root / "security"))
+# Clear any polluted `app` module (admin app) so security/app.py is reloaded
+if "app" in _sys.modules and getattr(_sys.modules["app"], "title", None) == "Open Agent OS Admin API":
+    del _sys.modules["app"]
 from app import app as security_app
 
 
