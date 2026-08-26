@@ -1,0 +1,5 @@
+{
+  "user_id": "employee:kim",
+  "message": "오늘 내가 처리해야 할 업무 정리해줘",
+  "expected_tools": ["calendar.read", "gmail.search", "tasks.list", "outline.search"]
+}

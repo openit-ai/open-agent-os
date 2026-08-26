@@ -1,0 +1,9 @@
+[project]
+name = "open-agent-os-security"
+version = "1.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7", "cryptography>=42", "python-jose[cryptography]>=3.3",
+    "open-agent-os-common-types", "open-agent-os-policy-model",
+    "open-agent-os-audit-model", "open-agent-os-delegation-model",
+]
