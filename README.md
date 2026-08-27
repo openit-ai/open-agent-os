@@ -121,5 +121,10 @@ pytest tests/test_admin_backend.py -v # 17 (register/login/JWT/bcrypt/RBAC/healt
 
 ## License
 
-Source-Available — Business/Managed는 별도 계약, Developer는 평가 목적. 배경 `/data/vault/` wiki 우선 참조, 충돌·구식·누락 명시.
+**Business Source License 1.1** — see [`LICENSE`](./LICENSE).
+
+- **Licensor:** OpenIT Co., Ltd. / **Licensed Work:** Open Agent OS
+- **Additional Use Grant:** Developer Edition 평가·개발·테스트 목적의 production 외 사용 허용, 그 외 production/호스팅/재배포는 Business/Managed 별도 상업 라이선스 필요
+- **Change Date:** `2030-08-27` (v1.1 기준, 이후 버전은 각 릴리즈일로부터 4년) — **Change License:** Apache 2.0 자동 전환
+- BSL 원문: https://mariadb.com/bsl11/ · Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0
 

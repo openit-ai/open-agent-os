@@ -1,0 +1,65 @@
+Business Source License 1.1
+
+Licensor:             OpenIT Co., Ltd.
+Licensed Work:        Open Agent OS
+                      The Licensed Work is (c) 2026 OpenIT Co., Ltd.
+Additional Use Grant: You may make production use of the Licensed Work in
+                      a non-commercial, evaluation, development, or testing
+                      context, including use under the Developer Edition as
+                      described in the README. Any production use beyond
+                      such evaluation/development/testing, any use of the
+                      Licensed Work as a hosted or managed service for
+                      third parties, and any commercial redistribution
+                      requires a separate commercial license from the
+                      Licensor (Business / Managed Editions).
+Change Date:          2030-08-27
+                      This Change Date applies to version 1.1 of the
+                      Licensed Work. Each subsequent version made available
+                      by the Licensor will specify its own Change Date,
+                      which shall be no earlier than four (4) years after
+                      the date that version is first made available.
+Change License:       Apache License, Version 2.0
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting production use
+of the Licensed Work.
+
+Licensor undertakes to grant you, at the Change Date, a license to the
+Licensed Work under the terms of the Change License.
+
+Conditions
+
+The Change License will in no way limit any rights you have to use, copy,
+modify, create derivative works, redistribute, or make non-production use
+of the Licensed Work as granted in the Terms above.
+
+You must not use the Licensed Work in any way that is incompatible with
+the Additional Use Grant, above.
+
+You must give any recipient of the Licensed Work a copy of this Business
+Source License.
+
+You must not use any Licensor trademark or logo.
+
+Notices
+
+The Business Source License and the Change License are not open source
+licenses. The Licensed Work is Source-Available.
+
+This Business Source License text is copyright (c) MariaDB Corporation Ab,
+used under the Creative Commons Attribution-ShareAlike 4.0 International
+Public License (CC BY-SA 4.0). The full BSL 1.1 text is available at
+https://mariadb.com/bsl11/ .
+
+------------------------------------------------------------------------
+Apache License 2.0 — Reference
+
+The Change License (Apache License, Version 2.0) is available at
+https://www.apache.org/licenses/LICENSE-2.0
+
+On the Change Date, the Licensed Work will automatically be made available
+under the Change License, without any further action required by the
+Licensor or any licensee.
