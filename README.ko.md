@@ -5,7 +5,7 @@
 **한국어** | [English](README.md)
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.1.md` (Sections 1–47) — Control Plane / Execution Gateway / Security & Governance 3분할 _(아키텍처 문서 버전 v1.1은 고정, 제품 버전은 v0.1.1)_
+- **Architecture:** `docs/architecture-v1.3.md` (Sections 1–47 + §§16A–16E) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (_v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `108 tests pass`, `npm run build ✓`
 
 ## 왜 Open Agent OS인가 — 시장이 풀지 못한 두 가지 모순
