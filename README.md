@@ -5,7 +5,7 @@
 [한국어](README.ko.md) | **English**
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.3.md` (Sections 1–47 + §§16A–16E) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (_v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Architecture:** `docs/architecture-v1.5.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes), `108 tests pass`, `npm run build ✓`
 
 ## Why Open Agent OS — Two Contradictions the Market Hasn't Solved
