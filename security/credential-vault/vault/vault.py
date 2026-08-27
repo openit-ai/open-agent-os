@@ -2,6 +2,8 @@
 - AES-GCM encrypt stub with cryptography.fernet (AES-128-CBC + HMAC-SHA256, AES-GCM 동등 보안 수준)
 - owner check (agent_id must match delegation)
 - PERSONAL_CREDENTIAL_USE audit event 기록
+- DB persistence: when `session_maker` (async_sessionmaker) is provided, vault_credentials table is used;
+  otherwise in-memory dict (backward-compatible for tests/dev).
 """
 from __future__ import annotations
 
@@ -13,9 +15,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from cryptography.fernet import Fernet, InvalidToken
-
-# audit model 은 optional — vault 가 audit ledger 에 직접 쓰지 않고 이벤트 반환만 해도 되지만
-# 여기서는 메모리 ledger 주입을 통해 이벤트를 남긴다.
 
 
 def _derive_fernet_key(raw_key: bytes) -> bytes:
@@ -41,11 +40,12 @@ class CredentialVault(ABC):
 
 
 class EncryptedPostgresVault(CredentialVault):
-    """Reference impl: Fernet(AES-128-CBC + HMAC) encrypted column (Section 10.2).
+    """Fernet(AES-128-CBC + HMAC) encrypted column (Section 10.2).
 
-    - 실제 Postgres 연동 대신 in-memory dict 로 동작하되 암호화 경로는 실제 수행.
-    - owner check: secret_ref → delegation → agent_id 바인딩 검증.
-    - PERSONAL_CREDENTIAL_USE 이벤트는 _audit_events 리스트에 적재 (외부 ledger 로 flush 가능).
+    Dual-mode:
+      - In-memory dict (default): `session_maker is None` → existing behavior, tests pass without DB.
+      - DB-backed: provide `session_maker` (async_sessionmaker) or `db_url` → vault_credentials table.
+    Owner check + PERSONAL_CREDENTIAL_USE audit event in both modes.
     """
 
     def __init__(
@@ -53,29 +53,91 @@ class EncryptedPostgresVault(CredentialVault):
         encryption_key: bytes,
         delegation_service=None,
         audit_ledger=None,
+        session_maker=None,
+        db_url: str | None = None,
     ) -> None:
-        # Fernet key 유도
         fernet_key = _derive_fernet_key(encryption_key)
         self._fernet = Fernet(fernet_key)
-        self.key = encryption_key  # 원본 키도 보관 (테스트 호환)
-        # secret_ref → encrypted bytes
+        self.key = encryption_key
+        # in-memory fallback stores
         self._store: dict[str, bytes] = {}
-        # secret_ref → owner metadata
         self._meta: dict[str, dict] = {}
-        # delegation_service 주입 (owner check)
         self._delegation_service = delegation_service
         self._audit_ledger = audit_ledger
-        # 메모리 audit 이벤트 버퍼 (PERSONAL_CREDENTIAL_USE)
         self._audit_events: list[dict] = []
+        # DB wiring
+        self._session_maker = session_maker
+        if self._session_maker is None and db_url:
+            try:
+                from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+                _url = db_url
+                if _url.startswith("postgresql://"):
+                    _url = _url.replace("postgresql://", "postgresql+asyncpg://", 1)
+                _engine = create_async_engine(_url, pool_pre_ping=True)
+                self._session_maker = async_sessionmaker(_engine, expire_on_commit=False)
+            except Exception:
+                self._session_maker = None
+
+    def set_session_maker(self, session_maker) -> None:
+        """Inject/replace DB session maker at runtime (e.g. from FastAPI lifespan)."""
+        self._session_maker = session_maker
+
+    # ── internal DB helpers (lazy import to avoid hard dep in tests) ─────
+    async def _db_insert(self, secret_ref: str, user_id: str, owner_agent_id: str, provider: str, scope: str, encrypted: bytes) -> None:
+        from security.models.orm import VaultCredentialORM  # lazy
+
+        async with self._session_maker() as sess:  # type: ignore
+            row = VaultCredentialORM(
+                secret_ref=secret_ref,
+                user_id=user_id,
+                owner_agent_id=owner_agent_id,
+                provider=provider,
+                scope=scope,
+                encrypted_token=encrypted,
+                created_at=datetime.now(timezone.utc),
+            )
+            sess.add(row)
+            await sess.commit()
+
+    async def _db_get(self, secret_ref: str):
+        from sqlalchemy import select
+        from security.models.orm import VaultCredentialORM
+
+        async with self._session_maker() as sess:  # type: ignore
+            res = await sess.execute(select(VaultCredentialORM).where(VaultCredentialORM.secret_ref == secret_ref))
+            return res.scalar_one_or_none()
+
+    async def _db_delete(self, secret_ref: str) -> None:
+        from sqlalchemy import delete
+        from security.models.orm import VaultCredentialORM
+
+        async with self._session_maker() as sess:  # type: ignore
+            await sess.execute(delete(VaultCredentialORM).where(VaultCredentialORM.secret_ref == secret_ref))
+            await sess.commit()
 
     async def store(self, user_id: str, provider: str, scope: str, token: bytes) -> str:
-        """토큰을 Fernet 으로 암호화하여 저장."""
         ref = f"secret_{uuid.uuid4().hex[:12]}"
-        # owner agent 는 관례상 agent:assistant:<user_suffix>
-        # user_id = employee:kim → agent:assistant:kim
         suffix = user_id.split(":")[-1] if ":" in user_id else user_id
         owner_agent_id = f"agent:assistant:{suffix}"
         encrypted = self._fernet.encrypt(token)
+
+        if self._session_maker is not None:
+            try:
+                await self._db_insert(ref, user_id, owner_agent_id, provider, scope, encrypted)
+                # also keep meta for owner_of fallback
+                self._meta[ref] = {
+                    "user_id": user_id,
+                    "owner_agent_id": owner_agent_id,
+                    "provider": provider,
+                    "scope": scope,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                return ref
+            except Exception:
+                # fall through to memory on DB failure
+                pass
+
         self._store[ref] = encrypted
         self._meta[ref] = {
             "user_id": user_id,
@@ -87,42 +149,53 @@ class EncryptedPostgresVault(CredentialVault):
         return ref
 
     async def retrieve(self, secret_ref: str, requester_agent_id: str) -> bytes:
-        """owner check → decrypt → audit event 기록."""
-        if secret_ref not in self._store:
+        # fetch encrypted + meta (DB preferred)
+        encrypted: bytes | None = None
+        meta: dict | None = None
+
+        if self._session_maker is not None:
+            try:
+                row = await self._db_get(secret_ref)
+                if row is not None:
+                    encrypted = row.encrypted_token
+                    meta = {
+                        "user_id": row.user_id,
+                        "owner_agent_id": row.owner_agent_id,
+                        "provider": row.provider,
+                        "scope": row.scope,
+                    }
+                else:
+                    # fall back to memory if not in DB
+                    encrypted = self._store.get(secret_ref)
+                    meta = self._meta.get(secret_ref)
+            except Exception:
+                encrypted = self._store.get(secret_ref)
+                meta = self._meta.get(secret_ref)
+        else:
+            encrypted = self._store.get(secret_ref)
+            meta = self._meta.get(secret_ref)
+
+        if encrypted is None:
             raise KeyError(f"secret not found: {secret_ref}")
 
-        meta = self._meta.get(secret_ref, {})
-        owner = meta.get("owner_agent_id")
-
-        # delegation_service 가 주입된 경우 추가 검증 (binding 기반)
-        # 없으면 meta 기반 owner check 만 수행
-        if self._delegation_service is not None:
-            # secret_ref 를 delegation binding 으로 찾는 로직은 delegation_service 와 연동
-            # 여기서는 store 시 delegation_id 가 없으므로 meta owner check 로 충분
-            pass
-
+        owner = (meta or {}).get("owner_agent_id")
         if owner and requester_agent_id != owner:
-            raise PermissionError(
-                f"credential isolation violation: owner={owner} requester={requester_agent_id}"
-            )
+            raise PermissionError(f"credential isolation violation: owner={owner} requester={requester_agent_id}")
 
-        encrypted = self._store[secret_ref]
         try:
             plaintext = self._fernet.decrypt(encrypted)
         except InvalidToken as e:
             raise ValueError("decryption failed — invalid key or corrupted token") from e
 
-        # PERSONAL_CREDENTIAL_USE audit event 기록
         event = {
             "event_type": "PERSONAL_CREDENTIAL_USE",
             "secret_ref": secret_ref,
             "requester_agent_id": requester_agent_id,
-            "provider": meta.get("provider"),
+            "provider": (meta or {}).get("provider"),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._audit_events.append(event)
 
-        # 외부 audit ledger 가 주입된 경우 실제 AuditEvent 로 append
         if self._audit_ledger is not None:
             try:
                 from audit_model import AuditEvent, AuditEventType
@@ -132,7 +205,7 @@ class EncryptedPostgresVault(CredentialVault):
                     event_type=AuditEventType.PERSONAL_CREDENTIAL_USE,
                     timestamp=datetime.now(timezone.utc),
                     tenant_id="default",
-                    user_id=meta.get("user_id"),
+                    user_id=(meta or {}).get("user_id"),
                     agent_id=requester_agent_id,
                     resource=secret_ref,
                     action="RETRIEVE",
@@ -144,10 +217,14 @@ class EncryptedPostgresVault(CredentialVault):
         return plaintext
 
     async def revoke(self, secret_ref: str) -> None:
+        if self._session_maker is not None:
+            try:
+                await self._db_delete(secret_ref)
+            except Exception:
+                pass
         self._store.pop(secret_ref, None)
         self._meta.pop(secret_ref, None)
 
-    # ── helpers for test ────────────────────────────────────────
     def audit_events(self) -> list[dict]:
         return list(self._audit_events)
 

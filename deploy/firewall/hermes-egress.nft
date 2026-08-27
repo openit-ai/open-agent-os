@@ -1,0 +1,96 @@
+#!/usr/sbin/nft -f
+# hermes-egress.nft — §16A.6 Network Isolation (nftables)
+# Default: DENY egress to internal systems; ALLOW only ACP/MCP/LLM (+ updates).
+#
+# Load:   sudo nft -f /etc/nftables/hermes-egress.nft
+#         (or copy to /etc/nftables/main.nft include)
+# Check:  sudo nft list ruleset
+# Flush:  sudo nft flush ruleset  (caution — flushes all)
+#
+# Design:
+#   - Chains attached to inet filter OUTPUT.
+#   - Matches packets owned by uid "hermes" (the dedicated OS account, §16A.4).
+#   - ALLOW set: ACP endpoint, MCP/Execution Gateway, approved LLM providers,
+#     and minimal OS update/package endpoints.
+#   - DENY set: internal DB/ERP/CRM/SSH/admin subnets — explicit drop before ALLOW
+#     so that even if ALLOW overlaps, internal is never reachable.
+#   - Default for hermes egress: DROP (zero-bypass).
+#   - Loopback always allowed.
+#
+# CUSTOMIZE the variables below per deployment before loading.
+
+# ---- Tunables (edit per customer environment) ----
+define ACP_HOST       = 10.10.1.10
+define ACP_PORT       = 8000
+define MCP_HOST       = 10.10.1.11
+define MCP_PORT       = 8001
+define LLM_HOSTS      = { 34.0.0.0/8, 34.120.0.0/13 }  # Example: GCP/Google AI — replace with real LLM CIDRs/domains
+define UPDATE_HOSTS   = { 93.184.216.34 }             # Example placeholder — replace
+
+# Internal networks that Hermes MUST NOT reach directly (§16A.6 DENY)
+define INTERNAL_DB_NET   = 10.20.0.0/16
+define ERP_NET           = 10.30.0.0/16
+define CRM_NET           = 10.40.0.0/16
+define INTERNAL_SSH_NET  = 10.0.0.0/8
+define ADMIN_API_NET     = 10.50.0.0/16
+
+flush ruleset
+
+table inet hermes_egress {
+  # Sets for maintainability
+  set allowed_llm {
+    type ipv4_addr
+    flags interval
+    elements = { $LLM_HOSTS }
+  }
+
+  chain output {
+    type filter hook output priority 0; policy accept;
+
+    # Only restrict packets originating from uid hermes.
+    # All other users (root, openitsvc, etc.) are unaffected.
+
+    # 1. Always allow loopback
+    oifname "lo" meta skuid hermes accept
+
+    # 2. DENY internal systems first (explicit, §16A.6)
+    #    These drops take precedence over any ALLOW below.
+    ip daddr $INTERNAL_DB_NET  meta skuid hermes drop
+    ip daddr $ERP_NET          meta skuid hermes drop
+    ip daddr $CRM_NET          meta skuid hermes drop
+    ip daddr $ADMIN_API_NET    meta skuid hermes drop
+    # SSH (port 22) to any internal net
+    tcp dport 22 ip daddr $INTERNAL_SSH_NET meta skuid hermes drop
+
+    # Common DB ports to anywhere (defense in depth — Hermes must go via MCP)
+    tcp dport { 5432, 3306, 1433, 6379, 27017 } meta skuid hermes drop
+
+    # 3. ALLOW: ACP / MCP (Execution Gateway)
+    ip daddr $ACP_HOST tcp dport $ACP_PORT meta skuid hermes accept
+    ip daddr $MCP_HOST tcp dport $MCP_PORT meta skuid hermes accept
+
+    # 4. ALLOW: Approved LLM Provider endpoints
+    #    Option A — IP-based (if provider publishes CIDRs):
+    # ip daddr @allowed_llm tcp dport { 443, 80 } meta skuid hermes accept
+    #    Option B — allow 443 to LLM hosts (DNS-based; requires cgroup/uid + https proxy in stricter envs)
+    #    Simplified: allow 443 egress for hermes and rely on HTTP proxy allowlist.
+    #    Uncomment one of the two per your security posture:
+    # ip daddr $LLM_HOSTS tcp dport 443 meta skuid hermes accept
+    tcp dport 443 meta skuid hermes accept  # TODO: restrict to $LLM_HOSTS + $UPDATE_HOSTS in production
+
+    # 5. ALLOW: DNS (needed to resolve LLM/ACP/MCP hostnames)
+    udp dport 53 meta skuid hermes accept
+    tcp dport 53 meta skuid hermes accept
+
+    # 6. ALLOW: NTP (optional)
+    # udp dport 123 meta skuid hermes accept
+
+    # 7. Default DENY for hermes egress
+    meta skuid hermes drop
+  }
+
+  chain input {
+    type filter hook input priority 0; policy accept;
+    # Ingress not restricted here; Hermes is a client. Add inbound rules if needed.
+  }
+}

@@ -1,0 +1,80 @@
+[Unit]
+Description=Hermes Runtime — Open Agent OS Agent Runtime (§16A Zero-Bypass)
+Documentation=https://github.com/openit-ai/open-agent-os/docs/architecture-v1.3.md#16A
+After=network.target
+Wants=network-online.target
+
+[Service]
+# --- Identity (§16A.4) ---
+User=hermes
+Group=hermes
+WorkingDirectory=/home/hermes
+SupplementaryGroups=
+
+# --- Execution ---
+# Adjust ExecStart to your Hermes binary / entrypoint.
+# Examples:
+#   ExecStart=/usr/local/bin/hermes --config /home/hermes/.hermes/config.yaml
+#   ExecStart=/home/hermes/.local/bin/hermes
+ExecStart=/usr/local/bin/hermes
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# --- Environment (§16A.3) ---
+Environment=HOME=/home/hermes
+Environment=HERMES_HOME=/home/hermes
+# Do NOT inject enterprise secrets here. Hermes holds only short-lived capabilities.
+# Credential Vault / DB secrets must NOT be passed via EnvironmentFile of this unit.
+# If needed, use a hermes-owned env file with 0600: /home/hermes/.hermes/env
+
+# --- Filesystem Isolation (§16A.5) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/hermes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+PrivateDevices=true
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+
+# Restrict still allows /home/hermes RW; everything else is read-only or invisible.
+# Explicitly deny access to sensitive paths (defense in depth — already covered by
+# ProtectSystem=strict + ProtectHome=true, but listed for audit clarity):
+#   /root, /home/* (except /home/hermes), /etc/shadow, Vault/DB data dirs
+InaccessiblePaths=/root
+# Note: ProtectHome=true already makes /home/* inaccessible except ReadWritePaths.
+# Add additional InaccessiblePaths if your host stores secrets at custom locations:
+# InaccessiblePaths=/var/lib/open-agent-os/vault
+# InaccessiblePaths=/var/lib/postgresql
+# InaccessiblePaths=/etc/open-agent-os/secrets
+
+# --- Privilege Hardening (§16A.4: No sudo / No root) ---
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=true
+SystemCallArchitectures=native
+# Allow common syscalls; tighten further per hardening review if needed.
+# SystemCallFilter=@system-service
+# SystemCallFilter=~@privileged @resources
+
+# --- Resource Limits (tune per node size) ---
+# MemoryMax=2G
+# CPUQuota=200%
+# TasksMax=512
+
+# --- Security: no credential leakage via coredump / logs ---
+# PrivateTmp + RemoveIPC already isolate temp/IPC.
+
+[Install]
+WantedBy=multi-user.target

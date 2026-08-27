@@ -1,15 +1,22 @@
-"""Hermes Runtime Adapter — Security Domain Worker Pool routing (Section 16)."""
+"""Re-export shim — canonical implementation lives in ``runtime_adapter`` package (§16E).
+
+This module preserves ``control_plane.hermes_adapter`` as the import path for
+existing code/tests while delegating to the new ``open-agent-os-runtime-adapter``
+package.
+"""
+
 from __future__ import annotations
-from .router import select_worker_pool
-from .session import SessionRecord
 
-class HermesAdapter:
-    def __init__(self, hermes_base_url: str):
-        self.hermes_base_url = hermes_base_url
+# Re-export the concrete adapter and its alias for backward compatibility
+from runtime_adapter.hermes_adapter import HermesAdapter, HermesRuntimeAdapter  # noqa: F401
+from runtime_adapter.adapter import AgentRuntimeAdapter  # noqa: F401
+from runtime_adapter.factory import get_adapter, ADAPTER_REGISTRY, register_adapter  # noqa: F401
 
-    def resolve_pool(self, session: SessionRecord, action: str | None = None, risk: str = "LOW") -> str:
-        return select_worker_pool(session.security_domain, risk_level=risk, action=action)
-
-    def worker_url(self, pool: str) -> str:
-        # In prod: pool maps to K8s service or VM; in dev: single Hermes instance
-        return self.hermes_base_url
+__all__ = [
+    "HermesAdapter",
+    "HermesRuntimeAdapter",
+    "AgentRuntimeAdapter",
+    "get_adapter",
+    "ADAPTER_REGISTRY",
+    "register_adapter",
+]
