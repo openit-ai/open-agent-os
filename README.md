@@ -1,6 +1,6 @@
-# Open Agent OS v0.1.1
+# Open Agent OS v0.1.1 — Personal AX Business Platform
 
-> **설치형 Enterprise Personal Agent Platform** — 1 user = 1 Logical Personal Agent, Personal Delegation과 Enterprise Authorization을 분리해 개인·기업 업무를 안전하게 연결하는 Source-Available 플랫폼
+> **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
 - **Repository:** `openit-ai/open-agent-os`
 - **Architecture:** `docs/architecture-v1.1.md` (Sections 1–47) — Control Plane / Execution Gateway / Security & Governance 3분할 _(아키텍처 문서 버전 v1.1은 고정, 제품 버전은 v0.1.1)_
