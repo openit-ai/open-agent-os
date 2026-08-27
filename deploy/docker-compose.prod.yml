@@ -1,5 +1,8 @@
-# deploy/docker-compose.prod.yml — production stack (§5 On-Prem / VPS + §31 signed checkpoint → S3)
+# deploy/docker-compose.prod.yml — production stack (§5 On-Prem / VPS + §16D Performance/HPA + §31 signed checkpoint → S3)
 # Extends docker-compose.dev.yml: same 5 services + TLS nginx sidecar, hardening, backups.
+# Resource limits (§16D.1): every service declares deploy.resources.limits/reservations.
+# For Swarm / Compose autoscaling see: docker compose --compatibility + external autoscaler,
+# or migrate to K8s HPA manifests at deploy/k8s/hpa.yaml (recommended for §16D.3 10-30 concurrent sessions).
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d
 #   # or with override: docker compose -f docker-compose.dev.yml -f docker-compose.prod.yml up -d (if dev file used as base)

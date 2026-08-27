@@ -5,8 +5,14 @@ metadata:
   namespace: open-agent-os
   labels:
     app: security
+  annotations:
+    oaos.hpa/minReplicas: "2"
+    oaos.hpa/maxReplicas: "6"
+    oaos.hpa/targetCPU: "70"
+    oaos.hpa/targetMemory: "80"
+    oaos.resources/limits: "cpu=1000m,memory=1Gi"
 spec:
-  replicas: 2
+  replicas: 2  # managed by HPA (deploy/k8s/hpa.yaml) — §16D.1/16D.4
   selector:
     matchLabels:
       app: security

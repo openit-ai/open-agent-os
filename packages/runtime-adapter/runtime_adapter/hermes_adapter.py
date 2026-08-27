@@ -65,11 +65,21 @@ def _session_id_of(session: Any) -> str:
 
 
 class HermesRuntimeAdapter(AgentRuntimeAdapter):
-    """Hermes backend for the runtime-adapter contract."""
+    """Hermes backend for the runtime-adapter contract — §16C optional impl (local fallbacks)."""
 
     def __init__(self, hermes_base_url: str = "http://localhost:8001", timeout_s: float = 30.0):
         self.hermes_base_url = hermes_base_url.rstrip("/")
         self.timeout_s = timeout_s
+        # §16C local state (fallback when Hermes unreachable)
+        from .skills import SkillRegistry as _SR
+        from .observability import ObservabilityBus as _OB
+        from .context import ContextManager as _CM
+
+        self._skills = _SR()
+        self._obs = _OB()
+        self._ctx = _CM()
+        self._models: dict[str, dict[str, Any]] = {}
+        self._current_model: dict[str, Any] = {"model": "hermes-default", "provider": "hermes"}
 
     # ── Legacy helpers preserved from control_plane.hermes_adapter ──
 
@@ -184,6 +194,102 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 continue
         # Hermes not reachable — report degraded but not error for dev
         return {"status": "degraded", "reason": "hermes unreachable", "base_url": self.hermes_base_url}
+
+    # ── §16C optional contracts (local fallbacks) ────────────────────────
+
+    async def reasoning_step(self, session: Any, step_input: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"thought": "local reasoning step", "input": step_input, "session_id": _session_id_of(session)}
+
+    async def loop_until(self, session: Any, *, max_steps: int = 20, done_fn: Any | None = None) -> dict[str, Any]:
+        from .reasoning import SimpleReasoningLoop
+
+        async def _think(s: Any, step: int, hist: Any) -> dict[str, Any]:
+            if step >= max_steps:
+                return {"thought": "max_steps reached", "done": True}
+            return {"thought": f"step {step}", "action": {"tool": "noop", "arguments": {}}, "done": False}
+
+        async def _act(s: Any, action: dict[str, Any]) -> dict[str, Any]:
+            return {"observation": "noop done", "action": action}
+
+        loop = SimpleReasoningLoop(_think, _act)
+        return await loop.loop_until(session, max_steps=max_steps, done_fn=done_fn)
+
+    async def list_tools(self, session: Any | None = None) -> list[dict[str, Any]]:
+        return []
+
+    async def call_tool(self, session: Any, tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"tool": tool_name, "arguments": arguments or {}, "result": "local_stub", "session_id": _session_id_of(session)}
+
+    async def load_skill(self, skill_name: str, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+        m = self._skills.load(manifest or {"name": skill_name})
+        return {"status": "loaded", "skill": m.to_dict()}
+
+    async def invoke_skill(self, session: Any, skill_name: str, action: str | None = None, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await self._skills.invoke(skill_name, action=action, params=params, session=session)
+
+    async def list_skills(self) -> list[dict[str, Any]]:
+        return self._skills.list_dicts()
+
+    async def unload_skill(self, skill_name: str) -> dict[str, Any]:
+        ok = self._skills.unload(skill_name)
+        return {"status": "unloaded" if ok else "not_found", "skill": skill_name}
+
+    async def execute_sandbox(self, session: Any, command: str, language: str = "shell", timeout_s: float = 30.0) -> dict[str, Any]:
+        return {"status": "sandbox_stub", "command": command, "language": language, "session_id": _session_id_of(session)}
+
+    async def get_context(self, session_id: str) -> dict[str, Any]:
+        w = self._ctx.get(session_id)
+        if w is None:
+            return {"session_id": session_id, "messages": [], "usage": {"tokens": 0}}
+        return {"session_id": session_id, "messages": w.get(), "usage": w.usage()}
+
+    async def update_context(self, session_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        w = self._ctx.update(session_id, messages)
+        return {"session_id": session_id, "messages": w.get(), "usage": w.usage()}
+
+    async def compact_context(self, session_id: str, max_tokens: int | None = None) -> dict[str, Any]:
+        w = self._ctx.get(session_id)
+        if w is None:
+            return {"compacted": False, "reason": "no_context"}
+        return await w.compact(max_tokens=max_tokens)
+
+    async def get_context_usage(self, session_id: str) -> dict[str, Any]:
+        w = self._ctx.get(session_id)
+        if w is None:
+            return {"session_id": session_id, "tokens": 0, "messages": 0}
+        return w.usage()
+
+    async def set_model(self, session: Any, model: str, provider: str | None = None) -> dict[str, Any]:
+        self._current_model = {"model": model, "provider": provider or "hermes"}
+        sid = _session_id_of(session)
+        if sid:
+            self._models[sid] = dict(self._current_model)
+        return {"status": "ok", **self._current_model, "session_id": sid}
+
+    async def get_model(self, session: Any | None = None) -> dict[str, Any]:
+        if session is not None:
+            sid = _session_id_of(session)
+            if sid in self._models:
+                return dict(self._models[sid])
+        return dict(self._current_model)
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        return [dict(self._current_model), {"model": "local-mock", "provider": "local"}]
+
+    async def emit_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        from .observability import RuntimeEvent
+
+        rt = RuntimeEvent(
+            event_type=str(event.get("event_type") or event.get("type") or "unknown"),
+            trace_id=str(event.get("trace_id", "")),
+            session_id=str(event.get("session_id", "")),
+            request_id=str(event.get("request_id", "")),
+            agent_id=str(event.get("agent_id", "")),
+            user_id=str(event.get("user_id", "")),
+            data={k: v for k, v in event.items() if k not in ("event_type", "type", "trace_id", "session_id", "request_id", "agent_id", "user_id")},
+        )
+        self._obs.emit(rt)
+        return {"status": "ok", "event": rt.to_dict()}
 
 
 # Backward-compatible alias — legacy imports expect HermesAdapter
