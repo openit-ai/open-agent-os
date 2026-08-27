@@ -28,7 +28,7 @@ except ImportError:
     from .auth import router as auth_router, get_current_admin, AdminUser  # type: ignore
     from .infra import router as infra_router  # type: ignore
 
-app = FastAPI(title="Open Agent OS Admin API", version="1.1.0")
+app = FastAPI(title="Open Agent OS Admin API", version="0.1.1")
 
 # ── CORS ─────────────────────────────────────────────────────────
 app.add_middleware(

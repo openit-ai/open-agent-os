@@ -22,7 +22,7 @@ from .internal_api import CreateSessionRequest, CreateSessionResponse, SendPromp
 from .mattermost_adapter.webhook import router as mattermost_router
 from .demo import router as demo_router
 
-app = FastAPI(title="Open Agent OS — Control Plane", version="1.1.0")
+app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.1")
 acp = ACPAdapter(settings.hermes_base_url)
 app.include_router(mattermost_router, prefix="/v1", tags=["mattermost"])
 app.include_router(demo_router, prefix="/v1", tags=["demo"])

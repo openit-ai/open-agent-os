@@ -34,7 +34,7 @@ try:
 except Exception:
     AgentContext = None  # type: ignore
 
-app = FastAPI(title="Open Agent OS — Execution Gateway", version="1.1.0")
+app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.1")
 
 # Registry & Auth Hook (singletons)
 _registry: MCPRegistry = default_registry
@@ -128,7 +128,7 @@ class ExecuteRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "execution-gateway", "version": "1.1.0"}
+    return {"status": "ok", "service": "execution-gateway", "version": "0.1.1"}
 
 
 @app.get("/v1/tools")

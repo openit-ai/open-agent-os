@@ -1,10 +1,10 @@
-# Open Agent OS v1.1
+# Open Agent OS v0.1.1
 
 > **설치형 Enterprise Personal Agent Platform** — 1 user = 1 Logical Personal Agent, Personal Delegation과 Enterprise Authorization을 분리해 개인·기업 업무를 안전하게 연결하는 Source-Available 플랫폼
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.1.md` (Sections 1–47) — Control Plane / Execution Gateway / Security & Governance 3분할
-- **Status:** `122d9e13` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `108 tests pass`, `npm run build ✓`
+- **Architecture:** `docs/architecture-v1.1.md` (Sections 1–47) — Control Plane / Execution Gateway / Security & Governance 3분할 _(아키텍처 문서 버전 v1.1은 고정, 제품 버전은 v0.1.1)_
+- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `108 tests pass`, `npm run build ✓`
 
 ## 30초 요약
 
@@ -125,6 +125,6 @@ pytest tests/test_admin_backend.py -v # 17 (register/login/JWT/bcrypt/RBAC/healt
 
 - **Licensor:** OpenIT Co., Ltd. / **Licensed Work:** Open Agent OS
 - **Additional Use Grant:** Developer Edition 평가·개발·테스트 목적의 production 외 사용 허용, 그 외 production/호스팅/재배포는 Business/Managed 별도 상업 라이선스 필요
-- **Change Date:** `2030-08-27` (v1.1 기준, 이후 버전은 각 릴리즈일로부터 4년) — **Change License:** Apache 2.0 자동 전환
+- **Change Date:** `2030-08-27` (v0.1.1 기준, 이후 버전은 각 릴리즈일로부터 4년) — **Change License:** Apache 2.0 자동 전환
 - BSL 원문: https://mariadb.com/bsl11/ · Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0
 

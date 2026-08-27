@@ -41,7 +41,7 @@ import uuid
 
 from audit_model import AuditEvent, AuditEventType
 
-app = FastAPI(title="Open Agent OS — Security & Governance", version="1.1.0")
+app = FastAPI(title="Open Agent OS — Security & Governance", version="0.1.1")
 
 # ── 전역 싱글톤 (프로세스 내 공유) ──────────────────────────────
 SIGNING_KEY = os.environ.get("OAOS_SIGNING_KEY", "dev-signing-key-please-change")

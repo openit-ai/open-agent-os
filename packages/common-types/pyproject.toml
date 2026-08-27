@@ -1,6 +1,6 @@
 [project]
 name = "open-agent-os-common-types"
-version = "1.1.0"
+version = "0.1.1"
 description = "Common domain types for Open Agent OS"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.7"]
