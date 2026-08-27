@@ -6,6 +6,52 @@
 - **Architecture:** `docs/architecture-v1.1.md` (Sections 1–47) — Control Plane / Execution Gateway / Security & Governance 3분할 _(아키텍처 문서 버전 v1.1은 고정, 제품 버전은 v0.1.1)_
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `108 tests pass`, `npm run build ✓`
 
+## 왜 Open Agent OS인가 — 시장이 풀지 못한 두 가지 모순
+
+**모순 1. 공용 Agent에 개인 정보를 맡길 수 없다.**
+
+> "누가 자신의 Gmail/Calendar/Drive/Tasks를 공용 Agent에 연결하고 싶겠는가?"
+
+기업용 공용 Agent(`company-agent`)는 구조적으로 답할 수 없다 — *누구의* Gmail인지, *누가* owner인지 불명확하고, credential이 한 곳에 모이면 노출·cross-user leakage·memory 오염·회수 복잡성이 동시에 발생한다. 지식 검색에는 유효하지만, 직원의 일상을 대행하는 Personal Assistant가 될 수 없다. (§2.1)
+
+**모순 2. 개인 도구에 닿지 못하는 Agent는 매일 쓸 이유가 없다.**
+
+메일·일정·문서·할 일·회의·기억에 접근하지 못하는 Agent는 "가끔 쓰는 검색봇"에 머문다 — 낮은 사용빈도 → 낮은 위임 → 낮은 자동화 → AX 전환 효과 없음. (§2.2)
+
+**Open Agent OS의 답: 1인 1 Logical Personal Agent**
+
+```
+개인 업무환경 (Email/Calendar/Drive/Tasks/SaaS/Memory)
+        +  Personal Delegation (내 자원은 내가 위임, 관리자 승인 불필요)
+        ↕  Logical Personal Agent — 직원 디지털 업무 Identity
+        +  Enterprise Authorization (회사 자원은 정책+JIT 승인)
+기업 공동환경 (Mattermost/Slack/Outline/ERP/CRM/GitHub)
+```
+
+AI가 질의응답을 넘어 `파악→정리→탐색→조율→실행→승인→연계→기억`을 수행하는 **일상 업무 실행 주체**가 되는 구조다. (§1, §14)
+
+## 시장 분석
+
+| 축 | 기존 Enterprise AI | Open Agent OS |
+|---|---|---|
+| **대상** | 대기업·클라우드 SaaS 중심 | **중소기업 AX 전환** — 설치형으로 공공/의료/제조까지 확장 용이 (§5) |
+| **배포** | 멀티테넌트 SaaS (데이터 종속) | **고객사 서버/VPS/Private Cloud/K8s** — 데이터 소유권·환경 분리·보안심사·탈퇴 lock-in 최소화 |
+| **Agent 모델** | 공용 Agent 1개 + shared credential | **직원별 Logical Personal Agent** + Hermes Security-Domain Worker Pool(General/Dev/Finance/Admin/High-risk ephemeral) (§16) |
+| **권한** | 단일 RBAC, LLM이 allow/deny | **Personal Delegation ↔ Enterprise Policy 분리**, 모든 판단은 Policy Engine(§25, LLM 아님), `Agent Permission ≤ User Permission` |
+| **품질/신뢰** | 프롬프트 기반, 감사 취약 | **최소권한·사람승인·감사(hash-chain)**, JIT Approval 4단계(거절/이번만/사용자 항상/그룹 항상) (§12, §23) |
+
+**포지셔닝:** Mattermost·Slack·Outline·Notion·Hermes를 대체하지 않는다 — 이들을 Personal Agent 중심으로 **안전하게 연결하는 Control + Security + Execution Platform**이다. (§4)
+
+**수요 근거 — 아침 브리핑 시나리오(§3.1):** Mattermost에서 "오늘 처리할 업무 정리해줘" 한 문장으로 Calendar 4건 + 회신 메일 7건 + 멘션 3건 + 마감 2건 + Drive/Outline/CRM을 종합해 `09:30 고객미팅 / 11:00 개발회의 / 오늘 반드시 처리` 형태로 브리핑 — 개인과 기업 정보에 동시 접근할 때만 가능한 가치.
+
+## 핵심 가치 5가지
+
+1. **Personal-First, Enterprise-Safe** — 내 Calendar/Gmail은 내가 위임(§9), Production/ERP/고객DB는 회사 정책+승인(§11). UX와 보안이 동시에 자연스럽다. (§13)
+2. **진짜 격리** — `agent:assistant:kim`은 `employee:kim` 소유 자원만 본다. Cross-user는 항상 DENY, plaintext token 저장 금지, Hermes 프로세스에 장기 저장 금지(§10). 108 tests로 검증.
+3. **사람이 승인하는 고위험 실행** — `MERGE/DEPLOY/PAY/EXPORT` 등 HIGH risk(§21)는 Capability Token(HS256 300s, nonce/jti replay 방지) + HMAC 승인 요청(§24) + Admin Console 4버튼으로만 실행.
+4. **감사 가능한 운영** — 모든 권한·위임·실행은 Audit Ledger에 hash-chain+HMAC checkpoint로 기록, 변조 즉시 탐지(§30-31). `verify_chain` / `checkpoint` API 제공.
+5. **설치형 Source-Available** — BSL 1.1 (4년 후 Apache 2.0 전환), 고객 인프라에 그대로 설치. SaaS 종속 없이 평가(Developer) → 운영(Business/Managed)으로 확장. (§5, Editions)
+
 ## 30초 요약
 
 ```
