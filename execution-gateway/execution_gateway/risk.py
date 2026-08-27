@@ -54,8 +54,12 @@ class DataClassification(str, Enum):
     SECRET = "SECRET"
 
 
-# Section 21 — 결정적 매핑
-HIGH_RISK_ACTIONS = {"SEND", "DELETE", "DEPLOY", "MERGE", "PAY", "EXPORT", "SHARE", "ADMIN"}
+# Section 21 — 결정적 매핑 (+ §16H BULK/EXPORT escalation)
+HIGH_RISK_ACTIONS = {
+    "SEND", "DELETE", "DEPLOY", "MERGE", "PAY", "EXPORT", "SHARE", "ADMIN",
+    # §16H.3 — bulk/export/external must escalate to HIGH (tool_policy 연동)
+    "BULK_READ", "BULK_DOWNLOAD", "BULK_EXPORT", "SHARE_EXTERNAL", "SEND_EXTERNAL",
+}
 MEDIUM_RISK_ACTIONS = {"CREATE", "MODIFY", "EXECUTE"}
 
 # bulk/PII/external 감지 키워드

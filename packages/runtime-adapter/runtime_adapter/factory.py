@@ -39,23 +39,41 @@ def get_adapter(name: str | None = None, **kwargs) -> AgentRuntimeAdapter:
                 return HermesRuntimeAdapter(**kwargs) if kwargs else HermesRuntimeAdapter()
 
             ADAPTER_REGISTRY[key] = _hermes_factory
+        elif key == "safe":
+            from .safe_adapter import SafeRuntimeAdapter
+
+            def _safe_factory() -> AgentRuntimeAdapter:
+                return SafeRuntimeAdapter(**kwargs) if kwargs else SafeRuntimeAdapter()
+
+            ADAPTER_REGISTRY[key] = _safe_factory
         else:
             available = ", ".join(sorted(ADAPTER_REGISTRY.keys())) or "(none)"
             raise ValueError(f"Unknown runtime adapter '{name}'. Available: {available}")
 
     factory = ADAPTER_REGISTRY[key]
-    # If caller passed kwargs and factory is the default hermes one, re-invoke with kwargs
-    if kwargs and key == "hermes":
-        from .hermes_adapter import HermesRuntimeAdapter
+    # If caller passed kwargs and factory is the default hermes/safe one, re-invoke with kwargs
+    if kwargs and key in ("hermes", "safe"):
+        if key == "hermes":
+            from .hermes_adapter import HermesRuntimeAdapter
 
-        return HermesRuntimeAdapter(**kwargs)
+            return HermesRuntimeAdapter(**kwargs)
+        else:
+            from .safe_adapter import SafeRuntimeAdapter
+
+            return SafeRuntimeAdapter(**kwargs)
     return factory()
 
 
-# Eagerly register hermes so ADAPTER_REGISTRY is populated on import
+# Eagerly register hermes + safe so ADAPTER_REGISTRY is populated on import
 try:
     from .hermes_adapter import HermesRuntimeAdapter as _Hermes
 
     ADAPTER_REGISTRY.setdefault("hermes", lambda: _Hermes())
+except Exception:  # pragma: no cover
+    pass
+try:
+    from .safe_adapter import SafeRuntimeAdapter as _Safe
+
+    ADAPTER_REGISTRY.setdefault("safe", lambda: _Safe())
 except Exception:  # pragma: no cover
     pass

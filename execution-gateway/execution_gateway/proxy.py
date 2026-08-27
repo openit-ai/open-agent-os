@@ -22,6 +22,15 @@ except ImportError:
     from execution_gateway.risk import classify, RiskLevel  # type: ignore
     from execution_gateway.normalize import normalize_resource, canonicalize_action  # type: ignore
 
+# §16I Data Access hook (deterministic, stub possible)
+try:
+    from .data_access import get_data_access_policy  # type: ignore
+except ImportError:
+    try:
+        from execution_gateway.data_access import get_data_access_policy  # type: ignore
+    except Exception:
+        get_data_access_policy = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,6 +190,30 @@ async def proxy_tool_call(
     except ValueError:
         resource = str(raw_resource)
 
+    # 1b. §16I Data Access hook — 결정론적 (stub 가능)
+    # Direct DB / Production 접근은 즉시 DENY, 그 외는 read/write 소스 검증
+    if get_data_access_policy is not None:
+        try:
+            _policy = get_data_access_policy()
+            _da = _policy.check(action, resource, source=context.get("data_source") or context.get("source"), user=context.get("user_id"))
+            # direct_db / blast radius DENY만 hard block, 그 외는 audit 힌트로만 기록
+            if _da.decision == "DENY" and ("direct_db" in _da.reason.lower() or "direct" in _da.reason.lower() or "blast_radius" in _da.reason.lower() or "production" in resource.lower()):
+                return {
+                    "error": "DATA_ACCESS_DENIED",
+                    "reason": _da.reason,
+                    "risk": "HIGH",
+                    "trace_id": trace_id,
+                    "request_id": request_id,
+                    "data_access": {"decision": _da.decision, "reason": _da.reason, "resource": resource, "action": action},
+                }
+            # store for later audit attachment
+            _data_access_hint = {"decision": _da.decision, "reason": _da.reason, "required_source": _da.required_source}
+        except Exception as e:
+            logger.debug("data_access check failed: %s", e)
+            _data_access_hint = None
+    else:
+        _data_access_hint = None
+
     # 2. risk 분류 (deterministic)
     risk = classify(
         action,
@@ -324,5 +357,9 @@ async def proxy_tool_call(
         "request_id": request_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    # §16I data_access hint attach
+    if "_data_access_hint" in locals() and _data_access_hint:
+        result["data_access"] = _data_access_hint
+        result["audit"]["data_access"] = _data_access_hint
 
     return result
