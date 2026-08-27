@@ -1,0 +1,87 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oaos-ingress
+  namespace: open-agent-os
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Uncomment for cert-manager auto TLS:
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["open-agent-os.example.com"]
+      secretName: oaos-tls  # kubectl create secret tls oaos-tls --cert=tls.crt --key=tls.key -n open-agent-os
+  rules:
+    - host: open-agent-os.example.com
+      http:
+        paths:
+          # Control Plane — sessions
+          - path: /v1/sessions
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 8000
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 8000
+          # Execution Gateway
+          - path: /v1/execution
+            pathType: Prefix
+            backend:
+              service:
+                name: execution-gateway
+                port:
+                  number: 8001
+          # Security — policy, audit, delegation, token, approval
+          - path: /v1/policy
+            pathType: Prefix
+            backend:
+              service:
+                name: security
+                port:
+                  number: 8002
+          - path: /v1/audit
+            pathType: Prefix
+            backend:
+              service:
+                name: security
+                port:
+                  number: 8002
+          - path: /v1/delegation
+            pathType: Prefix
+            backend:
+              service:
+                name: security
+                port:
+                  number: 8002
+          - path: /v1/token
+            pathType: Prefix
+            backend:
+              service:
+                name: security
+                port:
+                  number: 8002
+          - path: /v1/approval
+            pathType: Prefix
+            backend:
+              service:
+                name: security
+                port:
+                  number: 8002
+          # Fallback → control-plane
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 8000

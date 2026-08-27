@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution-gateway
+  namespace: open-agent-os
+  labels:
+    app: execution-gateway
+spec:
+  selector:
+    app: execution-gateway
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001

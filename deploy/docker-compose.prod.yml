@@ -1,1 +1,278 @@
-# prod: same + TLS, backups, signed audit checkpoints → S3/object storage
+# deploy/docker-compose.prod.yml — production stack (§5 On-Prem / VPS + §31 signed checkpoint → S3)
+# Extends docker-compose.dev.yml: same 5 services + TLS nginx sidecar, hardening, backups.
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#   # or with override: docker compose -f docker-compose.dev.yml -f docker-compose.prod.yml up -d (if dev file used as base)
+
+services:
+  # ── TLS Termination — nginx sidecar (§5, §16A.6) ──────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: oaos-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"    # HTTP → redirect to 443
+      - "443:443"  # HTTPS
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - nginx-cache:/var/cache/nginx
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      execution-gateway:
+        condition: service_healthy
+      security:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    networks: [oaos-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Postgres (§16A.5 persistence) ─────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: oaos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-open_agent_os}
+      POSTGRES_USER: ${POSTGRES_USER:-open_agent_os}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    # Do NOT expose 5432 publicly in prod — internal only (remove ports or bind 127.0.0.1)
+    expose: ["5432"]
+    # ports: ["127.0.0.1:5432:5432"]  # uncomment for host debug only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-open_agent_os} -d ${POSTGRES_DB:-open_agent_os}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    networks: [oaos-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── Redis (§16A.5 SessionStore) ──────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: oaos-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-}"]
+    volumes:
+      - redisdata:/data
+    expose: ["6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    networks: [oaos-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Control Plane (8000) ─────────────────────────────────────
+  control-plane:
+    build:
+      context: ../control-plane
+      dockerfile: Dockerfile
+    image: open-agent-os/control-plane:${IMAGE_TAG:-latest}
+    container_name: oaos-control-plane
+    restart: unless-stopped
+    env_file: [../.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-open_agent_os}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-open_agent_os}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      # Audit checkpoint → S3 (§31)
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_S3_REGION: ${AWS_S3_REGION:-ap-northeast-2}
+      AWS_S3_PREFIX: ${AWS_S3_PREFIX:-audit-checkpoints/}
+      AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:?AUDIT_SIGNING_KEY required}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY required}
+      OAOS_SIGNING_KEY: ${OAOS_SIGNING_KEY:-${AUDIT_SIGNING_KEY}}
+      OAOS_ENCRYPTION_KEY: ${OAOS_ENCRYPTION_KEY:?OAOS_ENCRYPTION_KEY required}
+      TENANT_ID: ${TENANT_ID:-default}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose: ["8000"]
+    volumes:
+      - control-plane-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    networks: [oaos-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── Execution Gateway (8001) ─────────────────────────────────
+  execution-gateway:
+    build:
+      context: ../execution-gateway
+      dockerfile: Dockerfile
+    image: open-agent-os/execution-gateway:${IMAGE_TAG:-latest}
+    container_name: oaos-execution-gateway
+    restart: unless-stopped
+    env_file: [../.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-open_agent_os}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-open_agent_os}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_S3_REGION: ${AWS_S3_REGION:-ap-northeast-2}
+      AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:?AUDIT_SIGNING_KEY required}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY required}
+      OAOS_SIGNING_KEY: ${OAOS_SIGNING_KEY:-${AUDIT_SIGNING_KEY}}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose: ["8001"]
+    volumes:
+      - execution-gateway-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).status==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    networks: [oaos-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── Security & Governance (8002) ─────────────────────────────
+  security:
+    build:
+      context: ../security
+      dockerfile: Dockerfile
+    image: open-agent-os/security:${IMAGE_TAG:-latest}
+    container_name: oaos-security
+    restart: unless-stopped
+    env_file: [../.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-open_agent_os}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-open_agent_os}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_S3_REGION: ${AWS_S3_REGION:-ap-northeast-2}
+      AWS_S3_PREFIX: ${AWS_S3_PREFIX:-audit-checkpoints/}
+      AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:?AUDIT_SIGNING_KEY required}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY required}
+      OAOS_SIGNING_KEY: ${OAOS_SIGNING_KEY:-${AUDIT_SIGNING_KEY}}
+      OAOS_ENCRYPTION_KEY: ${OAOS_ENCRYPTION_KEY:?OAOS_ENCRYPTION_KEY required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose: ["8002"]
+    volumes:
+      - security-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3).status==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    networks: [oaos-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  nginx-cache:
+    driver: local
+  control-plane-logs:
+    driver: local
+  execution-gateway-logs:
+    driver: local
+  security-logs:
+    driver: local
+
+networks:
+  oaos-net:
+    driver: bridge

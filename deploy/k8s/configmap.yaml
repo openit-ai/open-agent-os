@@ -1,0 +1,18 @@
+# ConfigMap — non-secret env (override per env)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oaos-config
+  namespace: open-agent-os
+data:
+  POSTGRES_DB: "open_agent_os"
+  POSTGRES_USER: "open_agent_os"
+  TENANT_ID: "default"
+  HERMES_BASE_URL: "http://execution-gateway:8001"
+  AWS_S3_REGION: "ap-northeast-2"
+  AWS_S3_PREFIX: "audit-checkpoints/"
+  AWS_S3_BUCKET: ""  # set via: kubectl patch configmap oaos-config -p '{"data":{"AWS_S3_BUCKET":"my-bucket"}}'
+  LOG_LEVEL: "info"
+  # Service URLs (intra-cluster)
+  DATABASE_URL: "postgresql+asyncpg://open_agent_os:$(POSTGRES_PASSWORD)@postgres:5432/open_agent_os"
+  REDIS_URL: "redis://:$(REDIS_PASSWORD)@redis:6379/0"

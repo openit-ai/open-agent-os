@@ -4,9 +4,11 @@
 - HIGH-risk는 token 필수
 - resource/action normalization
 - risk 분류 + audit trace 유지
+- P1-2: 실제 MCP transport 라우팅 + mock fallback
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 from datetime import datetime, timezone
@@ -20,6 +22,125 @@ except ImportError:
     from execution_gateway.risk import classify, RiskLevel  # type: ignore
     from execution_gateway.normalize import normalize_resource, canonicalize_action  # type: ignore
 
+logger = logging.getLogger(__name__)
+
+
+def _get_registry():
+    """Lazy import to avoid circular dependency at module load."""
+    try:
+        from .mcp_registry import default_registry
+        return default_registry
+    except ImportError:
+        try:
+            from execution_gateway.mcp_registry import default_registry  # type: ignore
+            return default_registry
+        except Exception:
+            return None
+
+
+# Map MCP tool names to MockToolExecutor method names
+_TOOL_TO_MOCK: dict[str, str] = {
+    "gmail_search": "gmail_search",
+    "gmail_read": "gmail_search",
+    "gmail_send": "gmail_search",
+    "calendar_list": "calendar_list",
+    "calendar_read": "calendar_list",
+    "calendar_create": "calendar_list",
+    "calendar_modify": "calendar_list",
+    "drive_search": "drive_recent",
+    "drive_read": "drive_recent",
+    "drive.recent": "drive_recent",
+    "tasks_list": "tasks_list",
+    "tasks_create": "tasks_list",
+    "tasks_modify": "tasks_list",
+    "outline_search": "outline_search",
+    "outline_read": "outline_search",
+    "outline_create": "outline_search",
+    "outline_modify": "outline_search",
+    "mattermost.mentions": "mattermost_mentions",
+    "crm_search": "crm_search",
+    # dot-style variants
+    "gmail.search": "gmail_search",
+    "calendar.list": "calendar_list",
+    "tasks.list": "tasks_list",
+    "drive.recent": "drive_recent",
+    "outline.search": "outline_search",
+}
+
+
+def _mock_fallback(tool_name: str, args: dict, context: dict) -> dict | None:
+    """Execute via MockToolExecutor if tool is known. Returns result dict or None."""
+    method_name = _TOOL_TO_MOCK.get(tool_name)
+    if not method_name:
+        # Try generic: replace _ with . and vice versa
+        alt = tool_name.replace("_", ".")
+        method_name = _TOOL_TO_MOCK.get(alt)
+        if not method_name:
+            alt2 = tool_name.replace(".", "_")
+            method_name = _TOOL_TO_MOCK.get(alt2)
+    if not method_name:
+        return None
+    try:
+        from .mock_executor import MockToolExecutor  # type: ignore
+    except ImportError:
+        try:
+            from execution_gateway.mock_executor import MockToolExecutor  # type: ignore
+        except Exception:
+            return None
+    try:
+        executor = MockToolExecutor(context)
+        method = getattr(executor, method_name, None)
+        if not method:
+            return None
+        # Call with appropriate args — mock methods accept different signatures
+        # We introspect: if args contains query/limit, pass them
+        result = method(**{k: v for k, v in args.items() if k in ("query", "limit", "date", "filter")}) if args else method()
+        # If method doesn't accept kwargs, try positional fallback
+        if not isinstance(result, dict):
+            result = {"result": result}
+        return result
+    except TypeError:
+        # Signature mismatch — try no-arg call
+        try:
+            executor = MockToolExecutor(context)  # type: ignore
+            method = getattr(executor, method_name)
+            result = method()
+            return result if isinstance(result, dict) else {"result": result}
+        except Exception as e:
+            logger.debug("mock fallback TypeError for %s: %s", tool_name, e)
+            return None
+    except Exception as e:
+        logger.debug("mock fallback failed for %s: %s", tool_name, e)
+        return None
+
+
+async def _try_transport_call(tool_name: str, args: dict, context: dict) -> tuple[dict | None, str | None]:
+    """Attempt real MCP transport call. Returns (result, error)."""
+    registry = _get_registry()
+    if registry is None:
+        return None, "no registry"
+    server = registry.find_tool(tool_name)
+    if server is None:
+        return None, f"unknown tool: {tool_name}"
+    # If server is mock or has no real transport, signal fallback
+    if server.transport == "mock":
+        return None, "mock transport — use fallback"
+    # Check if transport instance exists (url/command present)
+    transport = server.get_transport() if hasattr(server, "get_transport") else None
+    if transport is None:
+        return None, "no transport — fallback"
+    try:
+        raw = await server.call_tool(tool_name, args)
+        return raw, None
+    except Exception as e:
+        # Import error type check — MCPTransportError or generic
+        err_msg = str(e)
+        # If it's a "mock" or "not connected" error, allow fallback
+        if "mock" in err_msg.lower() or "not connected" in err_msg.lower():
+            return None, err_msg
+        # Real transport error — surface it but allow caller to decide fallback
+        return None, err_msg
+
 
 async def proxy_tool_call(
     tool_name: str,
@@ -27,7 +148,7 @@ async def proxy_tool_call(
     capability_token: dict | str | None,
     context: dict,
 ) -> dict:
-    """Tool proxy — HIGH-risk capability 강제 + delegation binding + trace.
+    """Tool proxy — HIGH-risk capability 강제 + delegation binding + trace + MCP routing.
 
     Args:
         tool_name: 호출할 MCP tool 이름
@@ -41,7 +162,7 @@ async def proxy_tool_call(
         }
 
     Returns:
-        dict with ok / error, risk, trace_id, tool
+        dict with ok / error, risk, trace_id, tool, (optional) transport_result / mock_result
     """
     raw_action = context.get("action", "EXECUTE")
     raw_resource = context.get("resource", tool_name)
@@ -55,7 +176,6 @@ async def proxy_tool_call(
         action = canonicalize_action(str(raw_action))
     except ValueError:
         action = str(raw_action).upper().strip()
-
     try:
         resource = normalize_resource(str(raw_resource))
     except ValueError:
@@ -112,11 +232,52 @@ async def proxy_tool_call(
                 "request_id": request_id,
             }
 
-    # 5. delegation binding trace (감사)
-    # 실제 MCP forward는 여기서 수행 — 현재는 stub이므로 성공으로 반환
-    # prod에서는 MCP client로 위임 (httpx / stdio)
+    # 5. MCP transport 라우팅 — capability 검증 후 실제 transport로
+    transport_result: dict | None = None
+    transport_error: str | None = None
+    use_mock_fallback = context.get("use_mock_fallback", True)
+    # Allow caller to disable mock fallback explicitly
+    if context.get("force_transport") or not use_mock_fallback:
+        # Strict: must succeed via transport
+        tr, err = await _try_transport_call(tool_name, args, context)
+        if tr is not None:
+            transport_result = tr
+        else:
+            # Check if error is "mock" vs real transport failure
+            if err and "mock" in err.lower():
+                if not use_mock_fallback:
+                    return {
+                        "error": "TRANSPORT_REQUIRED",
+                        "reason": f"tool {tool_name} has no real transport: {err}",
+                        "risk": risk_value,
+                        "trace_id": trace_id,
+                        "request_id": request_id,
+                    }
+                # fallback to mock below
+            else:
+                return {
+                    "error": "TRANSPORT_ERROR",
+                    "reason": err or "transport call failed",
+                    "risk": risk_value,
+                    "trace_id": trace_id,
+                    "request_id": request_id,
+                }
+    else:
+        # Default: try transport, fallback to mock on failure
+        tr, err = await _try_transport_call(tool_name, args, context)
+        if tr is not None:
+            transport_result = tr
+        else:
+            transport_error = err  # record for debug, but continue to mock
 
-    # 6. 성공 — trace 전파
+    mock_result: dict | None = None
+    if transport_result is None:
+        # 6. mock fallback (MCP 서버 없을 때)
+        mock_result = _mock_fallback(tool_name, args, context)
+        # If mock also returned None, we still succeed with stub (backward compat for unknown tools)
+        # But if tool was found via registry as mock, mock_result should have data for known tools
+
+    # 7. 성공 — trace 전파
     result: dict[str, Any] = {
         "ok": True,
         "risk": risk_value,
@@ -133,6 +294,25 @@ async def proxy_tool_call(
         result["capability_jti"] = token_dict["jti"]
     elif token_dict and token_dict.get("nonce"):
         result["capability_nonce"] = token_dict["nonce"]
+
+    # Attach execution results
+    if transport_result is not None:
+        result["transport"] = "real"
+        result["transport_result"] = transport_result
+        # Normalize common MCP content envelope: {content: [{type,text}]} or {result:...}
+        result["data"] = transport_result
+    elif mock_result is not None:
+        result["transport"] = "mock"
+        result["mock_result"] = mock_result
+        result["data"] = mock_result
+        if transport_error:
+            result["transport_error"] = transport_error
+    else:
+        # Stub success — tool not in mock map, but capability/risk checks passed
+        result["transport"] = "stub"
+        result["data"] = {"tool": tool_name, "args": args}
+        if transport_error:
+            result["transport_error"] = transport_error
 
     # audit hint (호출자가 audit ledger에 기록할 수 있도록)
     result["audit"] = {

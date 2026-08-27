@@ -5,4 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.111", "pydantic>=2.7", "httpx>=0.27",
     "open-agent-os-common-types", "open-agent-os-policy-model",
+    # P1-2 MCP transports: pure httpx + stdio (no mcp SDK required).
+    # Optional: httpx-sse for richer SSE parsing — not required since manual SSE parsing is sufficient.
+    # To enable: pip install httpx-sse  (kept optional to avoid extra dep)
 ]

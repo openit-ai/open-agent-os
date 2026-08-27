@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+  namespace: open-agent-os
+  labels:
+    app: control-plane
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: control-plane
+  template:
+    metadata:
+      labels:
+        app: control-plane
+    spec:
+      containers:
+        - name: control-plane
+          image: open-agent-os/control-plane:latest  # override with registry/tag
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: REDIS_PASSWORD
+                  optional: true
+            - name: JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: JWT_SIGNING_KEY
+            - name: AUDIT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: AUDIT_SIGNING_KEY
+            - name: OAOS_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: OAOS_SIGNING_KEY
+            - name: OAOS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: OAOS_ENCRYPTION_KEY
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)"
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+            - name: AWS_S3_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: AWS_S3_BUCKET
+            - name: AWS_S3_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: AWS_S3_REGION
+            - name: AWS_S3_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: AWS_S3_PREFIX
+            - name: TENANT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: TENANT_ID
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: LOG_LEVEL
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: POSTGRES_USER
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
