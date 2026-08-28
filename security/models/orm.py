@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, Index, ForeignKey, LargeBinary
+import sqlalchemy as sa
+from sqlalchemy import String, Text, DateTime, Index, ForeignKey, LargeBinary, Integer, Float
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import JSON as GenericJSON
 from sqlalchemy.orm import Mapped, mapped_column
@@ -198,3 +199,64 @@ class AdminStateORM(Base):
     category: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
+# ── v1.6 §22 Admin persistence (admin_users, infra_services, user_mappings) ──
+# sqlite-compat: Text PKs, GenericJSON extra, no NOW() / server_default
+
+
+class AdminUserORM(Base):
+    """Admin infra user — mirrors admin-console/backend/auth.py AdminUser."""
+
+    __tablename__ = "admin_users"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+
+    __table_args__ = (Index("ix_admin_users_email", "email"),)
+
+
+class AdminInfraServiceORM(Base):
+    """Infra service registry — mirrors admin-console/backend/infra.py InfraService."""
+
+    __tablename__ = "admin_infra_services"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    host: Mapped[str] = mapped_column(Text, nullable=False)
+    port: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    health_path: Mapped[str] = mapped_column(Text, nullable=False, default="/health")
+    expected_status: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=200)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="unknown")
+    latency_ms: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    last_check: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+
+
+class AdminUserMappingORM(Base):
+    """Mattermost -> employee/agent mapping — mirrors admin-console/backend/user_mappings.py."""
+
+    __tablename__ = "admin_user_mappings"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    mm_user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    mm_username: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    # task spec column + persistence compat column
+    employee_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    employee_principal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_admin_user_mappings_mm_user_id", "mm_user_id"),
+        Index("ix_admin_user_mappings_mm_username", "mm_username"),
+    )

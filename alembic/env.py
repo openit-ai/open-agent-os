@@ -41,6 +41,9 @@ from security.models.orm import (  # noqa: F401,E402
     MemoryORM,
     MemorySourceORM,
     AdminStateORM,
+    AdminUserORM,
+    AdminInfraServiceORM,
+    AdminUserMappingORM,
 )
 
 target_metadata = Base.metadata
