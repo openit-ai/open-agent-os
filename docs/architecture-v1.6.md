@@ -847,7 +847,7 @@ Agent Runtime
 
 최소 하나의 Runtime 구현체는 필요하지만 **Hermes Runtime은 필수 설치 구성요소가 아니다.**
 
-> **v1.6.3 Runtime Mode 조건부 동작**: `runtime_mode` 플래그로 분기한다 — **Hermes 선택 시** LLM 호출은 Hermes Agent 내부에서 라우팅되므로 **Multi-Provider 설정(UI·Registry·Fallback)은 비활성**이며, **LLM Runtime 선택 시**에만 §16.1.2의 5 Providers(claude/codex/gemini/opencode/ollama)가 Admin UI에서 설정된다. 혼합 설치 시 테넌트/세션의 `runtime_mode`에 따라 조건부 렌더링된다.
+> **v1.6.3 Runtime Mode 조건부 동작**: `runtime_mode` 플래그로 분기한다 — **Hermes 선택 시** LLM 호출은 Hermes Agent 내부에서 라우팅되므로 **Multi-Provider 설정(UI·Registry·Fallback)은 비활성**이며, **LLM Runtime 선택 시**에만 §16.1.2의 6 Providers(claude/codex/gemini/opencode-go/openrouter/ollama)가 Admin UI에서 설정된다. 혼합 설치 시 테넌트/세션의 `runtime_mode`에 따라 조건부 렌더링된다.
 
 ## 16.1 LLM Runtime
 
@@ -958,21 +958,22 @@ Copy of pydantic-ai MIT code
 
 
 
-### 16.1.2 LLM Multi-Provider — 5 Providers + Registry + Runtime Dispatch + Fallback — v1.6.3 신규
+### 16.1.2 LLM Multi-Provider — 6 Providers + Registry + Runtime Dispatch + Fallback — v1.6.3 신규
 
-> **목표**: LLM Runtime을 단일 벤더/모델 종속에서 분리하고, **5개 프로바이더**(claude / codex / gemini / opencode / ollama)를 **동일 인터페이스**로 운영한다. Argo `runners.mjs`의 Runner Registry 패턴을 차용—프로바이더를 레지스트리에 등록하고, Admin UI에서 활성/우선순위/모델을 관리하며, 런타임은 Task별 선택 + 실패 시 Fallback을 수행한다. 비밀키는 Vault에만 저장한다.
+> **목표**: LLM Runtime을 단일 벤더/모델 종속에서 분리하고, **6개 프로바이더**(claude / codex / gemini / opencode-go / openrouter / ollama)를 **동일 인터페이스**로 운영한다. Argo `runners.mjs`의 Runner Registry 패턴을 차용—프로바이더를 레지스트리에 등록하고, Admin UI에서 활성/우선순위/모델을 관리하며, 런타임은 Task별 선택 + 실패 시 Fallback을 수행한다. 비밀키는 Vault에만 저장한다.
 
-#### (1) 지원 프로바이더 5종
+#### (1) 지원 프로바이더 6종
 
 | ID | Provider | Backend / Protocol | 대표 모델 문자열 | 용도 |
 |---|---|---|---|---|
 | `claude` | Anthropic Claude | Anthropic Messages API (via litellm) | `claude:claude-3-5-sonnet`, `anthropic:claude-3-5-sonnet` | 고품질 추론/장문 요약 |
 | `codex` | OpenAI Codex | OpenAI Responses/Chat API | `codex:gpt-5-codex`, `openai:gpt-4o` | 코드 생성·리팩터링 |
 | `gemini` | Google Gemini | Google Generative API (via litellm) | `gemini:gemini-2.0-flash`, `google:gemini-1.5-pro` | 멀티모달·저비용 |
-| `opencode` | OpenCode OSS | OpenAI-compatible HTTP (`OPENCODE_BASE_URL`) | `opencode:qwen3-coder`, `opencode:deepseek-v3` | 셀프호스팅 OSS |
+| `opencode-go` | OpenCode-Go | OpenCode-Go binary/HTTP (`OPENCODE_BASE_URL`/`OPENCODE_BIN`) | `opencode-go:qwen3-coder`, `opencode-go:deepseek-v3` | 셀프호스팅 OSS |
+| `openrouter` | OpenRouter | OpenRouter Aggregated Gateway (`OPENROUTER_BASE_URL`=https://openrouter.ai/api/v1) | `openrouter:openrouter/auto`, `openrouter:anthropic/claude-3.5-sonnet` | 멀티 모델 게이트웨이 |
 | `ollama` | Ollama Local | Ollama `/api/chat` (local) | `ollama:llama3`, `ollama:qwen2.5` | 에어갭/로컬 추론 |
 
-- `model` 문자열은 `"provider:model-id"` 형태를 유지(§16.1.1). 예: `claude:claude-3-5-sonnet`, `ollama:llama3`.
+- `model` 문자열은 `"provider:model-id"` 형태를 유지(§16.1.1). 예: `claude:claude-3-5-sonnet`, `openrouter:openrouter/auto`, `ollama:llama3`.
 - 미등록 provider 문자열은 `UNKNOWN_PROVIDER`로 감사 로그 후 `DEFAULT_PROVIDER`로 폴백(또는 설정 시 거부).
 
 ```text
@@ -980,8 +981,9 @@ Provider Abstraction
 ├─ claude   (Anthropic)
 ├─ codex    (OpenAI)
 ├─ gemini   (Google)
-├─ opencode (OSS / OpenAI-compat)
-└─ ollama   (Local / Ollama)
+├─ opencode-go (OSS / OpenCode-Go)
+├─ openrouter  (Aggregated Gateway)
+└─ ollama      (Local / Ollama)
        ↓
 LLMProviderAdapter (litellm / http)
        ↓
@@ -995,7 +997,7 @@ OAOSContext + output_type + ToolOutputLimits (재사용)
 ```python
 @dataclass(frozen=True)
 class ProviderSpec:
-    id: str                     # claude|codex|gemini|opencode|ollama
+    id: str                     # claude|codex|gemini|opencode-go|openrouter|ollama
     display_name: str           # "Claude (Anthropic)"
     adapter: str                # "litellm" | "opencode_http" | "ollama_http"
     models: list[str]           # 허용 모델 id 목록
@@ -1009,7 +1011,9 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
     "claude":   ProviderSpec(id="claude",   display_name="Claude (Anthropic)", adapter="litellm", models=["claude-3-5-sonnet","claude-3-5-haiku"], default_model="claude-3-5-sonnet", endpoint_env=None, auth_kind="vault:secret_ref", capabilities={"streaming","tool_calling","vision","json_mode"}, enabled_by_default=True),
     "codex":    ProviderSpec(id="codex",    display_name="Codex (OpenAI)",     adapter="litellm", models=["gpt-4o","gpt-5-codex","o3-mini"], default_model="gpt-4o", endpoint_env=None, auth_kind="vault:secret_ref", capabilities={"streaming","tool_calling","vision","json_mode"}, enabled_by_default=True),
     "gemini":   ProviderSpec(id="gemini",   display_name="Gemini (Google)",    adapter="litellm", models=["gemini-2.0-flash","gemini-1.5-pro"], default_model="gemini-2.0-flash", endpoint_env=None, auth_kind="vault:secret_ref", capabilities={"streaming","tool_calling","vision","json_mode"}, enabled_by_default=False),
-    "opencode": ProviderSpec(id="opencode", display_name="OpenCode OSS",       adapter="opencode_http", models=["qwen3-coder","deepseek-v3"], default_model="qwen3-coder", endpoint_env="OPENCODE_BASE_URL", auth_kind="vault:secret_ref", capabilities={"streaming","tool_calling","json_mode"}, enabled_by_default=False),
+    "opencode-go": ProviderSpec(id="opencode-go", display_name="OpenCode-Go",    adapter="opencode_go", models=["qwen3-coder","deepseek-v3"], default_model="qwen3-coder", endpoint_env="OPENCODE_BASE_URL", auth_kind="vault:secret_ref", capabilities={"streaming","tool_calling","json_mode"}, enabled_by_default=False),
+    # opencode → opencode-go alias (backward compat)
+    "openrouter": ProviderSpec(id="openrouter", display_name="OpenRouter",       adapter="openrouter", models=["openrouter/auto","anthropic/claude-3.5-sonnet","openai/gpt-4o"], default_model="openrouter/auto", endpoint_env="OPENROUTER_BASE_URL", auth_kind="vault:secret_ref", capabilities={"streaming","tool_calling","vision","json_mode"}, enabled_by_default=False),
     "ollama":   ProviderSpec(id="ollama",   display_name="Ollama Local",       adapter="ollama_http", models=["llama3","qwen2.5","mistral"], default_model="llama3", endpoint_env="OLLAMA_BASE_URL", auth_kind="none", capabilities={"streaming","tool_calling"}, enabled_by_default=False),
 }
 ```
@@ -1032,11 +1036,11 @@ DB 테이블(예):
 ```sql
 CREATE TABLE llm_provider_config (
   tenant_id text NOT NULL,
-  provider_id text NOT NULL CHECK (provider_id IN ('claude','codex','gemini','opencode','ollama')),
+  provider_id text NOT NULL CHECK (provider_id IN ('claude','codex','gemini','opencode-go','openrouter','ollama')),
   enabled boolean NOT NULL DEFAULT false,
   default_model text NOT NULL,
-  endpoint_url text,                    -- opencode/ollama 커스텀 URL, 그 외 NULL
-  fallback_order integer NOT NULL,      -- 1..5, 낮을수록 우선
+  endpoint_url text,                    -- opencode-go/openrouter/ollama 커스텀 URL, 그 외 NULL
+  fallback_order integer NOT NULL,      -- 1..6, 낮을수록 우선
   secret_ref text,                      -- Vault 참조, 평문 키 저장 금지
   updated_by text NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -1045,7 +1049,7 @@ CREATE TABLE llm_provider_config (
 ```
 
 - **Admin UI 경로**: `Admin Console → Settings → LLM Providers`
-  - 프로바이더별 On/Off, 기본 모델 선택, 엔드포인트 URL(ollama/opencode), Fallback 순서 드래그, API Key 입력(마스크 표시).
+  - 프로바이더별 On/Off, 기본 모델 선택, 엔드포인트 URL(ollama/opencode-go/openrouter), Fallback 순서 드래그, API Key 입력(마스크 표시).
   - 저장 시: 평문 키는 **Vault에 write** → 반환된 `secret_ref`만 DB에 저장. DB에 평문 저장 금지(§27, §16H invariants).
   - 조회 시: `secret_ref` 존재 여부·만료만 표시, 원문 반환 금지.
 - 권한: `Super Admin`/`Security Admin`만 쓰기, `Operator-Viewer`는 읽기 전용. 모든 변경은 hash-chain audit (`LLM_PROVIDER_CONFIG_UPDATED`)로 기록.
@@ -1078,7 +1082,7 @@ policy_route = {
 ```python
 @dataclass
 class FallbackPolicy:
-    chain: list[str] = field(default_factory=lambda: ["claude","codex","gemini","opencode","ollama"])
+    chain: list[str] = field(default_factory=lambda: ["claude","codex","gemini","opencode-go","openrouter","ollama"])
     retryable_errors: set[str] = field(default_factory=lambda: {"timeout","rate_limited","5xx","model_not_found"})
     max_attempts: int = 3
     backoff_s: float = 0.5
@@ -1093,12 +1097,12 @@ class FallbackPolicy:
 
 #### (6) 보안 — Vault 기반 Secret 관리
 
-- 모든 외부 API 키(Anthropic, OpenAI, Google, OpenCode)는 **Credential Vault**에만 저장. DB에는 `secret_ref`만 보관. `openagentos` DB 덤프에 평문 키가 남지 않는다.
+- 모든 외부 API 키(Anthropic, OpenAI, Google, OpenRouter, OpenCode-Go)는 **Credential Vault**에만 저장. DB에는 `secret_ref`만 보관. `openagentos` DB 덤프에 평문 키가 남지 않는다.
 - 조회 경로: `LLMProviderAdapter` → `Vault(secret_ref)` → 단기 메모리 캐시(TTL 5분) → `Authorization: Bearer` 헤더로만 사용. 디스크·로그에 키 기록 금지.
 - 테넌트 격리: `secret_ref`는 `{tenant_id}/{provider_id}` 네임스페이스에 바인딩 — 타 테넌트 키 교차 접근 불가.
 - Ollama/opencode 로컬 프로바이더는 키 없이 동작 가능(`auth_kind="none"`), 필요 시에도 Vault 경로를 동일하게 적용.
 - 키 로테이션: Admin UI에서 키 재입력 → Vault `rotate` → 기존 `secret_ref` 버전 무효화, 감사 로그 `SECRET_ROTATED`.
-- 네트워크: 외부 LLM 호출은 **allowlist egress proxy** 경유(§16A.6), `*.anthropic.com`/`*.openai.com`/`*.googleapis.com` 외 차단.
+- 네트워크: 외부 LLM 호출은 **allowlist egress proxy** 경유(§16A.6), `*.anthropic.com`/`*.openai.com`/`*.googleapis.com`/`openrouter.ai` 외 차단.
 
 #### (7) 관측성·감사
 
@@ -1138,8 +1142,8 @@ runtime_mode: Literal["llm", "hermes", "hybrid"] = "llm"  # DB: tenant_settings.
 #### 설계 원칙 요약
 
 ```text
-runtime_mode = llm  → 5 Providers (claude/codex/gemini/opencode/ollama)
-                       → Registry (runners.mjs 패턴, ProviderSpec)
+runtime_mode = llm  → 6 Providers (claude/codex/gemini/opencode-go/openrouter/ollama)
+                       → Registry (runners.mjs 패턴, ProviderSpec, opencode→opencode-go alias)
                        → Adapter Interface (LLMProviderAdapter)
                        → Admin UI (DB llm_provider_config + Vault secret_ref) [표시]
                        → Dispatch (task/session/tenant 우선순위)
