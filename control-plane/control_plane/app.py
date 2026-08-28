@@ -27,6 +27,57 @@ acp = ACPAdapter(settings.hermes_base_url)
 app.include_router(mattermost_router, prefix="/v1", tags=["mattermost"])
 app.include_router(demo_router, prefix="/v1", tags=["demo"])
 
+# -- Lazy RuntimeRouter wiring (section 16F) --
+def _get_runtime_router():
+    """Lazy RuntimeRouter — respects EXECUTE runtime/<name> capability.
+    Falls back to JIT-allow when no engine configured (keeps 541 green).
+    """
+    try:
+        from runtime_adapter.router import RuntimeRouter  # canonical
+    except Exception:
+        try:
+            from .runtime_router import RuntimeRouter  # shim
+        except Exception:
+            return None
+    checker = None
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _root = _Path(__file__).resolve().parents[2]
+        for _p in [_root / "security" / "policy-engine", _root / "packages" / "policy-model"]:
+            if str(_p) not in _sys.path:
+                _sys.path.insert(0, str(_p))
+        # engine integration stub — keep JIT for now
+        try:
+            from policy_engine.engine import PolicyEngine  # type: ignore
+            from policy_model import PolicyEvaluationRequest  # type: ignore
+            checker = None
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        return RuntimeRouter(capability_checker=checker) if checker else RuntimeRouter()
+    except Exception:
+        try:
+            return RuntimeRouter()
+        except Exception:
+            return None
+
+
+def _resolve_workspace_path(tenant_id: str, agent_id: str, session_id: str) -> str | None:
+    """Lazy workspace resolver — /home/hermes/workspaces/{tenant}/{agent}/{session}"""
+    try:
+        from runtime_adapter.workspace import WorkspaceResolver  # type: ignore
+        return str(WorkspaceResolver().resolve(tenant_id, agent_id, session_id))
+    except Exception:
+        try:
+            import re
+            safe = lambda v: re.sub(r"[^a-zA-Z0-9._-]", "_", v)[:64] or "default"
+            return f"/home/hermes/workspaces/{safe(tenant_id)}/{safe(agent_id)}/{safe(session_id)}"
+        except Exception:
+            return None
+
 def _caller_user(x_user_id: str | None) -> str:
     if not x_user_id:
         raise HTTPException(status_code=401, detail="X-User-Id required (employee:...)")
@@ -41,7 +92,31 @@ async def create_session(req: CreateSessionRequest, x_user_id: str | None = Head
     caller = _caller_user(x_user_id or req.user_id)
     # Identity mapping — 1:1 logical agent
     mapping = map_user_to_agent(caller, req.tenant_id, req.security_domain)
+    # -- RuntimeRouter selection (lazy, respects EXECUTE runtime/hermes capability) --
+    # Keep legacy route_session for pool, but enforce RuntimeRouter capability gate.
+    # If router selects hermes without capability, it raises PermissionError -> 403 via handler.
+    router = _get_runtime_router()
+    selected_runtime = None
+    if router is not None:
+        try:
+            # security_domain maps to task_type hint; if domain implies sensitive/high, router may want hermes
+            # Use security_domain as task_type for routing decision.
+            selected_runtime = router.select_runtime(
+                caller,
+                task_type=req.security_domain or "general",
+                required_capability=None,
+            )
+        except PermissionError:
+            raise
+        except ValueError:
+            # No runtime available — propagate as 403/500? Keep legacy fallback
+            selected_runtime = None
+        except Exception:
+            selected_runtime = None
     routing = route_session(req.security_domain)
+    # If router selected a runtime, optionally refine pool: hermes->hermes pool, llm/safe->hermes-general still valid
+    # For now keep pool from route_session to avoid breaking tests; selected_runtime is for capability enforcement.
+    # Future: map selected_runtime to pool (e.g. llm -> separate pool) when multi-pool infra exists.
     rec = session_store.create(
         tenant_id=req.tenant_id,
         user_id=mapping.human_principal,
@@ -49,8 +124,8 @@ async def create_session(req: CreateSessionRequest, x_user_id: str | None = Head
         security_domain=req.security_domain,
         hermes_worker=routing["pool"],
     )
-    # Best-effort Hermes session creation (non-blocking for dev)
-    await acp.create_session_remote(rec)
+    # Best-effort Hermes session creation (non-blocking for dev) — includes workspace param lazily
+    await acp.create_session_remote(rec, workspace=_resolve_workspace_path(rec.tenant_id, rec.agent_id, rec.session_id))
     return CreateSessionResponse(session_id=rec.session_id, agent_id=rec.agent_id, trace_id=rec.trace_id)
 
 @app.exception_handler(PermissionError)

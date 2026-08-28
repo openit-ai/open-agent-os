@@ -1,6 +1,8 @@
 """Alembic env — async SQLAlchemy autogenerate."""
+
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -49,6 +51,7 @@ from security.models.orm import (  # noqa: F401,E402
 )
 
 target_metadata = Base.metadata
+logger = logging.getLogger("alembic.env")
 
 
 def run_migrations_offline() -> None:
@@ -85,21 +88,48 @@ async def run_async_migrations():
 def run_migrations_online() -> None:
     import asyncio
 
-    # During `alembic revision --autogenerate` with no DB, we don't need to fail — offline rendering suffices.
-    # Try to connect; if unreachable, skip autogenerate comparison (revision will be manual).
     try:
         asyncio.run(run_async_migrations())
     except Exception as e:
-        # If this is a revision command, allow it to proceed with empty diff
-        # Re-raise only for `upgrade` commands where DB is required
-        # We detect by checking if target_metadata has tables and we're in autogenerate mode
-        # For now, just log and fall back to offline rendering when DB unreachable
+        is_autogenerate = "--autogenerate" in sys.argv or "revision" in sys.argv
+        is_sql_mode = "--sql" in sys.argv
+        is_upgrade = "upgrade" in sys.argv
+
+        # Always surface DB-unreachable clearly — never swallow for autogenerate.
+        msg = f"Alembic online run failed (DB unreachable): {e}"
+        drift_hint = " --autogenerate diff will be EMPTY, drift may be hidden. Run with DB available."
+        full_msg = msg + (drift_hint if is_autogenerate else " Falling back.")
+
+        # Log via stdlib logging (visible regardless of warnings filter) and stderr
+        logger.warning(full_msg)
+        print(f"WARNING [alembic.env] {full_msg}", file=sys.stderr)
+
+        # Also emit warnings.warn for tooling that captures warnings, but not as sole channel
         import warnings
 
-        warnings.warn(f"Alembic online run failed (DB unreachable): {e}. Falling back to offline metadata-only revision.")
-        # Do not re-raise — let revision creation continue with no DB diff (manual version file will be used)
-        if "upgrade" in sys.argv:
+        warnings.warn(full_msg)
+
+        # --sql mode (offline) should not require DB — warn and allow offline rendering
+        # For online --sql autogenerate we still warn but don't need to fail
+        if is_sql_mode:
+            logger.warning("DB unreachable but --sql mode requested: offline rendering will be used (no DB comparison).")
+            print("WARNING [alembic.env] --sql mode: offline rendering, DB comparison skipped.", file=sys.stderr)
+            return
+
+        if is_autogenerate:
+            # Don't swallow: warning already emitted loudly above.
+            # Keep revision creation alive (return) but warning is now unmissable.
+            print(
+                "WARNING [alembic.env] DB unreachable during --autogenerate: empty diff — manual revision required.",
+                file=sys.stderr,
+            )
+            return
+
+        # For upgrade DB is required — re-raise; other commands (check/history) keep original swallow but now loudly warned
+        if is_upgrade:
             raise
+        # Non-upgrade, non-autogenerate (e.g. `alembic check` without DB) — keep alive but warning is unmissable
+        return
 
 
 if context.is_offline_mode():

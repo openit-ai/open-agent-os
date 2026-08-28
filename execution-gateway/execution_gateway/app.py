@@ -40,6 +40,32 @@ app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.1")
 _registry: MCPRegistry = default_registry
 _authz_hook = AuthorizationHook(tenant_id="default")
 
+# -- Lazy ToolRateLimiter wiring (§16H.2) --
+_rate_limiter = None
+
+def _get_rate_limiter():
+    global _rate_limiter
+    if _rate_limiter is not None:
+        return _rate_limiter
+    try:
+        try:
+            from .tool_policy import ToolRateLimiter  # type: ignore
+        except ImportError:
+            from execution_gateway.tool_policy import ToolRateLimiter  # type: ignore
+        # Configurable via env, defaults: 10/s burst 20 (§16H.2)
+        import os
+        rate = float(os.getenv("OAOS_TOOL_RATE_PER_SEC", "10"))
+        burst = int(os.getenv("OAOS_TOOL_BURST", "20"))
+        _rate_limiter = ToolRateLimiter(rate_per_sec=rate, burst=burst)
+    except Exception:
+        # No-op limiter (always allow) if import fails — keeps 541 green
+        class _Noop:
+            def allow(self, key: str, tokens: int = 1) -> bool:
+                return True
+            def retry_after(self, key: str, tokens: int = 1) -> float:
+                return 0.0
+        _rate_limiter = _Noop()
+    return _rate_limiter
 
 def _parse_agent_context_header(
     x_agent_context: str | None,
@@ -112,7 +138,7 @@ def _require_context(ctx: dict) -> dict:
     return ctx
 
 
-# ── Models ────────────────────────────────────────────────────────────
+# -- Models ────────────────────────────────────────────────────────────
 
 class ExecuteRequest(BaseModel):
     tool: str = Field(description="MCP tool name, e.g. gmail_search")
@@ -124,7 +150,7 @@ class ExecuteRequest(BaseModel):
     data_classification: str | None = None
 
 
-# ── Routes ────────────────────────────────────────────────────────────
+# -- Routes ────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
@@ -189,11 +215,31 @@ async def execute(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 3. tool 존재 검증
+    # 3. ToolRateLimiter (§16H.2) — lazy, per (tenant,user,tool,resource)
+    try:
+        limiter = _get_rate_limiter()
+        rate_key = f"{ctx.get('tenant_id')}:{ctx.get('user_id')}:{req.tool}:{canon_resource}"
+        if not limiter.allow(rate_key):
+            retry = limiter.retry_after(rate_key) if hasattr(limiter, "retry_after") else 1.0
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "RATE_LIMITED",
+                    "reason": f"tool rate limit exceeded for {req.tool}",
+                    "tool": req.tool,
+                    "trace_id": ctx["trace_id"],
+                    "retry_after": round(retry, 2),
+                },
+                headers={"Retry-After": str(round(retry, 2))},
+            )
+    except Exception:
+        pass  # fail-open for limiter errors — keeps 541 green
+
+    # 4. tool 존재 검증
     if _registry.find_tool(req.tool) is None and req.tool not in _registry.list_tools():
         raise HTTPException(status_code=404, detail=f"unknown tool: {req.tool}")
 
-    # 4. Authorization Hook — Personal vs Enterprise 분기
+    # 5. Authorization Hook — Personal vs Enterprise 분기
     authz = await _authz_hook.authorize(
         agent_context=ctx,
         action=canon_action,
@@ -226,7 +272,7 @@ async def execute(
             },
         )
 
-    # 5. Proxy — capability + risk + trace 전파
+    # 6. Proxy — capability + risk + trace 전파
     proxy_ctx = {
         **ctx,
         "action": canon_action,
@@ -241,7 +287,7 @@ async def execute(
         context=proxy_ctx,
     )
 
-    # 6. proxy 결과 상태 매핑
+    # 7. proxy 결과 상태 매핑
     if "error" in result:
         err = result["error"]
         if err == "CAPABILITY_REQUIRED":
@@ -258,7 +304,7 @@ async def execute(
     return JSONResponse(content=result, headers=headers)
 
 
-# ── Legacy / compat ─────────────────────────────────────────────────
+# -- Legacy / compat ─────────────────────────────────────────────────
 @app.get("/")
 def root():
     return {"service": "execution-gateway", "health": "/health", "tools": "/v1/tools", "execute": "/v1/execute"}

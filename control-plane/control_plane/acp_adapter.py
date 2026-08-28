@@ -21,6 +21,19 @@ from typing import AsyncGenerator, Any
 import httpx
 from .session import SessionRecord
 
+def _resolve_workspace_for_session(session: SessionRecord) -> str | None:
+    """Lazy workspace path — /home/hermes/workspaces/{tenant}/{agent}/{session}"""
+    try:
+        from runtime_adapter.workspace import WorkspaceResolver  # type: ignore
+        return str(WorkspaceResolver().resolve(session.tenant_id, session.agent_id, session.session_id))
+    except Exception:
+        try:
+            import re as _re
+            safe = lambda v: _re.sub(r"[^a-zA-Z0-9._-]", "_", str(v))[:64] or "default"
+            return f"/home/hermes/workspaces/{safe(session.tenant_id)}/{safe(session.agent_id)}/{safe(session.session_id)}"
+        except Exception:
+            return None
+
 class ACPAdapter:
     """Hermes ACP adapter — single integration point (Section 17)."""
 
@@ -29,8 +42,8 @@ class ACPAdapter:
         self.timeout_s = timeout_s
 
     def _headers(self, session: SessionRecord) -> dict[str, str]:
-        # AgentContext propagated as headers (Section 18)
-        return {
+        # AgentContext propagated as headers (Section 18) + workspace
+        headers = {
             "X-Tenant-Id": session.tenant_id,
             "X-User-Id": session.user_id,
             "X-Agent-Id": session.agent_id,
@@ -38,6 +51,14 @@ class ACPAdapter:
             "X-Trace-Id": session.trace_id,
             "X-Security-Domain": session.security_domain,
         }
+        # Lazy workspace header — per-session isolation (§16A.3.1)
+        ws = getattr(session, "workspace", None)
+        if not ws:
+            ws = _resolve_workspace_for_session(session)
+        if ws:
+            headers["X-Workspace"] = ws
+            headers["X-Workspace-Path"] = ws
+        return headers
 
     def _hermes_api_key(self) -> str:
         try:
@@ -70,9 +91,10 @@ class ACPAdapter:
             pass
         return os.getenv("OAOS_CP_HERMES_MODEL", "") or "qwen2.5"
 
-    async def create_session_remote(self, session: SessionRecord) -> dict[str, Any]:
+    async def create_session_remote(self, session: SessionRecord, workspace: str | None = None) -> dict[str, Any]:
         """POST /acp/sessions — create Hermes-side session. Falls back to local if Hermes unavailable (dev)."""
         url = f"{self.hermes_base_url}/acp/sessions"
+        ws = workspace or getattr(session, "workspace", None) or _resolve_workspace_for_session(session)
         payload = {
             "session_id": session.session_id,
             "agent_id": session.agent_id,
@@ -80,7 +102,13 @@ class ACPAdapter:
             "tenant_id": session.tenant_id,
             "security_domain": session.security_domain,
             "trace_id": session.trace_id,
+            "workspace": ws,
+            "workspace_path": ws,
         }
+        # remove None workspace if resolver failed (keep key but not None)
+        if ws is None:
+            payload.pop("workspace", None)
+            payload.pop("workspace_path", None)
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 r = await client.post(url, json=payload, headers=self._headers(session))
@@ -88,7 +116,7 @@ class ACPAdapter:
                 return r.json()
         except Exception as e:
             # Dev fallback — Hermes not yet running
-            return {"status": "local_fallback", "reason": str(e), "session_id": session.session_id}
+            return {"status": "local_fallback", "reason": str(e), "session_id": session.session_id, "workspace": ws}
 
     async def send_prompt(self, session: SessionRecord, prompt: str, request_id: str) -> dict[str, Any]:
         url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/prompt"
@@ -126,7 +154,7 @@ class ACPAdapter:
                     return
         except Exception:
             pass
-        # ── Hermes Gateway fallback (standard path — same LLM as @openit) ──
+        # -- Hermes Gateway fallback (standard path — same LLM as @openit) --
         # Retrieve last user prompt from session_store
         prompt_text = ""
         try:
@@ -187,7 +215,7 @@ class ACPAdapter:
                     logging.getLogger(__name__).warning(f"Hermes gateway fallback failed: {e}")
                 except Exception:
                     pass
-        # ── No synthetic fallback — strictly agent runtime only ──
+        # -- No synthetic fallback — strictly agent runtime only --
         # If Hermes gateway also unreachable, yield done without token so
         # Mattermost posts nothing (agent runtime will recover and retry).
         yield {"type": "done", "data": {}, "trace_id": session.trace_id}
