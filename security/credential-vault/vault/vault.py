@@ -108,8 +108,9 @@ class EncryptedPostgresVault(CredentialVault):
         self._external = None  # type: ignore
         try:
             from .external import get_vault_backend  # lazy to avoid circular
-
             self._external = get_vault_backend()
+        except ValueError:
+            raise
         except Exception as e:
             logger.debug("vault external backend init skipped: %s", e)
             self._external = None
@@ -247,10 +248,13 @@ class EncryptedPostgresVault(CredentialVault):
                     }
                     return ref
                 except Exception as e:
-                    # DB failed after external write — try to clean up external secret
+                    # DB failed after external write — cleanup external secret to avoid orphan
                     logger.warning("vault DB insert failed after external put %s: %s", ref, e)
-                    # fall through to memory (still holds external secret)
-                    pass
+                    try:
+                        await self._external.delete(ref)  # type: ignore
+                    except Exception as ce:
+                        logger.debug("external cleanup failed for %s: %s", ref, ce)
+                    raise
 
             # DB not available: keep in memory meta + external already holds bytes
             # For in-memory fallback we keep encrypted only if dual_write else None
@@ -331,12 +335,20 @@ class EncryptedPostgresVault(CredentialVault):
             if encrypted is None:
                 encrypted = self._store.get(secret_ref)
 
-        # owner check BEFORE touching external backend (design §5)
+        # owner check BEFORE touching external backend (design §5) — fail closed if owner unknown, but distinguish not-found
         owner = (meta or {}).get("owner_agent_id")
-        # if meta still missing but we have DB row’s owner already set above, ok
-        # if meta is none but secret exists in external, we still need to enforce — fetch meta from fallback
-        if owner and requester_agent_id != owner:
-            raise PermissionError(f"credential isolation violation: owner={owner} requester={requester_agent_id}")
+        # For non-external, existence is known now: if no meta and no encrypted, secret not found -> KeyError
+        if not self._use_external:
+            if meta is None and encrypted is None:
+                raise KeyError(f"secret not found: {secret_ref}")
+            if not owner or requester_agent_id != owner:
+                raise PermissionError(f"credential isolation violation: owner={owner} requester={requester_agent_id}")
+        else:
+            # external: if we have meta, enforce owner immediately (fail-closed even before external fetch)
+            if meta is not None:
+                if not owner or requester_agent_id != owner:
+                    raise PermissionError(f"credential isolation violation: owner={owner} requester={requester_agent_id}")
+            # if meta is None, defer owner check until after external probe (orphan external secret still fail-closed)
 
         # ── external path ─────────────────────────────────────
         if self._use_external:
@@ -349,11 +361,26 @@ class EncryptedPostgresVault(CredentialVault):
                 ext_bytes = None
 
             if ext_bytes is not None:
-                if meta is None:
-                    # meta missing but secret exists externally — create minimal meta for audit
-                    meta = {"provider": None, "user_id": None}
+                # orphan external secret with no owner -> fail closed (do not leak existence)
+                if meta is None or not (meta or {}).get("owner_agent_id"):
+                    # try to re-fetch owner from DB one more time if possible, otherwise deny
+                    if meta is None:
+                        # attempt DB owner lookup if available
+                        try:
+                            db_owner = await self._owner_from_db(secret_ref)
+                            if db_owner:
+                                if requester_agent_id != db_owner:
+                                    raise PermissionError(f"credential isolation violation: owner={db_owner} requester={requester_agent_id}")
+                                meta = {"provider": None, "user_id": None, "owner_agent_id": db_owner}
+                            else:
+                                raise PermissionError(f"credential isolation violation: owner=None requester={requester_agent_id}")
+                        except PermissionError:
+                            raise
+                        except Exception:
+                            raise PermissionError(f"credential isolation violation: owner=None requester={requester_agent_id}")
+                    else:
+                        raise PermissionError(f"credential isolation violation: owner={owner} requester={requester_agent_id}")
                 # decrypt is not needed — external already holds plaintext
-                # owner check was done above if owner known
                 return await self._audit_and_return(secret_ref, requester_agent_id, meta, ext_bytes)
 
             # external miss — try fallback if enabled
@@ -380,7 +407,7 @@ class EncryptedPostgresVault(CredentialVault):
         if encrypted is None:
             raise KeyError(f"secret not found: {secret_ref}")
 
-        if owner and requester_agent_id != owner:
+        if not owner or requester_agent_id != owner:
             raise PermissionError(f"credential isolation violation: owner={owner} requester={requester_agent_id}")
 
         try:
@@ -438,7 +465,39 @@ class EncryptedPostgresVault(CredentialVault):
         return list(self._audit_events)
 
     def owner_of(self, secret_ref: str) -> str | None:
-        return self._meta.get(secret_ref, {}).get("owner_agent_id")
+        # check in-memory first
+        meta = self._meta.get(secret_ref)
+        if meta and meta.get("owner_agent_id"):
+            return meta.get("owner_agent_id")
+        # fall back to DB lookup if available (sync attempt via asyncio.run when possible)
+        if self._session_maker is not None:
+            try:
+                import asyncio
+                # if running loop, cannot block — try to avoid deadlock
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is None or not loop.is_running():
+                    # safe to run async helper
+                    owner = asyncio.run(self._owner_from_db(secret_ref))
+                    if owner:
+                        return owner
+                else:
+                    # running loop — try to check via sync query if possible (best-effort)
+                    # attempt to create a new loop in thread
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                        fut = ex.submit(asyncio.run, self._owner_from_db(secret_ref))
+                        try:
+                            owner = fut.result(timeout=2)
+                            if owner:
+                                return owner
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        return None
 
     # Back-compat: allow tests to query ownership even when DB holds truth
     async def _owner_from_db(self, secret_ref: str) -> str | None:

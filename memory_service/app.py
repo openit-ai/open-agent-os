@@ -541,7 +541,7 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
                     ids.add(row[0])
             except Exception:
                 pass
-            # also via source_ids JSON not queryable, but try source_uri
+            # also via source_uri
             try:
                 stmt2 = select(MemorySourceORM.memory_id).where(MemorySourceORM.source_uri == source_resource_id)  # type: ignore
                 res2 = await session.execute(stmt2)
@@ -549,7 +549,26 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
                     ids.add(row[0])
             except Exception:
                 pass
-            # via MemoryORM source_ids JSON fallback - not needed
+            # via MemoryORM source_ids JSON column (GenericJSON list) — python filter for sqlite/postgres compat
+            try:
+                from sqlalchemy import select as _sel2
+                # fetch candidates where source_ids is not null and check membership in python
+                stmt3 = _sel2(MemoryORM.id, MemoryORM.source_ids)  # type: ignore
+                res3 = await session.execute(stmt3)
+                for mem_id, src_ids in res3.all():
+                    if isinstance(src_ids, list) and source_resource_id in src_ids:
+                        ids.add(mem_id)
+                    elif isinstance(src_ids, str):
+                        # fallback when stored as JSON string (Text column)
+                        try:
+                            import json as _json
+                            parsed = _json.loads(src_ids)
+                            if isinstance(parsed, list) and source_resource_id in parsed:
+                                ids.add(mem_id)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         return list(ids)
     except Exception as e:
         logger.warning(f"_db_collect_ids_by_resource failed: {e}")
@@ -676,6 +695,13 @@ async def memory_write(payload: dict, request: Request):
         provenance["policy_override"] = _override_hdr
         provenance["override"] = _override_hdr
 
+    # ---- Embedding validation (len 1536) before governance ----
+    if embedding is not None:
+        if not isinstance(embedding, list):
+            raise HTTPException(status_code=422, detail="embedding must be list of floats")
+        if len(embedding) != 1536:
+            raise HTTPException(status_code=422, detail="embedding must have length 1536")
+
     # ---- Governance validation via MemoryStore.write (includes scope/classification/retention/TTL logic) ----
     store = _get_store()
     try:
@@ -727,15 +753,37 @@ async def memory_write(payload: dict, request: Request):
             source_ids_val: list[str] = []
             if source_resource_id:
                 source_ids_val.append(source_resource_id)
-            # handle embedding: if list, serialize appropriately
-            # For pgvector, _VECTOR_1536 expects list; for sqlite fallback Text, we store as string
+            # handle embedding: validate len 1536 and serialize for Text fallback
             embedding_val = None
             if embedding is not None:
+                if not isinstance(embedding, list):
+                    raise HTTPException(status_code=422, detail="embedding must be list of floats")
+                if len(embedding) != 1536:
+                    raise HTTPException(status_code=422, detail="embedding must have length 1536")
+                # detect Text fallback vs pgvector Vector
                 try:
-                    # store as-is; SQLAlchemy will coerce
-                    embedding_val = embedding  # type: ignore
+                    from security.models.orm import _VECTOR_1536 as _vec_check  # type: ignore
+                    is_text_fallback = _vec_check is Text or getattr(_vec_check, '__name__', '') == 'Text' or isinstance(_vec_check, type(Text))
                 except Exception:
-                    embedding_val = None
+                    is_text_fallback = True
+                # pgvector Vector type has attribute 'dim' or is not string type; fallback is Text
+                try:
+                    from sqlalchemy import Text as _SA_Text
+                    if _vec_check is _SA_Text or str(_vec_check) == 'TEXT':
+                        is_text_fallback = True
+                    else:
+                        # if pgvector Vector, keep list
+                        is_text_fallback = False
+                except Exception:
+                    pass
+                if is_text_fallback:
+                    import json as _json
+                    try:
+                        embedding_val = _json.dumps(embedding)  # type: ignore
+                    except Exception:
+                        raise HTTPException(status_code=422, detail="embedding serialization failed")
+                else:
+                    embedding_val = embedding  # type: ignore
             try:
                 async with maker() as session:
                     mem_row = MemoryORM(
@@ -803,9 +851,13 @@ async def memory_write(payload: dict, request: Request):
                 except Exception:
                     pass
             except Exception as e:
-                # DB persistence is best-effort; log but don't fail write (governance validation already passed)
-                # Fallback still returns memory record
+                # DB persistence failed after in-memory write — compensating delete to avoid divergence
                 logger.warning(f"memory_service DB persist failed: {e}")
+                try:
+                    _store_physical_delete_single(store, rec.id)
+                except Exception as ce:
+                    logger.warning(f"compensating delete failed for {rec.id}: {ce}")
+                raise HTTPException(status_code=500, detail=f"DB persist failed: {e}")
             # return governed record (DB persisted)
             return rec.to_dict()
     # in-memory fallback — still audit
@@ -944,11 +996,17 @@ async def memory_search(payload: dict, request: Request):
                 has_pgvector = False
 
             if query:
-                # simple LIKE (case-insensitive via ilike on postgres, like on sqlite)
+                # escape LIKE wildcards %/_ and backslash to prevent injection
+                def _escape_like(s: str) -> str:
+                    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                esc = _escape_like(query)
                 try:
-                    stmt = stmt.where(MemoryORM.content.ilike(f"%{query}%"))  # type: ignore
+                    stmt = stmt.where(MemoryORM.content.ilike(f"%{esc}%", escape="\\"))  # type: ignore
                 except Exception:
-                    stmt = stmt.where(MemoryORM.content.like(f"%{query}%"))  # type: ignore
+                    try:
+                        stmt = stmt.where(MemoryORM.content.like(f"%{esc}%", escape="\\"))  # type: ignore
+                    except Exception:
+                        stmt = stmt.where(MemoryORM.content.like(f"%{esc}%"))  # type: ignore
 
             stmt = stmt.order_by(MemoryORM.created_at.desc()).limit(limit * 3)  # fetch extra for ACL post-filter
 
@@ -1103,11 +1161,11 @@ async def memory_get(memory_id: str, request: Request):
                 async with maker() as session:
                     row = await session.get(MemoryORM, memory_id)
                     if row is not None:
-                        # check tenant isolation
+                        # tenant isolation — strict deny, including default cross-read
                         tenant_val = getattr(row, "tenant_id", None)
-                        if tenant_val and tenant_val != auth.get("tenant_id") and tenant_val != "default":
-                            # allow default tenant cross-read? strict: deny
-                            pass
+                        requester_tenant = auth.get("tenant_id") or "default"
+                        if tenant_val and tenant_val != requester_tenant:
+                            raise HTTPException(status_code=404, detail="memory not found or access denied")
                         # fetch provenance
                         prov: dict = {}
                         try:

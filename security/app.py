@@ -44,7 +44,11 @@ from audit_model import AuditEvent, AuditEventType
 app = FastAPI(title="Open Agent OS — Security & Governance", version="0.1.1")
 
 # ── 전역 싱글톤 (프로세스 내 공유) ──────────────────────────────
-SIGNING_KEY = os.environ.get("OAOS_SIGNING_KEY", "dev-signing-key-please-change")
+_DEV_SIGNING_KEY = "dev-signing-key-please-change"
+SIGNING_KEY = os.environ.get("OAOS_SIGNING_KEY", _DEV_SIGNING_KEY)
+# Fail-closed in production: dev default OAOS_SIGNING_KEY must be overridden (like persistence.py)
+if os.environ.get("OAOS_ENV", "").lower() == "production" and SIGNING_KEY == _DEV_SIGNING_KEY:
+    raise RuntimeError("OAOS_SIGNING_KEY must be set to a strong value when OAOS_ENV=production (fail-closed)")
 ENCRYPTION_KEY = os.environ.get("OAOS_ENCRYPTION_KEY", "dev-encryption-key-32bytes!!").encode()
 
 delegation_service = DelegationService()
@@ -52,6 +56,43 @@ token_service = TokenService(signing_key=SIGNING_KEY)
 approval_store = ApprovalStore(signing_key=SIGNING_KEY)
 audit_ledger = AuditLedger(signing_key=SIGNING_KEY)
 policy_engine = PolicyEngine(bundles=[default_bundle(tenant_id="default")])
+
+# ── revoke cascade wiring (MemoryStore + Vault) — lazy, best-effort ──
+# DelegationService.revoke() will try these; wiring here ensures app singleton is connected.
+vault_instance = None
+_memory_store_instance = None
+try:
+    try:
+        from governance.governance import get_default_store as _get_mem_store  # type: ignore
+    except ImportError:
+        from security.memory_governance.governance.governance import get_default_store as _get_mem_store  # type: ignore
+    _memory_store_instance = _get_mem_store()
+    try:
+        delegation_service.set_memory_store(_memory_store_instance)
+    except Exception:
+        pass
+except Exception:
+    pass
+try:
+    # create vault singleton for cascade (reuses ENCRYPTION_KEY); lazy so tests without DB still pass
+    try:
+        from vault.vault import EncryptedPostgresVault  # type: ignore
+    except ImportError:
+        try:
+            from security.credential_vault.vault.vault import EncryptedPostgresVault  # type: ignore
+        except Exception:
+            EncryptedPostgresVault = None  # type: ignore
+    if EncryptedPostgresVault is not None:
+        try:
+            vault_instance = EncryptedPostgresVault(encryption_key=ENCRYPTION_KEY, audit_ledger=audit_ledger, delegation_service=delegation_service)
+            try:
+                delegation_service.set_vault(vault_instance)
+            except Exception:
+                pass
+        except Exception:
+            vault_instance = None
+except Exception:
+    pass
 
 
 # ── Request / Response 모델 ────────────────────────────────────

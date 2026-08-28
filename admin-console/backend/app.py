@@ -77,12 +77,25 @@ def _get_cors_origins() -> list[str]:
 
 _CORS_ORIGINS = _get_cors_origins()
 
+_CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+_CORS_ALLOW_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "Accept",
+    "Origin",
+    "X-Requested-With",
+    "X-User-Id",
+    "X-Tenant-Id",
+    "X-Agent-Id",
+    "X-Groups",
+    "X-Memory-Policy-Override",
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=_CORS_ALLOW_METHODS,
+    allow_headers=_CORS_ALLOW_HEADERS,
 )
 
 # ── Admin persistence (v1.6 §27.3) — openagentos with in-memory fallback ─

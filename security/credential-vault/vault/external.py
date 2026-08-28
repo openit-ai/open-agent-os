@@ -513,10 +513,8 @@ def get_vault_backend(backend: str | None = None) -> VaultBackend | None:
     # Also handle operator synonyms like "external"
     if val in {"external_vault", "external-vault"}:
         return HashiCorpVaultBackend()
-    # Unknown -> fail closed? Spec says unknown should raise ValueError.
-    # For backward compat, treat unknown as legacy with warning.
-    logger.warning("Unknown VAULT_BACKEND=%r, falling back to legacy encrypted_postgres", raw)
-    return None
+    # Unknown backend -> fail closed per spec
+    raise ValueError(f"unknown VAULT_BACKEND={raw!r}")
 
 # Back-compat alias
 create_vault_backend = get_vault_backend

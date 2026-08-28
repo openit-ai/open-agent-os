@@ -50,9 +50,14 @@ except Exception as _argon2_import_exc:  # pragma: no cover - missing lib path
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-JWT_SECRET = os.environ.get("ADMIN_JWT_SECRET", "dev-admin-jwt-secret-please-change")
+_DEV_JWT_SECRET = "dev-admin-jwt-secret-please-change"
+JWT_SECRET = os.environ.get("ADMIN_JWT_SECRET", _DEV_JWT_SECRET)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 8
+
+# Fail-closed in production: dev default ADMIN_JWT_SECRET must be overridden (like persistence.py)
+if os.environ.get("OAOS_ENV", "").lower() == "production" and JWT_SECRET == _DEV_JWT_SECRET:
+    raise RuntimeError("ADMIN_JWT_SECRET must be set to a strong value when OAOS_ENV=production (fail-closed)")
 
 # ---------------------------------------------------------------------------
 # Role

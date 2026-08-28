@@ -1,0 +1,214 @@
+# NetworkPolicy — default deny + allow postgres/redis/control-plane
+# Namespace: open-agent-os
+# - default-deny-all: deny all ingress/egress by default (fail-closed)
+# - allow-dns-egress: allow egress to kube-dns (53 UDP/TCP) for service discovery
+# - allow-postgres: allow ingress to postgres (5432) from control-plane, execution-gateway, security, admin-api
+# - allow-redis: allow ingress to redis (6379) from same app pods
+# - allow-control-plane: allow ingress to control-plane (8000) from ingress / admin / gateway
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: open-agent-os
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress/egress rules -> default deny. Explicit allows below override per-pod.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: open-agent-os
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Fallback: allow DNS on any namespace with kube-dns label (managed clusters vary)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres
+  namespace: open-agent-os
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: control-plane
+        - podSelector:
+            matchLabels:
+              app: execution-gateway
+        - podSelector:
+            matchLabels:
+              app: security
+        - podSelector:
+            matchLabels:
+              app: admin-api
+        - podSelector:
+            matchLabels:
+              app: memory-service
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  namespace: open-agent-os
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: control-plane
+        - podSelector:
+            matchLabels:
+              app: execution-gateway
+        - podSelector:
+            matchLabels:
+              app: security
+        - podSelector:
+            matchLabels:
+              app: admin-api
+        - podSelector:
+            matchLabels:
+              app: memory-service
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-control-plane
+  namespace: open-agent-os
+spec:
+  podSelector:
+    matchLabels:
+      app: control-plane
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: execution-gateway
+        - podSelector:
+            matchLabels:
+              app: security
+        - podSelector:
+            matchLabels:
+              app: admin-api
+        - podSelector:
+            matchLabels:
+              app: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Allow health/readiness from kubelet (no from = allow all within NS is too broad;
+    # use explicit ingress-nginx + intra-app above; kubelet probes are exempt via hostNetwork fallback)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-postgres-redis
+  namespace: open-agent-os
+spec:
+  podSelector:
+    matchLabels:
+      app: control-plane
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: security
+      ports:
+        - protocol: TCP
+          port: 8002
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-security
+  namespace: open-agent-os
+spec:
+  podSelector:
+    matchLabels:
+      app: security
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
