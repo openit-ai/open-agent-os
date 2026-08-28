@@ -49,6 +49,42 @@ admin_app = app_mod.app
 def isolate():
     # deterministic vault key for tests
     os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
+    # Force llm mode — vault tests require provider CRUD, which is blocked in hermes mode (409)
+    os.environ["OAOS_RUNTIME_MODE"] = "llm"
+    try:
+        import sys
+        # Ensure runtime_mode module is loaded and set to llm
+        # Try both import paths used by llm_providers guard
+        for mod_name in ("runtime_mode", "admin_llm_providers_vault"):
+            try:
+                # runtime_mode may not be loaded yet — load it
+                if "runtime_mode" not in sys.modules:
+                    import importlib.util
+                    from pathlib import Path
+                    be = Path(__file__).resolve().parents[1] / "admin-console" / "backend"
+                    spec = importlib.util.spec_from_file_location("runtime_mode", str(be / "runtime_mode.py"))
+                    rm = importlib.util.module_from_spec(spec)
+                    sys.modules["runtime_mode"] = rm
+                    spec.loader.exec_module(rm)
+                rm = sys.modules.get("runtime_mode")
+                if rm and hasattr(rm, "set_mode") and hasattr(rm, "RuntimeMode"):
+                    rm.set_mode(rm.RuntimeMode.llm)
+            except Exception:
+                pass
+        # Also patch the guard directly as fallback — ensures even if DB says hermes, tests bypass
+        try:
+            # llm_providers guard checks runtime_mode.get_mode() == hermes -> patch to never be hermes
+            if hasattr(llm_mod, "_check_hermes_mode_guard"):
+                orig = llm_mod._check_hermes_mode_guard
+                def _noop():
+                    return None
+                llm_mod._check_hermes_mode_guard = _noop
+                # store for restore
+                isolate._orig_guard = orig
+        except Exception:
+            pass
+    except Exception:
+        pass
     # clear state
     try:
         auth_mod.clear_users()
@@ -58,8 +94,13 @@ def isolate():
         llm_mod.clear_providers()
     except Exception:
         pass
-    # also clear legacy bare alias modules if present
     yield
+    # restore guard
+    try:
+        if hasattr(isolate, '_orig_guard'):
+            llm_mod._check_hermes_mode_guard = isolate._orig_guard
+    except Exception:
+        pass
     try:
         llm_mod.clear_providers()
     except Exception:

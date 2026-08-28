@@ -76,11 +76,9 @@ def _get_raw_vault_key() -> bytes:
     raw = os.environ.get("OAOS_VAULT_KEY") or os.environ.get("VAULT_ENCRYPTION_KEY") or ""
     raw = raw.strip()
     if not raw:
-        # Use dev fallback but allow tests to override via env
+        if os.environ.get("OAOS_ENV", "").lower() in ("production", "prod"):
+            raise RuntimeError("OAOS_VAULT_KEY/VAULT_ENCRYPTION_KEY must be set in production — refusing to use dev key (set a strong 32+ char key)")
         raw = _DEV_VAULT_KEY
-        # In production, fail-closed if no key configured? warn only — don't break in-memory dev.
-        if os.environ.get("OAOS_ENV", "").lower() == "production":
-            logger.warning("OAOS_VAULT_KEY/VAULT_ENCRYPTION_KEY not set in production — using dev key (fail-open for migration); set a strong key")
     return raw.encode("utf-8")
 
 
@@ -656,14 +654,34 @@ def _get_one_provider(pid: str) -> LLMProvider | None:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+def _check_hermes_mode_guard() -> None:
+    """If runtime_mode==hermes, LLM provider CRUD is noop — per §16.1.2(8) arch spec."""
+    try:
+        try:
+            from .runtime_mode import get_mode, RuntimeMode  # type: ignore
+        except ImportError:
+            from runtime_mode import get_mode, RuntimeMode  # type: ignore
+        if get_mode() == RuntimeMode.hermes:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "HERMES_MODE_NOOP", "message": "Hermes mode is active — LLM Multi-Provider settings are disabled. Model routing is delegated to Hermes Agent. Switch to llm mode to configure providers."},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+
 @router.get("/providers")
 def list_providers(admin: AdminUser = Depends(get_current_admin)):
+    _check_hermes_mode_guard()
     items = [_to_public(v) for v in _list_all_providers()]
     return {"providers": items, "items": items, "count": len(items), "total": len(items)}
 
 
 @router.post("/providers", status_code=201)
 def create_provider(payload: LLMProviderCreate, admin: AdminUser = Depends(require_l5)):
+    _check_hermes_mode_guard()
     data = _normalize_create(payload)
     _validate_fields(data["provider"], data, is_update=False)
     pid = f"llm_{uuid.uuid4().hex[:10]}"
@@ -724,6 +742,7 @@ def get_provider(provider_id: str, admin: AdminUser = Depends(get_current_admin)
 
 @router.patch("/providers/{provider_id}")
 def update_provider(provider_id: str, payload: LLMProviderUpdate, admin: AdminUser = Depends(require_l5)):
+    _check_hermes_mode_guard()
     p = _get_one_provider(provider_id)
     if not p:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -818,6 +837,7 @@ def update_provider(provider_id: str, payload: LLMProviderUpdate, admin: AdminUs
 
 @router.delete("/providers/{provider_id}")
 def delete_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
+    _check_hermes_mode_guard()
     # try DB first
     if _is_db_enabled():
         res = _db_delete_provider(provider_id)
@@ -842,6 +862,7 @@ def delete_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
 
 @router.post("/providers/{provider_id}/test")
 def test_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
+    _check_hermes_mode_guard()
     p = _get_one_provider(provider_id)
     if not p:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -872,6 +893,7 @@ def test_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
 @router.post("/providers/{provider_id}/toggle")
 @router.patch("/providers/{provider_id}/toggle")
 def toggle_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
+    _check_hermes_mode_guard()
     p = _get_one_provider(provider_id)
     if not p:
         raise HTTPException(status_code=404, detail="provider not found")

@@ -122,7 +122,7 @@ async def test_binary_fallback_to_mock(monkeypatch):
     monkeypatch.delenv("OPENCODE_BINARY", raising=False)
     prov = OpenCodeProvider(base_url="http://localhost:1", model="deepseek-v3")
     # force no binary
-    with patch("agent_runtime.providers.opencode.resolve_binary_path", return_value=None):
+    with patch("agent_runtime.providers.opencode.resolve_binary_path", return_value=None), patch("agent_runtime.providers.opencode_go.resolve_binary_path", return_value=None):
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=Exception("no server"))
@@ -174,7 +174,7 @@ async def test_health_check_http_and_binary(tmp_path):
 async def test_health_check_unavailable(monkeypatch):
     monkeypatch.delenv("OPENCODE_BIN", raising=False)
     prov = OpenCodeProvider(base_url="http://localhost:1")
-    with patch("agent_runtime.providers.opencode.resolve_binary_path", return_value=None):
+    with patch("agent_runtime.providers.opencode.resolve_binary_path", return_value=None), patch("agent_runtime.providers.opencode_go.resolve_binary_path", return_value=None):
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(side_effect=Exception("refused"))
@@ -190,7 +190,7 @@ async def test_health_check_unavailable(monkeypatch):
 @pytest.mark.asyncio
 async def test_stream_mock_fallback():
     prov = OpenCodeProvider(base_url="http://localhost:1", model="qwen3-coder")
-    with patch("agent_runtime.providers.opencode.resolve_binary_path", return_value=None):
+    with patch("agent_runtime.providers.opencode.resolve_binary_path", return_value=None), patch("agent_runtime.providers.opencode_go.resolve_binary_path", return_value=None):
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=Exception("no http"))
