@@ -137,6 +137,66 @@ Agent Runtime → Production DB = DENY
 
 ---
 
+## 16A.6 Network Isolation — Controlled Egress Proxy (v1.5.1)
+
+Filesystem을 막아도 Hermes가 내부 시스템에 직접 network egress 할 수 있으면 MCP를 우회한다. v1.5.1은 **Controlled Egress Proxy** 패턴으로 Egress를 경화한다.
+
+### Controlled Egress Proxy
+
+```
+                    ┌─────────────────────────────────┐
+                    │  Hermes Runtime (uid hermes)    │
+                    │  HOME=/home/hermes              │
+                    └───────────┬─────────────────────┘
+                                │  오직 Controlled Egress Proxy 경유
+                                ▼
+                    ┌─────────────────────────────────┐
+                    │   Controlled Egress Proxy       │
+                    │   (nftables + HTTP CONNECT      │
+                    │    domain allowlist)            │
+                    │                                 │
+                    │  ┌───────────────────────────┐  │
+                    │  │ LLM Gateway               │  │
+                    │  │ (LLM_GATEWAY_HOST)        │  │
+                    │  └───────────┬───────────────┘  │
+                    │              │                  │
+                    │  ┌───────────▼───────────────┐  │
+                    │  │ Approved Package Mirror   │  │
+                    │  │ (PACKAGE_MIRROR_HOST)     │  │
+                    │  └───────────────────────────┘  │
+                    │                                 │
+                    │  Explicit Domain Allowlist      │
+                    └─────────────────────────────────┘
+                                │
+                    DENY: arbitrary internet / direct registry / public LLM direct
+                    ALLOW: only ACP:8000, MCP:8001, LLM Gateway, Package Mirror
+```
+
+핵심: **Hermes가 임의 외부 목적지를 직접 선택하지 못하도록** 한다. nftables는 IP 계층에서 default DROP + DENY set을 강제하고, HTTP CONNECT 프록시는 domain 계층에서 allowlist를 강제한다.
+
+### ALLOW / DENY Table (v1.5.1 §16A.6)
+
+| Source | Destination | Path | Verdict | Comment |
+|--------|-------------|------|---------|---------|
+| Hermes | ACP `ACP_HOST:8000` | direct | **ALLOW** | Agent Control Plane |
+| Hermes | MCP `MCP_HOST:8001` | direct | **ALLOW** | Execution Gateway / MCP |
+| Hermes | LLM Gateway `LLM_GATEWAY_HOST:443` | via Controlled Egress Proxy | **ALLOW** | Configurable via `LLM_GATEWAY_HOST` env/template |
+| Hermes | Approved Package Mirror `PACKAGE_MIRROR_HOST:443` | via Controlled Egress Proxy | **ALLOW** | Configurable via `PACKAGE_MIRROR_HOST` env/template; covers PyPI/npm/GitHub via mirror |
+| Hermes | Public LLM API direct (e.g. `api.openai.com`, `generativelanguage.googleapis.com`) | direct | **DENY** | §16A.6 v1.5.1 — must use LLM Gateway |
+| Hermes | PyPI / files.pythonhosted.org direct | direct | **DENY** | §16A.6 v1.5.1 — must use Approved Package Mirror |
+| Hermes | registry.npmjs.org direct | direct | **DENY** | §16A.6 v1.5.1 — must use Approved Package Mirror |
+| Hermes | github.com / raw.githubusercontent.com direct | direct | **DENY** | §16A.6 v1.5.1 — must use Approved Package Mirror |
+| Hermes | Arbitrary Internet (0.0.0.0/0) | direct | **DENY** | Default DROP for uid `hermes` (§16A.6 Invariant E) |
+| Hermes | Internal DB `10.20.0.0/16` direct | direct | **DENY** | `INTERNAL_DB_NET` — explicit DROP before ALLOW |
+| Hermes | ERP `10.30.0.0/16` direct | direct | **DENY** | `ERP_NET` |
+| Hermes | CRM `10.40.0.0/16` direct | direct | **DENY** | `CRM_NET` |
+| Hermes | SSH `10.0.0.0/8:22` direct | direct | **DENY** | `INTERNAL_SSH_NET` port 22 |
+| Hermes | Internal Admin API `10.50.0.0/16` | direct | **DENY** | `ADMIN_API_NET` |
+
+> 구현: `deploy/firewall/hermes-egress.nft` — `define LLM_GATEWAY_HOST` / `define PACKAGE_MIRROR_HOST` 로 교체 가능, `set denied_registries` 로 pypi/npm/github/public-llm CIDR 명시적 DROP, 마지막 `meta skuid hermes drop` 으로 arbitrary internet 차단. Domain 기반 차단은 HTTP CONNECT proxy allowlist로 보강.
+
+---
+
 ## References
 
 - Canonical: `docs/architecture-v1.5.md` (3417 lines, SHA `b19f54ab`) — §§16F/16G/16H/16I, §§16A–16E carryover — §§16A–16I zero-trust boundary

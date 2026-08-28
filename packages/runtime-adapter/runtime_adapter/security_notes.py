@@ -1,4 +1,12 @@
-"""§16G Untrusted Execution Worker — Security Notes
+"""§16G/16A.3.1 Untrusted Execution Worker — Security Notes
+
+16A.3.1 Session/User Workspace Isolation (v1.5.1):
+  Namespace: /home/hermes/workspaces/{tenant}/{agent}/{session}/
+  Path-name-only != isolation: path separation alone is NOT security isolation.
+  Levels: general→per-session workspace+process isolation, sensitive→ephemeral sandbox, high-risk→ephemeral container/VM
+  Retention: delete or safe-retain, no reuse; Cross-session deny: A cannot read B
+
+§16G Untrusted Execution Worker — Security Notes
 
 이 모듈은 v1.4.1 §16G/§16I 보안 모델의 코드 레벨 주석 역할을 한다.
 Hermes를 trusted가 아닌 potentially compromised worker로 취급한다.
@@ -76,7 +84,32 @@ except Exception:
     DataAccessPolicy = None  # type: ignore
     get_data_access_policy = None  # type: ignore
 
-__all__ = ["DataAccessPolicy", "get_data_access_policy"]
+__all__ = ["DataAccessPolicy", "get_data_access_policy", "WORKSPACE_ROOT", "WORKSPACE_ROOT_STR", "ISOLATION_LEVELS", "IsolationLevel"]
+
+# ── 16A.3.1 Workspace Isolation constants (v1.5.1) ─────────────────────
+from pathlib import Path as _Path
+
+WORKSPACE_ROOT: _Path | str = _Path("/home/hermes/workspaces")
+WORKSPACE_ROOT_STR: str = "/home/hermes/workspaces"
+
+try:
+    from .workspace import IsolationLevel as _IsolationLevel, ISOLATION_LEVELS as _ISOLATION_LEVELS  # type: ignore
+
+    IsolationLevel = _IsolationLevel  # type: ignore
+    ISOLATION_LEVELS = _ISOLATION_LEVELS  # type: ignore
+except Exception:
+    from enum import Enum as _Enum  # fallback
+
+    class IsolationLevel(_Enum):  # type: ignore
+        GENERAL = "general"
+        SENSITIVE = "sensitive"
+        HIGH_RISK = "high_risk"
+
+    ISOLATION_LEVELS = {  # type: ignore
+        "general": "per-session workspace + process isolation",
+        "sensitive": "ephemeral sandbox",
+        "high_risk": "ephemeral container or VM",
+    }
 
 # ── 16G 주석 상수 (문서/검증용) ──────────────────────────────────────
 

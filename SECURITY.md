@@ -4,7 +4,8 @@
 
 | Version | Supported | Notes |
 |---|---|---|
-| `v1.5` | ✅ | Current canonical — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.md` (§§16A–16K) |
+| `v1.5.1` | ✅ | Current canonical — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.1.md` (§§16A–16K, §§16A.3.1/16A.6 new, 3615 lines, SHA `4c2c1b85`) |
+| `v1.5` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.md` (3417 lines, SHA `b19f54ab`) |
 | `v0.1.1` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0) |
 
 Earlier pre-release tags are not supported. Security fixes are applied to `main`.
@@ -41,7 +42,7 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 ## Canonical Architecture
 
-- `docs/architecture-v1.5.md` — 47 Sections + §§16A–16K (SHA `b19f54ab`, 3417 lines) — conformance: `docs/architecture-conformance.md` v1.5; Previous `v1.4.1` `646a8fe` / `v1.3` `4a0383c8` preserved; code: `packages/runtime-adapter` (LLM canonical) + `execution-gateway/tool_policy` + `data_access` (180 tests)
+- `docs/architecture-v1.5.1.md` — 47 Sections + §§16A–16K — §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy / 16C Core·Advanced split / 16F built-in reference + escalation / §17 ACP=Hermes-specific / §40 4 tests new (SHA `4c2c1b85`, 3615 lines) — conformance: `docs/architecture-conformance.md` v1.5.1; Previous `v1.5` `b19f54ab` / `v1.4.1` `646a8fe` / `v1.3` `4a0383c8` preserved; code: `packages/runtime-adapter` (LLM canonical) + `execution-gateway/tool_policy` + `data_access` (226 tests — incl. §16A.3.1 workspace isolation + §40 4 security tests)
 - `docs/security-model.md` — §§16F/16G/16H/16I reference
 
 ## Scope
@@ -67,9 +68,9 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 Open Agent OS is a **Self-Hosted Enterprise Personal Agent Platform** — `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + JIT approval)`, `Cross-user always DENY`, `Auditable (hash-chain)`.
 
-- Architecture: [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) (§16A–16K, §§16F–16I, §30–31) — canonical v1.5
-- Security Model: [`docs/security-model.md`](docs/security-model.md) (§§16A–16I, v1.5 — Dual Runtime / Untrusted Worker / Tool Policy / Data Access)
-- Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.5 — 180 tests passed
+- Architecture: [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) (§16A–16K — §§16A.3.1/16A.6 new, 16C Core·Advanced, 16F built-in + escalation, §17 ACP=Hermes-specific, §40 4 tests — canonical v1.5.1 `4c2c1b85`)
+- Security Model: [`docs/security-model.md`](docs/security-model.md) (§§16A–16I — Dual Runtime / Untrusted Worker / Tool Policy / Data Access, v1.5.1: 16A.3.1 workspace isolation + 16A.6 Controlled Egress Proxy)
+- Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.5.1 — 226 tests passed (incl. §40 4 new tests)
 - Threat review — Execution Gateway bypass: [`docs/security-review-gateway-bypass.md`](docs/security-review-gateway-bypass.md) — why "cannot bypass" matters more than "gateway exists", and the 3 remaining production hardenings (NetworkPolicy / Runtime hardening / DB re-verification)
 
 A bypass of the Gateway via direct Hermes → DB / Internal API / credential access is considered a **security boundary failure**, not a feature.
@@ -81,11 +82,11 @@ Self-hosted operators should:
 - Do not mount `docker.sock` into Hermes or Gateway containers
 - Set `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, `seccomp` / `AppArmor`
 - Apply Kubernetes `NetworkPolicy` + host `nft` / `systemd` — Hermes may only reach `control-plane:8000` / `execution-gateway:8001`, not DB / internal APIs directly — see `deploy/firewall/hermes-egress.nft` + `deploy/systemd/hermes.service` + `docs/security-model.md` (Blast Radius)
-- Apply host firewall — `deploy/firewall/hermes-egress.nft` (nftables, §16A.6): `hermes` uid egress DENY by default, explicit DENY for INTERNAL_DB_NET/ERP/CRM/SSH, ALLOW only ACP:8000 / MCP:8001 / LLM — `sudo nft -f /etc/nftables/hermes-egress.nft`
+- Apply host firewall — `deploy/firewall/hermes-egress.nft` (nftables, §16A.6 Controlled Egress Proxy): `hermes` uid egress DENY by default, explicit DENY for INTERNAL_DB_NET/ERP/CRM/SSH, ALLOW only ACP:8000 / MCP:8001 / LLM Gateway / Approved Package Mirror via Controlled Egress Proxy — `sudo nft -f /etc/nftables/hermes-egress.nft` — see `docs/architecture-v1.5.1.md` §16A.6
 - Apply systemd sandbox — `deploy/systemd/hermes.service` (§16A.4–16A.5): `User=hermes`, `NoNewPrivileges=true`, `ProtectSystem=strict`, `PrivateTmp=true`, `ReadWritePaths=/home/hermes` — `sudo systemd-analyze verify /etc/systemd/system/hermes.service`
 - Keep `OAOS_SIGNING_KEY` / `FERNET_KEY` out of images and logs — use secrets management
 - See `deploy/` for reference configurations
 
 ---
 
-*Last updated: 2026-08-28 — v1.5 canonical (180 tests). For general questions (non-security), use GitHub Issues.*
+*Last updated: 2026-08-28 — v1.5.1 canonical (3615 lines, SHA 4c2c1b85, 226 tests). For general questions (non-security), use GitHub Issues.*

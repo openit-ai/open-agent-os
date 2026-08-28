@@ -5,8 +5,8 @@
 [한국어](README.ko.md) | **English**
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.5.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
-- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes), `180 tests pass`, `npm run build ✓`
+- **Architecture:** `docs/architecture-v1.5.1.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern; §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy new — `4c2c1b85`, 3615 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes), `226 tests pass`, `npm run build ✓`
 
 ## Why Open Agent OS — Two Contradictions the Market Hasn't Solved
 
@@ -49,7 +49,7 @@ Beyond Q&A, the agent becomes a **daily work executor** — `discover → organi
 ## 5 Core Values
 
 1. **Personal-First, Enterprise-Safe** — Calendar / Gmail delegated by me (§9); Production / ERP / customer DB governed by company policy + approval (§11). Natural UX and security at once. (§13)
-2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user always DENY, no plaintext token storage, no long-term storage in Hermes process (§10). Verified by 180 tests.
+2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user always DENY, no plaintext token storage, no long-term storage in Hermes process (§10). Verified by 226 tests.
 3. **Human-approved high-risk execution** — HIGH-risk (§21) actions such as `MERGE / DEPLOY / PAY / EXPORT` run only via Capability Token (HS256, 300s, nonce/jti replay protection) + HMAC approval request (§24) + 4-button Admin Console decision.
 4. **Auditable operations** — Every authorization, delegation, and execution is recorded in the Audit Ledger as a hash-chain with HMAC checkpoint — tampering is immediately detectable (§30–31). `verify_chain` / `checkpoint` APIs.
 5. **Self-Hosted, Source-Available** — BSL 1.1 (converts to Apache 2.0 after 4 years), deploy on customer infrastructure. Evaluate (Developer) → operate (Business / Managed) without SaaS lock-in. (§5, Editions)
@@ -78,8 +78,8 @@ admin-console/             # Admin — Next.js 15 + shadcn Financial (#22C55E/#F
 adapters/                  # Mattermost / Slack / Outline / Notion / Hermes / IAM / Google / Microsoft
 examples/morning-briefing/ # MVP — orchestrator (per-user kim vs lee) + output.json (13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
-tests/                     # 180 tests
-docs/architecture-v1.5.md  # Canonical (47 Sections + §§16A–16K, Previous v1.4.1/v1.3 preserved, v1.1 preserved)
+tests/                     # 226 tests
+docs/architecture-v1.5.1.md  # Canonical (47 Sections + §§16A–16K — §§16A.3.1/16A.6 new, 3615 lines, SHA 4c2c1b85, Previous v1.5/v1.4.1/v1.3 preserved, v1.1 preserved)
 ```
 
 ## Quick Start
@@ -138,8 +138,8 @@ All screens: shadcn + WCAG AA, `overflow-auto` for 375px, `npm run build` 11 sta
 - **Token:** HS256 300s short-lived + nonce/jti replay store
 - **Approval:** HMAC-SHA256, 4 decisions (`DENIED / APPROVED_ONCE / APPROVED_USER_ALWAYS / APPROVED_GROUP_ALWAYS`), nonce/signature/expiry
 - **Audit:** hash-chain + HMAC checkpoint (`verify_chain`, `checkpoint`)
-- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options (LLM Only/Hermes Only/Both), Router 5-step, Capability `EXECUTE runtime/*`, §16G untrusted worker / §16H tool policy(rate-limit/bulk) / §16I data access (read_only_api→MCP, command_api+approval) — 180 tests
-- **Isolation verified:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` — 180 tests
+- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options (LLM Only/Hermes Only/Both), Router 5-step, Capability `EXECUTE runtime/*`, §16G untrusted worker / §16H tool policy(rate-limit/bulk) / §16I data access (read_only_api→MCP, command_api+approval) — 226 tests
+- **Isolation verified:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` — 226 tests
 
 ## Tests
 
@@ -164,7 +164,7 @@ Self-hosted on customer server / VPS / private cloud / K8s — not multi-tenant 
 
 ## Docs
 
-- `docs/architecture-v1.5.md` — Canonical (47 Sections + §§16A–16K, SHA `b19f54ab`) — Previous: `docs/architecture-v1.4.1.md`/`v1.3.md` preserved
+- `docs/architecture-v1.5.1.md` — Canonical (47 Sections + §§16A–16K — §§16A.3.1/16A.6 new, 3615 lines, SHA `4c2c1b85`) — Previous: `docs/architecture-v1.5.md` `b19f54ab`/`v1.4.1.md` `646a8fe`/`v1.3.md` `4a0383c8` preserved
 - `docs/api/` — Internal Agent Interface, Capability, Approval APIs
 - `examples/morning-briefing/README.md` — MVP briefing format (09:30 / 11:00 / Must-do today)
 
