@@ -1,0 +1,87 @@
+# prometheus.yml — Business edition monitoring (§16D + audit + hermes egress)
+# Prometheus 2.50+ compatible. Validate: promtool check config prometheus.yml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: open-agent-os-prod
+    edition: business
+
+rule_files:
+  - alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: control-plane
+    metrics_path: /metrics
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["control-plane:8000"]
+        labels:
+          service: control-plane
+    # For compose: control-plane exposes 8000 internal; via nginx also available
+    # Health endpoint also usable as fallback if /metrics not yet implemented
+
+  - job_name: execution-gateway
+    metrics_path: /metrics
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["execution-gateway:8001"]
+        labels:
+          service: execution-gateway
+
+  - job_name: security
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["security:8002"]
+        labels:
+          service: security
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          service: postgres
+    # postgres_exporter sidecar — if not deployed, target will be down (alerted separately)
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          service: redis
+
+  - job_name: nginx
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["nginx:9113"]
+        labels:
+          service: nginx
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: node
+    # hermes egress DENY count exposed via node_exporter textfile collector
+    # Place metric file at /var/lib/node_exporter/textfile/hermes_egress.prom:
+    #   hermes_egress_deny_total{chain="hermes_egress", verdict="drop"} 42
+    # See deploy/firewall/hermes-egress.nft + helper script
+
+  - job_name: backup-exporter
+    metrics_path: /metrics
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["control-plane:8000"]
+        labels:
+          service: backup
+    # Backup/upgrade metrics emitted by control-plane or pushgateway:
+    #   oaos_backup_last_success_timestamp, oaos_backup_fail_total, oaos_upgrade_fail_total

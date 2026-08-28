@@ -1,0 +1,14 @@
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+
+dashboards:
+  - name: OAOS Business
+    type: file
+    folder: ""
+    options:
+      path: /etc/grafana/dashboards

@@ -1,0 +1,152 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": { "list": [] },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "visible" } },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"control-plane\"}[5m]))",
+          "legendFormat": "QPS",
+          "refId": "A"
+        }
+      ],
+      "title": "Control-Plane QPS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"control-plane\"}[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"control-plane\"}[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "B"
+        }
+      ],
+      "title": "Control-Plane Latency (p50/p95)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "sum(rate(oaos_tool_calls_total{job=\"execution-gateway\"}[5m])) by (tool)",
+          "legendFormat": "{{tool}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(oaos_tool_calls_total[5m]))",
+          "legendFormat": "total",
+          "refId": "B"
+        }
+      ],
+      "title": "Execution-Gateway Tool Calls / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "oaos_audit_lag_seconds",
+          "legendFormat": "audit lag",
+          "refId": "A"
+        },
+        {
+          "expr": "time() - oaos_audit_last_checkpoint_timestamp",
+          "legendFormat": "checkpoint age",
+          "refId": "B"
+        }
+      ],
+      "title": "Audit Lag & Checkpoint Age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "increase(hermes_egress_deny_total[5m])",
+          "legendFormat": "DENY /5m",
+          "refId": "A"
+        },
+        {
+          "expr": "hermes_egress_deny_total",
+          "legendFormat": "total",
+          "refId": "B"
+        }
+      ],
+      "title": "Hermes Egress DENY Count",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "oaos_backup_last_success_timestamp",
+          "legendFormat": "last success",
+          "refId": "A"
+        },
+        {
+          "expr": "oaos_backup_fail_total",
+          "legendFormat": "fail total",
+          "refId": "B"
+        },
+        {
+          "expr": "oaos_upgrade_fail_total",
+          "legendFormat": "upgrade fail",
+          "refId": "C"
+        }
+      ],
+      "title": "Backup / Upgrade Health",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 27,
+  "style": "dark",
+  "tags": ["open-agent-os", "business"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "Open Agent OS — Business Overview",
+  "uid": "oaos-business",
+  "version": 1
+}

@@ -1,0 +1,142 @@
+groups:
+  - name: oaos-audit
+    interval: 30s
+    rules:
+      - alert: AuditChainBreak
+        expr: increase(oaos_audit_chain_break_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: security
+        annotations:
+          summary: "Audit hash chain broken"
+          description: "Audit ledger chain verification failed — possible tamper or DB corruption. Value={{ $value }} on {{$labels.instance}}."
+
+      - alert: AuditLagHigh
+        expr: oaos_audit_lag_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "Audit lag > 5m"
+          description: "Audit checkpoint lag is {{ $value }}s — consumer or S3 upload may be stuck."
+
+      - alert: AuditCheckpointStale
+        expr: time() - oaos_audit_last_checkpoint_timestamp > 7200
+        for: 5m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "Audit checkpoint stale >2h"
+          description: "No audit checkpoint produced for >2h. Check security service and cron."
+
+  - name: oaos-backup
+    interval: 1m
+    rules:
+      - alert: BackupFailed
+        expr: increase(oaos_backup_fail_total[1h]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: "Backup failed"
+          description: "Backup script reported failure in last hour (fails={{ $value }}). Check /var/log/oaos-backup.log and S3 config."
+
+      - alert: BackupStale
+        expr: time() - oaos_backup_last_success_timestamp > 172800
+        for: 10m
+        labels:
+          severity: warning
+          service: backup
+        annotations:
+          summary: "No successful backup >48h"
+          description: "Last successful backup was {{ $value }}s ago — retention risk."
+
+      - alert: BackupDurationHigh
+        expr: oaos_backup_duration_seconds > 1800
+        for: 5m
+        labels:
+          severity: warning
+          service: backup
+        annotations:
+          summary: "Backup duration >30m"
+          description: "Backup took {{ $value }}s — investigate pg_dump/redis size."
+
+  - name: oaos-upgrade
+    interval: 1m
+    rules:
+      - alert: UpgradeFailed
+        expr: increase(oaos_upgrade_fail_total[1h]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: deploy
+        annotations:
+          summary: "Upgrade failed and rollback may have triggered"
+          description: "Upgrade reported failure (fails={{ $value }}). Verify health endpoints and IMAGE_TAG rollback."
+
+      - alert: UpgradeStuck
+        expr: oaos_upgrade_in_progress == 1
+        for: 30m
+        labels:
+          severity: warning
+          service: deploy
+        annotations:
+          summary: "Upgrade stuck >30m"
+          description: "Upgrade still marked in-progress after 30m — possible hung compose pull/migrate."
+
+  - name: oaos-hermes-egress
+    interval: 30s
+    rules:
+      - alert: HermesEgressDenySpike
+        expr: increase(hermes_egress_deny_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: hermes
+        annotations:
+          summary: "Hermes egress DENY spike"
+          description: "DENY count increased by {{ $value }} in 5m — check nftables hermes_egress chain and ACP policy."
+
+      - alert: HermesEgressDenyHigh
+        expr: increase(hermes_egress_deny_total[10m]) > 100
+        for: 2m
+        labels:
+          severity: critical
+          service: hermes
+        annotations:
+          summary: "Hermes egress DENY very high"
+          description: "DENY count {{ $value }} in 10m — possible exfiltration attempt or misconfigured allowlist."
+
+  - name: oaos-service-health
+    interval: 30s
+    rules:
+      - alert: ControlPlaneDown
+        expr: up{job="control-plane"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "control-plane down"
+          description: "control-plane scrape target down >2m."
+
+      - alert: ExecutionGatewayDown
+        expr: up{job="execution-gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "execution-gateway down"
+          description: "execution-gateway scrape target down >2m."
+
+      - alert: HighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx rate >5%"
+          description: "5xx ratio {{ $value | humanizePercentage }} over 5m."

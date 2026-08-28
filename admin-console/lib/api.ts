@@ -266,3 +266,77 @@ export interface CredentialsStatusResponse {
 export function getCredentialsStatus(): Promise<CredentialsStatusResponse> {
   return apiFetch<CredentialsStatusResponse>("/v1/credentials/status");
 }
+
+// ---- business — license / security updates / backup / upgrade (§41, BSL 1.1, §16A.3.1) ----
+export interface LicenseStatusResponse {
+  status: string;
+  license_key: string | null;
+  edition: string;
+  bsl_version: string;
+  verified_at: string | null;
+  expires_at: string | null;
+  holder: string | null;
+  message: string;
+}
+export function getLicenseStatus(): Promise<LicenseStatusResponse> {
+  return apiFetch<LicenseStatusResponse>("/v1/license/status");
+}
+export function verifyLicense(license_key: string): Promise<LicenseStatusResponse> {
+  return apiFetch<LicenseStatusResponse>("/v1/license/verify", { method: "POST", body: JSON.stringify({ license_key }) });
+}
+
+export interface SecurityUpdateItem {
+  version: string;
+  available: boolean;
+  severity: string;
+  release_date: string;
+  cves: Array<{ id: string; severity: string; summary: string }>;
+  changelog: string;
+  current_version: string;
+}
+export interface SecurityUpdatesResponse {
+  current_version: string;
+  updates: SecurityUpdateItem[];
+  count: number;
+}
+export function getSecurityUpdates(): Promise<SecurityUpdatesResponse> {
+  return apiFetch<SecurityUpdatesResponse>("/v1/security/updates");
+}
+
+export interface BackupRecord {
+  id: string;
+  seq: number;
+  status: string;
+  created_at: string;
+  expires_at: string;
+  retention_days: number;
+  size_mb: number;
+  location: string;
+  triggered_by: string | null;
+  expired?: boolean;
+}
+export interface BackupStatusResponse {
+  retention_days: number;
+  retention_policy: string;
+  total: number;
+  backups: BackupRecord[];
+  next_scheduled: string;
+}
+export function getBackupStatus(): Promise<BackupStatusResponse> {
+  return apiFetch<BackupStatusResponse>("/v1/backup/status");
+}
+export function triggerBackup(): Promise<{ status: string; backup: BackupRecord }> {
+  return apiFetch("/v1/backup/trigger", { method: "POST" });
+}
+
+export interface UpgradeStatusResponse {
+  current_version: string;
+  available_version: string;
+  status: string;
+  last_check: string;
+  last_upgrade_at: string | null;
+  changelog: string;
+}
+export function getUpgradeStatus(): Promise<UpgradeStatusResponse> {
+  return apiFetch<UpgradeStatusResponse>("/v1/upgrade/status");
+}
