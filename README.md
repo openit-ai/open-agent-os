@@ -5,7 +5,7 @@
 [한국어](README.ko.md) | **English**
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.5.1.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern; §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy new — `4c2c1b85`, 3615 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Architecture:** `docs/architecture-v1.6.md` (Sections 1–47 + §§16A–16K + §27 Persistent Memory & Database — `openagentos` + `pgvector` + Admin persistence 3-Role; — `65a9686a`, 4253 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes), `226 tests pass`, `npm run build ✓`
 
 ## Why Open Agent OS — Two Contradictions the Market Hasn't Solved

@@ -6,11 +6,17 @@ ACP is an adapter — not the canonical protocol. Hermes core is NOT modified.
 Wire: Hermes ACP (Client ↔ Agent) via stdio/SSE/WebSocket depending on deployment.
 This adapter translates:
   create_session / send_prompt / stream_event  ↔  Hermes ACP messages
+
+Fallback v1.5.1: When ACP endpoint is unavailable (404), fall back to
+Hermes Gateway OpenAI-compatible /v1/chat/completions (same LLM as
+hermes @openit CoCo) — not Ollama. Uses OAOS_CP_HERMES_API_KEY.
 """
 from __future__ import annotations
 import asyncio
 import json
 import uuid
+import os
+from pathlib import Path
 from typing import AsyncGenerator, Any
 import httpx
 from .session import SessionRecord
@@ -32,6 +38,37 @@ class ACPAdapter:
             "X-Trace-Id": session.trace_id,
             "X-Security-Domain": session.security_domain,
         }
+
+    def _hermes_api_key(self) -> str:
+        try:
+            from .config import settings
+            k = getattr(settings, "hermes_api_key", "") or ""
+            if k:
+                return k
+        except Exception:
+            pass
+        k = os.getenv("OAOS_CP_HERMES_API_KEY", "") or os.getenv("API_SERVER_KEY", "") or ""
+        if k:
+            return k
+        # last resort: read from ~/.hermes/.env
+        try:
+            p = Path.home() / ".hermes" / ".env"
+            for line in p.read_text().splitlines():
+                if line.startswith("API_SERVER_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            pass
+        return ""
+
+    def _hermes_model(self) -> str:
+        try:
+            from .config import settings
+            m = getattr(settings, "hermes_model", "") or ""
+            if m:
+                return m
+        except Exception:
+            pass
+        return os.getenv("OAOS_CP_HERMES_MODEL", "") or "qwen2.5"
 
     async def create_session_remote(self, session: SessionRecord) -> dict[str, Any]:
         """POST /acp/sessions — create Hermes-side session. Falls back to local if Hermes unavailable (dev)."""
@@ -67,7 +104,9 @@ class ACPAdapter:
     async def stream_events(self, session: SessionRecord) -> AsyncGenerator[dict[str, Any], None]:
         """SSE stream from Hermes — yields StreamEvent dicts (Section 17: stream_event).
 
-        Dev fallback: yields synthetic events so Workstream A can be tested without Hermes.
+        If Hermes ACP stream is unavailable (404), fall back to Hermes Gateway
+        /v1/chat/completions (same LLM that powers @openit CoCo) and yield its
+        reply as token stream. This keeps Mattermost @agent on the Hermes-configured LLM.
         """
         url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/stream"
         try:
@@ -87,8 +126,68 @@ class ACPAdapter:
                     return
         except Exception:
             pass
-        # ── Dev fallback synthetic stream (keeps Workstream A testable) ──
-        for chunk in ["안녕하세요, ", "Personal Agent가 ", "준비되었습니다."]:
-            await asyncio.sleep(0.02)
-            yield {"type": "token", "data": {"text": chunk}, "trace_id": session.trace_id}
+        # ── Hermes Gateway fallback (standard path — same LLM as @openit) ──
+        # Retrieve last user prompt from session_store
+        prompt_text = ""
+        try:
+            from .session import session_store
+            rec = session_store.get_any(session.session_id)
+            if rec and rec.prompt_history:
+                prompt_text = rec.prompt_history[-1].get("prompt", "") or ""
+        except Exception:
+            pass
+        if prompt_text:
+            api_key = self._hermes_api_key()
+            model = self._hermes_model()
+            gateway_url = f"{self.hermes_base_url}/v1/chat/completions"
+            # Hermes gateway is at 8642, but config may point to wrong port — fixup if needed
+            if ":8001" in gateway_url:
+                gateway_url = gateway_url.replace(":8001", ":8642")
+            system_prompt = (
+                f"You are Open Agent OS personal agent {session.agent_id} for user {session.user_id} "
+                f"(tenant {session.tenant_id}, session {session.session_id}). "
+                "You are SEPARATE from Hermes @openit CoCo (company-wide). "
+                "Reply in Korean, concise, helpful. Keep identity consistent."
+            )
+            try:
+                async with httpx.AsyncClient(timeout=40.0) as client:
+                    r = await client.post(
+                        gateway_url,
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": prompt_text},
+                            ],
+                            "temperature": 0.7,
+                        },
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    content = ""
+                    try:
+                        content = data["choices"][0]["message"]["content"] or ""
+                    except Exception:
+                        content = data.get("content", "") or ""
+                    content = content.strip()
+                    if content:
+                        # yield in chunks to simulate streaming
+                        mid = len(content) // 2
+                        for chunk in ([content[:mid]] if mid and len(content) > 200 else [content]):
+                            if chunk:
+                                yield {"type": "token", "data": {"text": chunk}, "trace_id": session.trace_id}
+                                await asyncio.sleep(0.02)
+                        yield {"type": "done", "data": {}, "trace_id": session.trace_id}
+                        return
+            except Exception as e:
+                # log and fall through — no synthetic, let agent runtime handle
+                try:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Hermes gateway fallback failed: {e}")
+                except Exception:
+                    pass
+        # ── No synthetic fallback — strictly agent runtime only ──
+        # If Hermes gateway also unreachable, yield done without token so
+        # Mattermost posts nothing (agent runtime will recover and retry).
         yield {"type": "done", "data": {}, "trace_id": session.trace_id}

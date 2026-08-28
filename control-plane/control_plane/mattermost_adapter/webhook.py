@@ -168,17 +168,16 @@ async def _stream_and_post_to_mattermost(
                         await adapter.send_message(channel_id, buffer, root_id=root_id)
                     except Exception:
                         pass
+                    buffer = ""
                 break
             if text_chunk:
                 buffer += text_chunk
-                # post incremental if buffer large enough or on sentence boundary
                 if len(buffer) > 500 or text_chunk.endswith("\n"):
                     try:
                         await adapter.send_message(channel_id, buffer, root_id=root_id)
                     except Exception:
                         pass
                     buffer = ""
-        # flush remaining
         if buffer.strip():
             try:
                 await adapter.send_message(channel_id, buffer, root_id=root_id)
@@ -195,6 +194,7 @@ async def _handle_core_logic(
     session_id: str | None,
     channel_id: str | None = None,
     post_id: str | None = None,
+    root_id: str | None = None,
 ) -> dict[str, Any]:
     """Shared session/briefing/ACP logic (reused by events + slash)."""
     # Identity mapping — 1:1 logical agent
@@ -267,9 +267,10 @@ async def _handle_core_logic(
 
     # Streaming: fetch stream and post incremental updates via MattermostAdapter (threaded, root_id)
     if channel_id:
-        # background task — don't block response
+        # background task — don't block response; use thread root if provided
+        thread_root = root_id or post_id
         try:
-            asyncio.create_task(_stream_and_post_to_mattermost(channel_id, post_id, rec))
+            asyncio.create_task(_stream_and_post_to_mattermost(channel_id, thread_root, rec))
         except Exception:
             pass
 
@@ -305,13 +306,14 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     session_id: str | None = payload.get("session_id")
     channel_id: str | None = payload.get("channel_id") or payload.get("channel", {}).get("id")
     post_id: str | None = payload.get("post_id") or payload.get("id") or payload.get("data", {}).get("post", {}).get("id")
+    root_id: str | None = payload.get("root_id") or payload.get("data", {}).get("post", {}).get("root_id") or payload.get("rootId")
 
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id (employee:...) required")
     if not text:
         raise HTTPException(status_code=400, detail="text/message required")
 
-    return await _handle_core_logic(tenant_id, user_id, text, session_id, channel_id=channel_id, post_id=post_id)
+    return await _handle_core_logic(tenant_id, user_id, text, session_id, channel_id=channel_id, post_id=post_id, root_id=root_id)
 
 
 @router.post("/mattermost/slash")
