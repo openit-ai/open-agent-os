@@ -157,3 +157,48 @@ class ToolRateLimiter:
             if need <= 0:
                 return 0.0
             return need / self.rate if self.rate > 0 else 9999.0
+
+
+# ── Mattermost colleague DM policy (§14 §16H) ───────────────────────
+# SEND to colleague via Mattermost DM is internal, approval_not_required,
+# but audit_logged + rate-limited (token-bucket per user/tool).
+# Flow: mykim agent (agent:assistant:mykim) -> Choi agent (agent:assistant:choi) -> human (employee:choi)
+MATTERMOST_COLLEAGUE_DM_POLICY = ToolPolicy(
+    tool="notify_colleague",
+    allowed_actions=["SEND"],
+    limits={"max_results": 50, "rate_per_sec": 5, "burst": 20, "max_text_length": 4000},
+)
+
+MATTERMOST_SEND_DM_POLICY = ToolPolicy(
+    tool="mattermost_send_direct_message",
+    allowed_actions=["SEND"],
+    limits={"max_results": 50, "rate_per_sec": 5, "burst": 20, "max_text_length": 4000},
+)
+
+# Registry for tool_policy lookup — approval_not_required + audit_logged for colleague DM
+TOOL_POLICIES: dict[str, ToolPolicy] = {
+    "notify_colleague": MATTERMOST_COLLEAGUE_DM_POLICY,
+    "mattermost_send_direct_message": MATTERMOST_SEND_DM_POLICY,
+    "mattermost_send_dm": MATTERMOST_SEND_DM_POLICY,
+}
+
+# Rate limiter singleton for colleague DM (per (tenant,user,tool) key)
+_COLLEAGUE_RATE_LIMITER: ToolRateLimiter | None = None
+
+def get_colleague_rate_limiter() -> ToolRateLimiter:
+    global _COLLEAGUE_RATE_LIMITER
+    if _COLLEAGUE_RATE_LIMITER is None:
+        _COLLEAGUE_RATE_LIMITER = ToolRateLimiter(rate_per_sec=5, burst=20)
+    return _COLLEAGUE_RATE_LIMITER
+
+def get_tool_policy(tool_name: str) -> ToolPolicy | None:
+    """Lookup ToolPolicy for a tool — returns None if no specific policy."""
+    return TOOL_POLICIES.get(tool_name)
+
+def is_approval_required_for_tool(tool_name: str) -> bool:
+    """Whether tool requires approval. Colleague DM is approval_not_required (but audit logged)."""
+    if tool_name in TOOL_POLICIES:
+        # colleague DM tools are explicitly approval_not_required
+        return False
+    return True  # default: defer to Risk/PolicyEngine
+

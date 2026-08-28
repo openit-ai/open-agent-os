@@ -235,6 +235,65 @@ class MockToolExecutor:
         data = self._get_for_user(_MOCK_MATTERMOST)
         return {"tool": "mattermost.mentions", "trace_id": self.trace_id, "items": data, "count": len(data)}
 
+    # ── Mattermost colleague DM (agent-to-agent delivery via DM) ──────
+    def _resolve_dm_target(self, target_employee: str | None = None, target_user: str | None = None, mattermost_username: str | None = None, **_kw) -> str:
+        """Resolve target_employee principal — accepts employee:choi or username."""
+        raw = target_employee or target_user or mattermost_username or _kw.get("target_username") or _kw.get("username") or ""
+        raw = raw.strip() if isinstance(raw, str) else ""
+        if not raw:
+            raise ValueError("target_employee or target_user/mattermost_username required")
+        if raw.startswith("employee:"):
+            return raw
+        if raw.startswith("agent:assistant:"):
+            return raw.replace("agent:assistant:", "employee:", 1)
+        # bare username -> employee:
+        import re as _re
+        suffix = _re.sub(r"[^a-z0-9_.-]", "", raw.lower()) or "unknown"
+        return f"employee:{suffix}"
+
+    def notify_colleague(self, target_employee: str | None = None, target_user: str | None = None, mattermost_username: str | None = None, text: str | None = None, message: str | None = None, **kwargs) -> dict:
+        """Agent-to-agent DM delivery: mykim agent -> Choi agent -> Choi human via Mattermost DM."""
+        msg = text or message or kwargs.get("content") or ""
+        if not msg:
+            raise ValueError("text/message required for notify_colleague")
+        target = self._resolve_dm_target(target_employee, target_user, mattermost_username, **kwargs)
+        if not msg.strip():
+            raise ValueError("text/message required")
+        # rate limit check (tool_policy)
+        try:
+            from execution_gateway.tool_policy import get_colleague_rate_limiter  # type: ignore
+            limiter = get_colleague_rate_limiter()
+            key = f"{self.ctx.get('tenant_id', 'default')}:{self.user_id}:notify_colleague:mattermost/dm/{target.split(':')[-1]}"
+            if not limiter.allow(key):
+                return {"tool": "notify_colleague", "trace_id": self.trace_id, "error": "RATE_LIMITED", "retry_after": limiter.retry_after(key), "target_employee": target}
+        except Exception:
+            pass
+        resource = f"mattermost/dm/{target.split(':')[-1]}"
+        _audit("notify_colleague", "SEND", resource, {**self.ctx, "trace_id": self.trace_id}, 0)
+        target_agent = target.replace("employee:", "agent:assistant:", 1)
+        source_agent = self.ctx.get("agent_id") or self.user_id.replace("employee:", "agent:assistant:", 1) if self.user_id.startswith("employee:") else self.user_id
+        return {
+            "tool": "notify_colleague",
+            "trace_id": self.trace_id,
+            "target_employee": target,
+            "target_agent": target_agent,
+            "source_agent": source_agent,
+            "channel_id": f"dm_{target.replace(':', '_')}",
+            "text": msg,
+            "status": "delivered",
+            "audit_logged": True,
+            "approval_required": False,
+            "_skeleton": True,
+        }
+
+    def mattermost_send_direct_message(self, **kwargs) -> dict:
+        """Alias for notify_colleague — supports mattermost_send_direct_message tool name."""
+        return self.notify_colleague(**kwargs)
+
+    def mattermost_send_dm(self, **kwargs) -> dict:
+        """Alias for mattermost_send_dm."""
+        return self.notify_colleague(**kwargs)
+
     def crm_search(self) -> dict:
         resource = "crm/customer/*"
         _audit("crm.search", "SEARCH", resource, {**self.ctx, "trace_id": self.trace_id}, 0)

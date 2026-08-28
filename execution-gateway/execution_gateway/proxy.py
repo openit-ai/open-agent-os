@@ -68,6 +68,10 @@ _TOOL_TO_MOCK: dict[str, str] = {
     "outline_modify": "outline_search",
     "mattermost.mentions": "mattermost_mentions",
     "crm_search": "crm_search",
+    # colleague DM tools
+    "notify_colleague": "notify_colleague",
+    "mattermost_send_direct_message": "mattermost_send_direct_message",
+    "mattermost_send_dm": "mattermost_send_dm",
     # dot-style variants
     "gmail.search": "gmail_search",
     "calendar.list": "calendar_list",
@@ -96,20 +100,28 @@ def _mock_fallback(tool_name: str, args: dict, context: dict) -> dict | None:
             from execution_gateway.mock_executor import MockToolExecutor  # type: ignore
         except Exception:
             return None
+    # Colleague DM tools need full args passthrough
+    if method_name in ("notify_colleague", "mattermost_send_direct_message", "mattermost_send_dm"):
+        try:
+            executor = MockToolExecutor(context)
+            method = getattr(executor, method_name, None)
+            if not method:
+                return None
+            result = method(**(args or {}))
+            return result if isinstance(result, dict) else {"result": result}
+        except Exception as e:
+            logger.debug("mock colleague fallback failed for %s: %s", tool_name, e)
+            return {"error": str(e), "tool": tool_name}
     try:
         executor = MockToolExecutor(context)
         method = getattr(executor, method_name, None)
         if not method:
             return None
-        # Call with appropriate args — mock methods accept different signatures
-        # We introspect: if args contains query/limit, pass them
         result = method(**{k: v for k, v in args.items() if k in ("query", "limit", "date", "filter")}) if args else method()
-        # If method doesn't accept kwargs, try positional fallback
         if not isinstance(result, dict):
             result = {"result": result}
         return result
     except TypeError:
-        # Signature mismatch — try no-arg call
         try:
             executor = MockToolExecutor(context)  # type: ignore
             method = getattr(executor, method_name)
@@ -223,6 +235,16 @@ async def proxy_tool_call(
         arg_hints=args if isinstance(args, dict) else None,
     )
     risk_value = risk.value if hasattr(risk, "value") else str(risk)
+    # Colleague DM is internal — approval not required (§14), keep audit but exempt HIGH capability
+    _colleague_tools = {"notify_colleague", "mattermost_send_direct_message", "mattermost_send_dm"}
+    if tool_name in _colleague_tools or resource.startswith("mattermost/dm"):
+        # Force LOW risk so capability not required
+        from execution_gateway.risk import RiskLevel as _RL  # type: ignore
+        try:
+            risk = _RL.LOW  # type: ignore
+            risk_value = "LOW"
+        except Exception:
+            risk_value = "LOW"
 
     # 3. HIGH-risk는 capability token 필수
     # token 정규화: 문자열이면 decode 시도, dict면 그대로

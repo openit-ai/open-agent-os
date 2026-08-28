@@ -582,6 +582,54 @@ class MCPRegistry:
             ],
             connector="outline",
         ))
+        # ── mattermost MCP server (agent-to-agent delivery) ──────────
+        mm_url = os.getenv("MCP_MATTERMOST_URL", "").strip() or None
+        mm_cmd = os.getenv("MCP_MATTERMOST_COMMAND", "").strip() or None
+        if mm_url:
+            mm_transport = "streamable-http"
+            mm_url_val = mm_url
+            mm_cmd_val = None
+        elif mm_cmd:
+            mm_transport = "stdio"
+            mm_url_val = None
+            mm_cmd_val = mm_cmd
+        else:
+            mm_transport = "mock"
+            mm_url_val = None
+            mm_cmd_val = None
+        self.register(MCPServer(
+            name="mattermost",
+            transport=mm_transport,
+            url=mm_url_val,
+            command=mm_cmd_val,
+            tools=[
+                "notify_colleague",
+                "mattermost_send_direct_message",
+                "mattermost_send_dm",
+                "mattermost_send_message",
+                "mattermost_create_post",
+                "mattermost_list_channels",
+                "mattermost_get_user",
+                "mattermost_search_posts",
+            ],
+            tool_details=[
+                {"name": "notify_colleague", "action": "SEND", "resource_pattern": "mattermost/dm/*", "description": "Send direct message to colleague via Mattermost (agent-to-agent delivery)"},
+                {"name": "mattermost_send_direct_message", "action": "SEND", "resource_pattern": "mattermost/dm/*", "description": "Alias for notify_colleague"},
+                {"name": "mattermost_send_dm", "action": "SEND", "resource_pattern": "mattermost/dm/*", "description": "Alias for notify_colleague"},
+                {"name": "mattermost_send_message", "action": "SEND", "resource_pattern": "mattermost/channel/*"},
+                {"name": "mattermost_create_post", "action": "CREATE", "resource_pattern": "mattermost/channel/*"},
+                {"name": "mattermost_list_channels", "action": "SEARCH", "resource_pattern": "mattermost/channel/*"},
+                {"name": "mattermost_get_user", "action": "READ", "resource_pattern": "mattermost/user/*"},
+                {"name": "mattermost_search_posts", "action": "SEARCH", "resource_pattern": "mattermost/channel/*"},
+            ],
+            resources=[
+                "mattermost/channel/*",
+                "mattermost/user/*",
+                "mattermost/team/*",
+                "mattermost/dm/*",
+            ],
+            connector="mattermost",
+        ))
 
     def register_from_config(self, config: dict) -> None:
         """외부 config(dict)로부터 서버 일괄 등록. config 예시:
