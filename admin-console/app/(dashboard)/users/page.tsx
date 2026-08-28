@@ -213,9 +213,13 @@ export default function UsersPage() {
   async function handleCreateMapping(e: React.FormEvent) {
     e.preventDefault();
     setMapFormError(null);
+    if (!mmUsername.trim()) {
+      setMapFormError("MM Username은 필수입니다.");
+      return;
+    }
     let finalId = mmUserId.trim();
-    let finalUsername = mmUsername.trim() || undefined;
-    // Username만 입력한 경우 자동 조회 시도
+    let finalUsername: string | undefined = mmUsername.trim() || undefined;
+    // Username만 입력한 경우 백엔드가 자동 조회하므로 ID 없이도 제출 가능하나, UX상 미리 조회하여 즉시 피드백
     if (!finalId && finalUsername) {
       try {
         setMapFormLoading(true);
@@ -223,18 +227,14 @@ export default function UsersPage() {
         finalId = r.mm_user_id;
         finalUsername = r.mm_username || finalUsername;
         setMmUserId(finalId);
-      } catch {
-        setMapFormError("MM User ID가 비어있고 Username 조회도 실패했습니다. ID를 직접 입력하거나 Username을 확인하세요.");
-        setMapFormLoading(false);
-        return;
+        setResolveMsg(`조회 성공: ${r.mm_username} → ${r.mm_user_id.slice(0,8)}...`);
+      } catch (err) {
+        // 백엔드가 자동 조회하므로 그대로 제출 시도 — 실패 시 백엔드 에러 표시
+        // 하지만 UX상 메시지 유지
+        setResolveMsg(err instanceof Error ? err.message : "조회 실패 — 그래도 등록 시도합니다");
       } finally {
         // keep loading for next step
       }
-    }
-    if (!finalId) {
-      setMapFormError("MM User ID는 필수입니다. Username으로 자동 조회하려면 Username을 입력하고 다시 시도하세요.");
-      setMapFormLoading(false);
-      return;
     }
     if (employeePrincipal.trim() && !employeePrincipal.trim().startsWith("employee:")) {
       setMapFormError("employee_principal은 employee: 로 시작해야 합니다.");
@@ -485,7 +485,7 @@ export default function UsersPage() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="mm_user_id">MM User ID</Label>
+                  <Label htmlFor="mm_user_id">MM User ID (자동)</Label>
                   <Input id="mm_user_id" placeholder="Username 입력 후 ID 조회" value={mmUserId} onChange={(e) => setMmUserId(e.target.value)} />
                   {resolveMsg && <p className="text-xs text-muted-foreground">{resolveMsg}</p>}
                 </div>

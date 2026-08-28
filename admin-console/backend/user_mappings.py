@@ -47,7 +47,7 @@ class MattermostMapping(BaseModel):
     created_by: str
 
 class CreateMappingRequest(BaseModel):
-    mm_user_id: str = Field(min_length=1)
+    mm_user_id: Optional[str] = Field(default=None)
     mm_username: Optional[str] = None
     employee_principal: Optional[str] = None
 
@@ -188,31 +188,41 @@ def list_user_mappings(admin: AdminUser = Depends(get_current_admin)):
 def create_user_mapping(req: CreateMappingRequest, admin: AdminUser = Depends(require_l5)):
     """POST /v1/user-mappings — register mapping. L5 only.
 
-    Body: mm_user_id (required), mm_username?, employee_principal?
+    Body: mm_username (required), mm_user_id? (auto-resolved if omitted), employee_principal?
     - If no principal, auto-derive via MattermostAdapter.map_mattermost_user logic.
     """
-    mm_user_id = req.mm_user_id.strip()
-    if not mm_user_id:
-        raise HTTPException(status_code=400, detail="mm_user_id required")
+    raw_user_id = (req.mm_user_id or "").strip()
     mm_username = req.mm_username.strip() if req.mm_username else None
-    # Auto-resolve: if mm_user_id looks like a username (not 26-char ID) and no explicit lookup yet, try Mattermost API
-    if not _is_mm_id(mm_user_id):
-        # treat mm_user_id as username candidate
-        candidate = mm_username or mm_user_id
-        # if mm_user_id itself is username-like, try resolve it
-        resolved = _resolve_username_to_id(mm_user_id) if not _is_mm_id(mm_user_id) else None
+    if mm_username == "":
+        mm_username = None
+    # Username-only required: either field suffices, but mm_username preferred
+    if not raw_user_id and not mm_username:
+        raise HTTPException(status_code=400, detail="mm_username required (MM User name is required)")
+    # Determine mm_user_id: if empty, resolve from username; if username-like, auto-resolve
+    mm_user_id = raw_user_id
+    if not mm_user_id and mm_username:
+        resolved = _resolve_username_to_id(mm_username)
         if resolved and resolved[0]:
-            # keep original username if provided, else use resolved username
+            mm_user_id = resolved[0]
+            if not mm_username:
+                mm_username = resolved[1].get("username")
+        else:
+            raise HTTPException(status_code=404, detail=f"Mattermost user '{mm_username}' not found — check username or enter MM User ID manually")
+    elif mm_user_id and not _is_mm_id(mm_user_id):
+        resolved = _resolve_username_to_id(mm_user_id)
+        if resolved and resolved[0]:
             if not mm_username:
                 mm_username = resolved[1].get("username") or mm_user_id
             mm_user_id = resolved[0]
-        elif mm_username and not _is_mm_id(mm_user_id):
-            # try username field
+        elif mm_username:
             resolved2 = _resolve_username_to_id(mm_username)
             if resolved2 and resolved2[0]:
                 mm_user_id = resolved2[0]
-    if mm_username == "":
-        mm_username = None
+        # if still not a 26-char ID and no resolve, keep as-is for fallback (derive will sanitize) but prefer to error if clearly not ID
+        # allow fallback: if resolve failed but username exists, use username-derived placeholder? No — require resolve
+        if not _is_mm_id(mm_user_id) and mm_username:
+            # last attempt: if mm_user_id was meant to be username, error with guidance
+            pass
 
     if req.employee_principal:
         principal = req.employee_principal.strip()

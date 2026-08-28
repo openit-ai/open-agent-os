@@ -156,7 +156,7 @@ export interface UserMapping {
 }
 
 export interface UserMappingCreatePayload {
-  mm_user_id: string;
+  mm_user_id?: string;
   mm_username?: string;
   employee_principal?: string;
 }
