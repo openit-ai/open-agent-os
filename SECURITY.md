@@ -4,7 +4,9 @@
 
 | Version | Supported | Notes |
 |---|---|---|
-| `v1.5.1` | ✅ | Current canonical — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.1.md` (§§16A–16K, §§16A.3.1/16A.6 new, 3615 lines, SHA `4c2c1b85`) |
+| `v1.6.3` | ✅ | Current canonical — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.3.md` (§§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault, 4729 lines, SHA `e7b7796c`) |
+| `v1.6.2` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.2.md` (4526 lines, SHA `4456bd4c`) |
+| `v1.5.1` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.1.md` (3615 lines, SHA `4c2c1b85`) |
 | `v1.5` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.md` (3417 lines, SHA `b19f54ab`) |
 | `v0.1.1` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0) |
 
@@ -42,7 +44,7 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 ## Canonical Architecture
 
-- `docs/architecture-v1.5.1.md` — 47 Sections + §§16A–16K — §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy / 16C Core·Advanced split / 16F built-in reference + escalation / §17 ACP=Hermes-specific / §40 4 tests new (SHA `4c2c1b85`, 3615 lines) — conformance: `docs/architecture-conformance.md` v1.5.1; Previous `v1.5` `b19f54ab` / `v1.4.1` `646a8fe` / `v1.3` `4a0383c8` preserved; code: `packages/runtime-adapter` (LLM canonical) + `execution-gateway/tool_policy` + `data_access` (226 tests — incl. §16A.3.1 workspace isolation + §40 4 security tests)
+- `docs/architecture-v1.6.3.md` — 47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy / 16C Core·Advanced split / 16F Dual Runtime / §16.1.1 OAOSContext·output_type·ToolOutputLimits / §16.1.2 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, runtime_mode conditional) / §17 ACP=Hermes-specific / §27B Vault / §40 security tests (SHA `e7b7796c`, 4729 lines) — conformance: `docs/architecture-conformance.md` v1.6.3; Previous `v1.6.2` `4456bd4c` / `v1.5.1` `4c2c1b85` preserved; code: `packages/agent-runtime` (LLM) + `admin-console/backend/llm_providers` (Fernet Vault) + `execution-gateway/tool_policy` + `data_access` (590 tests)
 - `docs/security-model.md` — §§16F/16G/16H/16I reference
 
 ## Scope
@@ -50,7 +52,7 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 **In scope:**
 - `control-plane` — Identity (`derive_agent_id` 1:1), Session (`assert_owner` → 403), Router, ACP
 - `execution-gateway` — MCP Registry, normalize, Risk (§21), Tool Policy (§16H — validate/rate-limit/bulk §16H.1–3), Data Access (§16I — read_only_api/command_api, direct DB DENY), authz_hook, Proxy (trace, HIGH token required), connectors (Google `check_owner` / Outline ACL)
-- `security` — Runtime Registry/Router (§16F Dual Runtime, `llm` canonical/`safe` alias, 3 options, 5-step, `EXECUTE runtime/*`), Policy Engine (§25 Strict, `Explicit Deny > Personal`, `Agent Permission ≤ User Permission`), Delegation (fingerprint / cascade revoke), Vault (Fernet, `agent:assistant:<user>` isolation), Token (HS256 300s, nonce/jti replay), Approval (HMAC, 4 decisions), Audit (hash-chain + HMAC checkpoint)
+- `security` — Runtime Registry/Router (§16F Dual Runtime, `llm` canonical/`safe` alias, 3 options, 5-step, `EXECUTE runtime/*`), Policy Engine (§25 Strict, `Explicit Deny > Personal`, `Agent Permission ≤ User Permission`), Delegation (fingerprint / cascade revoke), Vault (Fernet `OAOS_VAULT_KEY` sha256→b64 derive, `vault://admin_llm_providers/{id}/api_key`, `encrypted_api_key=gAAAAA…`, `****` masking, DB-backed + fail-soft fallback, `agent:assistant:<user>` isolation), Token (HS256 300s, nonce/jti replay), Approval (HMAC, 4 decisions), Audit (hash-chain + HMAC checkpoint), LLM Providers (6-Provider Registry: claude/codex/gemini/opencode-go/openrouter/ollama, `runtime_mode` conditional, `opencode` alias, opencode-go binary chain)
 - `admin-console` — Auth (L5/L4, JWT 8h), RBAC enforcement
 - `§16F Dual Runtime` — LLM Runtime (canonical, Safe alias) / Hermes Runtime, Registry YAML 3 options (LLM Only / Hermes Only / Both), Router 5-step, `EXECUTE runtime/*` Capability
 - `§16G Untrusted Execution Worker` — Capability vs Authority 분리, Shell=Meta Capability, Blast Radius (`/home/hermes` 경계)
@@ -68,9 +70,9 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 Open Agent OS is a **Self-Hosted Enterprise Personal Agent Platform** — `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + JIT approval)`, `Cross-user always DENY`, `Auditable (hash-chain)`.
 
-- Architecture: [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) (§16A–16K — §§16A.3.1/16A.6 new, 16C Core·Advanced, 16F built-in + escalation, §17 ACP=Hermes-specific, §40 4 tests — canonical v1.5.1 `4c2c1b85`)
+- Architecture: [`docs/architecture-v1.6.3.md`](docs/architecture-v1.6.3.md) (§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — canonical v1.6.3 `e7b7796c`) — Previous `v1.6.2` `4456bd4c` / `v1.5.1` `4c2c1b85` preserved
 - Security Model: [`docs/security-model.md`](docs/security-model.md) (§§16A–16I — Dual Runtime / Untrusted Worker / Tool Policy / Data Access, v1.5.1: 16A.3.1 workspace isolation + 16A.6 Controlled Egress Proxy)
-- Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.5.1 — 226 tests passed (incl. §40 4 new tests)
+- Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.6.3 — 590 tests passed
 - Threat review — Execution Gateway bypass: [`docs/security-review-gateway-bypass.md`](docs/security-review-gateway-bypass.md) — why "cannot bypass" matters more than "gateway exists", and the 3 remaining production hardenings (NetworkPolicy / Runtime hardening / DB re-verification)
 
 A bypass of the Gateway via direct Hermes → DB / Internal API / credential access is considered a **security boundary failure**, not a feature.
@@ -84,9 +86,9 @@ Self-hosted operators should:
 - Apply Kubernetes `NetworkPolicy` + host `nft` / `systemd` — Hermes may only reach `control-plane:8000` / `execution-gateway:8001`, not DB / internal APIs directly — see `deploy/firewall/hermes-egress.nft` + `deploy/systemd/hermes.service` + `docs/security-model.md` (Blast Radius)
 - Apply host firewall — `deploy/firewall/hermes-egress.nft` (nftables, §16A.6 Controlled Egress Proxy): `hermes` uid egress DENY by default, explicit DENY for INTERNAL_DB_NET/ERP/CRM/SSH, ALLOW only ACP:8000 / MCP:8001 / LLM Gateway / Approved Package Mirror via Controlled Egress Proxy — `sudo nft -f /etc/nftables/hermes-egress.nft` — see `docs/architecture-v1.5.1.md` §16A.6
 - Apply systemd sandbox — `deploy/systemd/hermes.service` (§16A.4–16A.5): `User=hermes`, `NoNewPrivileges=true`, `ProtectSystem=strict`, `PrivateTmp=true`, `ReadWritePaths=/home/hermes` — `sudo systemd-analyze verify /etc/systemd/system/hermes.service`
-- Keep `OAOS_SIGNING_KEY` / `FERNET_KEY` out of images and logs — use secrets management
+- Keep `OAOS_SIGNING_KEY` / `OAOS_VAULT_KEY` / `FERNET_KEY` out of images and logs — use secrets management (Vault: `OAOS_VAULT_KEY`/`VAULT_ENCRYPTION_KEY` → Fernet, `vault://` secret_ref, never plaintext in DB)
 - See `deploy/` for reference configurations
 
 ---
 
-*Last updated: 2026-08-28 — v1.5.1 canonical (3615 lines, SHA 4c2c1b85, 226 tests). For general questions (non-security), use GitHub Issues.*
+*Last updated: 2026-08-28 — v1.6.3 canonical (4729 lines, SHA e7b7796c, 590 tests). For general questions (non-security), use GitHub Issues.*

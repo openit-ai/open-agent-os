@@ -5,8 +5,8 @@
 **한국어** | [English](README.md)
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.5.1.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern; §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy new — `4c2c1b85`, 3615 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
-- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `226 tests pass`, `npm run build ✓`
+- **Architecture:** `docs/architecture-v1.6.3.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM Runtime & 6-Provider Multi-Runner + §27 Personal Wiki Vault — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern; §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy new — `e7b7796c`, 4729 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes, LLM Providers 포함), `590 tests pass`, `npm run build ✓`
 
 ## 왜 Open Agent OS인가 — 시장이 풀지 못한 두 가지 모순
 
@@ -49,7 +49,7 @@ AI가 질의응답을 넘어 `파악→정리→탐색→조율→실행→승�
 ## 핵심 가치 5가지
 
 1. **Personal-First, Enterprise-Safe** — 내 Calendar/Gmail은 내가 위임(§9), Production/ERP/고객DB는 회사 정책+승인(§11). UX와 보안이 동시에 자연스럽다. (§13)
-2. **진짜 격리** — `agent:assistant:kim`은 `employee:kim` 소유 자원만 본다. Cross-user는 항상 DENY, plaintext token 저장 금지, Hermes 프로세스에 장기 저장 금지(§10). 226 tests로 검증.
+2. **진짜 격리** — `agent:assistant:kim`은 `employee:kim` 소유 자원만 본다. Cross-user는 항상 DENY, plaintext token 저장 금지, Hermes 프로세스에 장기 저장 금지(§10). 590 tests로 검증.
 3. **사람이 승인하는 고위험 실행** — `MERGE/DEPLOY/PAY/EXPORT` 등 HIGH risk(§21)는 Capability Token(HS256 300s, nonce/jti replay 방지) + HMAC 승인 요청(§24) + Admin Console 4버튼으로만 실행.
 4. **감사 가능한 운영** — 모든 권한·위임·실행은 Audit Ledger에 hash-chain+HMAC checkpoint로 기록, 변조 즉시 탐지(§30-31). `verify_chain` / `checkpoint` API 제공.
 5. **설치형 Source-Available** — BSL 1.1 (4년 후 Apache 2.0 전환), 고객 인프라에 그대로 설치. SaaS 종속 없이 평가(Developer) → 운영(Business/Managed)으로 확장. (§5, Editions)
@@ -74,12 +74,12 @@ packages/                  # Phase 0 Contracts (Pydantic 불변): agent-context,
 control-plane/             # A — Identity(derive_agent_id 1:1), Session(assert_owner→403), Router(HIGH→ephemeral), ACP(X-Agent-Context, SSE), Internal API(§17), Demo(morning briefing)
 execution-gateway/         # B — normalize(domain/scope/path), mcp_registry(wildcard·역색인), connectors(google check_owner/outline ACL), risk(§21), authz_hook, proxy(trace, HIGH token 필수), mock_executor(7 tools/14 audit)
 security/                  # C — policy-engine(§25 Strict, fnmatch, Explicit Deny>Personal), delegation(fingerprint·cascade revoke), vault(Fernet), token(HS256 300s·nonce/jti replay), approval(HMAC 4 decisions), audit(hash-chain·checkpoint), app(FastAPI)
-admin-console/             # Admin — Next.js 15 + shadcn Financial(#22C55E/#F59E0B/#DC2626), 375px, 11 routes: login/dashboard/infra/users/policy/approvals/audit/credentials + backend(auth L5/L4 JWT·infra CRUD·health probe·policy/approval/audit/credentials 프록시)
+admin-console/             # Admin — Next.js 15 + shadcn Financial(#22C55E/#F59E0B/#DC2626), 375px, 12 routes: login/dashboard/infra/users/policy/approvals/audit/credentials/providers + backend(auth L5/L4 JWT·infra CRUD·health probe·llm_providers(Fernet Vault)·runtime_mode·policy/approval/audit/credentials 프록시)
 adapters/                  # Mattermost/Slack/Outline/Notion/Hermes/IAM/Google/Microsoft
 examples/morning-briefing/ # MVP — orchestrator(per-user kim vs lee) + output.json(13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
-tests/                     # 226 tests (incl. §16A.3.1/16A.6 + §16F/16H/16I data-access, tool-policy, blast-radius)
-docs/architecture-v1.5.md  # Canonical (47 Sections + §§16A–16K, Previous v1.4.1/v1.3 보관, v1.1 preserved)
+tests/                     # 590 tests (incl. LLM 6-Provider + Fernet Vault + opencode binary + wiki/pgvector)
+docs/architecture-v1.6.3.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — 4729 lines, SHA e7b7796c, Previous v1.6.2/v1.6/v1.5.1 preserved, v1.1 preserved)
 ```
 
 ## Quick Start
@@ -90,7 +90,7 @@ git clone https://github.com/openit-ai/open-agent-os.git && cd open-agent-os
 # 1) Python (3.11) — 전체 테스트
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"  # 또는 pip install -r requirements.txt
-pytest -q                # 180 passed (12.8s)
+pytest -q                # 590 passed
 
 # 2) Admin Console
 cd admin-console && npm install && npm run build   # 11 routes, 114–115kB
@@ -134,11 +134,11 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 
 - **Policy Engine(§25):** fnmatch glob, Strict eval, Explicit Deny가 Personal Delegation override
 - **Delegation:** fingerprint + binding cascade revoke 즉시 적용
-- **Vault:** Fernet AES+HMAC, owner `agent:assistant:<user>` 격리, `EncryptedPostgresVault` stub→prod 전환 예정
+- **Vault:** Fernet AES+HMAC (`OAOS_VAULT_KEY`/`VAULT_ENCRYPTION_KEY` sha256→b64 derive, `vault://admin_llm_providers/{id}/api_key`, `encrypted_api_key=gAAAAA…`, `****` 마스킹), owner `agent:assistant:<user>` 격리, DB-backed + fail-soft fallback
 - **Token:** HS256 300s short-lived + nonce/jti replay store
 - **Approval:** HMAC-SHA256, 4 decisions(`DENIED/APPROVED_ONCE/APPROVED_USER_ALWAYS/APPROVED_GROUP_ALWAYS`), nonce/signature/expiry
 - **Audit:** hash-chain + HMAC checkpoint(`verify_chain`, `checkpoint`)
-- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options, Router 5-step, Capability `EXECUTE runtime/*`, §16G/§16H/§16I 동일 — 226 tests
+- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` alias) + Hermes Runtime advanced — Registry YAML 3 options, Router 5-step, Capability `EXECUTE runtime/*`, §16G/§16H/§16I + §16.1.1 OAOSContext/output_type/ToolOutputLimits + §16.1.2 LLM 6-Provider (claude/codex/gemini/opencode-go/openrouter/ollama, runtime_mode 조건부, opencode alias) + opencode-go 바이너리 체인 + §27B Personal Wiki Vault — 590 tests
 - **Isolation 검증:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` 등 180 tests
 
 ## Tests
@@ -164,7 +164,7 @@ pytest tests/test_admin_backend.py -v # 17 (register/login/JWT/bcrypt/RBAC/healt
 
 ## Docs
 
-- `docs/architecture-v1.5.1.md` — Canonical (47 Sections + §§16A–16K — §§16A.3.1/16A.6 new, 3615 lines, SHA `4c2c1b85`) — Previous: `docs/architecture-v1.4.1.md`/`v1.3.md` preserved
+- `docs/architecture-v1.6.3.md` — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — 4729 lines, SHA `e7b7796c`) — Previous: `docs/architecture-v1.6.2.md` `4456bd4c`/v1.6/v1.5.1 preserved
 - `docs/api/` — Internal Agent Interface, Capability, Approval API
 - `examples/morning-briefing/README.md` — MVP 브리핑 형식(09:30/11:00/오늘 반드시 처리)
 

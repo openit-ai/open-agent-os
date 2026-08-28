@@ -5,8 +5,8 @@
 [한국어](README.ko.md) | **English**
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.6.md` (Sections 1–47 + §§16A–16K + §27 Persistent Memory & Database — `openagentos` + `pgvector` + Admin persistence 3-Role; — `65a9686a`, 4253 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
-- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes), `226 tests pass`, `npm run build ✓`
+- **Architecture:** `docs/architecture-v1.6.3.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27 Personal Wiki Vault — `e7b7796c`, 4729 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes incl. LLM Providers), `590 tests pass`, `npm run build ✓`
 
 ## Why Open Agent OS — Two Contradictions the Market Hasn't Solved
 
@@ -49,7 +49,7 @@ Beyond Q&A, the agent becomes a **daily work executor** — `discover → organi
 ## 5 Core Values
 
 1. **Personal-First, Enterprise-Safe** — Calendar / Gmail delegated by me (§9); Production / ERP / customer DB governed by company policy + approval (§11). Natural UX and security at once. (§13)
-2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user always DENY, no plaintext token storage, no long-term storage in Hermes process (§10). Verified by 226 tests.
+2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user always DENY, no plaintext token storage, no long-term storage in Hermes process (§10). Verified by 590 tests.
 3. **Human-approved high-risk execution** — HIGH-risk (§21) actions such as `MERGE / DEPLOY / PAY / EXPORT` run only via Capability Token (HS256, 300s, nonce/jti replay protection) + HMAC approval request (§24) + 4-button Admin Console decision.
 4. **Auditable operations** — Every authorization, delegation, and execution is recorded in the Audit Ledger as a hash-chain with HMAC checkpoint — tampering is immediately detectable (§30–31). `verify_chain` / `checkpoint` APIs.
 5. **Self-Hosted, Source-Available** — BSL 1.1 (converts to Apache 2.0 after 4 years), deploy on customer infrastructure. Evaluate (Developer) → operate (Business / Managed) without SaaS lock-in. (§5, Editions)
@@ -78,8 +78,8 @@ admin-console/             # Admin — Next.js 15 + shadcn Financial (#22C55E/#F
 adapters/                  # Mattermost / Slack / Outline / Notion / Hermes / IAM / Google / Microsoft
 examples/morning-briefing/ # MVP — orchestrator (per-user kim vs lee) + output.json (13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
-tests/                     # 226 tests
-docs/architecture-v1.5.1.md  # Canonical (47 Sections + §§16A–16K — §§16A.3.1/16A.6 new, 3615 lines, SHA 4c2c1b85, Previous v1.5/v1.4.1/v1.3 preserved, v1.1 preserved)
+tests/                     # 590 tests (incl. LLM 6-Provider + Fernet Vault + opencode binary + wiki/pgvector)
+docs/architecture-v1.6.3.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — 4729 lines, SHA e7b7796c, Previous v1.6.2/v1.6/v1.5.1 preserved, v1.1 preserved)
 ```
 
 ## Quick Start
@@ -90,7 +90,7 @@ git clone https://github.com/openit-ai/open-agent-os.git && cd open-agent-os
 # 1) Python 3.11 — run all tests
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"  # or pip install -r requirements.txt
-pytest -q                # 180 passed (12.8s)
+pytest -q                # 590 passed
 
 # 2) Admin Console
 cd admin-console && npm install && npm run build   # 11 routes, 114–115kB
@@ -134,12 +134,12 @@ All screens: shadcn + WCAG AA, `overflow-auto` for 375px, `npm run build` 11 sta
 
 - **Policy Engine (§25):** fnmatch glob, Strict evaluation, Explicit Deny overrides Personal Delegation
 - **Delegation:** fingerprint + binding cascade revoke, immediate effect
-- **Vault:** Fernet AES+HMAC, owner `agent:assistant:<user>` isolation, `EncryptedPostgresVault` stub → prod
+- **Vault:** Fernet AES+HMAC (`OAOS_VAULT_KEY`/`VAULT_ENCRYPTION_KEY` sha256→b64 derive, `vault://admin_llm_providers/{id}/api_key`, `encrypted_api_key=gAAAAA…`, `****` masking), owner `agent:assistant:<user>` isolation, `EncryptedPostgresVault` DB-backed + fail-soft in-memory fallback
 - **Token:** HS256 300s short-lived + nonce/jti replay store
 - **Approval:** HMAC-SHA256, 4 decisions (`DENIED / APPROVED_ONCE / APPROVED_USER_ALWAYS / APPROVED_GROUP_ALWAYS`), nonce/signature/expiry
 - **Audit:** hash-chain + HMAC checkpoint (`verify_chain`, `checkpoint`)
-- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options (LLM Only/Hermes Only/Both), Router 5-step, Capability `EXECUTE runtime/*`, §16G untrusted worker / §16H tool policy(rate-limit/bulk) / §16I data access (read_only_api→MCP, command_api+approval) — 226 tests
-- **Isolation verified:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` — 226 tests
+- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options (LLM Only/Hermes Only/Both), Router 5-step, Capability `EXECUTE runtime/*`, §16G untrusted worker / §16H tool policy / §16I data access + §16.1.1 OAOSContext/output_type/ToolOutputLimits + §16.1.2 LLM 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, `runtime_mode` conditional, `opencode` alias) + opencode-go binary chain (`OPENCODE_BIN`→`opencode serve --model`) + §27B Personal Wiki Vault — 590 tests
+- **Isolation verified:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` — 590 tests
 
 ## Tests
 
@@ -164,7 +164,7 @@ Self-hosted on customer server / VPS / private cloud / K8s — not multi-tenant 
 
 ## Docs
 
-- `docs/architecture-v1.5.1.md` — Canonical (47 Sections + §§16A–16K — §§16A.3.1/16A.6 new, 3615 lines, SHA `4c2c1b85`) — Previous: `docs/architecture-v1.5.md` `b19f54ab`/`v1.4.1.md` `646a8fe`/`v1.3.md` `4a0383c8` preserved
+- `docs/architecture-v1.6.3.md` — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — 4729 lines, SHA `e7b7796c`) — Previous: `docs/architecture-v1.6.2.md` `4456bd4c`/v1.6/v1.5.1 preserved
 - `docs/api/` — Internal Agent Interface, Capability, Approval APIs
 - `examples/morning-briefing/README.md` — MVP briefing format (09:30 / 11:00 / Must-do today)
 
