@@ -1,0 +1,150 @@
+# managed-alerts.yml — Managed edition SLO & backup age alerts (§Managed)
+# Include via prometheus.yml: rule_files: [alerts.yml, managed-alerts.yml]
+# Validate: promtool check rules deploy/monitoring/managed-alerts.yml
+groups:
+  - name: oaos-managed-slo
+    interval: 30s
+    rules:
+      # ── SLO: 99.5% control-plane uptime (30d error budget ≈ 3h36m downtime) ──
+      - alert: ManagedControlPlaneSLOBreach
+        expr: |
+          (
+            avg_over_time(up{job="control-plane"}[30d])
+            < 0.995
+          )
+        for: 5m
+        labels:
+          severity: critical
+          service: control-plane
+          slo: "99.5"
+          edition: managed
+        annotations:
+          summary: "Control-plane SLO 99.5% breached (30d)"
+          description: "30-day avg up{control-plane} = {{ $value | humanizePercentage }} < 99.5%. Error budget exhausted."
+          runbook: "docs/managed-ops.md#incident-response"
+
+      - alert: ManagedControlPlaneAvailabilityLow
+        expr: |
+          (
+            avg_over_time(up{job="control-plane"}[5m]) < 0.995
+          )
+        for: 2m
+        labels:
+          severity: warning
+          service: control-plane
+          slo: "99.5"
+        annotations:
+          summary: "Control-plane availability <99.5% (5m window)"
+          description: "Current availability {{ $value | humanizePercentage }} over 5m < 99.5%."
+
+      # Fast burn: 5m window worth of 99.5% budget (≈0.5% down = 99.5% avail)
+      - alert: ManagedControlPlaneBurnRateHigh
+        expr: |
+          (
+            1 - avg_over_time(up{job="control-plane"}[5m])
+          ) / (1 - 0.995) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: control-plane
+        annotations:
+          summary: "Control-plane burn rate >5x (fast burn)"
+          description: "Burn rate {{ $value | humanize }}x over 5m — SLO budget burning fast."
+
+      # ── SLO: p95 latency < 500ms ─────────────────────────────────────
+      - alert: ManagedP95LatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="control-plane"}[5m])))
+          > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: control-plane
+          slo: "p95<500ms"
+        annotations:
+          summary: "Control-plane p95 latency >500ms (5m)"
+          description: "p95 latency is {{ $value | humanizeDuration }} over 5m — exceeds 500ms SLO."
+
+      - alert: ManagedP95LatencyCritical
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="control-plane"}[5m])))
+          > 1.0
+        for: 5m
+        labels:
+          severity: critical
+          service: control-plane
+        annotations:
+          summary: "Control-plane p95 latency >1s (5m) — critical"
+          description: "p95 latency {{ $value | humanizeDuration }} > 1s."
+
+      # Fallback for deployments without histogram: use avg latency proxy (if available)
+      - alert: ManagedAvgLatencyHigh
+        expr: |
+          avg_over_time(oaos_http_request_duration_avg_seconds{job="control-plane"}[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: control-plane
+        annotations:
+          summary: "Control-plane avg latency >500ms fallback"
+          description: "Avg latency {{ $value | humanizeDuration }} — histogram may be missing."
+
+  - name: oaos-managed-backup
+    interval: 1m
+    rules:
+      # ── Backup age >48h alert (SLO) ────────────────────────────────
+      - alert: ManagedBackupStale48h
+        expr: time() - oaos_backup_last_success_timestamp > 172800
+        for: 10m
+        labels:
+          severity: critical
+          service: backup
+          edition: managed
+        annotations:
+          summary: "Managed backup stale >48h"
+          description: "No successful backup for {{ $value | humanizeDuration }} — retention risk. Check backup.sh cron & S3."
+          runbook: "docs/managed-ops.md#backup-restore"
+
+      - alert: ManagedBackupStale24h
+        expr: time() - oaos_backup_last_success_timestamp > 86400
+        for: 10m
+        labels:
+          severity: warning
+          service: backup
+        annotations:
+          summary: "Backup stale >24h"
+          description: "No backup for {{ $value | humanizeDuration }} — investigate before 48h breach."
+
+      - alert: ManagedCheckpointStale
+        expr: time() - oaos_audit_last_checkpoint_timestamp > 7200
+        for: 5m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "Managed audit checkpoint stale >2h"
+          description: "No audit checkpoint for {{ $value | humanizeDuration }} — check audit-checkpoint-to-s3.sh cron."
+
+  - name: oaos-managed-infra
+    interval: 30s
+    rules:
+      - alert: ManagedAnyServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: infra
+        annotations:
+          summary: "Service down: {{ $labels.job }}"
+          description: "{{ $labels.job }} target {{ $labels.instance }} down >2m."
+
+      - alert: ManagedDiskPressure
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes)) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: node
+        annotations:
+          summary: "Disk usage >85% on {{ $labels.mountpoint }}"
+          description: "Disk {{ $labels.mountpoint }} usage {{ $value | humanizePercentage }} — prune backups/logs."

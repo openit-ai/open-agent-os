@@ -1,0 +1,190 @@
+# managed-values.yaml — Helm-style values for Managed K8s (Business + VPS auto-install + monitoring)
+# Usage:
+#   helm upgrade --install oaos ./chart -f deploy/k8s/managed-values.yaml --namespace open-agent-os --create-namespace
+#   # or raw: kubectl apply -k deploy/k8s/  + patch with these values via kustomize
+# Covers: ingress, TLS, resources, replica counts, monitoring enabled (§5, §16D, §31)
+
+# ── Global ───────────────────────────────────────────────────────
+global:
+  edition: managed
+  tenantId: default
+  imageRegistry: ghcr.io/openit-ai
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+
+namespace: open-agent-os
+
+# ── Ingress + TLS ────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: open-agent-os.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # cert-manager (uncomment to enable auto TLS)
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  tls:
+    enabled: true
+    secretName: oaos-tls
+    hosts:
+      - open-agent-os.example.com
+    # For manual TLS: kubectl create secret tls oaos-tls --cert=tls.crt --key=tls.key -n open-agent-os
+  paths:
+    - path: /v1/sessions
+      pathType: Prefix
+      service: control-plane
+      port: 8000
+    - path: /v1/execution
+      pathType: Prefix
+      service: execution-gateway
+      port: 8001
+    - path: /v1/policy
+      pathType: Prefix
+      service: security
+      port: 8002
+    - path: /v1/audit
+      pathType: Prefix
+      service: security
+      port: 8002
+    - path: /v1/delegation
+      pathType: Prefix
+      service: security
+      port: 8002
+    - path: /v1/token
+      pathType: Prefix
+      service: security
+      port: 8002
+    - path: /v1/approval
+      pathType: Prefix
+      service: security
+      port: 8002
+    - path: /health
+      pathType: Exact
+      service: control-plane
+      port: 8000
+    - path: /
+      pathType: Prefix
+      service: control-plane
+      port: 8000
+
+# ── Replica counts (Managed: HA defaults, §16D.3) ────────────────
+replicaCount:
+  controlPlane: 2
+  executionGateway: 2
+  security: 2
+  postgres: 1
+  redis: 1
+
+# ── Resources (§16D.1 — every service declares limits/reservations) ─
+resources:
+  controlPlane:
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+  executionGateway:
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+  security:
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+  postgres:
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+  redis:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "250m"
+      memory: "128Mi"
+  nginx:
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+    requests:
+      cpu: "250m"
+      memory: "128Mi"
+
+# ── Autoscaling (HPA, §16D.3 — 10-30 concurrent sessions) ────────
+autoscaling:
+  enabled: true
+  controlPlane:
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  executionGateway:
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  security:
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# ── Monitoring (Managed: enabled by default) ─────────────────────
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    scrapeInterval: 15s
+    retention: 15d
+  grafana:
+    enabled: true
+    adminPassword: ""  # set via secret or --set
+  alertmanager:
+    enabled: true
+  serviceMonitor:
+    enabled: true
+  alerts:
+    enabled: true
+    # rule file: deploy/monitoring/alerts.yml
+
+# ── Persistence ──────────────────────────────────────────────────
+persistence:
+  postgres:
+    enabled: true
+    storageClass: ""  # default
+    size: 20Gi
+  redis:
+    enabled: true
+    size: 5Gi
+
+# ── Secrets (inject via --set or external secret) ────────────────
+secrets:
+  # create via: kubectl create secret generic oaos-secrets --from-literal=... -n open-agent-os
+  postgresPassword: ""  # POSTGRES_PASSWORD
+  redisPassword: ""
+  jwtSigningKey: ""     # JWT_SIGNING_KEY
+  auditSigningKey: ""   # AUDIT_SIGNING_KEY
+  encryptionKey: ""     # OAOS_ENCRYPTION_KEY / VAULT_ENCRYPTION_KEY
+
+# ── Config ───────────────────────────────────────────────────────
+config:
+  logLevel: info
+  tenantId: default
+  postgresDb: open_agent_os
+  postgresUser: open_agent_os
+  hermesBaseUrl: http://execution-gateway:8001
+  awsS3Bucket: ""
+  awsS3Region: ap-northeast-2
+  awsS3Prefix: audit-checkpoints/

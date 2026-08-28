@@ -58,20 +58,32 @@ from audit.audit_ledger.ledger import AuditLedger
 from audit_model import AuditEvent, AuditEventType
 
 # ── FastAPI ────────────────────────────────────────────────────
-# Bare `from app import` resolves via sys.path — ensure security wins even if
-# admin-console/backend was inserted earlier (collection order).
+# Ensure security app is loaded even when admin-console/backend polluted sys.modules
 import sys as _sys
 import pathlib as _pl
+import importlib.util as _ilu
 _root = _pl.Path(__file__).resolve().parents[1]
 _backend = _root / "admin-console" / "backend"
 if str(_backend) in _sys.path:
     _sys.path.remove(str(_backend))
 if str(_root / "security") not in _sys.path:
     _sys.path.insert(0, str(_root / "security"))
-# Clear any polluted `app` module (admin app) so security/app.py is reloaded
-if "app" in _sys.modules and getattr(_sys.modules["app"], "title", None) == "Open Agent OS Admin API":
-    del _sys.modules["app"]
-from app import app as security_app
+# Remove any polluted admin `app`/`auth`/`infra`/`business`/`managed` that shadows security
+for _k in ("app", "auth", "infra", "business", "managed"):
+    if _k in _sys.modules:
+        # only delete if it's the admin console module (title check or file path)
+        _mod = _sys.modules[_k]
+        _f = getattr(_mod, "__file__", "") or ""
+        if "admin-console" in _f or getattr(_mod, "title", None) == "Open Agent OS Admin API":
+            del _sys.modules[_k]
+        elif _k == "app" and getattr(_mod, "title", None) == "Open Agent OS Admin API":
+            del _sys.modules[_k]
+# Load security app via spec to avoid bare `from app import` ambiguity
+_spec = _ilu.spec_from_file_location("security_app_module", str(_root / "security" / "app.py"))
+_mod = _ilu.module_from_spec(_spec)  # type: ignore
+_sys.modules["security_app_module"] = _mod
+_spec.loader.exec_module(_mod)  # type: ignore
+security_app = _mod.app
 
 
 # ──────────────────────────────────────────────────────────────

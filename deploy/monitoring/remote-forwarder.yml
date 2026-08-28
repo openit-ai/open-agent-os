@@ -1,0 +1,58 @@
+# remote-forwarder.yml — Prometheus remote_write to Managed central (if configured)
+# Managed edition remote ops: forward local metrics to central Prometheus/Mimir/Thanos.
+# Usage: include this block in prometheus.yml `remote_write:` section or use as external file
+#        and merge via deploy helper. Disabled by default — set PROM_REMOTE_WRITE_URL to enable.
+# Validate: promtool check config prometheus.yml (after merging)
+#
+# Environment:
+#   PROM_REMOTE_WRITE_URL  — central endpoint e.g. https://central.managed.openit.co.kr/api/v1/push
+#   PROM_REMOTE_WRITE_USERNAME / PROM_REMOTE_WRITE_PASSWORD — basic_auth if needed
+#   PROM_REMOTE_WRITE_BEARER_TOKEN — bearer_token if using token auth
+#
+# Deploy helper (compose): envsubst or yq merge:
+#   if [ -n "$PROM_REMOTE_WRITE_URL" ]; then yq eval-all 'select(fileIndex==0) * select(fileIndex==1)' prometheus.yml remote-forwarder.yml > prometheus.merged.yml
+#
+remote_write:
+  - url: "${PROM_REMOTE_WRITE_URL:-http://central-managed:9090/api/v1/write}"
+    # Enabled flag — prometheus ignores remote_write if url is unset via envsubst guard;
+    # alternatively wrap with deployment conditional: only include this file when PROM_REMOTE_WRITE_URL is set.
+    name: "managed-central"
+    remote_timeout: 30s
+    queue_config:
+      capacity: 10000
+      max_shards: 5
+      min_shards: 1
+      max_samples_per_send: 1000
+      batch_send_deadline: 5s
+      min_backoff: 30ms
+      max_backoff: 5s
+    metadata_config:
+      send: true
+      send_interval: 1m
+    # Auth — choose one; blank values are ignored by Prometheus if not templated via envsubst
+    # Basic auth (if PROM_REMOTE_WRITE_USERNAME set):
+    # basic_auth:
+    #   username: "${PROM_REMOTE_WRITE_USERNAME}"
+    #   password: "${PROM_REMOTE_WRITE_PASSWORD}"
+    # Bearer token (if PROM_REMOTE_WRITE_BEARER_TOKEN set):
+    # authorization:
+    #   type: Bearer
+    #   credentials: "${PROM_REMOTE_WRITE_BEARER_TOKEN}"
+    # TLS — central should be HTTPS; keep system CAs
+    tls_config:
+      insecure_skip_verify: false
+    # Relabel: ensure edition label present
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "go_.*"
+        action: drop
+      - target_label: edition
+        replacement: "managed"
+      - target_label: forwarded
+        replacement: "true"
+
+# Note: If PROM_REMOTE_WRITE_URL is empty/unconfigured, this remote_write URL
+# will point to a placeholder (http://central-managed:9090) which will fail closed
+# but not affect local scraping. For strict disabled-by-default, deployment should
+# conditionally include this file only when PROM_REMOTE_WRITE_URL is set:
+#   deploy/scripts/merge-prometheus.sh --if-env PROM_REMOTE_WRITE_URL --merge remote-forwarder.yml

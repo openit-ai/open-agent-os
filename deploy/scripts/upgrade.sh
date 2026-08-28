@@ -174,15 +174,12 @@ main() {
   fi
 
   # 1. Pull images
-  log "$(dry_prefix)Pulling images (docker compose pull)"
-  if ! compose pull 2>&1 | log; then
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log "[DRY-RUN] Would pull images (docker compose pull) — skipped"
+  elif ! compose pull 2>&1 | log; then
     log "[ERROR] docker compose pull failed"
     UPGRADE_FAILED=1
-    if [[ $DRY_RUN -eq 1 ]]; then
-      log "[DRY-RUN] Would have failed pull — continuing dry-run"
-    else
-      exit 1
-    fi
+    exit 1
   fi
 
   # 2. Alembic upgrade BEFORE restarting (so new code matches schema) — or after pull depending on strategy
