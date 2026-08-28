@@ -19,12 +19,15 @@ All DB imports are lazy (no DB at import time).
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from fastapi import FastAPI, Header, Request, HTTPException, Depends
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Open Agent OS — Memory Service", version="0.1.1")
 
@@ -44,6 +47,13 @@ def memory_health():
 def root():
     return {"service": "memory-service", "version": "0.1.1", "docs": "/docs"}
 
+
+# ---------------------------------------------------------------------------
+# Classification / Retention guard constants (§27.6 / §29)
+# CONFIDENTIAL/PII/SECRET with long_term/permanent must be blocked or require override
+# ---------------------------------------------------------------------------
+_SENSITIVE_CLASSIFICATIONS = frozenset({"CONFIDENTIAL", "PII", "SECRET"})
+_RESTRICTED_RETENTIONS = frozenset({"long_term", "permanent"})
 
 # ---------------------------------------------------------------------------
 # Lazy helpers — no DB at import time
@@ -222,6 +232,331 @@ def _record_to_response(rec: Any, db_provenance: dict | None = None) -> dict[str
 
 
 # ---------------------------------------------------------------------------
+# Audit helper — tries security/audit/ledger, falls back to log + DB row
+# ---------------------------------------------------------------------------
+
+def _emit_audit(request: Request, event_type: str, detail: dict[str, Any]) -> None:
+    """Best-effort audit emit: ledger -> AuditEventORM -> log.
+
+    Never raises; lazy imports so tests without DB still pass.
+    """
+    tenant = detail.get("tenant_id") or request.headers.get("x-tenant-id") or request.headers.get("X-Tenant-Id") or "default"
+    user_id = detail.get("user_id") or request.headers.get("x-user-id") or "anonymous"
+    agent_id = detail.get("agent_id") or request.headers.get("x-agent-id") or ""
+    # 1) Try ledger (security/audit)
+    try:
+        import sys
+        from pathlib import Path
+        _root = Path(__file__).resolve().parents[1]
+        # ensure audit-model on path
+        pkg_audit = str(_root / "packages" / "audit-model")
+        if pkg_audit not in sys.path:
+            sys.path.insert(0, pkg_audit)
+        # also ensure security on path for ledger
+        sec_path = str(_root / "security")
+        if sec_path not in sys.path:
+            sys.path.insert(0, sec_path)
+        from audit_model import AuditEvent as _AuditEvent, AuditEventType as _AuditEventType  # type: ignore
+        # try to resolve event type enum
+        try:
+            et = _AuditEventType(event_type)  # type: ignore
+        except Exception:
+            # fallback: use string as event_type if not in enum (MEMORY_DELETE not in enum)
+            et = event_type  # type: ignore
+        # Try to append to a process-global ledger if available (security.app audit_ledger)
+        try:
+            # lazy attempt to reuse security.app ledger singleton
+            import importlib.util
+            ledger_mod_path = _root / "security" / "audit" / "audit_ledger" / "ledger.py"
+            spec = importlib.util.spec_from_file_location("audit_ledger_mod", str(ledger_mod_path))
+            if spec and spec.loader:
+                pass  # just ensure import works
+        except Exception:
+            pass
+        # Construct event for logging / DB persistence; we don't maintain a long-lived ledger here
+        # Log with hash-chain intent
+        logger.info(f"[AUDIT] {event_type} tenant={tenant} user={user_id} detail={detail}")
+        # Also try in-memory store audit log (governance)
+        try:
+            store = _get_store()
+            store._audit_log.append({  # type: ignore
+                "event_type": event_type,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "tenant_id": tenant,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "detail": detail,
+            })
+        except Exception:
+            pass
+    except Exception as e:
+        logger.info(f"[AUDIT:{event_type}] tenant={tenant} user={user_id} detail={detail} (ledger fallback failed: {e})")
+    # Fallback always logged above; DB persistence for audit_events is handled async elsewhere if needed
+    # We also attempt to log at INFO regardless
+    logger.info(f"MEMORY_AUDIT event_type={event_type} detail={detail}")
+
+
+async def _emit_audit_db(event_type: str, tenant_id: str, user_id: str | None, agent_id: str | None, detail: dict[str, Any]) -> None:
+    """Optionally persist audit to AuditEventORM when DB configured (best-effort)."""
+    if not _is_db_configured():
+        return
+    maker = await _get_db_maker()
+    if maker is None:
+        return
+    try:
+        from security.models.orm import AuditEventORM  # type: ignore
+        async with maker() as session:
+            row = AuditEventORM(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                event_type=event_type,
+                timestamp=datetime.now(timezone.utc),
+                tenant_id=tenant_id or "default",
+                user_id=user_id,
+                agent_id=agent_id,
+                resource=detail.get("memory_id") or detail.get("delegation_id") or detail.get("source_resource_id"),
+                action=event_type,
+                decision=detail.get("reason") or detail.get("override") or "",
+            )
+            session.add(row)
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"audit DB persist failed for {event_type}: {e}")
+
+
+def _enforce_classification_retention_guard(request: Request, classification: str, retention_policy: str, owner: str, tenant_id: str) -> None:
+    """Enforce §27.6/§29: CONFIDENTIAL/PII/SECRET + long_term/permanent requires override.
+
+    If violation and no X-Memory-Policy-Override header, raises 403.
+    If override present, emits audit and allows.
+    """
+    cls = (classification or "INTERNAL").strip().upper()
+    ret = (retention_policy or "standard").strip()
+    if cls in _SENSITIVE_CLASSIFICATIONS and ret in _RESTRICTED_RETENTIONS:
+        override = request.headers.get("x-memory-policy-override") or request.headers.get("X-Memory-Policy-Override") or request.headers.get("X-MEMORY-POLICY-OVERRIDE") or ""
+        if not override:
+            _emit_audit(request, "MEMORY_POLICY_DENIED", {
+                "classification": cls,
+                "retention_policy": ret,
+                "owner": owner,
+                "tenant_id": tenant_id,
+                "reason": "classification+retention guard requires X-Memory-Policy-Override",
+            })
+            raise HTTPException(
+                status_code=403,
+                detail=f"classification {cls} with retention {ret} requires X-Memory-Policy-Override header per §27.6/§29 (or use retention standard/session/ephemeral)",
+            )
+        # override present -> audit and allow
+        _emit_audit(request, "MEMORY_POLICY_OVERRIDE", {
+            "classification": cls,
+            "retention_policy": ret,
+            "owner": owner,
+            "tenant_id": tenant_id,
+            "override": override,
+        })
+
+
+# ---------------------------------------------------------------------------
+# In-memory physical delete helpers (store + indexes)
+# ---------------------------------------------------------------------------
+
+def _store_physical_delete_single(store: Any, memory_id: str) -> bool:
+    """Remove single memory from in-memory store and indexes. Returns True if removed."""
+    rec = store._store.get(memory_id)  # type: ignore
+    if rec is None:
+        return False
+    # capture for index cleanup
+    delegation_id = getattr(rec, "source_delegation_id", None)
+    resource_id = getattr(rec, "source_resource_id", None)
+    owner = getattr(rec, "owner", None)
+    # remove from main store
+    store._store.pop(memory_id, None)  # type: ignore
+    # remove from indexes
+    if delegation_id and hasattr(store, "_by_delegation"):
+        s = store._by_delegation.get(delegation_id)  # type: ignore
+        if s:
+            s.discard(memory_id)
+            if not s:
+                store._by_delegation.pop(delegation_id, None)  # type: ignore
+    if resource_id and hasattr(store, "_by_resource"):
+        s = store._by_resource.get(resource_id)  # type: ignore
+        if s:
+            s.discard(memory_id)
+            if not s:
+                store._by_resource.pop(resource_id, None)  # type: ignore
+    if owner and hasattr(store, "_by_owner"):
+        s = store._by_owner.get(owner)  # type: ignore
+        if s:
+            s.discard(memory_id)
+            if not s:
+                store._by_owner.pop(owner, None)  # type: ignore
+    # also sweep any delegation/resource sets that might contain this id even if rec fields were None
+    for idx_name in ("_by_delegation", "_by_resource", "_by_owner"):
+        idx = getattr(store, idx_name, None)
+        if idx:
+            for k, v in list(idx.items()):
+                if memory_id in v:
+                    v.discard(memory_id)
+                    if not v:
+                        idx.pop(k, None)
+    return True
+
+
+def _store_physical_delete_by_delegation(store: Any, delegation_id: str) -> list[str]:
+    mids = list(store._by_delegation.get(delegation_id, set()).copy())  # type: ignore
+    deleted: list[str] = []
+    for mid in mids:
+        if _store_physical_delete_single(store, mid):
+            deleted.append(mid)
+    # ensure delegation index cleared
+    store._by_delegation.pop(delegation_id, None)  # type: ignore
+    return deleted
+
+
+def _store_physical_delete_by_resource(store: Any, source_resource_id: str) -> list[str]:
+    mids = list(store._by_resource.get(source_resource_id, set()).copy())  # type: ignore
+    deleted: list[str] = []
+    for mid in mids:
+        if _store_physical_delete_single(store, mid):
+            deleted.append(mid)
+    store._by_resource.pop(source_resource_id, None)  # type: ignore
+    return deleted
+
+
+# ---------------------------------------------------------------------------
+# DB physical delete helper
+# ---------------------------------------------------------------------------
+
+async def _db_physical_delete(memory_ids: list[str]) -> int:
+    """Physically delete memories + embeddings + access_bindings + sources from DB. Returns count."""
+    if not memory_ids:
+        return 0
+    if not _is_db_configured():
+        return 0
+    maker = await _get_db_maker()
+    if maker is None:
+        return 0
+    try:
+        from sqlalchemy import delete  # type: ignore
+        # lazy ORM imports
+        try:
+            from security.models.orm import MemoryORM, MemorySourceORM, MemoryEmbeddingORM, MemoryAccessBindingORM  # type: ignore
+        except Exception:
+            import sys
+            from pathlib import Path
+            root = Path(__file__).resolve().parents[1]
+            for p in [str(root / "security")]:
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+            from security.models.orm import MemoryORM, MemorySourceORM, MemoryEmbeddingORM, MemoryAccessBindingORM  # type: ignore
+
+        async with maker() as session:
+            # delete embeddings
+            try:
+                await session.execute(delete(MemoryEmbeddingORM).where(MemoryEmbeddingORM.id.in_(memory_ids)))  # type: ignore
+            except Exception as e:
+                logger.warning(f"db delete embeddings failed: {e}")
+            # delete access bindings
+            try:
+                await session.execute(delete(MemoryAccessBindingORM).where(MemoryAccessBindingORM.memory_id.in_(memory_ids)))  # type: ignore
+            except Exception as e:
+                logger.warning(f"db delete access_bindings failed: {e}")
+            # delete sources
+            try:
+                await session.execute(delete(MemorySourceORM).where(MemorySourceORM.memory_id.in_(memory_ids)))  # type: ignore
+            except Exception as e:
+                logger.warning(f"db delete sources failed: {e}")
+            # delete memories
+            try:
+                result = await session.execute(delete(MemoryORM).where(MemoryORM.id.in_(memory_ids)))  # type: ignore
+                await session.commit()
+                # result.rowcount may be available
+                try:
+                    rc = getattr(result, "rowcount", -1)
+                    cnt = rc if rc != -1 else len(memory_ids)
+                except Exception:
+                    cnt = len(memory_ids)
+                return cnt
+            except Exception as e:
+                logger.warning(f"db delete memories failed: {e}")
+                await session.rollback()
+                return 0
+    except Exception as e:
+        logger.warning(f"_db_physical_delete failed: {e}")
+        return 0
+    return 0
+
+
+async def _db_collect_ids_by_delegation(delegation_id: str) -> list[str]:
+    if not _is_db_configured():
+        return []
+    maker = await _get_db_maker()
+    if maker is None:
+        return []
+    try:
+        from sqlalchemy import select  # type: ignore
+        try:
+            from security.models.orm import MemoryORM  # type: ignore
+        except Exception:
+            import sys
+            from pathlib import Path
+            root = Path(__file__).resolve().parents[1]
+            for p in [str(root / "security")]:
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+            from security.models.orm import MemoryORM  # type: ignore
+        async with maker() as session:
+            stmt = select(MemoryORM.id).where(MemoryORM.source_delegation_id == delegation_id)  # type: ignore
+            res = await session.execute(stmt)
+            return [row[0] for row in res.all()]
+    except Exception as e:
+        logger.warning(f"_db_collect_ids_by_delegation failed: {e}")
+        return []
+
+
+async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
+    if not _is_db_configured():
+        return []
+    maker = await _get_db_maker()
+    if maker is None:
+        return []
+    try:
+        from sqlalchemy import select  # type: ignore
+        try:
+            from security.models.orm import MemoryORM, MemorySourceORM  # type: ignore
+        except Exception:
+            import sys
+            from pathlib import Path
+            root = Path(__file__).resolve().parents[1]
+            for p in [str(root / "security")]:
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+            from security.models.orm import MemoryORM, MemorySourceORM  # type: ignore
+        ids: set[str] = set()
+        async with maker() as session:
+            # via MemorySourceORM
+            try:
+                stmt = select(MemorySourceORM.memory_id).where(MemorySourceORM.source_id == source_resource_id)  # type: ignore
+                res = await session.execute(stmt)
+                for row in res.all():
+                    ids.add(row[0])
+            except Exception:
+                pass
+            # also via source_ids JSON not queryable, but try source_uri
+            try:
+                stmt2 = select(MemorySourceORM.memory_id).where(MemorySourceORM.source_uri == source_resource_id)  # type: ignore
+                res2 = await session.execute(stmt2)
+                for row in res2.all():
+                    ids.add(row[0])
+            except Exception:
+                pass
+            # via MemoryORM source_ids JSON fallback - not needed
+        return list(ids)
+    except Exception as e:
+        logger.warning(f"_db_collect_ids_by_resource failed: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Pydantic models (import lazily to avoid extra deps at import time but
 # pydantic is available at import — safe to define)
 # ---------------------------------------------------------------------------
@@ -264,11 +599,17 @@ try:
         source_resource_id: str | None = None
         reason: str = "manual"
 
+    class DeleteRequest(BaseModel):
+        memory_id: str | None = None
+        delegation_id: str | None = None
+        source_resource_id: str | None = None
+        reason: str = "manual_delete"
+
 except Exception:  # pragma: no cover
     WriteRequest = object  # type: ignore
     SearchRequest = object  # type: ignore
     InvalidateRequest = object  # type: ignore
-
+    DeleteRequest = object  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Write — POST /v1/memory/write
@@ -323,6 +664,18 @@ async def memory_write(payload: dict, request: Request):
         except Exception:
             raise HTTPException(status_code=422, detail=f"invalid expires_at: {expires_at}")
 
+    # ---- Classification + Retention guard (§27.6 / §29) ----
+    _enforce_classification_retention_guard(request, classification, retention_policy, owner, tenant_id)
+    # If override header present, propagate to governance via provenance so permanent guard can allow
+    _override_hdr = request.headers.get("x-memory-policy-override") or request.headers.get("X-Memory-Policy-Override") or request.headers.get("X-MEMORY-POLICY-OVERRIDE") or ""
+    if _override_hdr:
+        if provenance is None or not isinstance(provenance, dict):
+            provenance = {}
+        else:
+            provenance = dict(provenance)
+        provenance["policy_override"] = _override_hdr
+        provenance["override"] = _override_hdr
+
     # ---- Governance validation via MemoryStore.write (includes scope/classification/retention/TTL logic) ----
     store = _get_store()
     try:
@@ -343,6 +696,8 @@ async def memory_write(payload: dict, request: Request):
         )
     except ValueError as ve:
         raise HTTPException(status_code=422, detail=str(ve))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -441,15 +796,20 @@ async def memory_write(payload: dict, request: Request):
                     )
                     session.add(src_row)
                     await session.commit()
+                # audit write
+                _emit_audit(request, "MEMORY_WRITE", {"memory_id": rec.id, "owner": owner, "tenant_id": tenant_id, "classification": classification, "retention_policy": retention_policy})
+                try:
+                    await _emit_audit_db("MEMORY_WRITE", tenant_id, owner, agent_id, {"memory_id": rec.id, "classification": classification, "retention_policy": retention_policy})
+                except Exception:
+                    pass
             except Exception as e:
                 # DB persistence is best-effort; log but don't fail write (governance validation already passed)
                 # Fallback still returns memory record
-                import logging
-
-                logging.getLogger(__name__).warning(f"memory_service DB persist failed: {e}")
+                logger.warning(f"memory_service DB persist failed: {e}")
             # return governed record (DB persisted)
             return rec.to_dict()
-    # in-memory fallback
+    # in-memory fallback — still audit
+    _emit_audit(request, "MEMORY_WRITE", {"memory_id": rec.id, "owner": owner, "tenant_id": tenant_id, "classification": classification, "retention_policy": retention_policy})
     return rec.to_dict()
 
 
@@ -638,7 +998,7 @@ async def memory_search(payload: dict, request: Request):
                 if classification and classification_val != classification:
                     continue
 
-                # expired check (fallback if DB column missing)
+                # expired check (fallback if DB column missing) — also filter when include_invalidated=False
                 if not include_invalidated:
                     if invalidated_val:
                         continue
@@ -715,9 +1075,7 @@ async def memory_search(payload: dict, request: Request):
         raise
     except Exception as e:
         # On DB error, fallback to in-memory search (do not leak 500 to tests)
-        import logging
-
-        logging.getLogger(__name__).warning(f"memory_service DB search failed, fallback to in-memory: {e}")
+        logger.warning(f"memory_service DB search failed, fallback to in-memory: {e}")
         results = store.search(query=query, scope=scope, owner=owner, classification=classification, requester=requester, tenant_id=effective_tenant, include_invalidated=include_invalidated)  # type: ignore
         results = results[:limit]
         return {"results": [r.to_dict() for r in results], "count": len(results), "tenant_id": effective_tenant}
@@ -801,7 +1159,8 @@ async def memory_get(memory_id: str, request: Request):
                             "group_id": getattr(row, "group_id", None),
                             "created_at": getattr(row, "created_at", None).isoformat() if getattr(row, "created_at", None) else None,
                             "expires_at": getattr(row, "expires_at", None).isoformat() if getattr(row, "expires_at", None) else None,
-                            "invalidated": bool(getattr(row, "invalidated", False)),
+                            "invalidated": bool(getattr(row, "invalidated", False) or getattr(row, "invalidated_at", None)),
+                            "invalidated_at": getattr(row, "invalidated_at", None).isoformat() if getattr(row, "invalidated_at", None) else None,
                             "provenance": prov,
                             "source_ids": getattr(row, "source_ids", None),
                         }
@@ -823,13 +1182,15 @@ async def memory_get(memory_id: str, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Invalidate — POST /v1/memory/invalidate  (by memory_id, delegation, or resource)
+# Invalidate — POST /v1/memory/invalidate  (soft deny: sets invalidated_at)
+# vs Delete — POST /v1/memory/delete + DELETE /v1/memory/{id} (physical removal)
 # ---------------------------------------------------------------------------
 
 
 @app.post("/v1/memory/invalidate")
 async def memory_invalidate(payload: dict, request: Request):
-    _extract_auth(request)  # placeholder auth check
+    """Soft revoke: marks memories invalidated (invalidated_at/reason) — survives search filter."""
+    auth = _extract_auth(request)
     try:
         req = InvalidateRequest(**payload)  # type: ignore
     except Exception:
@@ -856,9 +1217,14 @@ async def memory_invalidate(payload: dict, request: Request):
                             update(MemoryORM).where(MemoryORM.source_delegation_id == delegation_id).values(invalidated_at=datetime.now(timezone.utc), invalidation_reason=reason)  # type: ignore
                         )
                         await session.commit()
-                except Exception:
-                    pass
-        return {"invalidated": count, "by": "delegation", "delegation_id": delegation_id}
+                except Exception as e:
+                    logger.warning(f"memory_invalidate DB update by delegation failed: {e}")
+        _emit_audit(request, "MEMORY_INVALIDATE", {"delegation_id": delegation_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
+        try:
+            await _emit_audit_db("MEMORY_INVALIDATE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"delegation_id": delegation_id, "reason": reason, "count": count})
+        except Exception:
+            pass
+        return {"invalidated": count, "by": "delegation", "delegation_id": delegation_id, "reason": reason}
     if source_resource_id:
         count = store.invalidate_by_resource(source_resource_id, reason=reason)
         if _is_db_configured():
@@ -878,9 +1244,22 @@ async def memory_invalidate(payload: dict, request: Request):
                         if mids:
                             await session.execute(update(MemoryORM).where(MemoryORM.id.in_(mids)).values(invalidated_at=datetime.now(timezone.utc), invalidation_reason=reason))  # type: ignore
                             await session.commit()
-                except Exception:
-                    pass
-        return {"invalidated": count, "by": "resource", "source_resource_id": source_resource_id}
+                        else:
+                            # fallback: try source_uri match
+                            stmt2 = select(MemorySourceORM).where(MemorySourceORM.source_uri == source_resource_id)  # type: ignore
+                            res2 = await session.execute(stmt2)
+                            mids2 = [row.memory_id for row in res2.scalars().all()]
+                            if mids2:
+                                await session.execute(update(MemoryORM).where(MemoryORM.id.in_(mids2)).values(invalidated_at=datetime.now(timezone.utc), invalidation_reason=reason))  # type: ignore
+                                await session.commit()
+                except Exception as e:
+                    logger.warning(f"memory_invalidate DB update by resource failed: {e}")
+        _emit_audit(request, "MEMORY_INVALIDATE", {"source_resource_id": source_resource_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
+        try:
+            await _emit_audit_db("MEMORY_INVALIDATE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"source_resource_id": source_resource_id, "reason": reason, "count": count})
+        except Exception:
+            pass
+        return {"invalidated": count, "by": "resource", "source_resource_id": source_resource_id, "reason": reason}
     if memory_id:
         ok = store.invalidate(memory_id, reason=reason)
         if _is_db_configured():
@@ -893,15 +1272,133 @@ async def memory_invalidate(payload: dict, request: Request):
                     async with maker() as session:
                         await session.execute(update(MemoryORM).where(MemoryORM.id == memory_id).values(invalidated_at=datetime.now(timezone.utc), invalidation_reason=reason))  # type: ignore
                         await session.commit()
-                except Exception:
-                    pass
-        return {"invalidated": 1 if ok else 0, "by": "memory_id", "memory_id": memory_id}
+                except Exception as e:
+                    logger.warning(f"memory_invalidate DB update by memory_id failed: {e}")
+        _emit_audit(request, "MEMORY_INVALIDATE", {"memory_id": memory_id, "reason": reason, "count": 1 if ok else 0, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
+        try:
+            await _emit_audit_db("MEMORY_INVALIDATE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"memory_id": memory_id, "reason": reason})
+        except Exception:
+            pass
+        return {"invalidated": 1 if ok else 0, "by": "memory_id", "memory_id": memory_id, "reason": reason}
     raise HTTPException(status_code=422, detail="memory_id or delegation_id or source_resource_id required")
 
 
 @app.post("/v1/memory/invalidate/by-delegation")
 async def memory_invalidate_by_delegation(payload: dict, request: Request):
     return await memory_invalidate(payload, request)
+
+
+# ---------------------------------------------------------------------------
+# Delete — physical removal (row + embeddings + access_bindings + sources)
+# Supports delegation_id / source_resource_id / memory_id lookup.
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/memory/delete")
+async def memory_delete(payload: dict, request: Request):
+    """Physical delete: removes row + embeddings + access_bindings + sources. Distinct from invalidate (soft)."""
+    auth = _extract_auth(request)
+    try:
+        req = DeleteRequest(**payload)  # type: ignore
+    except Exception:
+        req = payload  # type: ignore
+    memory_id = getattr(req, "memory_id", None) or payload.get("memory_id")
+    delegation_id = getattr(req, "delegation_id", None) or payload.get("delegation_id")
+    source_resource_id = getattr(req, "source_resource_id", None) or payload.get("source_resource_id")
+    reason = getattr(req, "reason", "manual_delete") or payload.get("reason", "manual_delete")
+    store = _get_store()
+
+    if delegation_id:
+        # in-memory physical delete
+        deleted_ids = _store_physical_delete_by_delegation(store, delegation_id)
+        count_mem = len(deleted_ids)
+        # DB: collect ids then physical delete
+        db_ids = await _db_collect_ids_by_delegation(delegation_id)
+        all_ids = list(set(deleted_ids + db_ids))
+        # also include any DB-only ids not in store
+        if db_ids:
+            db_deleted = await _db_physical_delete(db_ids)
+            # if store had 0 but DB had rows, count should reflect DB
+            if count_mem == 0:
+                count_mem = db_deleted
+            else:
+                # ensure DB rows for store ids also removed (if not already by db_ids)
+                store_only = [mid for mid in deleted_ids if mid not in db_ids]
+                if store_only:
+                    await _db_physical_delete(store_only)
+        elif deleted_ids:
+            await _db_physical_delete(deleted_ids)
+        _emit_audit(request, "MEMORY_DELETE", {"delegation_id": delegation_id, "reason": reason, "count": count_mem, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
+        try:
+            await _emit_audit_db("MEMORY_DELETE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"delegation_id": delegation_id, "reason": reason, "count": count_mem})
+        except Exception:
+            pass
+        return {"deleted": count_mem, "by": "delegation", "delegation_id": delegation_id, "reason": reason}
+
+    if source_resource_id:
+        deleted_ids = _store_physical_delete_by_resource(store, source_resource_id)
+        count_mem = len(deleted_ids)
+        db_ids = await _db_collect_ids_by_resource(source_resource_id)
+        all_ids = list(set(deleted_ids + db_ids))
+        if db_ids:
+            db_deleted = await _db_physical_delete(db_ids)
+            if count_mem == 0:
+                count_mem = db_deleted
+            else:
+                store_only = [mid for mid in deleted_ids if mid not in db_ids]
+                if store_only:
+                    await _db_physical_delete(store_only)
+        elif deleted_ids:
+            await _db_physical_delete(deleted_ids)
+        _emit_audit(request, "MEMORY_DELETE", {"source_resource_id": source_resource_id, "reason": reason, "count": count_mem, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
+        try:
+            await _emit_audit_db("MEMORY_DELETE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"source_resource_id": source_resource_id, "reason": reason, "count": count_mem})
+        except Exception:
+            pass
+        return {"deleted": count_mem, "by": "resource", "source_resource_id": source_resource_id, "reason": reason}
+
+    if memory_id:
+        ok = _store_physical_delete_single(store, memory_id)
+        db_deleted = await _db_physical_delete([memory_id])
+        count = 1 if (ok or db_deleted > 0) else 0
+        _emit_audit(request, "MEMORY_DELETE", {"memory_id": memory_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
+        try:
+            await _emit_audit_db("MEMORY_DELETE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"memory_id": memory_id, "reason": reason})
+        except Exception:
+            pass
+        return {"deleted": count, "by": "memory_id", "memory_id": memory_id, "reason": reason}
+
+    raise HTTPException(status_code=422, detail="memory_id or delegation_id or source_resource_id required")
+
+
+@app.delete("/v1/memory/{memory_id}")
+async def memory_delete_by_id(memory_id: str, request: Request, reason: str = "manual_delete"):
+    """DELETE verb for single memory physical removal."""
+    # support reason via query param or header
+    qp_reason = request.query_params.get("reason")
+    if qp_reason:
+        reason = qp_reason
+    return await memory_delete({"memory_id": memory_id, "reason": reason}, request)
+
+
+@app.delete("/v1/memory")
+async def memory_delete_query(request: Request, memory_id: str | None = None, delegation_id: str | None = None, source_resource_id: str | None = None, reason: str = "manual_delete"):
+    """DELETE with query params for delegation/resource bulk delete."""
+    payload: dict[str, Any] = {"reason": reason}
+    if memory_id:
+        payload["memory_id"] = memory_id
+    if delegation_id:
+        payload["delegation_id"] = delegation_id
+    if source_resource_id:
+        payload["source_resource_id"] = source_resource_id
+    if not payload.get("memory_id") and not payload.get("delegation_id") and not payload.get("source_resource_id"):
+        raise HTTPException(status_code=422, detail="memory_id or delegation_id or source_resource_id required")
+    return await memory_delete(payload, request)
+
+
+# Alias for spec compat
+@app.post("/v1/memory/delete/by-delegation")
+async def memory_delete_by_delegation(payload: dict, request: Request):
+    return await memory_delete(payload, request)
 
 
 if __name__ == "__main__":

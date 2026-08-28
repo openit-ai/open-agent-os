@@ -190,6 +190,14 @@ class MemoryStore:
         if classification not in valid_dc:
             raise ValueError(f"invalid classification: {classification!r} (allowed: {sorted(valid_dc)})")
         _validate_scope_owner(scope, owner)
+        # §29 classification guard: sensitive data must not be permanent (override via provenance policy_override)
+        if retention_policy == "permanent" and classification in ("CONFIDENTIAL", "SECRET", "PII"):
+            # Allow when explicit policy override is signaled via provenance (X-Memory-Policy-Override header)
+            _override = False
+            if provenance is not None and isinstance(provenance, dict):
+                _override = bool(provenance.get("policy_override") or provenance.get("policyOverride") or provenance.get("override"))
+            if not _override:
+                raise ValueError(f"classification {classification!r} incompatible with permanent retention (requires standard/long_term or shorter)")
 
         # expiry from ttl
         if ttl_seconds is not None and expires_at is None:
