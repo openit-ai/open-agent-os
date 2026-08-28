@@ -384,6 +384,20 @@ class AdminLLMProviderORM(Base):
     __table_args__ = (Index("ix_admin_llm_providers_provider", "provider"),)
 
 
+class AdminLLMQuotaORM(Base):
+    """Tenant LLM quota — daily + per-minute limits (v1.6.4 §16.4)."""
+
+    __tablename__ = "admin_llm_quotas"
+
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    daily_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    per_minute_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    used_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+
+
 class AdminSettingORM(Base):
     """Generic admin settings key/value — used for runtime_mode (hermes vs llm)."""
 
@@ -394,3 +408,4 @@ class AdminSettingORM(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+

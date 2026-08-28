@@ -26,6 +26,8 @@ for p in [
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 # security/token collides with stdlib 'token' — need parent 'security' on path for legacy `import token.token_service`
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(ROOT / "security") not in sys.path:
     sys.path.insert(0, str(ROOT / "security"))
 

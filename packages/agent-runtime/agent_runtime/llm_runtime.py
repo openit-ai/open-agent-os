@@ -425,6 +425,42 @@ class ToolOutputLimits:
 
 default_tool_limits = ToolOutputLimits()
 
+# ---------------------------------------------------------------------------
+# Tenant LLM quota (010) — in-memory + DB fail-open, before provider dispatch
+# ---------------------------------------------------------------------------
+_llm_quota_store = {}
+_llm_quota_window_counts = {}
+
+def _quota_http_exc(msg):
+    try:
+        from fastapi import HTTPException
+        return HTTPException(status_code=429, detail={"code":"QUOTA_EXCEEDED","message":msg})
+    except Exception:
+        e=Exception(f"QUOTA_EXCEEDED: {msg}"); e.status_code=429; return e
+
+def _llm_quota_check(tenant_id):
+    tid = (tenant_id or "default").strip() or "default"
+    from datetime import datetime, timezone
+    import os
+    now = datetime.now(timezone.utc)
+    # in-memory only (DB attempt fail-open)
+    rec=_llm_quota_store.get(tid)
+    if rec is None:
+        rec={"daily_limit":100,"per_minute_limit":10,"used_today":0,"window_start":now,"updated_at":now}
+        _llm_quota_store[tid]=rec; _llm_quota_window_counts[tid]=0
+    if rec["updated_at"].date()!=now.date():
+        rec["used_today"]=0; rec["window_start"]=now; _llm_quota_window_counts[tid]=0
+    wc=_llm_quota_window_counts.get(tid,0)
+    if (now - rec["window_start"]).total_seconds()>=60:
+        wc=0; rec["window_start"]=now
+    if rec["used_today"] >= rec["daily_limit"]:
+        raise _quota_http_exc("daily quota exceeded")
+    if wc >= rec["per_minute_limit"]:
+        raise _quota_http_exc("per-minute quota exceeded")
+    rec["used_today"]+=1; _llm_quota_window_counts[tid]=wc+1; rec["updated_at"]=now
+
+def _llm_quota_clear():
+    _llm_quota_store.clear(); _llm_quota_window_counts.clear()
 
 # ---------------------------------------------------------------------------
 # Shared helpers for provider layer (mock, litellm lazy, audit, retry)
@@ -859,6 +895,32 @@ class LLMProviderAdapter:
             pass
         return _mock_completion_response(model, messages, tools=tools)
 
+    def _check_quota(self, tenant_id: str | None = None, oaos_context: Any | None = None) -> None:
+        # quota hook before provider dispatch — fail-open on DB missing
+        tid = ""
+        if oaos_context is not None and hasattr(oaos_context, "tenant_id"):
+            tid = str(getattr(oaos_context, "tenant_id") or "")
+        if not tid:
+            tid = str(tenant_id or "default")
+        if not tid.strip():
+            tid = "default"
+        try:
+            _llm_quota_check(tid)
+        except Exception as e:
+            # re-raise quota 429 (has code QUOTA_EXCEEDED), otherwise fail-open
+            msg = str(e)
+            if "QUOTA_EXCEEDED" in msg or getattr(e, "status_code", None) == 429:
+                raise
+            # also check HTTPException detail
+            try:
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, dict) and detail.get("code") == "QUOTA_EXCEEDED":
+                    raise
+            except Exception:
+                pass
+            # fail-open for DB errors
+            return
+
     def _get_provider_instance(self) -> Any | None:
         """Lazy instantiate provider for current provider_type — returns None if no provider_type."""
         if self.provider_type is None:
@@ -954,7 +1016,13 @@ class LLMProviderAdapter:
             trace_id = oaos_context.trace_id
 
         self._emit("model_request", trace_id=trace_id, model=resolved, data={"request_id": request_id, "messages_len": len(messages), "provider": str(self.provider_type.value) if self.provider_type else "litellm", "runtime_mode": str(self.runtime_mode.value)})
-
+        # quota hook before provider dispatch (fail-open)
+        tenant_for_quota = getattr(oaos_context, "tenant_id", None) if oaos_context is not None else kwargs.get("tenant_id")
+        try:
+            _llm_quota_check(tenant_for_quota or "default")
+        except Exception as e:
+            if getattr(e, "status_code", None)==429 or "QUOTA_EXCEEDED" in str(e) or (isinstance(getattr(e, "detail", None), dict) and getattr(e, "detail", {}).get("code")=="QUOTA_EXCEEDED"):
+                raise
         # — Hermes mode: bypass provider logic entirely —
         if self.runtime_mode == RuntimeMode.HERMES:
             async def _do_hermes() -> dict[str, Any]:

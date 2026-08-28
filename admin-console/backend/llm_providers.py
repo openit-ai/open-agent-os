@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 try:
@@ -861,8 +861,16 @@ def delete_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
 
 
 @router.post("/providers/{provider_id}/test")
-def test_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
+def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends(require_l5)):
     _check_hermes_mode_guard()
+    # --- quota guard (fail-open) ---
+    tenant_id = request.headers.get("X-Tenant-Id") or request.headers.get("x-tenant-id") or request.query_params.get("tenant_id") or "default"
+    try:
+        _check_quota_or_raise(tenant_id)
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     p = _get_one_provider(provider_id)
     if not p:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -903,6 +911,136 @@ def toggle_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
     _db_persist_toggle(p)
     return _to_public(p)
 
+
+# ---------------------------------------------------------------------------
+# Tenant LLM quota (010) — fail-open
+# ---------------------------------------------------------------------------
+_quota_store: dict[str, dict] = {}
+_quota_window_counts: dict[str, int] = {}
+
+def _quota_tenant_key(tenant_id: str) -> str:
+    return (tenant_id or "default").strip() or "default"
+
+def clear_quotas() -> None:
+    _quota_store.clear()
+    _quota_window_counts.clear()
+    if _is_db_enabled():
+        try:
+            factory = _get_session_factory()
+            if factory is not None:
+                from security.models.orm import AdminLLMQuotaORM
+                with factory() as s:
+                    s.query(AdminLLMQuotaORM).delete()
+                    s.commit()
+        except Exception:
+            pass
+
+def _ensure_quota_table(engine) -> None:
+    try:
+        from security.models.orm import AdminLLMQuotaORM  # noqa
+        from security.models.db import Base
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass
+    try:
+        from sqlalchemy import text
+        ddl = """CREATE TABLE IF NOT EXISTS admin_llm_quotas (
+            tenant_id TEXT PRIMARY KEY, daily_limit INTEGER NOT NULL DEFAULT 100,
+            per_minute_limit INTEGER NOT NULL DEFAULT 10, used_today INTEGER NOT NULL DEFAULT 0,
+            window_start TEXT, updated_at TEXT NOT NULL)"""
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+    except Exception:
+        pass
+
+def _check_quota_or_raise(tenant_id: str) -> None:
+    tid = _quota_tenant_key(tenant_id)
+    now = datetime.now(timezone.utc)
+    # try DB first (fail-open)
+    try:
+        if _is_db_enabled():
+            factory = _get_session_factory()
+            if factory is not None:
+                from security.models.orm import AdminLLMQuotaORM
+                # ensure table exists
+                try:
+                    _ensure_quota_table(factory.bind if hasattr(factory, "bind") else _db_engine)
+                except Exception:
+                    pass
+                with factory() as s:
+                    row = s.query(AdminLLMQuotaORM).filter(AdminLLMQuotaORM.tenant_id == tid).first()
+                    if row is None:
+                        row = AdminLLMQuotaORM(tenant_id=tid, daily_limit=100, per_minute_limit=10, used_today=0, window_start=now, updated_at=now)
+                        s.add(row)
+                        s.commit()
+                        s.refresh(row)
+                    # daily reset (UTC date)
+                    if row.updated_at and row.updated_at.date() != now.date():
+                        row.used_today = 0
+                        row.window_start = now
+                        _quota_window_counts[tid] = 0
+                    # per-minute window
+                    wc = _quota_window_counts.get(tid, 0)
+                    ws = row.window_start
+                    if ws is None or (now - (ws if ws.tzinfo else ws.replace(tzinfo=timezone.utc))).total_seconds() >= 60:
+                        wc = 0
+                        row.window_start = now
+                    if row.used_today >= row.daily_limit:
+                        raise HTTPException(status_code=429, detail={"code": "QUOTA_EXCEEDED", "message": "daily quota exceeded"})
+                    if wc >= row.per_minute_limit:
+                        raise HTTPException(status_code=429, detail={"code": "QUOTA_EXCEEDED", "message": "per-minute quota exceeded"})
+                    row.used_today += 1
+                    wc += 1
+                    _quota_window_counts[tid] = wc
+                    row.updated_at = now
+                    s.commit()
+                    return
+    except HTTPException:
+        raise
+    except Exception:
+        # fail-open on DB error
+        pass
+    # in-memory fallback
+    rec = _quota_store.get(tid)
+    if rec is None:
+        rec = {"daily_limit": 100, "per_minute_limit": 10, "used_today": 0, "window_start": now, "updated_at": now}
+        _quota_store[tid] = rec
+        _quota_window_counts[tid] = 0
+    if rec["updated_at"].date() != now.date():
+        rec["used_today"] = 0
+        rec["window_start"] = now
+        _quota_window_counts[tid] = 0
+    wc = _quota_window_counts.get(tid, 0)
+    if (now - rec["window_start"]).total_seconds() >= 60:
+        wc = 0
+        rec["window_start"] = now
+    if rec["used_today"] >= rec["daily_limit"]:
+        raise HTTPException(status_code=429, detail={"code": "QUOTA_EXCEEDED", "message": "daily quota exceeded"})
+    if wc >= rec["per_minute_limit"]:
+        raise HTTPException(status_code=429, detail={"code": "QUOTA_EXCEEDED", "message": "per-minute quota exceeded"})
+    rec["used_today"] += 1
+    _quota_window_counts[tid] = wc + 1
+    rec["updated_at"] = now
+    # also try persist to DB best-effort if DB was unreachable earlier
+    try:
+        if _is_db_enabled():
+            factory = _get_session_factory()
+            if factory is not None:
+                from security.models.orm import AdminLLMQuotaORM
+                with factory() as s:
+                    row = s.query(AdminLLMQuotaORM).filter(AdminLLMQuotaORM.tenant_id == tid).first()
+                    if row is None:
+                        row = AdminLLMQuotaORM(tenant_id=tid, daily_limit=rec["daily_limit"], per_minute_limit=rec["per_minute_limit"], used_today=rec["used_today"], window_start=rec["window_start"], updated_at=rec["updated_at"])
+                        s.add(row)
+                    else:
+                        row.used_today = rec["used_today"]
+                        row.window_start = rec["window_start"]
+                        row.updated_at = rec["updated_at"]
+                        row.daily_limit = rec["daily_limit"]
+                        row.per_minute_limit = rec["per_minute_limit"]
+                    s.commit()
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Helpers for testing / inspection
