@@ -146,9 +146,17 @@ class VaultCredentialORM(Base):
 
 
 # ── v1.6 §27 Persistent Memory (pgvector ready, sqlite compatible) ────────────
+# Phase B: §27.5 missing columns + memory_embeddings + memory_access_bindings
+# sqlite-compat: Text for enums, nullable columns for add_column, no pg-only server_default
 
 class MemoryORM(Base):
-    """Persistent memory — tenant-scoped, per-user/agent, pgvector embedding."""
+    """Persistent memory — tenant-scoped, per-user/agent, pgvector embedding.
+
+    Phase B extensions (§27.5): namespace, owner_type/owner_id, memory_type,
+    summary, classification, source_resource_type, retention_policy, expires_at,
+    invalidated_at/invalidation_reason, source_acl_version, source_delegation_id.
+    All new columns nullable for sqlite compat + zero-downtime migration.
+    """
 
     __tablename__ = "memories"
 
@@ -163,10 +171,29 @@ class MemoryORM(Base):
     source_ids: Mapped[list | None] = mapped_column(GenericJSON, nullable=True, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # ── Phase B: §27.5 missing columns (all nullable, Text for enums) ──
+    namespace: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    memory_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classification: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_resource_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_acl_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_delegation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retention_policy: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index("ix_memories_tenant_user", "tenant_id", "user_id"),
         Index("ix_memories_tenant_agent", "tenant_id", "agent_id"),
+        Index("ix_memories_namespace", "namespace"),
+        Index("ix_memories_owner", "owner_type", "owner_id"),
+        Index("ix_memories_classification", "classification"),
+        Index("ix_memories_expires_at", "expires_at"),
+        Index("ix_memories_invalidated_at", "invalidated_at"),
     )
 
 
@@ -187,6 +214,43 @@ class MemorySourceORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("ix_memory_sources_memory", "memory_id"),)
+
+
+class MemoryEmbeddingORM(Base):
+    """Separate vector table — one row per memory, pgvector ready (Phase B)."""
+
+    __tablename__ = "memory_embeddings"
+
+    id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("memories.id", ondelete="CASCADE"), primary_key=True
+    )
+    embedding: Mapped[str | None] = mapped_column(_VECTOR_1536, nullable=True)  # type: ignore[arg-type]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_memory_embeddings_id", "id"),)
+
+
+class MemoryAccessBindingORM(Base):
+    """ACL binding for memory — who can access a memory (Phase B §27.7/27.8)."""
+
+    __tablename__ = "memory_access_bindings"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    memory_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("memories.id", ondelete="CASCADE"), nullable=False
+    )
+    principal_type: Mapped[str] = mapped_column(Text, nullable=False)
+    principal_id: Mapped[str] = mapped_column(Text, nullable=False)
+    permission: Mapped[str] = mapped_column(Text, nullable=False, default="read")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_memory_access_bindings_memory", "memory_id"),
+        Index("ix_memory_access_bindings_principal", "principal_type", "principal_id"),
+        Index("ix_memory_access_bindings_tenant_principal", "tenant_id", "principal_type", "principal_id"),
+    )
 
 
 class AdminStateORM(Base):

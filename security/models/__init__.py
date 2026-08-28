@@ -10,6 +10,8 @@ from .orm import (
     VaultCredentialORM,
     MemoryORM,
     MemorySourceORM,
+    MemoryEmbeddingORM,
+    MemoryAccessBindingORM,
     AdminStateORM,
 )
 
@@ -26,5 +28,7 @@ __all__ = [
     "VaultCredentialORM",
     "MemoryORM",
     "MemorySourceORM",
+    "MemoryEmbeddingORM",
+    "MemoryAccessBindingORM",
     "AdminStateORM",
 ]

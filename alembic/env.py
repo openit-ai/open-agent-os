@@ -40,6 +40,8 @@ from security.models.orm import (  # noqa: F401,E402
     VaultCredentialORM,
     MemoryORM,
     MemorySourceORM,
+    MemoryEmbeddingORM,
+    MemoryAccessBindingORM,
     AdminStateORM,
     AdminUserORM,
     AdminInfraServiceORM,
