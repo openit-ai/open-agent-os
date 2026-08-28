@@ -92,10 +92,26 @@ def _validate_name(name: str) -> None:
 # Health probe logic
 # ---------------------------------------------------------------------------
 async def _probe_one(service: InfraService) -> InfraService:
-    url = f"http://{service.host}:{service.port}{service.health_path}"
+    # Normalize host that may contain scheme/path (e.g. https://chat.openit.co.kr/api)
+    raw_host = (service.host or "").strip()
+    scheme = "http"
+    host_clean = raw_host
+    if raw_host.startswith("https://"):
+        scheme = "https"
+        host_clean = raw_host[8:]
+    elif raw_host.startswith("http://"):
+        scheme = "http"
+        host_clean = raw_host[7:]
+    # strip any trailing path from host
+    if "/" in host_clean:
+        host_clean = host_clean.split("/")[0]
+    # port 443 implies https unless explicitly http
+    if service.port == 443 and scheme == "http":
+        scheme = "https"
+    url = f"{scheme}://{host_clean}:{service.port}{service.health_path}"
     start = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
             resp = await client.get(url)
             latency = (time.perf_counter() - start) * 1000
             service.latency_ms = round(latency, 2)
