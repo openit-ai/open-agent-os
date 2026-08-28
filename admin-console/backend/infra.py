@@ -264,13 +264,19 @@ def _resolve_name(data: dict) -> str:
     return n
 
 
+def _to_alias_dict(svc: InfraService) -> dict:
+    d = svc.model_dump(mode="json")
+    d["service"] = d.get("name")
+    return d
+
+
 @router.get("", response_model=dict)
 def list_services_alias(admin: AdminUser = Depends(get_current_admin)):
     items = list(_services.values())
-    return {"items": [s.model_dump(mode="json") for s in items]}
+    return {"items": [_to_alias_dict(s) for s in items]}
 
 
-@router.post("", response_model=InfraService, status_code=201)
+@router.post("", response_model=dict, status_code=201)
 def create_service_alias(req: InfraAliasCreate, admin: AdminUser = Depends(require_l5)):
     data = req.model_dump(exclude_unset=True)
     name = _resolve_name(data)
@@ -286,18 +292,18 @@ def create_service_alias(req: InfraAliasCreate, admin: AdminUser = Depends(requi
         expected_status=data.get("expected_status", 200),
     )
     _services[sid] = svc
-    return svc
+    return _to_alias_dict(svc)  # type: ignore[return-value]
 
 
-@router.get("/{service_id}", response_model=InfraService)
+@router.get("/{service_id}", response_model=dict)
 def get_service_alias(service_id: str, admin: AdminUser = Depends(get_current_admin)):
     svc = _services.get(service_id)
     if svc is None:
         raise HTTPException(status_code=404, detail="service not found")
-    return svc
+    return _to_alias_dict(svc)
 
 
-@router.patch("/{service_id}", response_model=InfraService)
+@router.patch("/{service_id}", response_model=dict)
 def patch_service_alias(service_id: str, req: InfraAliasUpdate, admin: AdminUser = Depends(require_l5)):
     svc = _services.get(service_id)
     if svc is None:
@@ -311,10 +317,18 @@ def patch_service_alias(service_id: str, req: InfraAliasUpdate, admin: AdminUser
     for k, v in data.items():
         setattr(svc, k, v)
     _services[service_id] = svc
-    return svc
+    return _to_alias_dict(svc)  # type: ignore[return-value]
 
 
-@router.post("/{service_id}/probe", response_model=InfraService)
+@router.delete("/{service_id}")
+def delete_service_alias(service_id: str, admin: AdminUser = Depends(require_l5)):
+    if service_id not in _services:
+        raise HTTPException(status_code=404, detail="service not found")
+    del _services[service_id]
+    return {"status": "deleted", "id": service_id}
+
+
+@router.post("/{service_id}/probe", response_model=dict)
 async def probe_one_alias(service_id: str, admin: AdminUser = Depends(get_current_admin)):
     svc = _services.get(service_id)
     if svc is None:
@@ -332,7 +346,7 @@ async def probe_one_alias(service_id: str, admin: AdminUser = Depends(get_curren
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     )
-    return updated
+    return _to_alias_dict(updated)
 
 
 @router.get("/audit/events")
