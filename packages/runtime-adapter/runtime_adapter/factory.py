@@ -39,7 +39,7 @@ def get_adapter(name: str | None = None, **kwargs) -> AgentRuntimeAdapter:
                 return HermesRuntimeAdapter(**kwargs) if kwargs else HermesRuntimeAdapter()
 
             ADAPTER_REGISTRY[key] = _hermes_factory
-        elif key == "safe":
+        elif key in ("safe", "llm"):
             from .safe_adapter import SafeRuntimeAdapter
 
             def _safe_factory() -> AgentRuntimeAdapter:
@@ -52,7 +52,7 @@ def get_adapter(name: str | None = None, **kwargs) -> AgentRuntimeAdapter:
 
     factory = ADAPTER_REGISTRY[key]
     # If caller passed kwargs and factory is the default hermes/safe one, re-invoke with kwargs
-    if kwargs and key in ("hermes", "safe"):
+    if kwargs and key in ("hermes", "safe", "llm"):
         if key == "hermes":
             from .hermes_adapter import HermesRuntimeAdapter
 
@@ -74,6 +74,7 @@ except Exception:  # pragma: no cover
 try:
     from .safe_adapter import SafeRuntimeAdapter as _Safe
 
+    ADAPTER_REGISTRY.setdefault("llm", lambda: _Safe())
     ADAPTER_REGISTRY.setdefault("safe", lambda: _Safe())
 except Exception:  # pragma: no cover
     pass

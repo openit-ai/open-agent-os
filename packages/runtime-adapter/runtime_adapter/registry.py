@@ -32,7 +32,8 @@ class RuntimeEntry:
 
 
 _DEFAULT_RUNTIMES: dict[str, dict[str, Any]] = {
-    "safe": {"installed": True, "enabled": True, "security_level": "standard", "description": "Safe Default (LLM+MCP)"},
+    "llm": {"installed": True, "enabled": True, "security_level": "standard", "description": "LLM Runtime (Standard / Controlled)"},
+    "safe": {"installed": True, "enabled": True, "security_level": "standard", "description": "Safe Default (LLM+MCP) — deprecated alias for llm"},
     "hermes": {"installed": True, "enabled": True, "security_level": "privileged", "description": "Advanced (Shell/Python)"},
 }
 
@@ -69,6 +70,14 @@ class RuntimeRegistry:
                 description=str(cfg.get("description", "")),
                 extra={k: v for k, v in cfg.items() if k not in ("installed", "enabled", "security_level", "description")},
             )
+        # v1.5 §16E.6: llm canonical, safe deprecated alias — unify with explicit-caller priority
+        caller_keys = {k.lower() for k in (runtimes or {}).keys()}
+        if "safe" in caller_keys and "llm" not in caller_keys:
+            # caller used deprecated safe key only → propagate to llm
+            self.runtimes["llm"] = self.runtimes["safe"]
+            self.runtimes["safe"] = self.runtimes["llm"]
+        elif "llm" in self.runtimes:
+            self.runtimes["safe"] = self.runtimes["llm"]
         if yaml_path is not None:
             self.load_yaml(yaml_path)
 
@@ -103,6 +112,9 @@ class RuntimeRegistry:
             if not isinstance(cfg, dict):
                 continue
             key = name.lower()
+            # alias: safe <-> llm (v1.5 rename, §16E.6)
+            if key == "safe":
+                key = "llm"
             if key not in self.runtimes:
                 self.runtimes[key] = RuntimeEntry(name=key)
             entry = self.runtimes[key]
@@ -114,6 +126,9 @@ class RuntimeRegistry:
                 entry.security_level = str(cfg["security_level"])
             if "description" in cfg:
                 entry.description = str(cfg["description"])
+        # keep deprecated safe alias in sync with llm
+        if "llm" in self.runtimes:
+            self.runtimes["safe"] = self.runtimes["llm"]
 
     def is_available(self, name: str) -> bool:
         """Available == installed and enabled."""

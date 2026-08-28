@@ -34,11 +34,15 @@ class RuntimeRouter:
         self.policy_engine = policy_engine
         self.capability_checker = capability_checker
 
+    def _normalize(self, runtime: str) -> str:
+        return "llm" if runtime.lower() == "safe" else runtime.lower()
+
     def _has_capability(self, user_id: str, runtime: str) -> bool:
         """Check EXECUTE runtime/<name> capability.
 
         Priority: injected checker > PolicyEngine > allow (JIT stub).
         """
+        runtime = self._normalize(runtime)
         resource = f"runtime/{runtime}"
         if self.capability_checker is not None:
             try:
@@ -91,7 +95,7 @@ class RuntimeRouter:
         wants_hermes = self._task_requires_hermes(task_type, required_capability)
 
         # Candidate order: if task needs hermes, prefer hermes; otherwise safe default
-        candidates = ["hermes", "safe"] if wants_hermes else ["safe", "hermes"]
+        candidates = ["hermes", "llm"] if wants_hermes else ["llm", "hermes"]
 
         last_deny_reason: str | None = None
 
@@ -107,7 +111,7 @@ class RuntimeRouter:
                 last_deny_reason = f"missing capability EXECUTE runtime/{runtime}"
                 continue
             # Step 4: Task suitability
-            if runtime == "safe" and wants_hermes:
+            if self._normalize(runtime) == "llm" and wants_hermes:
                 # safe cannot handle shell/python
                 continue
             # Step 5: Resource capability (extra gate if required_capability references runtime)

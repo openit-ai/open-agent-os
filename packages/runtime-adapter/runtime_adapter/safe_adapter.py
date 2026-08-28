@@ -232,5 +232,7 @@ class SafeRuntimeAdapter(AgentRuntimeAdapter):
         return {"status": "ok", "event": rt.to_dict()}
 
 
-# Alias required by spec
+# Aliases — v1.5 §16E.6: SafeRuntime is deprecated, LLM Runtime is canonical
 SafeRuntime = SafeRuntimeAdapter
+LLMRuntime = SafeRuntimeAdapter
+LLMRuntimeAdapter = SafeRuntimeAdapter
