@@ -1131,11 +1131,14 @@ runtime_mode: Literal["llm", "hermes", "hybrid"] = "llm"  # DB: tenant_settings.
   if (runtime_mode === "hermes") return <Alert>Hermes 모드에서는 LLM Multi-Provider 설정이 비활성입니다. 모델 라우팅은 Hermes Agent 내부에서 관리됩니다.</Alert>;
   // llm / hybrid(llm 경로) 에서만 Provider 테이블·Fallback 순서·secret 입력 렌더링
   ```
-  - API도 동일하게 가드: `GET /admin/llm-providers`가 `runtime_mode=hermes`이면 `409 Conflict {code:"HERMES_MODE_NOOP"}` 반환 또는 빈 목록 + 경고.
+  - API 가드(확정, 2026-08-29): `GET/POST/PUT/DELETE /admin/llm-providers*` 및 `/test`, `/toggle`이 `runtime_mode=hermes`이면 `409 Conflict {code:"HERMES_MODE_NOOP", "detail": "Provider settings disabled in hermes mode"}`를 반환한다 — 빈 목록이 아닌 명시적 409로, UI는 배너만 노출한다. DB 미가용 시에는 fail-open으로 우회한다.
   - 혼합 설치(`LLM + Hermes`) 환경에서도 테넌트가 `hermes`를 선택하면 UI는 자동으로 숨김 — 사용자가 혼동하여 이중 설정하지 않도록 한다.
 
 - **보안 노트 (Hermes 위임)**:
   - Hermes 모드에서 OAOS는 외부 LLM 키를 **직접 보유·호출하지 않는다** — 모든 LLM 호출은 Hermes Agent의 내부 credential 관리에 위임한다. OAOS Vault의 `llm_provider_config.secret_ref`는 LLM 모드에서만 사용된다.
+  - **Provider fail-fast (2026-08-29)**: `OAOS_ENV=production`에서 API 키가 없거나 호출이 실패하면 mock fallback 없이 `503 ProviderUnavailable`로 즉시 실패한다 — `OAOS_MOCK_FALLBACK=1`로만 명시적으로 재활성화된다. `push_mock_response()`로 주입된 테스트 mock은 예외이다.
+  - **runtime_mode 영속화 (2026-08-29)**: `admin_settings(runtime_mode)`가 진실의 원천이며 `runtime_mode.py`가 `DB → env → in-memory` 순으로 해석한다 — 8010/3012 멀티 인스턴스에서도 일치한다.
+  - **opencode alias (2026-08-29)**: `opencode`는 `opencode_go`의 re-export이며 `__getattr__`로 `shutil.which` 등 하위 속성을 위임한다 — 하위 호환을 유지하면서 699줄 중복을 제거했다.
   - Hermes 위임 시에도 §16A Zero-Bypass(ACP→Hermes→MCP) 및 Hermes Untrusted Worker(§16G) 경계는 유지된다. Hermes 내부 모델 라우팅 정책은 Hermes 설정으로 감사하되, OAOS 감사 로그에는 `runtime_mode=hermes, provider=hermes-delegated`로 기록한다.
   - LLM 모드 ↔ Hermes 모드 전환은 `Super Admin`만 가능하며 `RUNTIME_MODE_CHANGED`로 hash-chain 감사한다. 전환 시 기존 `secret_ref`는 유지되나 비활성 상태로 보관(재전환 시 재사용 가능).
 
@@ -4714,14 +4717,14 @@ Audit
 | v1.6 | 2026-08-28 이전 | Runtime/Security/Persistence 확정 (LLM/Hermes dual, openagentos + pgvector, Admin UI 등) |
 | **v1.6.1** | **2026-08-28** | **§27B Personal Wiki (Vault) 추가** — Vault 레이아웃(`/var/lib/oaos/vault/{tenant}/{agent:assistant:xxx}/{journal,notes,projects,files,attachments}`), 첨부 추출(pdf/docx/xlsx/pptx/image OCR → journal md + pgvector 1536), Tool 결과 자동 아카이빙(Execution Gateway every tool call → journal append with trace_id, Zero-Bypass), Obsidian/.md bulk import, 검색(memory_service pgvector + TF-IDF fallback), Owner isolation + Capability+Approval cross-agent, Consolidation daily scheduler via Hermes (02:00 KST) |
 | **v1.6.2** | **2026-08-28** | **§16.1.1 LLM Runtime Enhancements (pydantic-ai inspired)** — OAOSContext deps injection, output_type Pydantic BaseModel 검증, ToolOutputLimits 4000자 절삭, model string swap (`openai:gpt-4o` ↔ `ollama:llama3` 등), clean-room 재구현(MIT 코드 미복사) |
-| **v1.6.3** | **2026-08-28** | **§16.1.2 LLM Multi-Provider (5 Providers + Registry + Fallback)** — 5 Providers(claude/codex/gemini/opencode/ollama) Registry(Argo runners.mjs 패턴 ProviderSpec), Admin UI(llm_provider_config + Vault secret_ref, fallback_order), Runtime Dispatch(task/session/tenant 우선순위), Fallback(chain+circuit breaker+audit), Vault-only secrets(평문 DB 저장 금지, tenant 격리) |
+| **v1.6.3** | **2026-08-28** | **§16.1.2 LLM Multi-Provider (6 Providers + Registry + Fallback + Hotfixes)** — 6 Providers(claude/codex/gemini/opencode-go/openrouter/ollama) Registry(Argo runners.mjs 패턴 ProviderSpec), Admin UI(llm_provider_config + Vault secret_ref, fallback_order), Runtime Dispatch(task/session/tenant 우선순위), Fallback(chain+circuit breaker+audit), Vault-only secrets(평문 DB 저장 금지, tenant 격리), **Hotfixes (2026-08-29)**: llm_runtime 7-key Registry + opencode alias(re-export), Provider fail-fast(503/mock 차단), runtime_mode DB 영속화(8010/3012 일치), hermes 409 guard(HERMES_MODE_NOOP), openrouter openai-SDK+httpx 이중 경로+tool_choice |
 
 # Table of Contents (v1.6.3)
 
 - §27 Persistent Memory & Database Architecture
 - **§27B Personal Wiki (Vault) — v1.6.1 신규** (27B.1 Vault 레이아웃, 27B.2 추출 파이프라인, 27B.3 Tool 자동 아카이빙, 27B.4 Obsidian Import, 27B.5 검색, 27B.6 권한, 27B.7 Consolidation)
 - **§16.1.1 LLM Runtime Enhancements (pydantic-ai inspired) — v1.6.2 신규** (OAOSContext, output_type BaseModel, ToolOutputLimits 4000, model string swap, clean-room)
-- **§16.1.2 LLM Multi-Provider — v1.6.3 신규** (5 Providers claude/codex/gemini/opencode/ollama, Registry runners.mjs 패턴, Admin UI llm_provider_config+Vault, Dispatch task/session/tenant, Fallback chain+circuit breaker, Vault-only secrets)
+- **§16.1.2 LLM Multi-Provider — v1.6.3 신규** (6 Providers claude/codex/gemini/opencode-go/openrouter/ollama, Registry runners.mjs 패턴, Admin UI llm_provider_config+Vault, Dispatch task/session/tenant, Fallback chain+circuit breaker, Vault-only secrets)
 - §28 Knowledge Access 이후 동일
 
 ---
