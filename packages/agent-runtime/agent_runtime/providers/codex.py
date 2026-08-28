@@ -7,6 +7,19 @@ import uuid
 import json
 from typing import Any
 
+
+def _is_mock_allowed() -> bool:
+    import os as _os
+    mf = _os.getenv("OAOS_MOCK_FALLBACK", "").lower()
+    if mf in ("1", "true", "yes", "on"):
+        return True
+    if mf in ("0", "false", "no", "off"):
+        return False
+    if _os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):
+        return False
+    return True
+
+
 def _mock(model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
     last = ""
     for m in reversed(messages):
@@ -35,8 +48,12 @@ class CodexProvider:
         try:
             import openai  # type: ignore
         except ImportError:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: codex — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)
         if not self.api_key:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: codex — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)
         try:
             client_kwargs: dict[str, Any] = {"api_key": self.api_key}
@@ -62,6 +79,8 @@ class CodexProvider:
                     data = {"choices": [{"message": {"role": "assistant", "content": str(resp)}, "finish_reason": "stop"}], "model": resolved, "id": f"codex-{uuid.uuid4().hex[:8]}"}
             # Normalize to our shape if needed
             if "choices" not in data:
+                if not _is_mock_allowed():
+                    raise RuntimeError("LLM provider unavailable: codex — mock fallback disabled in production")
                 data = _mock(resolved, messages, tools=tools)
             # Ensure required fields
             data.setdefault("object", "chat.completion")
@@ -69,4 +88,6 @@ class CodexProvider:
             data.setdefault("model", resolved)
             return data  # type: ignore
         except Exception:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: codex — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)

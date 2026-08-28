@@ -452,6 +452,17 @@ def _load_litellm() -> Any | None:
         return None
 
 
+def _is_mock_allowed() -> bool:
+    mf = os.getenv("OAOS_MOCK_FALLBACK", "").lower()
+    if mf in ("1", "true", "yes", "on"):
+        return True
+    if mf in ("0", "false", "no", "off"):
+        return False
+    if os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):
+        return False
+    return True
+
+
 def _mock_completion_response(model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
     last_user = ""
     for m in reversed(messages):
@@ -916,9 +927,12 @@ class LLMProviderAdapter:
                                 return data
                     except Exception:
                         continue
-                # If all fail, mock fallback (so hermes mock tests pass)
+                if not _is_mock_allowed():
+                    raise RuntimeError("LLM provider unavailable — mock fallback disabled in production (OAOS_ENV=production or OAOS_MOCK_FALLBACK=0)")
                 return _mock_completion_response(resolved, messages, **kwargs)
         except Exception:
+            if not _is_mock_allowed():
+                raise
             return _mock_completion_response(resolved, messages, **kwargs)
 
     async def _raw_completion(
@@ -1004,6 +1018,8 @@ class LLMProviderAdapter:
         async def _do() -> dict[str, Any]:
             if self._mock_responses or _load_litellm() is None:
                 if self._mock_index < len(self._mock_responses) or _load_litellm() is None:
+                    if not _is_mock_allowed() and not self._mock_responses:
+                        raise RuntimeError("LLM provider unavailable — mock fallback disabled in production (no litellm, no mock_responses)")
                     return self._next_mock(resolved, messages, tools)
             lm = _load_litellm()
             if lm is None:

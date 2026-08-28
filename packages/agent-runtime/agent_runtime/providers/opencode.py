@@ -24,6 +24,19 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
+
+def _is_mock_allowed() -> bool:
+    import os as _os
+    mf = _os.getenv("OAOS_MOCK_FALLBACK", "").lower()
+    if mf in ("1", "true", "yes", "on"):
+        return True
+    if mf in ("0", "false", "no", "off"):
+        return False
+    if _os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Mock
 # ---------------------------------------------------------------------------
@@ -593,6 +606,8 @@ class OpenCodeProvider:
             pass
 
         # 3. Mock
+        if not _is_mock_allowed():
+            raise RuntimeError("LLM provider unavailable: opencode — mock fallback disabled in production")
         return _mock(resolved, messages, tools=tools)
 
     async def stream(
@@ -648,6 +663,8 @@ class OpenCodeProvider:
                             yield {"id": http_result.get("id", f"opencode-{uuid.uuid4().hex[:8]}"), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {"tool_calls": tcs}, "finish_reason": None}]}
                             yield {"id": http_result.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
                             return
+                        if not _is_mock_allowed():
+                            raise RuntimeError("LLM provider unavailable: opencode — mock stream disabled in production")
                         for ch in _mock_stream_chunks(resolved, content or "mock stream"):
                             yield ch
                         return
@@ -663,6 +680,8 @@ class OpenCodeProvider:
                 bin_result = await self._call_via_binary(messages, resolved, tools=tools, timeout_s=timeout_s)
                 if bin_result is not None:
                     content = str(bin_result.get("choices", [{}])[0].get("message", {}).get("content", "") or "")
+                    if not _is_mock_allowed():
+                        raise RuntimeError("LLM provider unavailable: opencode — mock stream disabled in production")
                     for ch in _mock_stream_chunks(resolved, content):
                         yield ch
                     return
@@ -672,6 +691,8 @@ class OpenCodeProvider:
         # Fallback mock streaming
         mock = _mock(resolved, messages, tools=tools)
         content = str(mock["choices"][0]["message"]["content"])
+        if not _is_mock_allowed():
+            raise RuntimeError("LLM provider unavailable: opencode — mock stream disabled in production")
         for ch in _mock_stream_chunks(resolved, content):
             yield ch
             await asyncio.sleep(0)

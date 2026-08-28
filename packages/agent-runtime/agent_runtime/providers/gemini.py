@@ -6,6 +6,19 @@ import time
 import uuid
 from typing import Any
 
+
+def _is_mock_allowed() -> bool:
+    import os as _os
+    mf = _os.getenv("OAOS_MOCK_FALLBACK", "").lower()
+    if mf in ("1", "true", "yes", "on"):
+        return True
+    if mf in ("0", "false", "no", "off"):
+        return False
+    if _os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):
+        return False
+    return True
+
+
 def _mock(model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
     last = ""
     for m in reversed(messages):
@@ -32,6 +45,8 @@ class GeminiProvider:
     async def call(self, messages: list[dict[str, Any]], model: str | None = None, tools: list[dict[str, Any]] | None = None, **kwargs: Any) -> dict[str, Any]:
         resolved = model or self.default_model
         if not self.api_key:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: gemini — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)
         # Try google.genai (new SDK)
         try:
@@ -84,6 +99,8 @@ class GeminiProvider:
                     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                 }
             except Exception:
+                if not _is_mock_allowed():
+                    raise RuntimeError("LLM provider unavailable: gemini — mock fallback disabled in production")
                 return _mock(resolved, messages, tools=tools)
         except ImportError:
             pass
@@ -115,6 +132,10 @@ class GeminiProvider:
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             }
         except ImportError:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: gemini — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)
         except Exception:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: gemini — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)

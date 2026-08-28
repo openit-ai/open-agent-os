@@ -230,3 +230,49 @@ async def test_structured_tool_loop_still_works_with_ollama_provider():
     assert result["steps"] >= 1
     assert result["terminated"] in ("done", "max_steps")
     assert len(result["messages"]) >= 3  # user + assistant+tool + final
+
+# ── P1: mock fallback disabled in production ─────────────────────
+def test_mock_blocked_in_production():
+    """OAOS_ENV=production must block mock fallback — provider call raises without key."""
+    import os
+    from agent_runtime.providers.openrouter import OpenRouterProvider
+    os.environ["OAOS_ENV"] = "production"
+    os.environ.pop("OAOS_MOCK_FALLBACK", None)
+    try:
+        prov = OpenRouterProvider(api_key="", base_url="https://openrouter.ai/api/v1", model="openrouter/auto")
+        import asyncio
+        try:
+            asyncio.run(prov.call([{"role": "user", "content": "hi"}]))
+            assert False, "should have raised RuntimeError in production without key"
+        except RuntimeError as e:
+            assert "mock fallback disabled" in str(e)
+    finally:
+        os.environ.pop("OAOS_ENV", None)
+
+def test_mock_allowed_with_explicit_flag_in_production():
+    """OAOS_MOCK_FALLBACK=1 overrides production block."""
+    import os, asyncio
+    from agent_runtime.providers.openrouter import OpenRouterProvider
+    os.environ["OAOS_ENV"] = "production"
+    os.environ["OAOS_MOCK_FALLBACK"] = "1"
+    try:
+        prov = OpenRouterProvider(api_key="", base_url="https://openrouter.ai/api/v1", model="openrouter/auto")
+        result = asyncio.run(prov.call([{"role": "user", "content": "hi prod override"}]))
+        assert "mock:openrouter" in result["choices"][0]["message"]["content"]
+    finally:
+        os.environ.pop("OAOS_ENV", None)
+        os.environ.pop("OAOS_MOCK_FALLBACK", None)
+
+@pytest.mark.asyncio
+async def test_push_mock_still_works_in_production():
+    """Explicit push_mock_response must still work even in production."""
+    import os
+    os.environ["OAOS_ENV"] = "production"
+    try:
+        adapter = LLMProviderAdapter(provider="ollama", model="llama3", timeout_s=5.0, max_retries=0)
+        adapter.push_mock_response({"id": "m1", "object": "chat.completion", "model": "llama3", "choices": [{"index": 0, "message": {"role": "assistant", "content": "explicit mock ok", "tool_calls": []}, "finish_reason": "stop"}]})
+        result = await adapter.completion([{"role": "user", "content": "hi"}])
+        assert "explicit mock ok" in result["choices"][0]["message"]["content"]
+    finally:
+        os.environ.pop("OAOS_ENV", None)
+

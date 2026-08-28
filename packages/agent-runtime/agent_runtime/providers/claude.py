@@ -6,6 +6,19 @@ import time
 import uuid
 from typing import Any
 
+
+def _is_mock_allowed() -> bool:
+    import os as _os
+    mf = _os.getenv("OAOS_MOCK_FALLBACK", "").lower()
+    if mf in ("1", "true", "yes", "on"):
+        return True
+    if mf in ("0", "false", "no", "off"):
+        return False
+    if _os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):
+        return False
+    return True
+
+
 def _mock(model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
     last = ""
     for m in reversed(messages):
@@ -35,8 +48,12 @@ class ClaudeProvider:
         try:
             import anthropic  # type: ignore
         except ImportError:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: claude — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)
         if not self.api_key:
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: claude — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)
         # Translate messages: anthropic expects system separate
         system_parts: list[str] = []
@@ -103,7 +120,11 @@ class ClaudeProvider:
                     "usage": {"prompt_tokens": getattr(getattr(resp, "usage", None), "input_tokens", 0) if hasattr(resp, "usage") else 0, "completion_tokens": getattr(getattr(resp, "usage", None), "output_tokens", 0) if hasattr(resp, "usage") else 0, "total_tokens": 0},
                 }
             else:
+                if not _is_mock_allowed():
+                    raise RuntimeError("LLM provider unavailable: claude — mock fallback disabled in production")
                 return _mock(resolved, messages, tools=tools)
         except Exception:
             # On any API error, fallback to mock for offline/tests
+            if not _is_mock_allowed():
+                raise RuntimeError("LLM provider unavailable: claude — mock fallback disabled in production")
             return _mock(resolved, messages, tools=tools)
