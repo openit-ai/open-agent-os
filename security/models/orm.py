@@ -398,6 +398,31 @@ class AdminLLMQuotaORM(Base):
     extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
 
 
+class AdminLlmUsageORM(Base):
+    """Tenant LLM usage — cost/latency/token tracking (v1.6.4 §16.4.1)."""
+
+    __tablename__ = "admin_llm_usage"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="success")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_admin_llm_usage_tenant", "tenant_id"),
+        Index("ix_admin_llm_usage_created", "created_at"),
+        Index("ix_admin_llm_usage_tenant_created", "tenant_id", "created_at"),
+    )
+
+
 class AdminSettingORM(Base):
     """Generic admin settings key/value — used for runtime_mode (hermes vs llm)."""
 

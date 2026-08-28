@@ -863,16 +863,25 @@ def delete_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
 @router.post("/providers/{provider_id}/test")
 def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends(require_l5)):
     _check_hermes_mode_guard()
-    # --- quota guard (fail-open) ---
     tenant_id = request.headers.get("X-Tenant-Id") or request.headers.get("x-tenant-id") or request.query_params.get("tenant_id") or "default"
     try:
         _check_quota_or_raise(tenant_id)
-    except HTTPException:
+    except HTTPException as he:
+        # record quota-exceeded as failed usage then re-raise (fail-open: record best-effort)
+        try:
+            _admin_record_usage(tenant_id=tenant_id, provider="unknown", model="", prompt_tokens=0, completion_tokens=0, latency_ms=0, status="failed", error="quota exceeded")
+        except Exception:
+            pass
         raise
     except Exception:
         pass
     p = _get_one_provider(provider_id)
     if not p:
+        # record failed usage
+        try:
+            _admin_record_usage(tenant_id=tenant_id, provider="unknown", model="", prompt_tokens=0, completion_tokens=0, latency_ms=0, status="failed", error="provider not found")
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="provider not found")
     start = time.perf_counter()
     time.sleep(0.05)
@@ -893,8 +902,17 @@ def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends
     p.last_test_latency_ms = latency
     p.updated_at = datetime.now(timezone.utc)
     _providers[provider_id] = p
-    # persist to DB
     _db_persist_test_result(p)
+    # --- usage tracking (success/fail both) ---
+    try:
+        # token/cost estimation: test call has no real usage -> 0, cost from model pricing if known
+        model = p.model or ""
+        prov_str = str(p.provider.value) if hasattr(p.provider, "value") else str(p.provider)
+        pt, ct = 0, 0
+        cost = _admin_estimate_cost(pt, ct, model)
+        _admin_record_usage(tenant_id=tenant_id, provider=prov_str, model=model, prompt_tokens=pt, completion_tokens=ct, latency_ms=latency, status="success" if ok else "failed", error=None if ok else reason)
+    except Exception:
+        pass
     return {"status": "ok" if ok else "failed", "latency_ms": latency, "detail": reason, "provider_id": provider_id}
 
 
@@ -1041,6 +1059,211 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                     s.commit()
     except Exception:
         pass
+
+# ---------------------------------------------------------------------------
+# LLM usage tracking (011) — in-memory + DB persist (AdminLlmUsageORM)
+# ---------------------------------------------------------------------------
+import math as _usage_math
+from collections import deque as _usage_deque
+
+_USAGE_PRICING: dict[str, tuple[float, float]] = {
+    "gpt-4o": (0.0025, 0.01),
+    "gpt-4o-mini": (0.00015, 0.0006),
+    "claude-3-5-sonnet": (0.003, 0.015),
+    "gemini-1.5-pro": (0.00125, 0.005),
+    "default": (0.001, 0.002),
+}
+
+def _admin_estimate_cost(prompt_tokens: int, completion_tokens: int, model: str) -> float:
+    key = (model or "default").lower()
+    pricing = None
+    for k, v in _USAGE_PRICING.items():
+        if k in key:
+            pricing = v
+            break
+    if pricing is None:
+        pricing = _USAGE_PRICING["default"]
+    return round(prompt_tokens / 1000 * pricing[0] + completion_tokens / 1000 * pricing[1], 6)
+
+_admin_usage_records: "_usage_deque[dict]" = _usage_deque(maxlen=10000)
+
+def _admin_ensure_usage_table(engine) -> None:
+    try:
+        from security.models.orm import AdminLlmUsageORM  # noqa
+        from security.models.db import Base
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass
+    try:
+        from sqlalchemy import text
+        ddl = """CREATE TABLE IF NOT EXISTS admin_llm_usage (
+            id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, provider TEXT NOT NULL,
+            model TEXT NOT NULL, prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd FLOAT NOT NULL DEFAULT 0, latency_ms FLOAT NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'success', error TEXT,
+            created_at TEXT NOT NULL)"""
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_admin_llm_usage_tenant_id ON admin_llm_usage(tenant_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_admin_llm_usage_created_at ON admin_llm_usage(created_at)"))
+    except Exception:
+        pass
+
+def _admin_db_insert_usage(rec: dict) -> None:
+    if not _is_db_enabled():
+        return
+    try:
+        factory = _get_session_factory()
+        if factory is None:
+            return
+        try:
+            eng = factory.bind if hasattr(factory, "bind") else _db_engine
+            if eng is not None:
+                _admin_ensure_usage_table(eng)
+        except Exception:
+            pass
+        from security.models.orm import AdminLlmUsageORM
+        with factory() as s:
+            row = AdminLlmUsageORM(
+                id=rec["id"], tenant_id=rec["tenant_id"], provider=rec["provider"], model=rec["model"],
+                prompt_tokens=rec["prompt_tokens"], completion_tokens=rec["completion_tokens"],
+                total_tokens=rec["total_tokens"], cost_usd=rec["cost_usd"], latency_ms=rec["latency_ms"],
+                status=rec["status"], error=rec.get("error"), created_at=rec["created_at"],
+            )
+            s.add(row)
+            s.commit()
+    except Exception:
+        pass
+
+def _admin_record_usage(*, tenant_id: str, provider: str, model: str, prompt_tokens: int, completion_tokens: int, latency_ms: float, status: str, error: str | None = None) -> dict:
+    tid = (tenant_id or "default").strip() or "default"
+    now = datetime.now(timezone.utc)
+    total = int(prompt_tokens or 0) + int(completion_tokens or 0)
+    cost = _admin_estimate_cost(int(prompt_tokens or 0), int(completion_tokens or 0), model or "")
+    rec = {
+        "id": f"usage_{uuid.uuid4().hex[:12]}",
+        "tenant_id": tid, "provider": provider or "unknown", "model": model or "",
+        "prompt_tokens": int(prompt_tokens or 0), "completion_tokens": int(completion_tokens or 0),
+        "total_tokens": total, "cost_usd": cost, "latency_ms": float(latency_ms or 0),
+        "status": status or "success", "error": error, "created_at": now,
+    }
+    _admin_usage_records.append(rec)
+    try:
+        _admin_db_insert_usage(rec)
+    except Exception:
+        pass
+    return rec
+
+def _admin_clear_usage() -> None:
+    _admin_usage_records.clear()
+    if _is_db_enabled():
+        try:
+            factory = _get_session_factory()
+            if factory is not None:
+                from security.models.orm import AdminLlmUsageORM
+                with factory() as s:
+                    s.query(AdminLlmUsageORM).delete()
+                    s.commit()
+        except Exception:
+            pass
+
+def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[dict]:
+    items: list[dict] = []
+    # try DB first if enabled, else in-memory; merge: prefer DB for persistence
+    if _is_db_enabled():
+        try:
+            factory = _get_session_factory()
+            if factory is not None:
+                from security.models.orm import AdminLlmUsageORM
+                with factory() as s:
+                    q = s.query(AdminLlmUsageORM).order_by(AdminLlmUsageORM.created_at.desc())
+                    if tenant_id:
+                        q = q.filter(AdminLlmUsageORM.tenant_id == tenant_id)
+                    q = q.limit(max(1, min(100, limit)))
+                    for r in q.all():
+                        items.append({"id": r.id, "tenant_id": r.tenant_id, "provider": r.provider, "model": r.model, "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens, "total_tokens": r.total_tokens, "cost_usd": r.cost_usd, "latency_ms": r.latency_ms, "status": r.status, "error": r.error, "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at)})
+                    if items:
+                        return items
+        except Exception:
+            pass
+    # fallback in-memory
+    recs = list(_admin_usage_records)
+    if tenant_id:
+        recs = [r for r in recs if r["tenant_id"] == tenant_id]
+    recs = sorted(recs, key=lambda x: x["created_at"], reverse=True)[: max(1, min(100, limit))]
+    for r in recs:
+        c = dict(r)
+        if hasattr(c["created_at"], "isoformat"):
+            c["created_at"] = c["created_at"].isoformat()
+        items.append(c)
+    return items
+
+def _admin_usage_summary(tenant_id: str | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    # collect records from DB if available, else in-memory
+    recs: list[dict] = []
+    if _is_db_enabled():
+        try:
+            factory = _get_session_factory()
+            if factory is not None:
+                from security.models.orm import AdminLlmUsageORM
+                with factory() as s:
+                    q = s.query(AdminLlmUsageORM)
+                    if tenant_id:
+                        q = q.filter(AdminLlmUsageORM.tenant_id == tenant_id)
+                    for r in q.all():
+                        recs.append({"tenant_id": r.tenant_id, "cost_usd": r.cost_usd or 0, "latency_ms": r.latency_ms or 0, "status": r.status, "created_at": r.created_at, "total_tokens": r.total_tokens or 0, "prompt_tokens": r.prompt_tokens or 0, "completion_tokens": r.completion_tokens or 0})
+                if recs:
+                    pass
+                else:
+                    recs = [dict(r) for r in _admin_usage_records if (not tenant_id or r["tenant_id"] == tenant_id)]
+        except Exception:
+            recs = [dict(r) for r in _admin_usage_records if (not tenant_id or r["tenant_id"] == tenant_id)]
+    else:
+        recs = [dict(r) for r in _admin_usage_records if (not tenant_id or r["tenant_id"] == tenant_id)]
+    total = len(recs)
+    success = sum(1 for r in recs if r["status"] == "success")
+    failed = total - success
+    total_cost = round(sum(float(r.get("cost_usd") or 0) for r in recs), 6)
+    total_tokens = sum(int(r.get("total_tokens") or 0) for r in recs)
+    latencies = sorted([float(r.get("latency_ms") or 0) for r in recs])
+    avg_lat = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
+    p95 = 0.0
+    if latencies:
+        idx = _usage_math.ceil(0.95 * len(latencies)) - 1
+        idx = max(0, min(idx, len(latencies) - 1))
+        p95 = float(latencies[idx])
+    # daily = today UTC, per_minute = last 60s
+    daily = 0
+    per_min = 0
+    for r in recs:
+        ca = r.get("created_at")
+        if isinstance(ca, str):
+            try:
+                ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
+            except Exception:
+                continue
+        if ca is None:
+            continue
+        if ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
+        if ca.date() == now.date():
+            daily += 1
+        if (now - ca).total_seconds() <= 60:
+            per_min += 1
+    return {"tenant_id": tenant_id or "all", "total_requests": total, "success_count": success, "failed_count": failed, "total_cost_usd": total_cost, "total_tokens": total_tokens, "avg_latency_ms": avg_lat, "p95_latency_ms": round(p95, 2), "daily_count": daily, "per_minute_count": per_min, "window": "all-time"}
+
+@router.get("/usage/summary")
+def usage_summary(tenant_id: str | None = None, admin: AdminUser = Depends(get_current_admin)):
+    return _admin_usage_summary(tenant_id=tenant_id)
+
+@router.get("/usage/history")
+def usage_history(limit: int = 20, tenant_id: str | None = None, admin: AdminUser = Depends(get_current_admin)):
+    return {"items": _admin_usage_history(limit=limit, tenant_id=tenant_id), "count": len(_admin_usage_history(limit=limit, tenant_id=tenant_id))}
+
+def clear_usage() -> None:
+    _admin_clear_usage()
 
 # ---------------------------------------------------------------------------
 # Helpers for testing / inspection

@@ -513,6 +513,133 @@ export function toggleLLMProvider(id: string): Promise<LLMProvider> {
   return apiFetch<LLMProvider>(`/v1/llm/providers/${id}/toggle`, { method: "POST" });
 }
 
+// ---- LLM Usage (cost / latency dashboard) ----
+export interface LLMUsageSummary {
+  daily_tokens: number;
+  daily_quota: number;
+  daily_usage_ratio: number; // 0..1
+  per_minute_tokens: number;
+  per_minute_limit?: number;
+  total_cost_usd: number;
+  avg_latency_ms: number;
+  p50_latency_ms?: number;
+  p95_latency_ms: number;
+  p99_latency_ms?: number;
+  total_requests: number;
+  success_rate: number; // 0..1
+  /** hourly timeseries for sparkline/bar (last 24h) */
+  hourly_tokens?: number[];
+  hourly_cost?: number[];
+  hourly_latency?: number[];
+  updated_at: string;
+}
+
+export interface LLMUsageHistoryItem {
+  id: string;
+  timestamp: string;
+  tenant: string;
+  provider: string;
+  model: string;
+  latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  status: "success" | "error" | "timeout" | string;
+}
+
+export interface LLMUsageHistoryResponse {
+  items: LLMUsageHistoryItem[];
+  count: number;
+  total: number;
+  page?: number;
+  page_size?: number;
+}
+
+export interface LLMUsageHistoryParams {
+  limit?: number;
+  offset?: number;
+  tenant?: string;
+  provider?: string;
+  status?: string;
+}
+
+// mock data fallback — keeps build green when backend not yet deployed
+function mockUsageSummary(): LLMUsageSummary {
+  const hourly_tokens = [320, 480, 610, 540, 720, 890, 1100, 950, 1020, 1300, 1450, 1200, 980, 860, 1100, 1350, 1500, 1420, 1180, 900, 650, 480, 390, 300];
+  const hourly_cost = hourly_tokens.map((t) => +(t * 0.000002 * (0.9 + Math.random() * 0.2)).toFixed(4));
+  const hourly_latency = [180, 210, 195, 220, 240, 260, 310, 280, 250, 270, 320, 290, 230, 210, 250, 280, 330, 300, 260, 220, 190, 175, 165, 170];
+  return {
+    daily_tokens: 18420,
+    daily_quota: 50000,
+    daily_usage_ratio: 0.368,
+    per_minute_tokens: 420,
+    per_minute_limit: 2000,
+    total_cost_usd: 1.84,
+    avg_latency_ms: 238,
+    p50_latency_ms: 210,
+    p95_latency_ms: 412,
+    p99_latency_ms: 580,
+    total_requests: 312,
+    success_rate: 0.973,
+    hourly_tokens,
+    hourly_cost,
+    hourly_latency,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function mockUsageHistory(limit = 20): LLMUsageHistoryResponse {
+  const providers = ["claude", "openrouter", "gemini", "ollama", "opencode-go"] as const;
+  const models = ["claude-3-5-sonnet", "gpt-4o-mini", "gemini-1.5-pro", "llama3.1:8b", "qwen2.5-coder"];
+  const tenants = ["default", "acme", "openit", "demo"];
+  const statuses: LLMUsageHistoryItem["status"][] = ["success", "success", "success", "success", "error", "timeout"];
+  const now = Date.now();
+  const items: LLMUsageHistoryItem[] = Array.from({ length: limit }, (_, i) => {
+    const p = providers[i % providers.length];
+    return {
+      id: `mock-${String(i + 1).padStart(4, "0")}`,
+      timestamp: new Date(now - i * 1000 * 60 * 7 - Math.random() * 60000).toISOString(),
+      tenant: tenants[i % tenants.length],
+      provider: p,
+      model: models[i % models.length],
+      latency_ms: Math.round(120 + Math.random() * 480),
+      prompt_tokens: Math.round(80 + Math.random() * 900),
+      completion_tokens: Math.round(40 + Math.random() * 600),
+      total_tokens: 0,
+      cost_usd: 0,
+      status: statuses[i % statuses.length],
+    };
+  }).map((it) => ({ ...it, total_tokens: it.prompt_tokens + it.completion_tokens, cost_usd: +(it.total_tokens * 0.000002).toFixed(5) }));
+  return { items, count: items.length, total: 312, page: 1, page_size: limit };
+}
+
+async function fetchWithMock<T>(path: string, mock: () => T): Promise<T> {
+  try {
+    return await apiFetch<T>(path);
+  } catch {
+    return mock();
+  }
+}
+
+export function getLLMUsageSummary(): Promise<LLMUsageSummary> {
+  return fetchWithMock<LLMUsageSummary>("/v1/llm/usage/summary", mockUsageSummary);
+}
+
+export function getLLMUsageHistory(params: LLMUsageHistoryParams = {}): Promise<LLMUsageHistoryResponse> {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.offset) qs.set("offset", String(params.offset));
+  if (params.tenant) qs.set("tenant", params.tenant);
+  if (params.provider) qs.set("provider", params.provider);
+  if (params.status) qs.set("status", params.status);
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return fetchWithMock<LLMUsageHistoryResponse>(`/v1/llm/usage/history${suffix}`, () => mockUsageHistory(params.limit ?? 20));
+}
+
+// expose mocks for UI fallback / storybook
+export const __mocks = { mockUsageSummary, mockUsageHistory };
+
 // ---- Runtime mode ----
 export type RuntimeMode = "hermes" | "llm";
 export interface RuntimeModeResponse {

@@ -463,6 +463,310 @@ def _llm_quota_clear():
     _llm_quota_store.clear(); _llm_quota_window_counts.clear()
 
 # ---------------------------------------------------------------------------
+# LLM usage tracking (011) — latency/token/cost, tenant_id aggregated
+# in-memory + DB persist (AdminLlmUsageORM), fail-open, 429 연동
+# ---------------------------------------------------------------------------
+import collections
+from datetime import datetime, timezone as _tz
+
+# pricing per 1k tokens (USD): prompt vs completion
+_MODEL_PRICING: dict[str, dict[str, float]] = {
+    "gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
+    "gpt-4o": {"prompt": 0.0025, "completion": 0.01},
+    "claude-3-5-sonnet": {"prompt": 0.003, "completion": 0.015},
+    "claude": {"prompt": 0.003, "completion": 0.015},
+    "gemini": {"prompt": 0.0005, "completion": 0.0015},
+    "default": {"prompt": 0.001, "completion": 0.002},
+}
+
+def _estimate_cost_usd(prompt_tokens: int, completion_tokens: int, model: str | None = None) -> float:
+    key = (model or "default").lower()
+    # try exact then prefix match
+    pricing = _MODEL_PRICING.get(key)
+    if pricing is None:
+        # prefix search
+        for k, v in _MODEL_PRICING.items():
+            if k in key or key in k:
+                pricing = v
+                break
+        if pricing is None:
+            pricing = _MODEL_PRICING["default"]
+    return round((prompt_tokens / 1000.0) * pricing["prompt"] + (completion_tokens / 1000.0) * pricing["completion"], 6)
+
+_llm_usage_records: collections.deque = collections.deque(maxlen=10000)
+
+def _usage_db_url() -> str | None:
+    url = os.getenv("OAOS_DATABASE_URL") or os.getenv("DATABASE_URL") or ""
+    return url.strip() or None
+
+def _usage_ensure_table(engine) -> None:
+    try:
+        from security.models.orm import AdminLlmUsageORM  # type: ignore
+        from security.models.db import Base  # type: ignore
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass
+    try:
+        from sqlalchemy import text as _t
+        ddl = """CREATE TABLE IF NOT EXISTS admin_llm_usage (
+            id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, provider TEXT, model TEXT,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens INTEGER NOT NULL DEFAULT 0, cost_usd FLOAT NOT NULL DEFAULT 0,
+            latency_ms FLOAT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'success',
+            error TEXT, created_at TEXT NOT NULL)"""
+        with engine.begin() as conn:
+            conn.execute(_t(ddl))
+    except Exception:
+        pass
+
+def _usage_normalize_sync_url(url: str) -> str:
+    u = url.strip()
+    if u.startswith("postgresql+asyncpg://"):
+        u = u.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    elif u.startswith("postgresql://"):
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
+    if "+aiosqlite" in u:
+        u = u.replace("+aiosqlite", "")
+        u = u.replace("sqlite+://", "sqlite://")
+    if u.startswith("sqlite+"):
+        u = u.replace("sqlite+", "sqlite", 1)
+    return u
+
+def _usage_db_insert(rec: dict) -> None:
+    url = _usage_db_url()
+    if not url:
+        return
+    try:
+        from sqlalchemy import create_engine as _ce
+        sync_url = _usage_normalize_sync_url(url)
+        kwargs: dict = {"pool_pre_ping": True}
+        if sync_url.startswith("sqlite"):
+            kwargs = {}
+            if ":memory:" in sync_url:
+                kwargs["connect_args"] = {"check_same_thread": False}
+        eng = _ce(sync_url, **kwargs)
+        _usage_ensure_table(eng)
+        from security.models.orm import AdminLlmUsageORM  # type: ignore
+        from sqlalchemy.orm import sessionmaker as _sm
+        factory = _sm(bind=eng, autoflush=False, autocommit=False)
+        with factory() as s:
+            orm = AdminLlmUsageORM(
+                id=rec["id"], tenant_id=rec["tenant_id"], provider=rec.get("provider"),
+                model=rec.get("model"), prompt_tokens=int(rec.get("prompt_tokens", 0)),
+                completion_tokens=int(rec.get("completion_tokens", 0)), total_tokens=int(rec.get("total_tokens", 0)),
+                cost_usd=float(rec.get("cost_usd", 0)), latency_ms=float(rec.get("latency_ms", 0)),
+                status=str(rec.get("status", "success")), error=rec.get("error"), created_at=rec["created_at"],
+            )
+            s.add(orm)
+            s.commit()
+        try:
+            eng.dispose()
+        except Exception:
+            pass
+    except Exception:
+        pass  # fail-open
+
+def record_llm_usage(
+    tenant_id: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    latency_ms: float = 0.0,
+    status: str = "success",
+    error: str | None = None,
+    created_at: datetime | None = None,
+) -> dict:
+    tid = (tenant_id or "default").strip() or "default"
+    pt = int(prompt_tokens or 0)
+    ct = int(completion_tokens or 0)
+    tt = pt + ct
+    cost = _estimate_cost_usd(pt, ct, model)
+    now = created_at or datetime.now(_tz.utc)
+    rec = {
+        "id": f"usage_{uuid.uuid4().hex[:12]}",
+        "tenant_id": tid,
+        "provider": provider,
+        "model": model,
+        "prompt_tokens": pt,
+        "completion_tokens": ct,
+        "total_tokens": tt,
+        "cost_usd": cost,
+        "latency_ms": float(latency_ms or 0),
+        "status": status,
+        "error": error,
+        "created_at": now,
+    }
+    _llm_usage_records.append(rec)
+    try:
+        _usage_db_insert(rec)
+    except Exception:
+        pass
+    return rec
+
+def clear_llm_usage() -> None:
+    _llm_usage_records.clear()
+    url = _usage_db_url()
+    if not url:
+        return
+    try:
+        from sqlalchemy import create_engine as _ce, text as _t
+        sync_url = _usage_normalize_sync_url(url)
+        kwargs2: dict = {"pool_pre_ping": True}
+        if sync_url.startswith("sqlite"):
+            kwargs2 = {}
+            if ":memory:" in sync_url:
+                kwargs2["connect_args"] = {"check_same_thread": False}
+        eng = _ce(sync_url, **kwargs2)
+        with eng.begin() as conn:
+            try:
+                conn.execute(_t("DELETE FROM admin_llm_usage"))
+            except Exception:
+                pass
+        try:
+            eng.dispose()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def _usage_to_public(r: dict) -> dict:
+    ca = r.get("created_at")
+    if isinstance(ca, datetime):
+        iso = ca.isoformat()
+    else:
+        iso = str(ca) if ca else ""
+    return {
+        "id": r.get("id"), "tenant_id": r.get("tenant_id"), "provider": r.get("provider"),
+        "model": r.get("model"), "prompt_tokens": r.get("prompt_tokens", 0),
+        "completion_tokens": r.get("completion_tokens", 0), "total_tokens": r.get("total_tokens", 0),
+        "cost_usd": r.get("cost_usd", 0), "latency_ms": r.get("latency_ms", 0),
+        "status": r.get("status", "success"), "error": r.get("error"), "created_at": iso,
+    }
+
+def get_llm_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[dict]:
+    lim = max(1, min(1000, int(limit or 20)))
+    tid = (tenant_id or "").strip() if tenant_id is not None else None
+    # try in-memory first
+    recs = list(_llm_usage_records)
+    if tid:
+        recs = [r for r in recs if r.get("tenant_id") == tid]
+    # if empty and DB configured, try DB fallback
+    if not recs:
+        url = _usage_db_url()
+        if url:
+            try:
+                from sqlalchemy import create_engine as _ce
+                sync_url = _usage_normalize_sync_url(url)
+                kwargs3: dict = {"pool_pre_ping": True}
+                if sync_url.startswith("sqlite"):
+                    kwargs3 = {}
+                    if ":memory:" in sync_url:
+                        kwargs3["connect_args"] = {"check_same_thread": False}
+                eng = _ce(sync_url, **kwargs3)
+                _usage_ensure_table(eng)
+                from security.models.orm import AdminLlmUsageORM  # type: ignore
+                from sqlalchemy.orm import sessionmaker as _sm2
+                factory = _sm2(bind=eng, autoflush=False, autocommit=False)
+                with factory() as s:
+                    q = s.query(AdminLlmUsageORM).order_by(AdminLlmUsageORM.created_at.desc())
+                    if tid:
+                        q = q.filter(AdminLlmUsageORM.tenant_id == tid)
+                    rows = q.limit(lim).all()
+                    recs = [
+                        {"id": r.id, "tenant_id": r.tenant_id, "provider": r.provider, "model": r.model,
+                         "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens,
+                         "total_tokens": r.total_tokens, "cost_usd": r.cost_usd, "latency_ms": r.latency_ms,
+                         "status": r.status, "error": r.error, "created_at": r.created_at}
+                        for r in rows
+                    ]
+                try:
+                    eng.dispose()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    # sort newest first
+    recs_sorted = sorted(recs, key=lambda x: x.get("created_at") or datetime.min.replace(tzinfo=_tz.utc), reverse=True)
+    return [_usage_to_public(r) for r in recs_sorted[:lim]]
+
+def get_llm_usage_summary(tenant_id: str | None = None) -> dict:
+    tid = (tenant_id or "").strip() if tenant_id is not None else None
+    # collect records: in-memory + maybe DB if empty
+    recs = list(_llm_usage_records)
+    if tid:
+        recs = [r for r in recs if r.get("tenant_id") == tid]
+    if not recs:
+        url = _usage_db_url()
+        if url:
+            try:
+                from sqlalchemy import create_engine as _ce
+                sync_url = _usage_normalize_sync_url(url)
+                kw: dict = {"pool_pre_ping": True}
+                if sync_url.startswith("sqlite"):
+                    kw = {}
+                    if ":memory:" in sync_url:
+                        kw["connect_args"] = {"check_same_thread": False}
+                eng = _ce(sync_url, **kw)
+                _usage_ensure_table(eng)
+                from security.models.orm import AdminLlmUsageORM  # type: ignore
+                from sqlalchemy.orm import sessionmaker as _sm3
+                factory = _sm3(bind=eng, autoflush=False, autocommit=False)
+                with factory() as s:
+                    q = s.query(AdminLlmUsageORM)
+                    if tid:
+                        q = q.filter(AdminLlmUsageORM.tenant_id == tid)
+                    rows = q.all()
+                    recs = [
+                        {"id": r.id, "tenant_id": r.tenant_id, "provider": r.provider, "model": r.model,
+                         "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens,
+                         "total_tokens": r.total_tokens, "cost_usd": r.cost_usd, "latency_ms": r.latency_ms,
+                         "status": r.status, "error": r.error, "created_at": r.created_at}
+                        for r in rows
+                    ]
+                try:
+                    eng.dispose()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    total = len(recs)
+    if total == 0:
+        return {"tenant_id": tid or "all", "total_requests": 0, "success_count": 0, "fail_count": 0,
+                "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                "total_cost_usd": 0.0, "avg_latency_ms": 0.0, "p95_latency_ms": 0.0,
+                "daily_count": 0, "per_minute_count": 0, "daily_cost_usd": 0.0}
+    success = sum(1 for r in recs if r.get("status") == "success")
+    fail = total - success
+    total_tokens = sum(int(r.get("total_tokens", 0)) for r in recs)
+    prompt_tokens = sum(int(r.get("prompt_tokens", 0)) for r in recs)
+    completion_tokens = sum(int(r.get("completion_tokens", 0)) for r in recs)
+    total_cost = round(sum(float(r.get("cost_usd", 0)) for r in recs), 6)
+    latencies = sorted(float(r.get("latency_ms", 0)) for r in recs)
+    avg_lat = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
+    # p95
+    import math
+    if latencies:
+        idx = math.ceil(0.95 * len(latencies)) - 1
+        idx = max(0, min(idx, len(latencies)-1))
+        p95 = round(latencies[idx], 2)
+    else:
+        p95 = 0.0
+    # daily/per-minute windows (UTC)
+    now = datetime.now(_tz.utc)
+    daily = [r for r in recs if r.get("created_at") and r["created_at"].date() == now.date()]
+    per_min = [r for r in recs if r.get("created_at") and (now - r["created_at"]).total_seconds() < 60]
+    daily_cost = round(sum(float(r.get("cost_usd", 0)) for r in daily), 6)
+    return {
+        "tenant_id": tid or "all", "total_requests": total, "success_count": success, "fail_count": fail,
+        "total_tokens": total_tokens, "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+        "total_cost_usd": total_cost, "avg_latency_ms": avg_lat, "p95_latency_ms": p95,
+        "daily_count": len(daily), "per_minute_count": len(per_min), "daily_cost_usd": daily_cost,
+        "daily_tokens": sum(int(r.get("total_tokens", 0)) for r in daily),
+        "per_minute_tokens": sum(int(r.get("total_tokens", 0)) for r in per_min),
+    }
+
+# ---------------------------------------------------------------------------
 # Shared helpers for provider layer (mock, litellm lazy, audit, retry)
 # ---------------------------------------------------------------------------
 
@@ -1016,12 +1320,47 @@ class LLMProviderAdapter:
             trace_id = oaos_context.trace_id
 
         self._emit("model_request", trace_id=trace_id, model=resolved, data={"request_id": request_id, "messages_len": len(messages), "provider": str(self.provider_type.value) if self.provider_type else "litellm", "runtime_mode": str(self.runtime_mode.value)})
-        # quota hook before provider dispatch (fail-open)
+        # quota hook before provider dispatch (fail-open) — also record 429 as failed usage
         tenant_for_quota = getattr(oaos_context, "tenant_id", None) if oaos_context is not None else kwargs.get("tenant_id")
+        _usage_tid = (tenant_for_quota or getattr(oaos_context, "tenant_id", None) or kwargs.get("tenant_id") or "default")
+        _usage_start = time.perf_counter()
+        _usage_provider = str(self.provider_type.value) if self.provider_type else "litellm"
+        def _extract_usage(resp: dict | None):
+            if not isinstance(resp, dict):
+                return 0, 0
+            u = resp.get("usage") or {}
+            try:
+                pt = int(u.get("prompt_tokens", 0) or 0)
+                ct = int(u.get("completion_tokens", 0) or 0)
+                if pt == 0 and ct == 0:
+                    # fallback to total_tokens
+                    tt = int(u.get("total_tokens", 0) or 0)
+                    if tt:
+                        pt = tt // 2
+                        ct = tt - pt
+                return pt, ct
+            except Exception:
+                return 0, 0
+        def _record_success(resp: dict | None, latency: float):
+            try:
+                pt, ct = _extract_usage(resp)
+                # try to get model from response
+                m = (resp.get("model") if isinstance(resp, dict) else None) or resolved
+                p = _usage_provider
+                # if litellm path, try litellm model, else provider value
+                record_llm_usage(tenant_id=_usage_tid, provider=p, model=m, prompt_tokens=pt, completion_tokens=ct, latency_ms=round(latency*1000,2), status="success")
+            except Exception:
+                pass
+        def _record_fail(err: str, latency: float):
+            try:
+                record_llm_usage(tenant_id=_usage_tid, provider=_usage_provider, model=resolved, prompt_tokens=0, completion_tokens=0, latency_ms=round(latency*1000,2), status="failed", error=str(err)[:500])
+            except Exception:
+                pass
         try:
             _llm_quota_check(tenant_for_quota or "default")
         except Exception as e:
             if getattr(e, "status_code", None)==429 or "QUOTA_EXCEEDED" in str(e) or (isinstance(getattr(e, "detail", None), dict) and getattr(e, "detail", {}).get("code")=="QUOTA_EXCEEDED"):
+                _record_fail(str(e) or "quota exceeded", time.perf_counter() - _usage_start)
                 raise
         # — Hermes mode: bypass provider logic entirely —
         if self.runtime_mode == RuntimeMode.HERMES:
@@ -1042,12 +1381,15 @@ class LLMProviderAdapter:
                     timeout_s=self.timeout_s,
                 )
                 self._emit("model_response", trace_id=trace_id, model=resolved, data={"request_id": request_id, "runtime_mode": "hermes", "finish_reason": result.get("choices", [{}])[0].get("finish_reason", "") if isinstance(result, dict) else ""})
+                _record_success(result, time.perf_counter() - _usage_start)
                 return result  # type: ignore
             except asyncio.TimeoutError as e:
                 self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s})
+                _record_fail("timeout", time.perf_counter() - _usage_start)
                 raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
             except Exception as e:
                 self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e)})
+                _record_fail(str(e), time.perf_counter() - _usage_start)
                 raise
 
         # — Provider dispatch (when provider_type set) —
@@ -1075,12 +1417,15 @@ class LLMProviderAdapter:
                         timeout_s=self.timeout_s,
                     )
                     self._emit("model_response", trace_id=trace_id, model=resolved, data={"request_id": request_id, "provider": str(self.provider_type.value), "finish_reason": result.get("choices", [{}])[0].get("finish_reason", "") if isinstance(result, dict) else ""})
+                    _record_success(result, time.perf_counter() - _usage_start)
                     return result  # type: ignore
                 except asyncio.TimeoutError as e:
                     self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s, "provider": str(self.provider_type.value)})
+                    _record_fail("timeout", time.perf_counter() - _usage_start)
                     raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
                 except Exception as e:
                     self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e), "provider": str(self.provider_type.value)})
+                    _record_fail(str(e), time.perf_counter() - _usage_start)
                     raise
 
         async def _do() -> dict[str, Any]:
@@ -1121,12 +1466,15 @@ class LLMProviderAdapter:
                 timeout_s=self.timeout_s,
             )
             self._emit("model_response", trace_id=trace_id, model=resolved, data={"request_id": request_id, "finish_reason": result.get("choices", [{}])[0].get("finish_reason", "") if isinstance(result, dict) else ""})
+            _record_success(result, time.perf_counter() - _usage_start)
             return result  # type: ignore
         except asyncio.TimeoutError as e:
             self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s})
+            _record_fail("timeout", time.perf_counter() - _usage_start)
             raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
         except Exception as e:
             self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e)})
+            _record_fail(str(e), time.perf_counter() - _usage_start)
             raise
 
     # -- core completion (non-stream) with output_type -------------------

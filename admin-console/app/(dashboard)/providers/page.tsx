@@ -8,8 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getToken, listLLMProviders, createLLMProvider, updateLLMProvider, deleteLLMProvider, testLLMProvider, toggleLLMProvider, getRuntimeMode, setRuntimeMode, type LLMProvider, type LLMProviderType, type RuntimeMode } from "@/lib/api";
-import { RefreshCw, Trash2, Pencil, Plus, Cpu, Plug2, Ban, CheckCircle2, Info } from "lucide-react";
+import { RefreshCw, Trash2, Pencil, Plus, Cpu, Plug2, Ban, CheckCircle2, Info, BarChart3 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import Link from "next/link";
 
 const PROVIDER_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "opencode-go", "openrouter", "ollama"];
 const APIKEY_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "openrouter"];
@@ -191,7 +192,17 @@ export default function ProvidersPage() {
           <h1 className="flex items-center gap-2 text-2xl font-semibold"><Cpu className="h-6 w-6" /> {t("providers.title")}</h1>
           <p className="text-sm text-muted-foreground">{t("providers.subtitle")}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchList(); fetchRuntime(); }}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/llm-usage"><BarChart3 className="mr-1 h-4 w-4" />{t("providers.usageTab")}</Link>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchList(); fetchRuntime(); }}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
+        </div>
+      </div>
+
+      <div className="flex gap-1 border-b" role="tablist" aria-label="providers tabs">
+        <span className="rounded-t-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground" role="tab" aria-selected="true">{t("providers.title")}</span>
+        <Link href="/llm-usage" className="rounded-t-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" role="tab" aria-selected="false">{t("providers.usageTab")}</Link>
       </div>
 
       {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
