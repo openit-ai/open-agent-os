@@ -21,6 +21,7 @@ for p in [
     ROOT / "packages/mcp-resource-model",
     ROOT / "packages/runtime-adapter",
     ROOT / "packages/personal-wiki",
+    ROOT / "packages/agent-runtime",
 ]:
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
@@ -31,4 +32,3 @@ if str(ROOT / "security") not in sys.path:
 import pytest
 @pytest.fixture
 def tenant_id(): return "test-tenant"
-

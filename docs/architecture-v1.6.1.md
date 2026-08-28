@@ -877,6 +877,12 @@ Built-in LLM Runtime
 
 LLM Runtime은 별도의 범용 자율 실행환경이 아니라, Open Agent OS가 직접 관리 가능한 최소 기능 Runtime으로 유지한다.
 
+> **구현 노트 (v1.6.1 — 2026-08-28, verified E2E):**
+> - **구현체:** `packages/runtime-adapter/runtime_adapter/safe_adapter.py` — `SafeRuntimeAdapter` (`LLMRuntime`/`SafeRuntime` alias, `AgentRuntimeAdapter` 구현) — LLM+MCP only, `execute_sandbox`/`shell`/`python` 호출 시 `NotImplementedError("DENY … §16F.1")`.
+> - **Control-Plane 연동 (lazy):** `control-plane/control_plane/app.py` — `_get_runtime_router()`가 `runtime_adapter.router.RuntimeRouter`를 lazy import, `create_session`에서 `RuntimeRouter.select_runtime(user_id, task_type, capability)`로 `EXECUTE runtime/llm|hermes` capability gate 검증 후 `route_session` + `ACPAdapter.create_session_remote(…, workspace=/home/hermes/workspaces/{tenant}/{agent}/{session})`. 미설치/미구성 시 JIT-allow fallback으로 548+ 기존 테스트 영향 없음.
+> - **Execution-Gateway 연동 (lazy):** `execution-gateway/execution_gateway/app.py` — `_get_rate_limiter()` lazy, `POST /v1/execute`에서 `ToolRateLimiter`/`ToolPolicy`/`MCPRegistry.proxy_tool_call` 경유. LLM Runtime은 Execution Gateway를 통해서만 MCP tool을 호출하며 direct DB/ERP/SSH 접근 없음.
+> - **검증:** `tests/test_llm_runtime.py` (5 tests) — provider adapter mock(`get_adapter("llm")` + httpx mock), tool loop terminates(`SimpleReasoningLoop` + gateway stub, max_steps 보장), session isolation(`employee:kim` vs `lee` cross-user `PermissionError`), streaming yields events(`stream_events` → `token`/`tool_call`/`done` + Control-Plane SSE), no arbitrary execution(grep).
+> - **보안 grep 검증:** `grep -E "subprocess|os\.system|os\.popen|eval\(|exec\(" packages/runtime-adapter/runtime_adapter/safe_adapter.py` → DENY 문자열 제외 시 0건. `grep -R "subprocess" packages/runtime-adapter/` → 0건. Hermes의 `hermes_adapter.py` sandbox는 Advanced Runtime에만 허용, LLM Runtime에서는 전면 차단.
 
 ## 16.2 Hermes Runtime
 
