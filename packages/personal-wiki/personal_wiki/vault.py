@@ -189,10 +189,37 @@ def append_journal(
                 # file existed before this write — ensure separator
                 f.write("\n---\n\n")
             f.write(block)
+        # optional pgvector embed (env OAOS_EMBED_ENABLED)
+        try:
+            if os.getenv("OAOS_EMBED_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on"):
+                _maybe_embed(jfile, metadata={"trace_id": trace_id, "tool": tool_name, "kind": "journal"})
+        except Exception:
+            pass
         return jfile
     except Exception:
         # best-effort: never raise
         return None
+
+
+def _maybe_embed(path: Path, metadata: dict[str, Any] | None = None) -> None:
+    """Best-effort embed vault file via personal_wiki.embed (lazy, never raises)."""
+    try:
+        # lazy import to avoid hard dep
+        import importlib.util
+
+        found = importlib.util.find_spec("personal_wiki.embed")
+        if found is None:
+            # try adding package to path fallback
+            return
+        from personal_wiki.embed import embed_file_sync  # type: ignore
+
+        # Extract owner/tenant from path or metadata if available
+        owner = (metadata or {}).get("owner") or (metadata or {}).get("user_id") or "employee:anonymous"
+        tenant_id = (metadata or {}).get("tenant_id") or "default"
+        agent_id = (metadata or {}).get("agent_id")
+        embed_file_sync(path, metadata=metadata, owner=owner, tenant_id=tenant_id, agent_id=agent_id)
+    except Exception:
+        pass
 
 
 # Backwards-compat aliases
@@ -234,6 +261,12 @@ def upsert_note(
         if frontmatter:
             fm = _frontmatter(frontmatter) + "\n\n"
         nfile.write_text(fm + content, encoding="utf-8")
+        # optional pgvector embed (env OAOS_EMBED_ENABLED)
+        try:
+            if os.getenv("OAOS_EMBED_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on"):
+                _maybe_embed(nfile, metadata={"slug": slug, "kind": "note", **(frontmatter or {})})
+        except Exception:
+            pass
         return nfile
     except Exception:
         return None

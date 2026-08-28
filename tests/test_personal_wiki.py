@@ -3,7 +3,6 @@
 Keeps 541+2 passing when added.
 """
 from __future__ import annotations
-
 import sys
 from pathlib import Path
 import importlib.util
@@ -38,6 +37,38 @@ except Exception:
     import admin_console.backend.app as app_mod2  # type: ignore
 
     admin_app = app_mod2.app
+
+# Restore real personal_wiki package for subsequent tests (embed/e2e) that need vault/extractor/importer
+try:
+    _pkg_root = ROOT / "packages" / "personal-wiki"
+    if str(_pkg_root) not in sys.path:
+        sys.path.insert(0, str(_pkg_root))
+    # admin file was registered as personal_wiki; replace with real package for later imports
+    # Keep admin alias, but re-point personal_wiki to package
+    if "personal_wiki" in sys.modules:
+        # admin file currently shadows package; stash it and reload package
+        _admin_mod = sys.modules["personal_wiki"]
+        # ensure admin_personal_wiki still points to admin file
+        sys.modules["admin_personal_wiki"] = _admin_mod
+        del sys.modules["personal_wiki"]
+        for k in list(sys.modules.keys()):
+            if k.startswith("personal_wiki."):
+                # don't delete admin's personal_wiki alias submodules (none)
+                del sys.modules[k]
+        # ensure package front of backend
+        if str(BACKEND) in sys.path:
+            sys.path.remove(str(BACKEND))
+            sys.path.append(str(BACKEND))
+        if str(_pkg_root) in sys.path:
+            sys.path.remove(str(_pkg_root))
+        sys.path.insert(0, str(_pkg_root))
+        import importlib as _imp
+        try:
+            _imp.import_module("personal_wiki")
+        except Exception:
+            pass
+except Exception:
+    pass
 
 from fastapi.testclient import TestClient
 

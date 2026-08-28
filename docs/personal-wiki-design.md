@@ -1,6 +1,6 @@
 # Personal Wiki 설계서 — 첨부파일 + Tool 결과 아카이빙
 
-> **상태:** Design (코드 미반영) | **대상:** `openit-ai/open-agent-os` v0.1.1 (BSL 1.1)  
+> **상태:** Implemented (partial) — Vault/Extractor 구현 완료 (Phase 1-2, `packages/personal-wiki`), Consolidate/Embed 진행 중 | **대상:** `openit-ai/open-agent-os` v0.1.1 (BSL 1.1)  
 > **최종 갱신:** 2026-08-28 | **의존:** `docs/architecture-v1.6.md` §§5, 10, 16H, 27, 40 / `memory_service/app.py` / `security/models/orm.py` / `execution_gateway/`  
 > **원칙:** Clean-room 설계 — Argo 코드 복사 없음. Hermes `ocr-and-documents` / `nano-pdf` / `docx` / `xlsx` / `pdf` 스킬 로직은 **참조**만 하고, 구현은 OAOS 파이썬 스택으로 재작성.
 

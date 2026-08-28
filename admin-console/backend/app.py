@@ -157,6 +157,29 @@ except ImportError:
 except Exception as e:
     logger.warning(f"Personal Wiki router mount failed: {e}")
 
+# ── Personal Wiki consolidation scheduler (02:00 KST daily, fail gracefully) ─
+try:
+    # Try to register APScheduler 02:00 KST job best-effort; missing key/lib -> graceful
+    import sys as _sys_sched
+    from pathlib import Path as _PathSched
+    _pw_path = _PathSched(__file__).resolve().parents[2] / "packages" / "personal-wiki"
+    if str(_pw_path) not in _sys_sched.path:
+        _sys_sched.path.insert(0, str(_pw_path))
+    from personal_wiki.consolidate import register_consolidation_scheduler  # type: ignore
+
+    # Only auto-register if explicitly enabled (OAOS_WIKI_CONSOLIDATION_CRON=1)
+    # Hermes cron is the primary scheduler; APScheduler is fallback.
+    if os.environ.get("OAOS_WIKI_CONSOLIDATION_CRON", "0") in ("1", "true", "True"):
+        try:
+            _sched_res = register_consolidation_scheduler()
+            logger.info(f"Wiki consolidation scheduler: {_sched_res}")
+        except Exception as _se:
+            logger.warning(f"Wiki consolidation scheduler not registered: {_se}")
+    else:
+        logger.info("Wiki consolidation scheduler idle (set OAOS_WIKI_CONSOLIDATION_CRON=1 to enable APScheduler 02:00 KST)")
+except Exception as _e:
+    logger.warning(f"Wiki consolidation scheduler import skipped: {_e}")
+
 
 # ── Health ───────────────────────────────────────────────────────
 @app.get("/health")

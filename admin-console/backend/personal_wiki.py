@@ -411,3 +411,64 @@ async def list_notes(
             "vault_path": get_vault_path(owner["user_id"]),
             "error": str(e),
         }
+
+# ── Consolidation endpoint (02:00 KST scheduler trigger, graceful) ─
+
+@router.post("/consolidate")
+async def trigger_consolidation(
+    request: Request,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    lang: str = Query("ko", description="prompt language ko/en"),
+    dry_run: bool = Query(False, description="dry run without writing notes"),
+):
+    """POST /v1/personal-wiki/consolidate -> run consolidate_once for owner."""
+    owner = _resolve_owner(request, x_user_id=x_user_id)
+    user_id = owner["user_id"]
+    ws_id = user_id
+    try:
+        import sys
+        from pathlib import Path
+        pkg_path = Path(__file__).resolve().parents[2] / "packages" / "personal-wiki"
+        if str(pkg_path) not in sys.path:
+            sys.path.insert(0, str(pkg_path))
+        from personal_wiki.consolidate import consolidate_once  # type: ignore
+        result = consolidate_once(ws_id=ws_id, lang=lang, dry_run=dry_run)
+        _audit(request, "CONSOLIDATION_RUN", {"user_id": user_id, "ws_id": ws_id, "result": result})
+        return {"owner": user_id, "ws_id": ws_id, **result}
+    except Exception as e:
+        logger.warning(f"consolidate trigger failed for {user_id}: {e}")
+        _audit(request, "CONSOLIDATION_RUN_FAILED", {"user_id": user_id, "ws_id": ws_id, "error": str(e)})
+        return {"owner": user_id, "ws_id": ws_id, "action": "error", "error": str(e), "mock": True}
+
+
+@router.get("/consolidation/status")
+async def consolidation_status(
+    request: Request,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """GET /v1/personal-wiki/consolidation/status -> watermark + scheduler info."""
+    owner = _resolve_owner(request, x_user_id=x_user_id)
+    user_id = owner["user_id"]
+    ws_id = user_id
+    try:
+        import sys
+        from pathlib import Path
+        pkg_path = Path(__file__).resolve().parents[2] / "packages" / "personal-wiki"
+        if str(pkg_path) not in sys.path:
+            sys.path.insert(0, str(pkg_path))
+        from personal_wiki.consolidate import _load_watermark, _hermes_config, WATERMARK, CAP_BYTES  # type: ignore
+        watermark = _load_watermark(ws_id=ws_id)
+        _, key, model = _hermes_config()
+        return {
+            "owner": user_id,
+            "ws_id": ws_id,
+            "watermark": watermark,
+            "watermark_file": WATERMARK,
+            "cap_bytes": CAP_BYTES,
+            "cap_14kb": CAP_BYTES == 14336,
+            "hermes_key_set": bool(key),
+            "hermes_model": model,
+            "scheduler": "02:00 KST (Asia/Seoul) via Hermes cron or APScheduler fallback — set OAOS_WIKI_CONSOLIDATION_CRON=1",
+        }
+    except Exception as e:
+        return {"owner": user_id, "ws_id": ws_id, "error": str(e), "mock": True}
