@@ -384,4 +384,19 @@ async def proxy_tool_call(
         result["data_access"] = _data_access_hint
         result["audit"]["data_access"] = _data_access_hint
 
+    # Personal Wiki auto-archive hook (best-effort, non-blocking) — after mock fallback / proxy result
+    try:
+        from .wiki_archive import auto_archive  # type: ignore
+    except ImportError:
+        try:
+            from execution_gateway.wiki_archive import auto_archive  # type: ignore
+        except Exception:
+            auto_archive = None  # type: ignore
+    if "auto_archive" in locals() and auto_archive is not None:
+        try:
+            # truncate result to 4k chars inside auto_archive; pass full result
+            auto_archive(trace_id=trace_id, tool_name=tool_name, result=result, max_chars=4000)
+        except Exception:
+            pass
+
     return result

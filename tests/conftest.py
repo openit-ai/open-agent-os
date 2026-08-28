@@ -20,6 +20,7 @@ for p in [
     ROOT / "packages/delegation-model",
     ROOT / "packages/mcp-resource-model",
     ROOT / "packages/runtime-adapter",
+    ROOT / "packages/personal-wiki",
 ]:
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))

@@ -1,0 +1,17 @@
+[project]
+name = "open-agent-os-personal-wiki"
+version = "0.1.1"
+description = "Personal Wiki vault, attachment extraction, and Obsidian import for Open Agent OS"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.7"]
+
+[project.optional-dependencies]
+pdf = ["pypdf>=4", "pdfminer.six>=20221105"]
+docx = ["python-docx>=1.1"]
+xlsx = ["openpyxl>=3.1"]
+pptx = ["python-pptx>=0.6.21"]
+ocr = ["pytesseract>=0.3", "Pillow>=10"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

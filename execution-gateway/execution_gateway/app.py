@@ -287,6 +287,16 @@ async def execute(
         context=proxy_ctx,
     )
 
+    # Personal Wiki auto-archive hook (best-effort, non-blocking) — after proxy_tool_call
+    try:
+        try:
+            from execution_gateway.wiki_archive import auto_archive  # type: ignore
+        except ImportError:
+            from .wiki_archive import auto_archive  # type: ignore  # type: ignore
+        auto_archive(trace_id=ctx.get("trace_id") or result.get("trace_id") or "unknown", tool_name=req.tool, result=result, max_chars=4000)
+    except Exception:
+        pass
+
     # 7. proxy 결과 상태 매핑
     if "error" in result:
         err = result["error"]

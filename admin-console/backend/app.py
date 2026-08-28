@@ -140,6 +140,23 @@ app.include_router(business_router)
 app.include_router(managed_router)
 app.include_router(user_mappings_router)
 
+# ── Personal Wiki (skeleton, lazy, fail-graceful) ──────────────────
+try:
+    from personal_wiki import router as personal_wiki_router  # type: ignore
+
+    app.include_router(personal_wiki_router)
+    logger.info("Personal Wiki router mounted at /v1/personal-wiki")
+except ImportError:
+    try:
+        from .personal_wiki import router as personal_wiki_router  # type: ignore
+
+        app.include_router(personal_wiki_router)
+        logger.info("Personal Wiki router mounted at /v1/personal-wiki")
+    except Exception as e:
+        logger.warning(f"Personal Wiki router not mounted: {e}")
+except Exception as e:
+    logger.warning(f"Personal Wiki router mount failed: {e}")
+
 
 # ── Health ───────────────────────────────────────────────────────
 @app.get("/health")
