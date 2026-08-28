@@ -64,6 +64,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+class UpdateProfileRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=64)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -228,3 +237,19 @@ def delete_admin_user(user_id: str, admin: AdminUser = Depends(require_l5)):
             del _users_by_email[em]
             break
     return {"status": "deleted", "id": user_id}
+
+
+@router.post("/change-password")
+def change_password(req: ChangePasswordRequest, admin: AdminUser = Depends(get_current_admin)):
+    """Change own password — requires current password verification."""
+    if not _verify_password(req.current_password, admin.hashed_password):
+        raise HTTPException(status_code=401, detail="현재 비밀번호가 일치하지 않습니다")
+    admin.hashed_password = _hash_password(req.new_password)
+    return {"status": "changed"}
+
+
+@router.patch("/me", response_model=AdminUserPublic)
+def update_profile(req: UpdateProfileRequest, admin: AdminUser = Depends(get_current_admin)):
+    """Update own display_name."""
+    admin.display_name = req.display_name
+    return AdminUserPublic(**admin.model_dump(exclude={"hashed_password"}))

@@ -64,12 +64,12 @@ export default function BackupPage() {
 
       {/* Upgrade status */}
       <Card>
-        <CardHeader className="pb-3"><CardTitle className="text-base">Upgrade Status</CardTitle><CardDescription>현재 vs可用 버전 · Viewer 조회 가능</CardDescription></CardHeader>
+        <CardHeader className="pb-3"><CardTitle className="text-base">Upgrade Status</CardTitle><CardDescription>현재 vs 가용 버전 · Viewer 조회 가능</CardDescription></CardHeader>
         <CardContent>
           {loading ? <p className="text-sm text-muted-foreground">로딩 중...</p> : upgrade ? (
             <div className="grid gap-3 sm:grid-cols-3 text-sm">
               <div><span className="text-muted-foreground">현재 버전</span><div className="font-mono font-medium">{upgrade.current_version}</div></div>
-              <div><span className="text-muted-foreground">可用 버전</span><div className="font-mono font-medium">{upgrade.available_version}</div></div>
+              <div><span className="text-muted-foreground">가용 버전</span><div className="font-mono font-medium">{upgrade.available_version}</div></div>
               <div><span className="text-muted-foreground">상태</span><div><Badge variant={upgrade.status === "idle" ? "secondary" : upgrade.status === "in_progress" ? "warning" : "success"}>{upgrade.status}</Badge></div></div>
               <div className="sm:col-span-3"><span className="text-muted-foreground">Changelog</span><div className="text-xs">{upgrade.changelog}</div></div>
               <div><span className="text-muted-foreground">Last check</span><div className="text-xs">{upgrade.last_check ? new Date(upgrade.last_check).toLocaleString("ko-KR") : "-"}</div></div>

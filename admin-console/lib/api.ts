@@ -124,6 +124,23 @@ export function registerUser(payload: { email: string; password: string; display
 export function deleteUser(id: string): Promise<{ status: string; id: string }> {
   return apiFetch(`/v1/auth/users/${id}`, { method: "DELETE" });
 }
+export function changePassword(current_password: string, new_password: string): Promise<{ status: string }> {
+  return apiFetch("/v1/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) });
+}
+export function updateProfile(display_name: string): Promise<AdminUserPublic> {
+  return apiFetch<AdminUserPublic>("/v1/auth/me", { method: "PATCH", body: JSON.stringify({ display_name }) });
+}
+export const AVATAR_KEY = "admin_avatar_url";
+export function getAvatarUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(AVATAR_KEY);
+}
+export function setAvatarUrl(url: string): void {
+  localStorage.setItem(AVATAR_KEY, url);
+}
+export function clearAvatarUrl(): void {
+  localStorage.removeItem(AVATAR_KEY);
+}
 
 // ---- Mattermost → Agent user mappings (§14) ----
 export interface UserMapping {
