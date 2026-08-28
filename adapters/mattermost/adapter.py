@@ -124,6 +124,76 @@ class MattermostAdapter:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.bot_token}", "Content-Type": "application/json"} if self.bot_token else {}
 
+    # ---- Approval card §23 ------------------------------------------------
+
+    def build_approval_card(self, approval_request: Any) -> dict[str, Any]:
+        """Build Mattermost attachment props for §23 approval card with 4 buttons."""
+        if isinstance(approval_request, dict):
+            approval_id = approval_request.get("approval_id", "")
+            resource = approval_request.get("resource", "")
+            action = approval_request.get("action", "")
+            risk = approval_request.get("risk", "")
+            user_id = approval_request.get("user_id", "")
+            expires_at = str(approval_request.get("expires_at", ""))
+        else:
+            approval_id = getattr(approval_request, "approval_id", "")
+            resource = getattr(approval_request, "resource", "")
+            action = getattr(approval_request, "action", "")
+            risk = getattr(approval_request, "risk", "")
+            user_id = getattr(approval_request, "user_id", "")
+            expires_at = str(getattr(approval_request, "expires_at", ""))
+
+        integration_url = f"{self.base_url}/v1/mattermost/actions" if self.base_url else "/v1/mattermost/actions"
+        attachment = {
+            "fallback": f"Approval required: {action} {resource} ({approval_id})",
+            "color": "#F59E0B" if risk == "HIGH" else "#3B82F6",
+            "title": "Approval Required",
+            "text": f"**Action:** `{action}`\n**Resource:** `{resource}`\n**Requester:** `{user_id}`\n**Approval ID:** `{approval_id}`\n**Expires:** `{expires_at}`",
+            "fields": [
+                {"title": "Risk", "value": risk, "short": True},
+                {"title": "Approval ID", "value": approval_id, "short": True},
+            ],
+            "actions": [
+                {
+                    "id": "deny",
+                    "name": "Deny",
+                    "integration": {"url": integration_url, "context": {"approval_id": approval_id, "decision": "DENIED"}},
+                },
+                {
+                    "id": "approve_once",
+                    "name": "Approve Once",
+                    "integration": {"url": integration_url, "context": {"approval_id": approval_id, "decision": "APPROVED_ONCE"}},
+                },
+                {
+                    "id": "approve_user_always",
+                    "name": "Always (User)",
+                    "integration": {"url": integration_url, "context": {"approval_id": approval_id, "decision": "APPROVED_USER_ALWAYS"}},
+                },
+                {
+                    "id": "approve_group_always",
+                    "name": "Always (Group)",
+                    "integration": {"url": integration_url, "context": {"approval_id": approval_id, "decision": "APPROVED_GROUP_ALWAYS"}},
+                },
+            ],
+        }
+        props: dict[str, Any] = {"attachments": [attachment]}
+        return props
+
+    async def post_approval_card(
+        self,
+        channel_id: str,
+        approval_request: Any,
+        text: str | None = None,
+        root_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Post §23 approval card with 4 buttons to a channel (threaded if root_id)."""
+        props = self.build_approval_card(approval_request)
+        aid = approval_request.get("approval_id") if isinstance(approval_request, dict) else getattr(approval_request, "approval_id", "")
+        if aid:
+            props["approval_id"] = aid
+        fallback_text = text or f"Approval required: {aid}"
+        return await self.send_message(channel_id, fallback_text, props=props, root_id=root_id)
+
     async def send_message(
         self,
         channel_id: str,
@@ -135,14 +205,20 @@ class MattermostAdapter:
 
         POST /api/v4/posts  {channel_id, message, props, root_id}
         Skeleton if no base_url/bot_token configured.
+        Props handling: preserves attachments/actions for interactive cards (§23).
         """
         if not self.base_url or not self.bot_token:
-            return {
+            out: dict[str, Any] = {
                 "_skeleton": True,
                 "channel_id": channel_id,
                 "text": text,
                 "message": "MATTERMOST_URL or MATTERMOST_BOT_TOKEN not set — skeleton",
             }
+            if props is not None:
+                out["props"] = props
+            if root_id is not None:
+                out["root_id"] = root_id
+            return out
         if httpx is None:
             raise RuntimeError("httpx not installed")
         url = f"{self.base_url}/api/v4/posts"

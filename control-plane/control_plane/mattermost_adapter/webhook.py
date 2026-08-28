@@ -14,45 +14,69 @@ Real verification uses MATTERMOST_WEBHOOK_SECRET.
 Extended for Phase 1 MVP (Section 3.1):
   If text contains "정리해줘" keyword, route to morning-briefing orchestrator
   and return briefing JSON directly (demo parity with POST /v1/demo/morning-briefing).
+
+Hardened v1.5.1:
+  - POST /v1/mattermost/events  (existing, now with background streaming)
+  - POST /v1/mattermost/slash   (slash commands)
+  - POST /v1/mattermost/actions (interactive 4-button approval)
+  §§16A, 23
 """
 from __future__ import annotations
-import hmac
+
+import asyncio
 import hashlib
+import hmac
 import json
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
+
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from ..identity import map_user_to_agent
-from ..session import session_store, new_request_id
-from ..router import route_session
 from ..acp_adapter import ACPAdapter
 from ..config import settings
+from ..identity import map_user_to_agent
+from ..router import route_session
+from ..session import new_request_id, session_store
 
 router = APIRouter()
 
 # Lazy import for orchestrator (avoid circular at import time)
 def _load_orchestrator():
     ROOT = Path(__file__).resolve().parents[3]
-    for p in [ROOT / "examples" / "morning-briefing", ROOT / "execution-gateway", ROOT / "security" / "policy-engine", ROOT / "packages" / "policy-model", ROOT / "packages" / "audit-model", ROOT / "packages" / "common-types"]:
+    for p in [
+        ROOT / "examples" / "morning-briefing",
+        ROOT / "execution-gateway",
+        ROOT / "security" / "policy-engine",
+        ROOT / "packages" / "policy-model",
+        ROOT / "packages" / "audit-model",
+        ROOT / "packages" / "common-types",
+    ]:
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))
     try:
         from orchestrator import run_morning_briefing  # type: ignore
+
         return run_morning_briefing
     except Exception:
         try:
             from morning_briefing.orchestrator import run_morning_briefing  # type: ignore
+
             return run_morning_briefing
         except Exception:
             return None
 
+
 BRIEFING_KEYWORDS = ["정리해줘", "브리핑", "업무 정리", "오늘 업무"]
+
+# 4-button approval decisions §23
+VALID_DECISIONS = {"DENIED", "APPROVED_ONCE", "APPROVED_USER_ALWAYS", "APPROVED_GROUP_ALWAYS"}
 
 
 def _is_briefing_request(text: str) -> bool:
     return any(kw in text for kw in BRIEFING_KEYWORDS)
+
 
 def verify_mattermost_signature(body: bytes, signature: str | None, secret: str | None) -> bool:
     if not secret:
@@ -62,30 +86,117 @@ def verify_mattermost_signature(body: bytes, signature: str | None, secret: str 
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
-@router.post("/mattermost/events")
-async def mattermost_event(request: Request, x_signature: str | None = Header(default=None, alias="X-Mattermost-Signature")):
-    body = await request.body()
-    # In prod: settings.mattermost_webhook_secret
-    secret = getattr(settings, "mattermost_webhook_secret", None)
-    if not verify_mattermost_signature(body, x_signature, secret):
-        raise HTTPException(status_code=401, detail="invalid mattermost signature")
 
+def _get_mattermost_adapter():
+    """Lazy MattermostAdapter (avoid hard dep if adapters not installed)."""
     try:
-        payload: dict[str, Any] = json.loads(body) if body else {}
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="invalid JSON")
+        # Use absolute import via path insertion
+        ROOT = Path(__file__).resolve().parents[3]
+        p = ROOT / "adapters"
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+        from mattermost.adapter import MattermostAdapter  # type: ignore
 
-    # Expected payload (MVP): {"tenant_id": "...", "user_id": "employee:kim", "text": "...", "channel_id": "...", "session_id": "...?"}
-    tenant_id: str = payload.get("tenant_id") or settings.tenant_id
-    user_id: str = payload.get("user_id") or payload.get("user", {}).get("id", "")
-    text: str = payload.get("text") or payload.get("message") or ""
-    session_id: str | None = payload.get("session_id")
+        return MattermostAdapter(
+            base_url=getattr(settings, "mattermost_url", "") or "",
+            bot_token=getattr(settings, "mattermost_bot_token", "") or "",
+            webhook_secret=getattr(settings, "mattermost_webhook_secret", "") or "",
+        )
+    except Exception:
+        # Fallback import relative
+        try:
+            import importlib.util
 
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id (employee:...) required")
-    if not text:
-        raise HTTPException(status_code=400, detail="text/message required")
+            spec = importlib.util.spec_from_file_location(
+                "mm_adapter", str(Path(__file__).resolve().parents[3] / "adapters" / "mattermost" / "adapter.py")
+            )
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)  # type: ignore
+                return mod.MattermostAdapter(
+                    base_url=getattr(settings, "mattermost_url", "") or "",
+                    bot_token=getattr(settings, "mattermost_bot_token", "") or "",
+                    webhook_secret=getattr(settings, "mattermost_webhook_secret", "") or "",
+                )
+        except Exception:
+            return None
+    return None
 
+
+def _get_approval_store():
+    """Obtain ApprovalStore singleton (security/approval)."""
+    try:
+        ROOT = Path(__file__).resolve().parents[3]
+        p = ROOT / "security" / "approval"
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+        from approval_workflow.workflow import ApprovalStore  # type: ignore
+
+        # reuse module-level singleton if already created
+        if not hasattr(_get_approval_store, "_store"):
+            key = getattr(settings, "mattermost_webhook_secret", "") or "dev-signing-key"
+            _get_approval_store._store = ApprovalStore(signing_key=key)  # type: ignore
+        return _get_approval_store._store  # type: ignore
+    except Exception:
+        return None
+
+
+async def _stream_and_post_to_mattermost(
+    channel_id: str | None,
+    root_id: str | None,
+    session_rec: Any,
+) -> None:
+    """Fetch ACP stream and post incremental updates via MattermostAdapter.send_message (threaded)."""
+    if not channel_id:
+        return
+    adapter = _get_mattermost_adapter()
+    if adapter is None:
+        return
+    try:
+        acp = ACPAdapter(settings.hermes_base_url)
+        buffer = ""
+        async for ev in acp.stream_events(session_rec):
+            etype = ev.get("type", "")
+            text_chunk = ""
+            if etype == "token":
+                text_chunk = ev.get("data", {}).get("text", "") or ev.get("text", "")
+            elif etype == "briefing":
+                continue
+            elif etype == "done":
+                if buffer.strip():
+                    try:
+                        await adapter.send_message(channel_id, buffer, root_id=root_id)
+                    except Exception:
+                        pass
+                break
+            if text_chunk:
+                buffer += text_chunk
+                # post incremental if buffer large enough or on sentence boundary
+                if len(buffer) > 500 or text_chunk.endswith("\n"):
+                    try:
+                        await adapter.send_message(channel_id, buffer, root_id=root_id)
+                    except Exception:
+                        pass
+                    buffer = ""
+        # flush remaining
+        if buffer.strip():
+            try:
+                await adapter.send_message(channel_id, buffer, root_id=root_id)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+async def _handle_core_logic(
+    tenant_id: str,
+    user_id: str,
+    text: str,
+    session_id: str | None,
+    channel_id: str | None = None,
+    post_id: str | None = None,
+) -> dict[str, Any]:
+    """Shared session/briefing/ACP logic (reused by events + slash)."""
     # Identity mapping — 1:1 logical agent
     mapping = map_user_to_agent(user_id, tenant_id)
 
@@ -120,10 +231,19 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
                 "security_domain": mapping.security_domain,
             }
             briefing_result = await run_briefing(agent_ctx, tenant_id)
-            # Also store prompt/stream for audit continuity
             rid = new_request_id()
             session_store.append_prompt(session_id, user_id, text, rid)
             session_store.append_stream_event(session_id, {"type": "briefing", "data": briefing_result, "trace_id": rec.trace_id})
+            # optional: post briefing summary to Mattermost threaded
+            if channel_id:
+                try:
+                    adapter = _get_mattermost_adapter()
+                    if adapter is not None:
+                        briefing_text = json.dumps(briefing_result.get("briefing", briefing_result), ensure_ascii=False)[:4000]
+                        # fire-and-forget threaded post
+                        asyncio.create_task(adapter.send_message(channel_id, briefing_text, root_id=post_id))
+                except Exception:
+                    pass
             return {
                 "received": True,
                 "routed": "morning-briefing",
@@ -135,7 +255,6 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
                 "sources": briefing_result.get("sources"),
                 "approvals_required": briefing_result.get("approvals_required"),
                 "audit": briefing_result.get("audit"),
-                # Keep legacy acp field for compatibility
                 "acp": {"status": "routed_to_briefing"},
             }
 
@@ -146,6 +265,14 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     acp_result = await acp.send_prompt(rec, text, rid)
     session_store.append_stream_event(session_id, {"type": "prompt_queued", "data": {"text": text, "request_id": rid}, "trace_id": rec.trace_id})
 
+    # Streaming: fetch stream and post incremental updates via MattermostAdapter (threaded, root_id)
+    if channel_id:
+        # background task — don't block response
+        try:
+            asyncio.create_task(_stream_and_post_to_mattermost(channel_id, post_id, rec))
+        except Exception:
+            pass
+
     return {
         "received": True,
         "session_id": session_id,
@@ -154,6 +281,219 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
         "request_id": rid,
         "acp": acp_result,
     }
+
+
+@router.post("/mattermost/events")
+async def mattermost_event(request: Request, x_signature: str | None = Header(default=None, alias="X-Mattermost-Signature")):
+    body = await request.body()
+    secret = getattr(settings, "mattermost_webhook_secret", None) or getattr(settings, "mattermost_webhook_secret", "")  # noqa
+    # also support MATTERMOST_WEBHOOK_SECRET env via settings
+    if not secret:
+        secret = getattr(settings, "mattermost_webhook_secret", None)
+    if not verify_mattermost_signature(body, x_signature, secret):
+        raise HTTPException(status_code=401, detail="invalid mattermost signature")
+
+    try:
+        payload: dict[str, Any] = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid JSON")
+
+    # Expected payload (MVP): {"tenant_id": "...", "user_id": "employee:kim", "text": "...", "channel_id": "...", "session_id": "...?"}
+    tenant_id: str = payload.get("tenant_id") or settings.tenant_id
+    user_id: str = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
+    text: str = payload.get("text") or payload.get("message") or ""
+    session_id: str | None = payload.get("session_id")
+    channel_id: str | None = payload.get("channel_id") or payload.get("channel", {}).get("id")
+    post_id: str | None = payload.get("post_id") or payload.get("id") or payload.get("data", {}).get("post", {}).get("id")
+
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id (employee:...) required")
+    if not text:
+        raise HTTPException(status_code=400, detail="text/message required")
+
+    return await _handle_core_logic(tenant_id, user_id, text, session_id, channel_id=channel_id, post_id=post_id)
+
+
+@router.post("/mattermost/slash")
+async def mattermost_slash(request: Request, x_signature: str | None = Header(default=None, alias="X-Mattermost-Signature")):
+    """Slash command endpoint — verifies HMAC, parses command/text, reuses same session/briefing logic."""
+    body = await request.body()
+    secret = getattr(settings, "mattermost_webhook_secret", None)
+    if not verify_mattermost_signature(body, x_signature, secret):
+        raise HTTPException(status_code=401, detail="invalid mattermost signature")
+
+    content_type = request.headers.get("content-type", "")
+    payload: dict[str, Any] = {}
+    text = ""
+    command = ""
+    user_id = ""
+    channel_id: str | None = None
+    team_id: str | None = None
+    session_id: str | None = None
+    tenant_id: str = settings.tenant_id
+
+    if "application/x-www-form-urlencoded" in content_type or b"=" in body and b"&" in body:
+        # Mattermost slash sends form-urlencoded
+        try:
+            parsed = urllib.parse.parse_qs(body.decode())
+            # parse_qs values are lists
+            def _get(k: str) -> str:
+                v = parsed.get(k)
+                return v[0] if v else ""
+
+            command = _get("command")
+            text = _get("text")
+            user_id = _get("user_id") or _get("user")
+            channel_id = _get("channel_id") or None
+            team_id = _get("team_id") or None
+            session_id = _get("session_id") or None
+            tenant_id = _get("tenant_id") or tenant_id
+            # also allow explicit payload json in text? keep text as-is
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid form payload")
+    else:
+        try:
+            payload = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="invalid JSON")
+        command = payload.get("command") or ""
+        text = payload.get("text") or payload.get("message") or ""
+        user_id = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
+        channel_id = payload.get("channel_id") or payload.get("channel", {}).get("id")
+        team_id = payload.get("team_id")
+        session_id = payload.get("session_id")
+        tenant_id = payload.get("tenant_id") or tenant_id
+
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if not text and not command:
+        raise HTTPException(status_code=400, detail="text/command required")
+
+    # If text empty but command provided, use command as text
+    effective_text = text or command
+    # Optionally prefix command for audit
+    if command and text:
+        effective_text = f"{command} {text}"
+
+    return await _handle_core_logic(tenant_id, user_id, effective_text, session_id, channel_id=channel_id, post_id=None)
+
+
+@router.post("/mattermost/actions")
+async def mattermost_actions(request: Request, x_signature: str | None = Header(default=None, alias="X-Mattermost-Signature")):
+    """Interactive action endpoint — handles Approval 4-button payload.
+
+    Expected payload (Mattermost interactive message):
+      {
+        "user_id": "employee:kim" or mattermost user id,
+        "user_name": "...",
+        "channel_id": "...",
+        "post_id": "...",
+        "context": {"approval_id": "apr_xxx", "decision": "APPROVED_ONCE"},
+        "context_decision": "APPROVED_ONCE"  # alternative flat
+      }
+    Also supports: {"approval_id": "...", "decision": "...", "user_id": "..."}
+    Maps decision to ApprovalDecision and calls security approval service.
+    """
+    body = await request.body()
+    secret = getattr(settings, "mattermost_webhook_secret", None)
+    if not verify_mattermost_signature(body, x_signature, secret):
+        raise HTTPException(status_code=401, detail="invalid mattermost signature")
+
+    # Mattermost interactive actions may send application/x-www-form-urlencoded with payload=JSON
+    content_type = request.headers.get("content-type", "")
+    payload: dict[str, Any] = {}
+    if "application/x-www-form-urlencoded" in content_type:
+        try:
+            parsed = urllib.parse.parse_qs(body.decode())
+            # Mattermost sends 'payload' as JSON string
+            raw_payload = parsed.get("payload", [None])[0]
+            if raw_payload:
+                payload = json.loads(raw_payload)
+            else:
+                # fallback: flatten qs
+                payload = {k: v[0] for k, v in parsed.items()}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="invalid JSON")
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid form payload")
+    else:
+        try:
+            payload = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="invalid JSON")
+
+    # Extract fields — support multiple shapes
+    context = payload.get("context") or {}
+    # Mattermost sends context inside integration context
+    approval_id = context.get("approval_id") or payload.get("approval_id") or ""
+    decision = context.get("decision") or payload.get("decision") or payload.get("action") or ""
+    # Normalize decision (Mattermost action id -> decision)
+    decision_map = {
+        "deny": "DENIED",
+        "approve_once": "APPROVED_ONCE",
+        "approve_user_always": "APPROVED_USER_ALWAYS",
+        "approve_group_always": "APPROVED_GROUP_ALWAYS",
+    }
+    if decision in decision_map:
+        decision = decision_map[decision]
+    decision = decision.upper() if isinstance(decision, str) else ""
+
+    user_id = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
+    user_name = payload.get("user_name") or payload.get("user", {}).get("username", "") or ""
+    channel_id = payload.get("channel_id") or ""
+    post_id = payload.get("post_id") or ""
+
+    if not approval_id:
+        raise HTTPException(status_code=400, detail="approval_id required")
+    if decision not in VALID_DECISIONS:
+        raise HTTPException(status_code=400, detail=f"invalid decision: {decision}, must be one of {VALID_DECISIONS}")
+
+    # Map Mattermost user to employee principal for decided_by
+    decided_by = user_id
+    # Try mattermost adapter mapping
+    try:
+        adapter = _get_mattermost_adapter()
+        if adapter is not None and user_id:
+            decided_by = adapter.map_mattermost_user(user_id, user_name)
+    except Exception:
+        pass
+
+    # Call approval service
+    store = _get_approval_store()
+    if store is None:
+        raise HTTPException(status_code=500, detail="approval service unavailable")
+
+    # If approval not found in this store instance, try to synthesize minimal request for test/dev
+    # In prod, approvals are persisted in DB/Redis — here we support in-memory for tests
+    try:
+        from approval_workflow.workflow import ApprovalDecision  # type: ignore
+
+        # Ensure request exists for idempotency in tests: if not found, return 404
+        existing = store.get(approval_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"approval not found: {approval_id}")
+
+        decision_enum = ApprovalDecision(decision)
+        group_id = payload.get("group_id") or context.get("group_id") or None
+        result = store.decide(approval_id, decision_enum, decided_by, group_id=group_id)
+        # Post confirmation back to Mattermost threaded if channel available
+        if channel_id:
+            try:
+                adapter = _get_mattermost_adapter()
+                if adapter is not None:
+                    asyncio.create_task(adapter.send_message(channel_id, f"Approval {approval_id} → {decision} by {decided_by}", root_id=post_id or None))
+            except Exception:
+                pass
+        return {"approval_id": approval_id, "decision": decision, "decided_by": decided_by, "status": result.decision.value if hasattr(result.decision, "value") else str(result.decision)}
+    except HTTPException:
+        raise
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
 
 @router.get("/mattermost/health")
 def mm_health():
