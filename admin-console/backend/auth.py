@@ -192,15 +192,26 @@ def _db_enabled() -> bool:
 
 
 def _normalize_sync_url(url: str) -> str:
-    """Strip async driver suffixes for sync SQLAlchemy (postgres/sqlite compat)."""
+    """Normalize async URL to sync psycopg driver (postgres/sqlite compat).
+
+    Uses psycopg (v3) driver which is installed as psycopg 3.3.4 / psycopg-binary.
+    Bare postgresql:// would require psycopg2 which is NOT installed -> ModuleNotFoundError.
+    """
     u = url.strip()
-    if "+asyncpg" in u:
-        u = u.replace("+asyncpg", "")
+    if u.startswith("postgresql+asyncpg://"):
+        u = u.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    elif "+asyncpg" in u:
+        # generic +asyncpg -> +psycopg (covers postgresql+asyncpg edge)
+        u = u.replace("+asyncpg", "+psycopg")
+    elif u.startswith("postgresql://"):
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
+    # sqlite+aiosqlite -> sqlite
     if "+aiosqlite" in u:
         u = u.replace("+aiosqlite", "")
-    # also handle bare async prefix
-    if u.startswith("postgresql+asyncpg://"):
-        u = u.replace("postgresql+asyncpg://", "postgresql://", 1)
+        u = u.replace("sqlite+://", "sqlite://")
+    if u.startswith("sqlite+"):
+        u = u.replace("sqlite+", "sqlite", 1)
+    # also handle bare sqlite+aiosqlite prefix
     if u.startswith("sqlite+aiosqlite://"):
         u = u.replace("sqlite+aiosqlite://", "sqlite://", 1)
     return u

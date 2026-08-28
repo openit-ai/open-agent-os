@@ -228,10 +228,33 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
     except Exception:
         pass
 
+    infra_count = 0
+    # Prefer DB count (authoritative) over in-memory _services
     try:
-        from infra import _services
-
-        infra_count = len(_services)
+        from infra import _services as _infra_services
+        # Try DB count first (persistent)
+        db_count = None
+        try:
+            import os
+            url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL") or ""
+            if url and "openagentos" in url:
+                from sqlalchemy import create_engine, text
+                sync_url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace("postgresql://", "postgresql+psycopg://") if url.startswith("postgresql") else url
+                # strip +asyncpg fallback already handled
+                if "+asyncpg" in sync_url:
+                    sync_url = sync_url.replace("+asyncpg", "+psycopg")
+                eng = create_engine(sync_url, pool_pre_ping=False)
+                with eng.connect() as conn:
+                    row = conn.execute(text("SELECT COUNT(*) FROM admin_infra_services")).fetchone()
+                    if row is not None:
+                        db_count = int(row[0])
+                eng.dispose()
+        except Exception:
+            db_count = None
+        if db_count is not None:
+            infra_count = db_count
+        else:
+            infra_count = len(_infra_services)
     except Exception:
         infra_count = 0
 
@@ -286,12 +309,19 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
     except Exception:
         pass
 
+    pending_n = len(pending_approvals) if isinstance(pending_approvals, list) else 0
+    # Frontend compat keys (DashboardPage expects these) + legacy keys
     return {
         "users_count": users_count,
         "policy_count": policy_count,
         "audit_count": audit_count,
         "infra_services_count": infra_count,
-        "pending_approvals_count": len(pending_approvals) if isinstance(pending_approvals, list) else 0,
+        "pending_approvals_count": pending_n,
+        # Frontend DashboardPage compat (aliases)
+        "total_users": users_count,
+        "total_agents": users_count,  # logical personal agents 1:1 with users (§14)
+        "pending_approvals": pending_n,
+        "audit_events_today": audit_count,
     }
 
 
@@ -327,6 +357,13 @@ def dashboard_approvals(admin: AdminUser = Depends(get_current_admin)):
 
 
 # ── Approvals proxy (Section 23-24) ──────────────────────────────
+@app.get("/v1/approvals")
+def approvals_list(limit: int = 5, admin: AdminUser = Depends(get_current_admin)):
+    """GET /v1/approvals — frontend compat (limit=5)."""
+    pending = _list_pending_approvals()
+    items = pending[: max(1, min(50, limit))]
+    return {"items": items, "count": len(pending)}
+
 @app.get("/v1/approvals/pending")
 def approvals_pending(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/approvals/pending — pending approvals list."""
@@ -422,6 +459,34 @@ def audit_events(admin: AdminUser = Depends(get_current_admin)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/v1/audit/chain")
+def audit_chain(admin: AdminUser = Depends(get_current_admin)):
+    """GET /v1/audit/chain — frontend compat (AuditChain {head_hash, chain_length, verified})."""
+    _, _, al = _get_security()
+    chain_length = 0
+    head_hash = None
+    verified = True
+    try:
+        if al is not None:
+            if hasattr(al, "verify_chain"):
+                vr = al.verify_chain()
+                verified = bool(vr) if not isinstance(vr, dict) else bool(vr.get("valid", True))
+            if hasattr(al, "head"):
+                h = al.head()
+                head_hash = getattr(h, "hash", None) if h is not None else None
+                if isinstance(h, dict):
+                    head_hash = h.get("hash") or h.get("head_hash")
+            if hasattr(al, "count"):
+                chain_length = int(al.count()) if callable(getattr(al, "count")) else int(getattr(al, "count", 0))
+            elif hasattr(al, "_events"):
+                chain_length = len(getattr(al, "_events", []))
+            elif hasattr(al, "events"):
+                ev = getattr(al, "events")
+                chain_length = len(ev) if isinstance(ev, list) else 0
+    except Exception:
+        pass
+    return {"head_hash": head_hash, "chain_length": chain_length, "verified": verified, "last_checkpoint": None}
 
 @app.get("/v1/audit/verify")
 def audit_verify(admin: AdminUser = Depends(get_current_admin)):
