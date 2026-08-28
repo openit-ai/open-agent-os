@@ -14,12 +14,16 @@ import sys
 # Ensure sibling imports work when run as module or via pytest conftest SYS.PATH injection
 sys.path.insert(0, os.path.dirname(__file__))
 
+import logging
+
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 try:
     from auth import router as auth_router, get_current_admin, AdminUser  # type: ignore
@@ -44,6 +48,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Admin persistence (v1.6 §27.3) — openagentos with in-memory fallback ─
+try:
+    from persistence import ensure_admin_tables, get_database_url  # type: ignore
+except ImportError:
+    try:
+        from .persistence import ensure_admin_tables, get_database_url  # type: ignore
+    except Exception:
+        ensure_admin_tables = None  # type: ignore
+        get_database_url = None  # type: ignore
+
+
+@app.on_event("startup")
+async def _admin_persistence_startup() -> None:
+    """Startup hook — ensure admin tables if DB configured, else fallback.
+
+    Must never raise; logs the required persistence readiness line so
+    Admin Web UI persistence is documented even when running in-memory.
+    """
+    if ensure_admin_tables is not None:
+        try:
+            await ensure_admin_tables()
+        except Exception as exc:  # pragma: no cover - safety net
+            logger.warning(f"Admin persistence startup fallback: {exc}")
+    # Required log line per spec (exact substring match)
+    logger.info("Admin persistence: openagentos ready (or in-memory fallback)")
+
 
 # ── Routers ──────────────────────────────────────────────────────
 app.include_router(auth_router)

@@ -1,9 +1,10 @@
 services:
+  # Postgres — pgvector/pg16, DB isolation: same PostgreSQL instance may be shared with Mattermost/Outline but databases/users are separate (mattermost / outline / openagentos)
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: open_agent_os
-      POSTGRES_USER: open_agent_os
+      POSTGRES_DB: openagentos
+      POSTGRES_USER: openagentos
       POSTGRES_PASSWORD: secret
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]

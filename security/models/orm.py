@@ -2,7 +2,8 @@
 
 Tables:
   delegations, credential_bindings, approval_requests, audit_events,
-  session_records, vault_credentials (encrypted column)
+  session_records, vault_credentials (encrypted column),
+  memories, memory_sources, admin_state  — v1.6 §27 persistent memory (pgvector ready)
 """
 from __future__ import annotations
 
@@ -21,6 +22,14 @@ try:
     JSONType = JSONB
 except Exception:  # pragma: no cover
     from sqlalchemy import JSON as JSONType  # type: ignore
+
+# ── pgvector ready: Vector(1536) on Postgres, fallback to Text for SQLite/tests ──
+try:
+    from pgvector.sqlalchemy import Vector as _PgVector  # type: ignore
+
+    _VECTOR_1536 = _PgVector(1536)  # type: ignore
+except Exception:  # pragma: no cover - pgvector not installed or SQLite
+    _VECTOR_1536 = Text  # fallback column type for sqlite compat
 
 
 class DelegationORM(Base):
@@ -133,3 +142,59 @@ class VaultCredentialORM(Base):
     scope: Mapped[str] = mapped_column(String(256), nullable=False)
     encrypted_token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ── v1.6 §27 Persistent Memory (pgvector ready, sqlite compatible) ────────────
+
+class MemoryORM(Base):
+    """Persistent memory — tenant-scoped, per-user/agent, pgvector embedding."""
+
+    __tablename__ = "memories"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    agent_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, default="episodic")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # pgvector Vector(1536) when available, else Text fallback for sqlite
+    embedding: Mapped[str | None] = mapped_column(_VECTOR_1536, nullable=True)  # type: ignore[arg-type]
+    source_ids: Mapped[list | None] = mapped_column(GenericJSON, nullable=True, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_memories_tenant_user", "tenant_id", "user_id"),
+        Index("ix_memories_tenant_agent", "tenant_id", "agent_id"),
+    )
+
+
+class MemorySourceORM(Base):
+    """Provenance source for a memory chunk — links memory to origin resource."""
+
+    __tablename__ = "memory_sources"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    memory_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, default="document")
+    source_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    source_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", GenericJSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_memory_sources_memory", "memory_id"),)
+
+
+class AdminStateORM(Base):
+    """Admin Web UI persistent state — generic key/value store for §27.3."""
+
+    __tablename__ = "admin_state"
+
+    key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    value: Mapped[dict | list | None] = mapped_column(GenericJSON, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(256), nullable=True)

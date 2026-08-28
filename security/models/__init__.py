@@ -8,6 +8,9 @@ from .orm import (
     AuditEventORM,
     SessionRecordORM,
     VaultCredentialORM,
+    MemoryORM,
+    MemorySourceORM,
+    AdminStateORM,
 )
 
 __all__ = [
@@ -21,4 +24,7 @@ __all__ = [
     "AuditEventORM",
     "SessionRecordORM",
     "VaultCredentialORM",
+    "MemoryORM",
+    "MemorySourceORM",
+    "AdminStateORM",
 ]

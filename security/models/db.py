@@ -13,7 +13,7 @@ class Base(DeclarativeBase):
 def _database_url() -> str:
     url = os.environ.get("DATABASE_URL") or os.environ.get("OAOS_DATABASE_URL", "")
     if not url:
-        url = "postgresql+asyncpg://open_agent_os:secret@localhost:5432/open_agent_os"
+        url = "postgresql+asyncpg://openagentos:secret@localhost:5432/openagentos"
     # ensure async driver
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
