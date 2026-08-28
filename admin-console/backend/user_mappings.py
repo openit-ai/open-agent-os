@@ -11,10 +11,12 @@ Endpoints:
 
 RBAC: L4 read, L5 write per §22.
 Wire into app.py: from user_mappings import router as user_mappings_router; app.include_router(user_mappings_router)
+DB persistence (AdminUserMappingORM) when DATABASE_URL/OAOS_DATABASE_URL set, fallback to dict.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -22,7 +24,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-import os
 import httpx
 
 try:
@@ -55,15 +56,220 @@ class SyncRequest(BaseModel):
     users: Optional[list[dict]] = None  # each {mm_user_id, mm_username}
 
 # ---------------------------------------------------------------------------
-# In-memory store
+# In-memory store (fallback)
 # ---------------------------------------------------------------------------
 _mappings: dict[str, MattermostMapping] = {}
 
 def clear_mappings() -> None:
     _mappings.clear()
+    if _is_db_enabled():
+        try:
+            _db_clear_all()
+        except Exception:
+            pass
 
 def list_mappings() -> list[MattermostMapping]:
+    # try DB first
+    if _is_db_enabled():
+        items = _db_list_mappings()
+        if items is not None:
+            # sync dict mirror
+            for m in items:
+                _mappings[m.id] = m
+            return sorted(items, key=lambda m: m.created_at, reverse=True)
     return sorted(_mappings.values(), key=lambda m: m.created_at, reverse=True)
+
+# ---------------------------------------------------------------------------
+# DB persistence helpers — lazy, never import at top-level that breaks without DB
+# ---------------------------------------------------------------------------
+_db_engine = None
+_db_session_factory = None  # type: ignore
+
+
+def _db_url() -> str | None:
+    url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if url and url.strip():
+        return url.strip()
+    return None
+
+
+def _is_db_enabled() -> bool:
+    try:
+        u = _db_url()
+        return bool(u)
+    except Exception:
+        return False
+
+
+def _normalize_sync_url(url: str) -> str:
+    u = url.strip()
+    if u.startswith("postgresql+asyncpg://"):
+        u = u.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    elif u.startswith("postgresql://"):
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
+    if "+aiosqlite" in u:
+        u = u.replace("+aiosqlite", "")
+        u = u.replace("sqlite+://", "sqlite://")
+    if u.startswith("sqlite+"):
+        u = u.replace("sqlite+", "sqlite", 1)
+    return u
+
+
+def _get_session_factory():
+    global _db_engine, _db_session_factory
+    if _db_session_factory is not None:
+        return _db_session_factory
+    url = _db_url()
+    if not url:
+        return None
+    try:
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        sync_url = _normalize_sync_url(url)
+        kwargs: dict = {"pool_pre_ping": True}
+        if sync_url.startswith("sqlite"):
+            kwargs = {}
+            if ":memory:" in sync_url:
+                kwargs["connect_args"] = {"check_same_thread": False}
+        _db_engine = create_engine(sync_url, **kwargs)
+        _db_session_factory = sessionmaker(bind=_db_engine, autoflush=False, autocommit=False)
+        return _db_session_factory
+    except Exception:
+        return None
+
+
+def _orm_to_mapping(row) -> MattermostMapping:
+    # ORM has employee_id / employee_principal; prefer employee_principal then employee_id
+    principal = getattr(row, "employee_principal", None) or getattr(row, "employee_id", None) or ""
+    return MattermostMapping(
+        id=row.id,
+        mm_user_id=row.mm_user_id,
+        mm_username=row.mm_username,
+        employee_principal=principal,
+        agent_id=row.agent_id or "",
+        status=row.status or "active",
+        created_at=row.created_at,
+        created_by=row.created_by or "",
+    )
+
+
+def _db_clear_all() -> None:
+    factory = _get_session_factory()
+    if factory is None:
+        return
+    try:
+        from security.models.orm import AdminUserMappingORM  # type: ignore
+
+        with factory() as s:
+            s.query(AdminUserMappingORM).delete()
+            s.commit()
+    except Exception:
+        pass
+
+
+def _db_list_mappings() -> list[MattermostMapping] | None:
+    if not _is_db_enabled():
+        return None
+    factory = _get_session_factory()
+    if factory is None:
+        return None
+    try:
+        from security.models.orm import AdminUserMappingORM  # type: ignore
+
+        with factory() as s:
+            rows = s.query(AdminUserMappingORM).order_by(AdminUserMappingORM.created_at.desc()).all()
+            return [_orm_to_mapping(r) for r in rows]
+    except Exception:
+        return None
+
+
+def _db_get_mapping(mid: str) -> MattermostMapping | None:
+    if not _is_db_enabled():
+        return None
+    factory = _get_session_factory()
+    if factory is None:
+        return None
+    try:
+        from security.models.orm import AdminUserMappingORM  # type: ignore
+
+        with factory() as s:
+            row = s.query(AdminUserMappingORM).filter(AdminUserMappingORM.id == mid).first()
+            if row is None:
+                return None
+            return _orm_to_mapping(row)
+    except Exception:
+        return None
+
+
+def _db_exists_mm_user_id(mm_user_id: str) -> bool | None:
+    if not _is_db_enabled():
+        return None
+    factory = _get_session_factory()
+    if factory is None:
+        return None
+    try:
+        from security.models.orm import AdminUserMappingORM  # type: ignore
+
+        with factory() as s:
+            exists = s.query(AdminUserMappingORM).filter(AdminUserMappingORM.mm_user_id == mm_user_id).first() is not None
+            return exists
+    except Exception:
+        return None
+
+
+def _db_create_mapping(m: MattermostMapping) -> bool:
+    if not _is_db_enabled():
+        return False
+    factory = _get_session_factory()
+    if factory is None:
+        return False
+    try:
+        from security.models.orm import AdminUserMappingORM  # type: ignore
+
+        with factory() as s:
+            orm = AdminUserMappingORM(
+                id=m.id,
+                mm_user_id=m.mm_user_id,
+                mm_username=m.mm_username,
+                employee_principal=m.employee_principal,
+                employee_id=m.employee_principal,  # compat column
+                agent_id=m.agent_id,
+                status=m.status,
+                created_at=m.created_at,
+                created_by=m.created_by,
+            )
+            s.add(orm)
+            s.commit()
+            return True
+    except Exception:
+        try:
+            with factory() as s2:
+                s2.rollback()
+        except Exception:
+            pass
+        return False
+
+
+def _db_delete_mapping(mid: str) -> bool | None:
+    if not _is_db_enabled():
+        return None
+    factory = _get_session_factory()
+    if factory is None:
+        return None
+    try:
+        from security.models.orm import AdminUserMappingORM  # type: ignore
+
+        with factory() as s:
+            row = s.query(AdminUserMappingORM).filter(AdminUserMappingORM.id == mid).first()
+            if row is None:
+                return False
+            s.delete(row)
+            s.commit()
+            return True
+    except Exception:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Helpers — auto-derive logic (mirrors MattermostAdapter.map_mattermost_user)
@@ -232,10 +438,25 @@ def create_user_mapping(req: CreateMappingRequest, admin: AdminUser = Depends(re
 
     agent_id = _derive_agent_id(principal)
 
-    # optional: prevent duplicate mm_user_id (return 409)
-    for existing in _mappings.values():
-        if existing.mm_user_id == mm_user_id:
+    # optional: prevent duplicate mm_user_id — check DB if enabled, else dict
+    if _is_db_enabled():
+        dup = _db_exists_mm_user_id(mm_user_id)
+        if dup is True:
             raise HTTPException(status_code=409, detail=f"mapping for mm_user_id {mm_user_id} already exists")
+        if dup is None:
+            # DB unreachable, fallback to dict check
+            for existing in _mappings.values():
+                if existing.mm_user_id == mm_user_id:
+                    raise HTTPException(status_code=409, detail=f"mapping for mm_user_id {mm_user_id} already exists")
+        else:
+            # dup is False -> not exists, continue; also check dict mirror
+            for existing in _mappings.values():
+                if existing.mm_user_id == mm_user_id:
+                    raise HTTPException(status_code=409, detail=f"mapping for mm_user_id {mm_user_id} already exists")
+    else:
+        for existing in _mappings.values():
+            if existing.mm_user_id == mm_user_id:
+                raise HTTPException(status_code=409, detail=f"mapping for mm_user_id {mm_user_id} already exists")
 
     mid = f"map_{uuid.uuid4().hex[:10]}"
     now = datetime.now(timezone.utc)
@@ -249,12 +470,35 @@ def create_user_mapping(req: CreateMappingRequest, admin: AdminUser = Depends(re
         created_at=now,
         created_by=admin.email,
     )
+    # try DB persist first
+    if _is_db_enabled():
+        ok = _db_create_mapping(mapping)
+        if ok:
+            _mappings[mid] = mapping
+            return mapping.model_dump(mode="json")
+        # if DB enabled but create failed due to unique constraint, surface 409
+        # check if already exists
+        if _db_exists_mm_user_id(mm_user_id) is True:
+            raise HTTPException(status_code=409, detail=f"mapping for mm_user_id {mm_user_id} already exists")
+        # if DB error, fallback to dict
     _mappings[mid] = mapping
     return mapping.model_dump(mode="json")
 
 @router.delete("/{mapping_id}", response_model=None)
 def delete_user_mapping(mapping_id: str, admin: AdminUser = Depends(require_l5)):
     """DELETE /v1/user-mappings/{id} — L5 only."""
+    if _is_db_enabled():
+        res = _db_delete_mapping(mapping_id)
+        if res is True:
+            _mappings.pop(mapping_id, None)
+            return {"status": "deleted", "id": mapping_id}
+        if res is False:
+            # not found in DB — check dict
+            if mapping_id not in _mappings:
+                raise HTTPException(status_code=404, detail="mapping not found")
+            del _mappings[mapping_id]
+            return {"status": "deleted", "id": mapping_id}
+        # None -> DB error, fallback to dict
     if mapping_id not in _mappings:
         raise HTTPException(status_code=404, detail="mapping not found")
     del _mappings[mapping_id]
@@ -302,8 +546,8 @@ def sync_preview(body: Optional[SyncRequest] = None, admin: AdminUser = Depends(
             })
     else:
         # No users provided — preview from stored mappings (derived view)
-        # Also provide derived example for known stored users? Return stored as preview
-        for m in _mappings.values():
+        # Use list_mappings() which is DB-aware
+        for m in list_mappings():
             preview.append({
                 "mm_user_id": m.mm_user_id,
                 "mm_username": m.mm_username,
