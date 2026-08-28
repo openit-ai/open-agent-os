@@ -1,0 +1,374 @@
+"""LLM Provider Vault — Fernet encryption + secret_ref + DB fallback.
+
+- Fernet encrypt/decrypt roundtrip
+- OAOS_VAULT_KEY / VAULT_ENCRYPTION_KEY env loading
+- encrypted_api_key + secret_ref (vault://admin_llm_providers/{id}/api_key)
+- GET masking (****)
+- creation/update 암호화 저장, raw never leaked
+- Alembic 009 columns 활용, DB-backed (SQLAlchemy) with in-memory fallback
+"""
+from __future__ import annotations
+
+import os
+import sys
+import importlib.util
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "admin-console" / "backend"
+
+
+def _load_admin_module(name: str, filename: str, bare_alias: str | None = None):
+    if str(BACKEND) not in sys.path:
+        sys.path.insert(0, str(BACKEND))
+    spec = importlib.util.spec_from_file_location(name, str(BACKEND / filename))
+    mod = importlib.util.module_from_spec(spec)  # type: ignore
+    sys.modules[name] = mod
+    if bare_alias:
+        sys.modules[bare_alias] = mod
+    spec.loader.exec_module(mod)  # type: ignore
+    return mod
+
+
+# Load fresh modules — ensure llm_providers sees cryptography
+auth_mod = _load_admin_module("admin_auth_vault", "auth.py", bare_alias="auth")
+# Ensure llm_providers loads after auth
+llm_mod = _load_admin_module("admin_llm_providers_vault", "llm_providers.py", bare_alias="llm_providers")
+app_mod = _load_admin_module("admin_app_vault", "app.py")
+# Remove BACKEND from path front to avoid polluting other tests
+if str(BACKEND) in sys.path:
+    sys.path.remove(str(BACKEND))
+
+admin_app = app_mod.app
+
+
+@pytest.fixture(autouse=True)
+def isolate():
+    # deterministic vault key for tests
+    os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
+    # clear state
+    try:
+        auth_mod.clear_users()
+    except Exception:
+        pass
+    try:
+        llm_mod.clear_providers()
+    except Exception:
+        pass
+    # also clear legacy bare alias modules if present
+    yield
+    try:
+        llm_mod.clear_providers()
+    except Exception:
+        pass
+    try:
+        auth_mod.clear_users()
+    except Exception:
+        pass
+
+
+def _client():
+    return TestClient(admin_app)
+
+
+def _login(email="admin@openit.co.kr", password="Admin123!"):
+    c = _client()
+    r = c.post("/v1/auth/login", json={"email": email, "password": password})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+def _auth(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ---------------------------------------------------------------------------
+# 1. Fernet crypto unit
+# ---------------------------------------------------------------------------
+def test_fernet_roundtrip():
+    plain = "sk-test-1234567890abcdef"
+    enc = llm_mod._encrypt_api_key(plain)
+    assert enc != plain
+    assert enc != ""
+    # encrypted should be Fernet token (base64 urlsafe, starts with gAAAAA)
+    assert enc.startswith("gAAAAA")
+    dec = llm_mod._decrypt_api_key(enc)
+    assert dec == plain
+
+
+def test_fernet_env_key_loading():
+    # OAOS_VAULT_KEY is set in fixture
+    enc1 = llm_mod._encrypt_api_key("hello-key-1")
+    dec1 = llm_mod._decrypt_api_key(enc1)
+    assert dec1 == "hello-key-1"
+    # Change to VAULT_ENCRYPTION_KEY fallback: clear OAOS_VAULT_KEY, set VAULT_ENCRYPTION_KEY
+    old_oaos = os.environ.pop("OAOS_VAULT_KEY", None)
+    os.environ["VAULT_ENCRYPTION_KEY"] = "fallback-vault-key-32bytes-test!!"
+    llm_mod._fernet_cache.clear()
+    enc2 = llm_mod._encrypt_api_key("hello-key-2")
+    dec2 = llm_mod._decrypt_api_key(enc2)
+    assert dec2 == "hello-key-2"
+    # wrong key should fail decrypt
+    os.environ["VAULT_ENCRYPTION_KEY"] = "different-key-should-fail-decrypt!!"
+    llm_mod._fernet_cache.clear()
+    dec_fail = llm_mod._decrypt_api_key(enc2)
+    assert dec_fail is None or dec_fail != "hello-key-2"
+    # restore
+    if old_oaos is not None:
+        os.environ["OAOS_VAULT_KEY"] = old_oaos
+    os.environ.pop("VAULT_ENCRYPTION_KEY", None)
+    llm_mod._fernet_cache.clear()
+    os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
+
+
+def test_fernet_decrypt_invalid():
+    assert llm_mod._decrypt_api_key(None) is None
+    assert llm_mod._decrypt_api_key("") is None
+    assert llm_mod._decrypt_api_key("not-a-fernet-token") is None
+
+
+# ---------------------------------------------------------------------------
+# 2. secret_ref format
+# ---------------------------------------------------------------------------
+def test_secret_ref_format():
+    assert llm_mod._make_secret_ref("llm_abc123") == "vault://admin_llm_providers/llm_abc123/api_key"
+
+
+# ---------------------------------------------------------------------------
+# 3. CRUD with encryption + masking
+# ---------------------------------------------------------------------------
+def test_create_masks_and_encrypts():
+    token = _login()
+    c = _client()
+    h = _auth(token)
+    raw_key = "sk-claude-test-1234567890abcdef"
+    r = c.post("/v1/llm/providers", json={"provider": "claude", "apiKey": raw_key, "model": "claude-3"}, headers=h)
+    assert r.status_code == 201, r.text
+    data = r.json()
+    pid = data["id"]
+    # response must be masked, not raw
+    assert data["apiKey"] != raw_key
+    assert "***" in data["apiKey"]
+    assert data["api_key"] != raw_key
+    assert "***" in data["api_key"]
+    # raw must never appear in response body
+    assert raw_key not in r.text
+    # encrypted storage must exist and be Fernet token
+    enc = llm_mod.get_encrypted_api_key(pid)
+    assert enc is not None
+    assert enc != raw_key
+    assert enc.startswith("gAAAAA")
+    # decrypt should yield original
+    assert llm_mod.decrypt_api_key_for_test(enc) == raw_key
+    # secret_ref format
+    sref = llm_mod.get_secret_ref(pid)
+    assert sref == f"vault://admin_llm_providers/{pid}/api_key"
+    # also exposed in response
+    assert data.get("secret_ref") == sref
+
+
+def test_get_masks():
+    token = _login()
+    c = _client()
+    h = _auth(token)
+    raw = "sk-gemini-1234567890abcdefXXXX"
+    r = c.post("/v1/llm/providers", json={"provider": "gemini", "apiKey": raw}, headers=h)
+    pid = r.json()["id"]
+    # GET single
+    r2 = c.get(f"/v1/llm/providers/{pid}", headers=h)
+    assert r2.status_code == 200
+    assert raw not in r2.text
+    assert "***" in r2.json()["apiKey"]
+    # LIST
+    r3 = c.get("/v1/llm/providers", headers=h)
+    assert r3.status_code == 200
+    items = r3.json()["providers"]
+    found = [x for x in items if x["id"] == pid]
+    assert len(found) == 1
+    assert "***" in found[0]["apiKey"]
+    assert raw not in r3.text
+
+
+def test_update_re_encrypts():
+    token = _login()
+    c = _client()
+    h = _auth(token)
+    raw1 = "sk-codex-orig-1234567890abcd"
+    r = c.post("/v1/llm/providers", json={"provider": "codex", "apiKey": raw1}, headers=h)
+    pid = r.json()["id"]
+    enc1 = llm_mod.get_encrypted_api_key(pid)
+    # update with new key
+    raw2 = "sk-codex-new-9999999999abcd"
+    r2 = c.patch(f"/v1/llm/providers/{pid}", json={"apiKey": raw2}, headers=h)
+    assert r2.status_code == 200
+    assert "***" in r2.json()["apiKey"]
+    assert raw2 not in r2.text
+    enc2 = llm_mod.get_encrypted_api_key(pid)
+    assert enc2 != enc1
+    assert llm_mod.decrypt_api_key_for_test(enc2) == raw2
+    # patch with masked placeholder should NOT change key
+    masked = r2.json()["apiKey"]
+    r3 = c.patch(f"/v1/llm/providers/{pid}", json={"apiKey": masked}, headers=h)
+    assert r3.status_code == 200
+    enc3 = llm_mod.get_encrypted_api_key(pid)
+    assert enc3 == enc2  # unchanged
+
+
+def test_create_opencode_ollama_no_api_key():
+    token = _login()
+    c = _client()
+    h = _auth(token)
+    # opencode requires path, no apiKey
+    r = c.post("/v1/llm/providers", json={"provider": "opencode", "path": "/opt/opencode"}, headers=h)
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    assert llm_mod.get_encrypted_api_key(pid) is None or llm_mod.get_encrypted_api_key(pid) == ""
+    assert llm_mod.get_secret_ref(pid) is None  # no secret_ref when no apiKey
+    # ollama requires url
+    r2 = c.post("/v1/llm/providers", json={"provider": "ollama", "url": "http://localhost:11434"}, headers=h)
+    assert r2.status_code == 201, r2.text
+
+
+def test_delete_clears_encrypted():
+    token = _login()
+    c = _client()
+    h = _auth(token)
+    r = c.post("/v1/llm/providers", json={"provider": "claude", "apiKey": "sk-delete-test-12345678"}, headers=h)
+    pid = r.json()["id"]
+    assert llm_mod.get_encrypted_api_key(pid) is not None
+    r2 = c.delete(f"/v1/llm/providers/{pid}", headers=h)
+    assert r2.status_code == 200
+    assert llm_mod.get_encrypted_api_key(pid) is None
+    r3 = c.get(f"/v1/llm/providers/{pid}", headers=h)
+    assert r3.status_code == 404
+
+
+def test_test_and_toggle_persist():
+    token = _login()
+    c = _client()
+    h = _auth(token)
+    r = c.post("/v1/llm/providers", json={"provider": "claude", "apiKey": "sk-toggle-test-12345678"}, headers=h)
+    pid = r.json()["id"]
+    # test
+    r2 = c.post(f"/v1/llm/providers/{pid}/test", headers=h)
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "ok"
+    # toggle
+    before = c.get(f"/v1/llm/providers/{pid}", headers=h).json()["enabled"]
+    r3 = c.post(f"/v1/llm/providers/{pid}/toggle", headers=h)
+    assert r3.status_code == 200
+    assert r3.json()["enabled"] != before
+
+
+# ---------------------------------------------------------------------------
+# 4. DB-backed with sqlite memory (OAOS_DATABASE_URL)
+# ---------------------------------------------------------------------------
+def test_db_backed_sqlite_memory():
+    # Use sqlite memory for this test — set OAOS_DATABASE_URL
+    import tempfile
+
+    # create a temp sqlite file so multiple connections share state (4 slashes = absolute path)
+    db_url = "sqlite:////tmp/test_llm_provider_vault.db"
+    old_url = os.environ.get("OAOS_DATABASE_URL")
+    old_db = os.environ.get("DATABASE_URL")
+    os.environ["OAOS_DATABASE_URL"] = db_url
+    # reset engine cache so new URL is picked up
+    llm_mod._db_engine = None
+    llm_mod._db_session_factory = None
+    llm_mod._fernet_cache.clear()
+    os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
+    # need to recreate table
+    try:
+        from sqlalchemy import create_engine
+
+        sync_url = llm_mod._normalize_sync_url(db_url)
+        eng = create_engine(sync_url)
+        llm_mod._db_ensure_table(eng)
+        eng.dispose()
+    except Exception:
+        pass
+
+    # clear providers (also clears DB)
+    llm_mod.clear_providers()
+
+    token = _login()
+    c = _client()
+    h = _auth(token)
+    raw = "sk-db-test-1234567890abcdef"
+    r = c.post("/v1/llm/providers", json={"provider": "claude", "apiKey": raw, "model": "claude-3"}, headers=h)
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    assert "***" in r.json()["apiKey"]
+    assert raw not in r.text
+
+    # Verify DB row has encrypted_api_key and secret_ref, not raw
+    try:
+        from sqlalchemy import create_engine, text
+
+        sync_url = llm_mod._normalize_sync_url(db_url)
+        eng = create_engine(sync_url)
+        with eng.connect() as conn:
+            row = conn.execute(text("SELECT id, provider, encrypted_api_key, secret_ref, vault_backend FROM admin_llm_providers WHERE id=:id"), {"id": pid}).fetchone()
+            assert row is not None, "DB row not found"
+            assert row[2] is not None and row[2].startswith("gAAAAA"), f"encrypted_api_key not Fernet: {row[2]}"
+            assert row[2] != raw
+            assert raw not in str(row[2])
+            assert row[3] == f"vault://admin_llm_providers/{pid}/api_key"
+            assert row[4] == "fernet"
+        eng.dispose()
+    except Exception as e:
+        pytest.fail(f"DB verification failed: {e}")
+
+    # GET via DB should still mask
+    r2 = c.get(f"/v1/llm/providers/{pid}", headers=h)
+    assert r2.status_code == 200
+    assert raw not in r2.text
+    assert "***" in r2.json()["apiKey"]
+
+    # LIST via DB
+    r3 = c.get("/v1/llm/providers", headers=h)
+    assert r3.status_code == 200
+    assert any(x["id"] == pid for x in r3.json()["providers"])
+
+    # cleanup
+    llm_mod.clear_providers()
+    # remove sqlite file
+    try:
+        Path("/tmp/test_llm_provider_vault.db").unlink(missing_ok=True)
+    except Exception:
+        pass
+    # restore env
+    if old_url is not None:
+        os.environ["OAOS_DATABASE_URL"] = old_url
+    else:
+        os.environ.pop("OAOS_DATABASE_URL", None)
+    if old_db is not None:
+        os.environ["DATABASE_URL"] = old_db
+    else:
+        os.environ.pop("DATABASE_URL", None)
+    llm_mod._db_engine = None
+    llm_mod._db_session_factory = None
+    llm_mod._fernet_cache.clear()
+    os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
+    llm_mod.clear_providers()
+
+
+def test_009_migration_columns_exist():
+    """Verify Alembic 009 created expected columns."""
+    path = ROOT / "alembic" / "versions" / "009_admin_llm_providers.py"
+    assert path.exists()
+    content = path.read_text()
+    assert "encrypted_api_key" in content
+    assert "secret_ref" in content
+    assert "vault_backend" in content
+    assert "admin_llm_providers" in content
+    # ORM should have same columns
+    from security.models.orm import AdminLLMProviderORM
+
+    cols = {c.key for c in AdminLLMProviderORM.__table__.columns}
+    assert "encrypted_api_key" in cols
+    assert "secret_ref" in cols
+    assert "vault_backend" in cols
