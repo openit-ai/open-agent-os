@@ -25,6 +25,7 @@ import {
   type SyncPreviewItem,
 } from "@/lib/api";
 import { Trash2, RefreshCw, UserPlus, Users, Link2, Eye, Loader2 } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 function mappingStatusVariant(s: string) {
   const v = s?.toLowerCase();
@@ -47,10 +48,11 @@ function fmtDate(iso?: string | null) {
 
 export default function UsersPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [tab, setTab] = useState<string>("admin");
   const [me, setMe] = useState<AdminUserPublic | null>(null);
 
-  // ---- Admin Users state ----
+  // ---- {t("users.tabsAdmin")} state ----
   const [users, setUsers] = useState<AdminUserPublic[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +90,7 @@ export default function UsersPage() {
       else if ((usersData as { users?: AdminUserPublic[] }).users) setUsers((usersData as { users?: AdminUserPublic[] }).users!);
       else setUsers([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "조회 실패");
+      setError(e instanceof Error ? e.message : t("users.lookupFailed"));
     } finally {
       setLoading(false);
     }
@@ -106,7 +108,7 @@ export default function UsersPage() {
           []);
       setMappings(arr);
     } catch (e) {
-      setMapError(e instanceof Error ? e.message : "매핑 조회 실패");
+      setMapError(e instanceof Error ? e.message : t("common.error"));
     } finally {
       setMapLoading(false);
     }
@@ -153,11 +155,11 @@ export default function UsersPage() {
     e.preventDefault();
     setFormError(null);
     if (!email || !displayName || !password) {
-      setFormError("이메일, 이름, 비밀번호는 필수입니다.");
+      setFormError(t("users.validationRequired"));
       return;
     }
     if (password.length < 8) {
-      setFormError("비밀번호는 8자 이상이어야 합니다.");
+      setFormError(t("users.validationPassword"));
       return;
     }
     setFormLoading(true);
@@ -169,7 +171,7 @@ export default function UsersPage() {
       setRole("L4");
       await fetchAdmin();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "등록 실패");
+      setFormError(err instanceof Error ? err.message : t("common.error"));
     } finally {
       setFormLoading(false);
     }
@@ -177,16 +179,16 @@ export default function UsersPage() {
 
   async function handleDelete(id: string) {
     if (me && me.id === id) {
-      alert("자기 자신은 삭제할 수 없습니다.");
+      alert(t("users.selfDeleteError"));
       return;
     }
-    if (!confirm("해당 사용자를 삭제하시겠습니까?")) return;
+    if (!confirm(t("users.deleteConfirm"))) return;
     setDeleting(id);
     try {
       await deleteUser(id);
       await fetchAdmin();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "삭제 실패");
+      alert(e instanceof Error ? e.message : t("common.error"));
     } finally {
       setDeleting(null);
     }
@@ -196,15 +198,15 @@ export default function UsersPage() {
   async function handleResolve() {
     setResolveMsg(null);
     const uname = mmUsername.trim() || mmUserId.trim();
-    if (!uname) { setResolveMsg("Username을 먼저 입력하세요."); return; }
+    if (!uname) { setResolveMsg(t("users.lookupNeedUsername")); return; }
     setResolving(true);
     try {
       const r = await resolveMmUser(uname);
       setMmUserId(r.mm_user_id);
       if (r.mm_username) setMmUsername(r.mm_username);
-      setResolveMsg(`조회 성공: ${r.mm_username} → ${r.mm_user_id.slice(0,8)}...`);
+      setResolveMsg(t("users.lookupSuccess", { username: r.mm_username, id: r.mm_user_id.slice(0,8) }));
     } catch (err) {
-      setResolveMsg(err instanceof Error ? err.message : "조회 실패");
+      setResolveMsg(err instanceof Error ? err.message : t("users.lookupFailed"));
     } finally {
       setResolving(false);
     }
@@ -214,7 +216,7 @@ export default function UsersPage() {
     e.preventDefault();
     setMapFormError(null);
     if (!mmUsername.trim()) {
-      setMapFormError("MM Username은 필수입니다.");
+      setMapFormError(t("users.validationMmUsername"));
       return;
     }
     let finalId = mmUserId.trim();
@@ -227,7 +229,7 @@ export default function UsersPage() {
         finalId = r.mm_user_id;
         finalUsername = r.mm_username || finalUsername;
         setMmUserId(finalId);
-        setResolveMsg(`조회 성공: ${r.mm_username} → ${r.mm_user_id.slice(0,8)}...`);
+        setResolveMsg(t("users.lookupSuccess", { username: r.mm_username, id: r.mm_user_id.slice(0,8) }));
       } catch (err) {
         // 백엔드가 자동 조회하므로 그대로 제출 시도 — 실패 시 백엔드 에러 표시
         // 하지만 UX상 메시지 유지
@@ -237,7 +239,7 @@ export default function UsersPage() {
       }
     }
     if (employeePrincipal.trim() && !employeePrincipal.trim().startsWith("employee:")) {
-      setMapFormError("employee_principal은 employee: 로 시작해야 합니다.");
+      setMapFormError(t("users.validationPrincipal"));
       return;
     }
     if (!mapFormLoading) setMapFormLoading(true);
@@ -253,20 +255,20 @@ export default function UsersPage() {
       setPreview(null);
       await fetchMappings();
     } catch (err) {
-      setMapFormError(err instanceof Error ? err.message : "매핑 등록 실패");
+      setMapFormError(err instanceof Error ? err.message : t("common.error"));
     } finally {
       setMapFormLoading(false);
     }
   }
 
   async function handleDeleteMapping(id: string) {
-    if (!confirm("해당 매핑을 삭제하시겠습니까?")) return;
+    if (!confirm(t("users.deleteConfirm"))) return;
     setDeletingMap(id);
     try {
       await deleteMapping(id);
       await fetchMappings();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "매핑 삭제 실패");
+      alert(e instanceof Error ? e.message : t("common.error"));
     } finally {
       setDeletingMap(null);
     }
@@ -284,7 +286,7 @@ export default function UsersPage() {
           []);
       setPreview(arr);
     } catch (e) {
-      setPreviewError(e instanceof Error ? e.message : "미리보기 실패");
+      setPreviewError(e instanceof Error ? e.message : t("common.error"));
     } finally {
       setPreviewLoading(false);
     }
@@ -295,7 +297,7 @@ export default function UsersPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="flex items-center gap-2 text-2xl font-semibold">
           <Users className="h-6 w-6" />
-          Users / Agents
+          {t("users.title")}
         </h1>
         <Button
           variant="outline"
@@ -315,15 +317,15 @@ export default function UsersPage() {
         <TabsList className="w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="admin" className="gap-1.5">
             <Users className="h-4 w-4" />
-            Admin Users
+            {t("users.tabsAdmin")}
           </TabsTrigger>
           <TabsTrigger value="mapping" className="gap-1.5">
             <Link2 className="h-4 w-4" />
-            Mattermost → Agent 매핑
+            {t("users.tabsMapping")}
           </TabsTrigger>
         </TabsList>
 
-        {/* Admin Users tab - existing intact */}
+        {/* {t("users.tabsAdmin")} tab - existing intact */}
         <TabsContent value="admin" className="space-y-6">
           {error && (
             <p className="rounded-md bg-[#DC2626]/10 p-3 text-sm text-[#DC2626]" role="alert">
@@ -335,9 +337,9 @@ export default function UsersPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
                   <UserPlus className="h-4 w-4" />
-                  사용자 등록
+                  {t("users.adminRegisterTitle")}
                 </CardTitle>
-                <CardDescription>L5 Infra Admin만 신규 사용자를 등록할 수 있습니다.</CardDescription>
+                <CardDescription>{t("users.adminRegisterDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleRegister} className="grid gap-4 sm:grid-cols-2">
@@ -381,7 +383,7 @@ export default function UsersPage() {
           ) : me ? (
             <Card>
               <CardContent className="pt-6">
-                <p className="text-sm text-muted-foreground">현재 계정은 L4 (읽기 전용)입니다. 사용자 등록은 L5만 가능합니다.</p>
+                <p className="text-sm text-muted-foreground">현재 계정은 L4 (읽기 전용)입니다. {t("users.adminRegisterTitle")}은 L5만 가능합니다.</p>
               </CardContent>
             </Card>
           ) : null}
@@ -455,7 +457,7 @@ export default function UsersPage() {
           <p className="text-xs text-muted-foreground">JWT 기반 인증. 삭제는 L5만 가능하며 자기 자신 삭제는 차단됩니다.</p>
         </TabsContent>
 
-        {/* Mattermost → Agent 매핑 tab */}
+        {/* {t("users.tabsMapping")} tab */}
         <TabsContent value="mapping" className="space-y-6">
           {mapError && (
             <p className="rounded-md bg-[#DC2626]/10 p-3 text-sm text-[#DC2626]" role="alert">
@@ -467,7 +469,7 @@ export default function UsersPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <Link2 className="h-4 w-4" />
-                Mattermost → Agent 매핑 등록
+                {t("users.tabsMapping")} 등록
               </CardTitle>
               <CardDescription>
                 Username만 입력해도 ID 자동 조회 가능 · Employee Principal 미입력 시 자동 유도 (<span className="font-mono text-xs">employee:&lt;username|id&gt;</span> → <span className="font-mono text-xs">agent:assistant:&lt;suffix&gt;</span>)

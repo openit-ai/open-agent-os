@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch, getToken } from "@/lib/api";
 import { RefreshCw, Trash2, Pencil, Plus } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 interface InfraItem {
   id: string; service: string; host: string; port: number; health_path: string;
@@ -25,6 +26,7 @@ function statusVariant(s: string) {
 
 export default function InfraPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [items, setItems] = useState<InfraItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,9 +47,9 @@ export default function InfraPage() {
       const list: InfraItem[] = Array.isArray(res) ? res : (res as { items: InfraItem[] }).items ?? [];
       setItems(list);
       setError(null);
-    } catch (e) { setError(e instanceof Error ? e.message : "조회 실패"); }
+    } catch (e) { setError(e instanceof Error ? e.message : t("common.error")); }
     finally { setLoading(false); }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!getToken()) { router.replace("/login"); return; }
@@ -59,9 +61,9 @@ export default function InfraPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    if (!host || !port) { setFormError("host, port는 필수입니다."); return; }
+    if (!host || !port) { setFormError(t("infra.validationHostPort")); return; }
     const portNum = Number(port);
-    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) { setFormError("port는 1~65535 정수여야 합니다."); return; }
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) { setFormError(t("infra.validationPort")); return; }
     setFormLoading(true);
     try {
       const payload = { service, host, port: portNum, health_path: healthPath || "/health" };
@@ -72,7 +74,7 @@ export default function InfraPage() {
       }
       setHost(""); setPort(""); setHealthPath("/health"); setEditingId(null);
       await fetchList();
-    } catch (e) { setFormError(e instanceof Error ? e.message : "저장 실패"); }
+    } catch (e) { setFormError(e instanceof Error ? e.message : t("infra.saveFailed")); }
     finally { setFormLoading(false); }
   }
 
@@ -85,53 +87,53 @@ export default function InfraPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("삭제하시겠습니까?")) return;
+    if (!confirm(t("infra.deleteConfirm"))) return;
     try { await apiFetch(`/v1/infra/${id}`, { method: "DELETE" }); await fetchList(); }
-    catch (e) { alert(e instanceof Error ? e.message : "삭제 실패"); }
+    catch (e) { alert(e instanceof Error ? e.message : t("common.error")); }
   }
 
   async function handleProbe(id: string) {
     setProbing(id);
     try { await apiFetch(`/v1/infra/${id}/probe`, { method: "POST" }); await fetchList(); }
-    catch (e) { alert(e instanceof Error ? e.message : "probe 실패"); }
+    catch (e) { alert(e instanceof Error ? e.message : t("infra.probeFailed")); }
     finally { setProbing(null); }
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Infra 관리</h1>
-        <Button variant="outline" size="sm" onClick={fetchList}><RefreshCw className="mr-1 h-4 w-4" />새로고침</Button>
+        <h1 className="text-2xl font-semibold">{t("infra.title")}</h1>
+        <Button variant="outline" size="sm" onClick={fetchList}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
       </div>
 
       {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
 
       {/* 등록/수정 폼 */}
       <Card>
-        <CardHeader><CardTitle className="text-base">{editingId ? "인프라 수정" : "인프라 등록"}</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">{editingId ? t("infra.formTitleEdit") : t("infra.formTitleCreate")}</CardTitle></CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <div className="space-y-1">
-              <Label htmlFor="service">서비스</Label>
+              <Label htmlFor="service">{t("infra.service")}</Label>
               <select id="service" value={service} onChange={(e) => setService(e.target.value)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm">
                 {SERVICE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="host">host</Label>
-              <Input id="host" placeholder="127.0.0.1" value={host} onChange={(e) => setHost(e.target.value)} required />
+              <Label htmlFor="host">{t("infra.host")}</Label>
+              <Input id="host" placeholder={t("infra.hostPlaceholder")} value={host} onChange={(e) => setHost(e.target.value)} required />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="port">port</Label>
-              <Input id="port" type="number" placeholder="8000" value={port} onChange={(e) => setPort(e.target.value)} required />
+              <Label htmlFor="port">{t("infra.port")}</Label>
+              <Input id="port" type="number" placeholder={t("infra.portPlaceholder")} value={port} onChange={(e) => setPort(e.target.value)} required />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="health_path">health_path</Label>
-              <Input id="health_path" placeholder="/health" value={healthPath} onChange={(e) => setHealthPath(e.target.value)} />
+              <Label htmlFor="health_path">{t("infra.healthPath")}</Label>
+              <Input id="health_path" placeholder={t("infra.healthPathPlaceholder")} value={healthPath} onChange={(e) => setHealthPath(e.target.value)} />
             </div>
             <div className="flex items-end gap-2">
-              <Button type="submit" disabled={formLoading} className="flex-1"><Plus className="mr-1 h-4 w-4" />{editingId ? "수정" : "등록"}</Button>
-              {editingId && <Button type="button" variant="outline" onClick={() => { setEditingId(null); setHost(""); setPort(""); setHealthPath("/health"); }}>취소</Button>}
+              <Button type="submit" disabled={formLoading} className="flex-1"><Plus className="mr-1 h-4 w-4" />{editingId ? t("infra.update") : t("infra.register")}</Button>
+              {editingId && <Button type="button" variant="outline" onClick={() => { setEditingId(null); setHost(""); setPort(""); setHealthPath("/health"); }}>{t("infra.cancel")}</Button>}
             </div>
           </form>
           {formError && <p className="mt-2 text-sm text-[#DC2626]" role="alert">{formError}</p>}
@@ -144,20 +146,20 @@ export default function InfraPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>서비스</TableHead>
+                <TableHead>{t("infra.service")}</TableHead>
                 <TableHead>host:port</TableHead>
-                <TableHead>health_path</TableHead>
-                <TableHead>상태</TableHead>
-                <TableHead>latency</TableHead>
-                <TableHead>last_check</TableHead>
-                <TableHead className="text-right">작업</TableHead>
+                <TableHead>{t("infra.healthPath")}</TableHead>
+                <TableHead>{t("infra.status")}</TableHead>
+                <TableHead>{t("infra.latency")}</TableHead>
+                <TableHead>{t("infra.lastCheck")}</TableHead>
+                <TableHead className="text-right">{t("common.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">로딩 중...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">{t("common.loading")}</TableCell></TableRow>
               ) : items.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">등록된 인프라가 없습니다.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">{t("infra.noData")}</TableCell></TableRow>
               ) : items.map((it) => (
                 <TableRow key={it.id}>
                   <TableCell className="font-medium">{it.service}</TableCell>
@@ -165,12 +167,12 @@ export default function InfraPage() {
                   <TableCell className="font-mono text-xs">{it.health_path}</TableCell>
                   <TableCell><Badge variant={statusVariant(it.status)}>{it.status}</Badge></TableCell>
                   <TableCell>{it.latency_ms != null ? `${it.latency_ms}ms` : "-"}</TableCell>
-                  <TableCell className="text-xs">{it.last_check ? new Date(it.last_check).toLocaleString("ko-KR") : "-"}</TableCell>
+                  <TableCell className="text-xs">{it.last_check ? new Date(it.last_check).toLocaleString(langLocale()) : "-"}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      <Button variant="outline" size="sm" disabled={probing === it.id} onClick={() => handleProbe(it.id)}>{probing === it.id ? "..." : "probe"}</Button>
-                      <Button variant="ghost" size="icon" onClick={() => startEdit(it)} aria-label="수정"><Pencil className="h-4 w-4" /></Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleDelete(it.id)} aria-label="삭제"><Trash2 className="h-4 w-4" /></Button>
+                      <Button variant="outline" size="sm" disabled={probing === it.id} onClick={() => handleProbe(it.id)}>{probing === it.id ? "..." : t("infra.probe")}</Button>
+                      <Button variant="ghost" size="icon" onClick={() => startEdit(it)} aria-label={t("common.edit")}><Pencil className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleDelete(it.id)} aria-label={t("common.delete")}><Trash2 className="h-4 w-4" /></Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -179,7 +181,14 @@ export default function InfraPage() {
           </Table>
         </CardContent>
       </Card>
-      <p className="text-xs text-muted-foreground">상태는 15초마다 자동 갱신됩니다. probe 버튼으로 수동 점검 가능.</p>
+      <p className="text-xs text-muted-foreground">{t("infra.autoRefreshNote")}</p>
     </div>
   );
+}
+
+function langLocale(): string {
+  try {
+    const v = typeof window !== "undefined" ? localStorage.getItem("oaos_lang") : null;
+    return v === "ko" ? "ko-KR" : "en-US";
+  } catch { return "en-US"; }
 }
