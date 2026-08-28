@@ -349,7 +349,39 @@ def _db_persist_probe(svc: InfraService) -> None:
 # ---------------------------------------------------------------------------
 # Health probe logic
 # ---------------------------------------------------------------------------
+_TCP_NAMES = {"postgres", "redis"}
+
+async def _probe_tcp(service: InfraService) -> InfraService:
+    """TCP connect probe for non-HTTP services (postgres/redis)."""
+    start = time.perf_counter()
+    try:
+        host_clean = (service.host or "").strip().removeprefix("https://").removeprefix("http://").split("/")[0]
+        conn = await asyncio.wait_for(asyncio.open_connection(host_clean, service.port), timeout=3.0)
+        # close cleanly
+        try:
+            writer = conn[1]
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+        except Exception:
+                pass
+        latency = (time.perf_counter() - start) * 1000
+        service.latency_ms = round(latency, 2)
+        service.last_check = datetime.now(timezone.utc)
+        service.status = InfraStatus.healthy
+    except Exception:
+        latency = (time.perf_counter() - start) * 1000
+        service.latency_ms = round(latency, 2)
+        service.last_check = datetime.now(timezone.utc)
+        service.status = InfraStatus.unhealthy
+    return service
+
 async def _probe_one(service: InfraService) -> InfraService:
+    # TCP probe for postgres/redis — no HTTP
+    if service.name in _TCP_NAMES:
+        return await _probe_tcp(service)
     # Normalize host that may contain scheme/path (e.g. https://chat.openit.co.kr/api)
     raw_host = (service.host or "").strip()
     scheme = "http"
