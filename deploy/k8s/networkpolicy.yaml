@@ -1,22 +1,27 @@
 # NetworkPolicy — default deny + allow postgres/redis/control-plane
 # Namespace: open-agent-os
-# - default-deny-all: deny all ingress/egress by default (fail-closed)
-# - allow-dns-egress: allow egress to kube-dns (53 UDP/TCP) for service discovery
+# - default-deny-all: deny all ingress/egress by default (fail-closed) + audit deny events
+# - allow-dns-egress: allow egress to kube-dns (53 UDP/TCP) for service discovery — restricted to kube-system only
 # - allow-postgres: allow ingress to postgres (5432) from control-plane, execution-gateway, security, admin-api
 # - allow-redis: allow ingress to redis (6379) from same app pods
 # - allow-control-plane: allow ingress to control-plane (8000) from ingress / admin / gateway
+# - deny-audit: explicit audit for denied traffic (CNI policy audit logging — Cilium/Calico)
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all
   namespace: open-agent-os
+  annotations:
+    description: "Default deny all ingress/egress — fail-closed. All deny events must be audited via CNI flow logs."
+    audit/policy-deny: "true"
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
     - Egress
   # No ingress/egress rules -> default deny. Explicit allows below override per-pod.
+  # Audit: CNI (Cilium/Calico) must enable policy audit logging; denied flows forwarded to SIEM/audit pipeline.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -31,17 +36,11 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              name: kube-system
+              kubernetes.io/metadata.name: kube-system
           podSelector:
             matchLabels:
               k8s-app: kube-dns
       ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    # Fallback: allow DNS on any namespace with kube-dns label (managed clusters vary)
-    - ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
@@ -175,7 +174,14 @@ spec:
       ports:
         - protocol: TCP
           port: 8002
-    - ports:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
@@ -207,8 +213,40 @@ spec:
       ports:
         - protocol: TCP
           port: 6379
-    - ports:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
+---
+# Deny audit — explicit audit for all denied traffic
+# Requires CNI with NetworkPolicy audit/flow logging enabled:
+# - Cilium: enable hubble + policy verdict logging, forward deny verdicts to audit sink
+# - Calico: enable Felix PolicyAuditMode / flow logs
+# All deny events from default-deny-all and per-pod policies MUST be collected
+# and forwarded to the audit pipeline (SIEM / Loki / CloudWatch).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-audit
+  namespace: open-agent-os
+  annotations:
+    description: "Deny audit — documents that all denied ingress/egress must be audit-logged via CNI flow/policy logs"
+    audit/policy-deny: "true"
+    audit/deny-action: "log"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  # No rules -> deny all complements default-deny-all; existence signals audit requirement
+  # CNI audit config (example):
+  #   cilium: hubble --verdict DROPPED --since 1m
+  #   calico: felixConfiguration.spec.policySyncPathPrefix + flowLogs

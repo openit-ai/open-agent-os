@@ -21,9 +21,124 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Optional
 
+import asyncio
+import threading
+import time
+
 from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
+
+# ── Prometheus counter + dead-letter log for revoke failures ──────────
+# oaos_vault_revoke_failures_total — increments after 3 failed revoke attempts
+_vault_revoke_failures_total: int = 0
+_vault_revoke_failures_lock = threading.Lock()
+_vault_revoke_dead_letters: list[dict] = []
+_vault_revoke_dead_letters_lock = threading.Lock()
+# tuning knob for tests: set OAOS_VAULT_REVOKE_SLEEP=0 to disable real sleeps
+_VAULT_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
+
+
+def _inc_vault_revoke_failures() -> None:
+    global _vault_revoke_failures_total
+    with _vault_revoke_failures_lock:
+        _vault_revoke_failures_total += 1
+
+
+def get_vault_revoke_failures_total() -> int:
+    with _vault_revoke_failures_lock:
+        return _vault_revoke_failures_total
+
+
+def _record_dead_letter(secret_ref: str, error: str) -> None:
+    entry = {
+        "secret_ref": secret_ref,
+        "error": str(error)[:500],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    with _vault_revoke_dead_letters_lock:
+        _vault_revoke_dead_letters.append(entry)
+    # dead-letter log — structured ERROR for SIEM/monitoring
+    logger.error("vault revoke dead-letter secret_ref=%s error=%s", secret_ref, error, extra={"secret_ref": secret_ref, "dead_letter": True})
+    _inc_vault_revoke_failures()
+    # also increment gateway metrics collector if available (single pane)
+    try:
+        from execution_gateway.metrics import default_metrics  # type: ignore
+        default_metrics.record_vault_revoke_failure()
+    except Exception:
+        try:
+            from execution_gateway.execution_gateway.metrics import default_metrics as _dm2  # type: ignore
+            _dm2.record_vault_revoke_failure()
+        except Exception:
+            pass
+
+
+def get_vault_dead_letters() -> list[dict]:
+    with _vault_revoke_dead_letters_lock:
+        return list(_vault_revoke_dead_letters)
+
+
+def reset_vault_revoke_metrics() -> None:
+    """Reset counter + dead-letters — for tests."""
+    global _vault_revoke_failures_total
+    with _vault_revoke_failures_lock:
+        _vault_revoke_failures_total = 0
+    with _vault_revoke_dead_letters_lock:
+        _vault_revoke_dead_letters.clear()
+
+
+def vault_revoke_metrics_prometheus() -> str:
+    lines = [
+        "# HELP oaos_vault_revoke_failures_total Vault revoke failures after retries (dead-letter)",
+        "# TYPE oaos_vault_revoke_failures_total counter",
+        f"oaos_vault_revoke_failures_total {get_vault_revoke_failures_total()}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _should_skip_sleep() -> bool:
+    # tests can set OAOS_VAULT_REVOKE_SLEEP=0 or ==0 to avoid slow sleeps
+    raw = os.getenv("OAOS_VAULT_REVOKE_SLEEP", "")
+    if raw.strip() == "0":
+        return True
+    return False
+
+
+async def _retry_async(coro_fn, *, delays: tuple[float, ...] = _VAULT_RETRY_DELAYS, label: str = "vault_revoke") -> None:
+    """Retry an async callable with exponential backoff.
+
+    coro_fn: async () -> None
+    delays: per-retry waits — len 3 => 3 tries with 1s/2s/4s
+    """
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            await coro_fn()
+            return
+        except Exception as e:
+            last_exc = e
+            if attempt < 2:
+                delay = delays[attempt] if attempt < len(delays) else delays[-1]
+                logger.warning("%s attempt %d/3 failed: %s — retry in %ss", label, attempt + 1, e, delay)
+                if not _should_skip_sleep():
+                    try:
+                        await asyncio.sleep(delay)
+                    except Exception:
+                        pass
+            else:
+                # final attempt failed — also respect 4s delay before dead-letter if caller expects 1/2/4
+                # sleep 4s before giving up to honor 3rd delay value
+                delay = delays[2] if len(delays) >= 3 else delays[-1]
+                logger.warning("%s attempt %d/3 failed: %s — no more retries (would wait %ss)", label, attempt + 1, e, delay)
+                # honour the final 4s sleep only if not skipping (keeps 1s/2s/4s contract)
+                if not _should_skip_sleep():
+                    try:
+                        await asyncio.sleep(delay)
+                    except Exception:
+                        pass
+    # all retries exhausted — caller will handle dead-letter
+    if last_exc is not None:
+        raise last_exc
 
 
 def _derive_fernet_key(raw_key: bytes) -> bytes:
@@ -448,16 +563,36 @@ class EncryptedPostgresVault(CredentialVault):
         return plaintext
 
     async def revoke(self, secret_ref: str) -> None:
+        """Revoke with retry (3 tries, 1s/2s/4s) + dead-letter + Prometheus counter.
+
+        Retries external delete and DB delete independently. On final failure,
+        records dead-letter log and increments oaos_vault_revoke_failures_total.
+        In-memory cleanup always happens to avoid orphan in this process.
+        """
+        # ── external delete with retry ──
         if self._use_external:
-            try:
+
+            async def _do_external():
                 await self._external.delete(secret_ref)  # type: ignore
-            except Exception as e:
-                logger.debug("external vault delete failed for %s: %s", secret_ref, e)
-        if self._session_maker is not None:
+
             try:
+                await _retry_async(_do_external, label=f"vault external delete {secret_ref}")
+            except Exception as e:
+                _record_dead_letter(secret_ref, f"external delete failed after 3 retries: {e}")
+                logger.debug("external vault delete dead-letter for %s: %s", secret_ref, e)
+
+        # ── DB delete with retry ──
+        if self._session_maker is not None:
+
+            async def _do_db():
                 await self._db_delete(secret_ref)
-            except Exception:
-                pass
+
+            try:
+                await _retry_async(_do_db, label=f"vault db delete {secret_ref}")
+            except Exception as e:
+                _record_dead_letter(secret_ref, f"db delete failed after 3 retries: {e}")
+                logger.debug("vault DB delete dead-letter for %s: %s", secret_ref, e)
+
         self._store.pop(secret_ref, None)
         self._meta.pop(secret_ref, None)
 

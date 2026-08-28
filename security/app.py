@@ -364,9 +364,44 @@ def audit_verify(req: AuditVerifyRequest | None = None):
 
 
 @app.get("/v1/audit/checkpoint")
-def audit_checkpoint():
+def audit_checkpoint(verify_external: bool = True):
+    """GET /v1/audit/checkpoint — current checkpoint + external anchor verification.
+    Includes external_verified flag by reading OAOS_AUDIT_CHECKPOINT_S3 or local file /var/lib/oaos/audit-checkpoint.json.
+    """
     cp = audit_ledger.checkpoint()
-    return cp
+    # base payload
+    try:
+        base = cp.model_dump(mode="json") if hasattr(cp, "model_dump") else dict(cp)
+    except Exception:
+        base = {"chain_head_hash": getattr(cp, "chain_head_hash", ""), "event_count": getattr(cp, "event_count", 0), "created_at": str(getattr(cp, "created_at", "")), "signature": getattr(cp, "signature", "")}
+    # external verification (best-effort, never fails 200)
+    try:
+        if verify_external and hasattr(audit_ledger, "verify_external_checkpoint"):
+            ext_info = audit_ledger.verify_external_checkpoint()
+            ext_cp = ext_info.get("external_checkpoint")
+            base["external_verified"] = bool(ext_info.get("external_verified", False))
+            base["external_exists"] = bool(ext_info.get("external_exists", False))
+            base["external_path"] = ext_info.get("external_path", "")
+            base["external_head_match"] = bool(ext_info.get("head_match", False)) if ext_info.get("external_exists") else False
+            if ext_cp is not None:
+                try:
+                    base["external_checkpoint"] = ext_cp.model_dump(mode="json") if hasattr(ext_cp, "model_dump") else dict(ext_cp)
+                except Exception:
+                    base["external_checkpoint"] = {"chain_head_hash": getattr(ext_cp, "chain_head_hash", ""), "event_count": getattr(ext_cp, "event_count", 0), "signature": getattr(ext_cp, "signature", "")}
+            else:
+                base["external_checkpoint"] = None
+        else:
+            base["external_verified"] = False
+            base["external_exists"] = False
+            base["external_path"] = audit_ledger._external_checkpoint_path() if hasattr(audit_ledger, "_external_checkpoint_path") else ""
+            base["external_checkpoint"] = None
+            base["external_head_match"] = False
+    except Exception as e:
+        base["external_verified"] = False
+        base["external_exists"] = False
+        base["external_error"] = str(e)[:200]
+        base["external_checkpoint"] = None
+    return base
 
 
 @app.get("/v1/audit/events")

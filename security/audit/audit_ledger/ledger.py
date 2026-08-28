@@ -322,18 +322,198 @@ class AuditLedger:
             prev = e.event_hash
         return True
 
+    # ── External anchor helpers ──────────────────────────────────
+    def _external_checkpoint_path(self) -> str:
+        p = os.environ.get("OAOS_AUDIT_CHECKPOINT_S3") or os.environ.get("OAOS_AUDIT_CHECKPOINT_PATH") or ""
+        p = p.strip()
+        if p:
+            return p
+        return "/var/lib/oaos/audit-checkpoint.json"
+
+    def _write_external_checkpoint(self, cp) -> bool:
+        """Best-effort write checkpoint to external storage path."""
+        path = self._external_checkpoint_path()
+        try:
+            data = cp.model_dump(mode="json") if hasattr(cp, "model_dump") else dict(cp)
+        except Exception:
+            try:
+                data = json.loads(cp.model_dump_json())  # type: ignore
+            except Exception:
+                data = {"chain_head_hash": getattr(cp, "chain_head_hash", ""), "event_count": getattr(cp, "event_count", 0), "created_at": str(getattr(cp, "created_at", "")), "signature": getattr(cp, "signature", "")}
+        if path.startswith("s3://"):
+            import tempfile, subprocess, pathlib
+            try:
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+                json.dump(data, tmp, indent=2, sort_keys=True, ensure_ascii=False)
+                tmp.write("\n")
+                tmp.close()
+                region = os.environ.get("AWS_S3_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "ap-northeast-2"
+                try:
+                    subprocess.run(["aws", "s3", "cp", tmp.name, path, "--region", region, "--server-side-encryption", "AES256", "--content-type", "application/json"], check=True, capture_output=True, timeout=15)
+                    logger.info("Audit checkpoint anchored to S3 %s", path)
+                    try:
+                        os.unlink(tmp.name)
+                    except Exception:
+                        pass
+                    return True
+                except FileNotFoundError:
+                    logger.debug("aws CLI not found, fallback to local anchor for s3 path %s", path)
+                except subprocess.CalledProcessError as e:
+                    logger.warning("S3 checkpoint upload failed %s: %s", path, e)
+                except Exception as e:
+                    logger.warning("S3 checkpoint anchor failed %s: %s", path, e)
+                finally:
+                    try:
+                        fallback = "/tmp/oaos-audit-checkpoint.json"
+                        pathlib.Path(fallback).parent.mkdir(parents=True, exist_ok=True)
+                        with open(fallback, "w") as f:
+                            json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
+                            f.write("\n")
+                    except Exception:
+                        pass
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+                return False
+            except Exception as e:
+                logger.debug("External checkpoint S3 anchor failed: %s", e)
+                return False
+        try:
+            from pathlib import Path
+            p = Path(path)
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            tmp_path = str(p) + ".tmp"
+            try:
+                with open(tmp_path, "w") as f:
+                    json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
+                    f.write("\n")
+                os.replace(tmp_path, str(p))
+            except (PermissionError, OSError, FileNotFoundError) as e:
+                fallback = "/tmp/oaos-audit-checkpoint.json"
+                try:
+                    Path(fallback).parent.mkdir(parents=True, exist_ok=True)
+                    with open(fallback, "w") as f:
+                        json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
+                        f.write("\n")
+                    logger.debug("Audit checkpoint fallback to %s (original %s not writable: %s)", fallback, path, e)
+                except Exception:
+                    pass
+                # consider fallback success as true if fallback file exists
+                try:
+                    if Path(fallback).exists():
+                        return True
+                except Exception:
+                    pass
+                return False
+            logger.info("Audit checkpoint anchored to %s head=%s count=%s", path, data.get("chain_head_hash", "")[:8], data.get("event_count"))
+            return True
+        except Exception as e:
+            logger.debug("External checkpoint anchor failed for %s: %s", path, e)
+            return False
+
+    def read_external_checkpoint(self):
+        """Read checkpoint from external anchor if present."""
+        path = self._external_checkpoint_path()
+        try:
+            if path.startswith("s3://"):
+                import tempfile, subprocess, json as _json
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+                tmp.close()
+                region = os.environ.get("AWS_S3_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "ap-northeast-2"
+                try:
+                    subprocess.run(["aws", "s3", "cp", path, tmp.name, "--region", region], check=True, capture_output=True, timeout=15)
+                    with open(tmp.name) as f:
+                        raw = _json.load(f)
+                    os.unlink(tmp.name)
+                    return AuditCheckpoint(**raw)
+                except Exception:
+                    try:
+                        os.unlink(tmp.name)
+                    except Exception:
+                        pass
+                    try:
+                        with open("/tmp/oaos-audit-checkpoint.json") as f:
+                            raw = _json.load(f)
+                        return AuditCheckpoint(**raw)
+                    except Exception:
+                        return None
+            else:
+                from pathlib import Path
+                p = Path(path)
+                candidates = [p, Path("/tmp/oaos-audit-checkpoint.json")]
+                for cand in candidates:
+                    if cand.exists():
+                        try:
+                            raw = json.loads(cand.read_text())
+                            return AuditCheckpoint(**raw)
+                        except Exception:
+                            continue
+                return None
+        except Exception:
+            return None
+
+    def verify_external_checkpoint(self, signing_key: str | None = None) -> dict:
+        ext = self.read_external_checkpoint()
+        if ext is None:
+            return {"external_exists": False, "external_verified": False, "external_checkpoint": None, "external_path": self._external_checkpoint_path()}
+        sig_ok = self.verify_checkpoint(ext, signing_key=signing_key)
+        head_match = (ext.chain_head_hash == (self.head or "")) if self.count > 0 else True
+        return {
+            "external_exists": True,
+            "external_verified": bool(sig_ok),
+            "external_checkpoint": ext,
+            "external_path": self._external_checkpoint_path(),
+            "head_match": head_match,
+        }
+
     # ── Checkpoint (Section 31 — 주기적 외부 서명 보관) ─────────
     def checkpoint(self, signing_key: str | None = None) -> AuditCheckpoint:
-        """현재 chain head 를 HMAC-SHA256 으로 서명한 checkpoint 생성."""
+        """현재 chain head 를 HMAC-SHA256 으로 서명한 checkpoint 생성. 외부 앵커에도 동기 기록."""
         key = signing_key or self._signing_key
         head = self.head or ""
         sig = hmac.new(key.encode(), head.encode(), hashlib.sha256).hexdigest()
-        return AuditCheckpoint(
+        cp = AuditCheckpoint(
             chain_head_hash=head,
             event_count=self.count,
             created_at=datetime.now(timezone.utc),
             signature=sig,
         )
+        try:
+            self._write_external_checkpoint(cp)
+        except Exception as e:
+            logger.debug("Checkpoint external anchor error (ignored): %s", e)
+        try:
+            ts = int(cp.created_at.timestamp()) if hasattr(cp.created_at, "timestamp") else int(datetime.now(timezone.utc).timestamp())
+            for metric_path in ["/var/lib/node_exporter/textfile/oaos_audit.prom", "/tmp/oaos_audit.prom"]:
+                try:
+                    from pathlib import Path
+                    Path(metric_path).parent.mkdir(parents=True, exist_ok=True)
+                    lines = []
+                    if Path(metric_path).exists():
+                        try:
+                            txt = Path(metric_path).read_text()
+                            for line in txt.splitlines():
+                                if "oaos_audit_last_checkpoint_timestamp" not in line:
+                                    lines.append(line)
+                        except Exception:
+                            pass
+                    lines.append("# HELP oaos_audit_last_checkpoint_timestamp Last audit checkpoint unix timestamp")
+                    lines.append("# TYPE oaos_audit_last_checkpoint_timestamp gauge")
+                    lines.append(f"oaos_audit_last_checkpoint_timestamp {ts}")
+                    lines.append(f"oaos_audit_last_checkpoint_event_count {cp.event_count}")
+                    Path(metric_path).write_text("\n".join(lines) + "\n")
+                    break
+                except PermissionError:
+                    continue
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return cp
 
     def verify_checkpoint(
         self, checkpoint: AuditCheckpoint, signing_key: str | None = None

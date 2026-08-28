@@ -47,6 +47,8 @@ BACKUP_FILE_PREFIX="${BACKUP_DIR}/oaos-${TIMESTAMP}"
 PG_DUMP_FILE="${BACKUP_FILE_PREFIX}-postgres.sql"
 PG_DUMP_GZ="${PG_DUMP_FILE}.gz"
 REDIS_RDB_FILE="${BACKUP_FILE_PREFIX}-redis.rdb"
+AUDIT_CHECKPOINT_SRC="${OAOS_AUDIT_CHECKPOINT_S3:-/var/lib/oaos/audit-checkpoint.json}"
+AUDIT_CHECKPOINT_FILE="${BACKUP_FILE_PREFIX}-audit-checkpoint.json"
 MANIFEST_FILE="${BACKUP_FILE_PREFIX}-manifest.json"
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2; }
@@ -536,6 +538,68 @@ do_redis_backup() {
   fi
 }
 
+
+# ── 2b. Audit checkpoint external anchor (OAOS_AUDIT_CHECKPOINT_S3 or /var/lib/oaos/audit-checkpoint.json) ──
+do_audit_checkpoint_backup() {
+  local dst="${AUDIT_CHECKPOINT_FILE}"
+  log "$(dry_prefix)Audit checkpoint backup -> ${dst} (src=${AUDIT_CHECKPOINT_SRC})"
+  local src="${AUDIT_CHECKPOINT_SRC}"
+  if [[ "${src}" == s3://* ]]; then
+    if command -v aws >/dev/null 2>&1; then
+      local region="${AWS_S3_REGION:-ap-northeast-2}"
+      if aws s3 cp "${src}" "${dst}" --region "${region}" 2>/dev/null; then
+        log "[OK] Audit checkpoint fetched from S3 ${src} -> ${dst}"
+        return 0
+      else
+        log "[WARN] S3 checkpoint fetch failed ${src} — trying local fallbacks"
+      fi
+    fi
+    src="/var/lib/oaos/audit-checkpoint.json"
+  fi
+  # try local candidates
+  local candidates=("${src}" "/tmp/oaos-audit-checkpoint.json" "/var/lib/oaos/audit-checkpoint.json")
+  # de-dupe and check
+  local found=0
+  for cand in "${candidates[@]}"; do
+    if [[ -f "${cand}" && "${cand}" != "${dst}" ]]; then
+      if cp "${cand}" "${dst}" 2>/dev/null; then
+        log "[OK] Audit checkpoint copied ${cand} -> ${dst}"
+        found=1
+        break
+      fi
+    elif [[ -f "${cand}" && "${cand}" == "${dst}" ]]; then
+      log "[OK] Audit checkpoint already at ${dst}"
+      found=1
+      break
+    fi
+  done
+  if [[ $found -eq 1 ]]; then return 0; fi
+  # try fetching from security service
+  local sec_url="${SECURITY_URL:-http://security:8002}"
+  if command -v curl >/dev/null 2>&1; then
+    local tmp_http
+    tmp_http=$(mktemp)
+    local http_code
+    http_code=$(curl -sk -o "${dst}" -w "%{http_code}" "${sec_url}/v1/audit/checkpoint" 2>/dev/null || echo "000")
+    if [[ "${http_code}" == "200" ]] && [[ -s "${dst}" ]] && grep -q "chain_head_hash" "${dst}" 2>/dev/null; then
+      if python3 -c "import json; json.load(open('${dst}'))" 2>/dev/null; then
+        log "[OK] Audit checkpoint fetched via ${sec_url}/v1/audit/checkpoint"
+        rm -f "${tmp_http}" || true
+        return 0
+      fi
+    fi
+    rm -f "${tmp_http}" || true
+  fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '{"chain_head_hash":"","event_count":0,"created_at":"%s","signature":"","note":"dry-run placeholder"}\n' "${TIMESTAMP}" > "${dst}"
+    log "[DRY-RUN] Created placeholder audit checkpoint ${dst}"
+  else
+    printf '{"chain_head_hash":"","event_count":0,"created_at":"%s","signature":"","note":"placeholder - no checkpoint source found"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${dst}"
+    log "[WARN] No audit checkpoint source found — placeholder created ${dst}"
+  fi
+  return 0
+}
+
 # ── 3. Retention ──────────────────────────────────────────────────
 apply_retention() {
   log "Retention: daily ${RETENTION_DAYS}d, weekly ${RETENTION_WEEKLY}d (dir=${BACKUP_DIR})"
@@ -553,6 +617,7 @@ apply_retention() {
   find "${BACKUP_DIR}" -maxdepth 1 -type f -name "oaos-*.age" -mtime +"${RETENTION_DAYS}" -print -delete 2>/dev/null || true
   find "${BACKUP_DIR}" -maxdepth 1 -type f -name "oaos-*.gpg" -mtime +"${RETENTION_DAYS}" -print -delete 2>/dev/null || true
   find "${BACKUP_DIR}" -maxdepth 1 -type f -name "oaos-*.json" -mtime +"${RETENTION_DAYS}" -print -delete 2>/dev/null || true
+  find "${BACKUP_DIR}" -maxdepth 1 -type f -name "oaos-*-audit-checkpoint.json*" -mtime +"${RETENTION_DAYS}" -print -delete 2>/dev/null || true
   find "${BACKUP_DIR}" -maxdepth 1 -type f -name "oaos-weekly-*" -mtime +"${RETENTION_WEEKLY}" -print -delete 2>/dev/null || true
   log "[OK] Retention applied"
 }
@@ -595,6 +660,7 @@ main() {
 
   do_pg_dumps
   do_redis_backup
+  do_audit_checkpoint_backup
 
   # Encrypt per-DB dumps
   declare -a final_pg_files=()
@@ -626,6 +692,14 @@ main() {
     fi
   done
 
+  local final_audit="${AUDIT_CHECKPOINT_FILE}"
+  if [[ -f "${AUDIT_CHECKPOINT_FILE}" ]]; then
+    final_audit=$(encrypt_file "${AUDIT_CHECKPOINT_FILE}") || true
+    if [[ -z "${final_audit}" ]]; then final_audit="${AUDIT_CHECKPOINT_FILE}"; fi
+  else
+    final_audit="${AUDIT_CHECKPOINT_FILE}"
+  fi
+
   local final_redis="${REDIS_RDB_FILE}"
   if [[ -f "${REDIS_RDB_FILE}" ]]; then
     final_redis=$(encrypt_file "${REDIS_RDB_FILE}") || true
@@ -650,7 +724,7 @@ main() {
     if [[ $DRY_RUN -eq 1 ]]; then
       log "[DRY-RUN] Sunday — would create weekly copies"
     else
-      for f in "${final_pg_files[@]}" "${final_redis}"; do
+      for f in "${final_pg_files[@]}" "${final_redis}" "${final_audit}"; do
         if [[ -f "${f}" ]]; then
           local base
           base=$(basename "${f}")
@@ -717,6 +791,9 @@ main() {
   "postgres_dbs": [${dbs_json}],
   "redis_file": "$(basename "${final_redis}")",
   "redis_size": ${redis_size},
+  "audit_checkpoint_file": "$(basename "${final_audit}")",
+  "audit_checkpoint_size": $(stat -c%s "${final_audit}" 2>/dev/null || stat -f%z "${final_audit}" 2>/dev/null || echo 0),
+  "audit_checkpoint_src": "${AUDIT_CHECKPOINT_SRC}",
   "pgvector_verified": ${pgvector_overall},
   "encrypted": $( [[ "${legacy_final_pg}" == *.age ]] || [[ "${legacy_final_pg}" == *.gpg ]] && echo "true" || echo "false"),
   "dry_run": $( [[ $DRY_RUN -eq 1 ]] && echo "true" || echo "false"),
@@ -730,11 +807,28 @@ JSON
   # S3 push
   local to_upload=()
   for f in "${final_pg_files[@]}"; do to_upload+=("${f}"); done
-  to_upload+=("${final_redis}" "${MANIFEST_FILE}")
+  to_upload+=("${final_redis}" "${final_audit}" "${MANIFEST_FILE}")
   for wf in "${weekly_files[@]}"; do to_upload+=("${wf}"); done
   push_s3 "${to_upload[@]}"
 
   apply_retention
+
+  # Emit Prometheus metric oaos_backup_last_success_timestamp (for alerts.yml)
+  if [[ $DRY_RUN -eq 0 ]]; then
+    _ts=$(date +%s)
+    for _mf in "/var/lib/node_exporter/textfile/oaos_backup.prom" "/tmp/oaos_backup.prom"; do
+      if mkdir -p "$(dirname "${_mf}")" 2>/dev/null; then
+        { echo "# HELP oaos_backup_last_success_timestamp Last successful backup unix timestamp";
+          echo "# TYPE oaos_backup_last_success_timestamp gauge";
+          echo "oaos_backup_last_success_timestamp ${_ts}";
+          echo "# HELP oaos_backup_last_success_timestamp_seconds Same as oaos_backup_last_success_timestamp";
+          echo "oaos_backup_duration_seconds 0";
+        } > "${_mf}" 2>/dev/null && log "[OK] Backup metric written to ${_mf} ts=${_ts}" && break || true
+      fi
+    done
+  else
+    log "[DRY-RUN] Would emit oaos_backup_last_success_timestamp $(date +%s) to node_exporter textfile"
+  fi
 
   log "=== OAOS Backup complete (dry_run=${DRY_RUN}) dbs=${PG_DB_LIST[*]} ==="
   echo "${MANIFEST_FILE}"

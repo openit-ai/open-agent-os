@@ -37,6 +37,7 @@ from security.models.orm import (  # noqa: F401,E402
     DelegationORM,
     CredentialBindingORM,
     ApprovalRequestORM,
+    ApprovalNonceORM,
     AuditEventORM,
     SessionRecordORM,
     VaultCredentialORM,

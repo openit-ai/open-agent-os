@@ -84,6 +84,23 @@ class ApprovalRequestORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ApprovalNonceORM(Base):
+    """Replay-protection nonces — persists _seen_nonces across restarts.
+
+    nonce TEXT PK, created_at, expires_at. TTL 300s (token expiry) — expired
+    rows are GC'd on each check/insert. DB-backed primary; in-memory set is
+    fallback when DATABASE_URL is not configured or DB unreachable.
+    """
+
+    __tablename__ = "approval_nonces"
+
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+    __table_args__ = (Index("ix_approval_nonces_expires_at", "expires_at"),)
+
+
 class AuditEventORM(Base):
     __tablename__ = "audit_events"
 

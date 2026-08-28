@@ -1,6 +1,6 @@
 """vault package — exports CredentialVault + factory helpers."""
 
-from .vault import CredentialVault, EncryptedPostgresVault  # noqa: F401
+from .vault import CredentialVault, EncryptedPostgresVault, get_vault_revoke_failures_total, get_vault_dead_letters, vault_revoke_metrics_prometheus, reset_vault_revoke_metrics  # noqa: F401
 from .external import (  # noqa: F401
     VaultBackend,
     EnvFileBackend,

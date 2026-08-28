@@ -36,6 +36,7 @@ class MetricsCollector:
         self._tool_calls: Counter[str] = Counter()
         self._tool_failures: Counter[str] = Counter()
         self._status_codes: Counter[int] = Counter()
+        self._vault_revoke_failures: int = 0
         self._start_time = time.time()
 
     # -- recording ---------------------------------------------------
@@ -77,6 +78,14 @@ class MetricsCollector:
     def record_audit_event(self, event_type: str = "generic") -> None:
         with self._lock:
             self._audit_event_count += 1
+
+    def record_vault_revoke_failure(self) -> None:
+        with self._lock:
+            self._vault_revoke_failures += 1
+
+    def get_vault_revoke_failures(self) -> int:
+        with self._lock:
+            return self._vault_revoke_failures
 
     # -- computed ----------------------------------------------------
 
@@ -133,6 +142,7 @@ class MetricsCollector:
                 "failure_count": self._failure_count,
                 "policy_deny_count": self._policy_deny_count,
                 "audit_event_count": self._audit_event_count,
+                "vault_revoke_failures": self._vault_revoke_failures,
                 "success_rate": round(s_rate, 4),
                 "policy_deny_rate": round(deny_rate, 4),
                 "latency_avg_ms": round(sum(lat_vals) / len(lat_vals), 2) if lat_vals else None,
@@ -170,6 +180,28 @@ class MetricsCollector:
         lines.append("# HELP oaos_audit_events_total Audit events emitted")
         lines.append("# TYPE oaos_audit_events_total counter")
         lines.append(f"oaos_audit_events_total {s['audit_event_count']}")
+        lines.append("# HELP oaos_vault_revoke_failures_total Vault revoke failures after retries (dead-letter)")
+        lines.append("# TYPE oaos_vault_revoke_failures_total counter")
+        vault_total = s["vault_revoke_failures"]
+        try:
+            from vault.vault import get_vault_revoke_failures_total  # type: ignore
+            vault_total += get_vault_revoke_failures_total()
+        except Exception:
+            try:
+                from security.credential_vault.vault.vault import get_vault_revoke_failures_total as _gv  # type: ignore
+                vault_total += _gv()
+            except Exception:
+                pass
+        try:
+            from delegation_service.service import get_delegation_vault_revoke_failures_total  # type: ignore
+            vault_total += get_delegation_vault_revoke_failures_total()
+        except Exception:
+            try:
+                from security.delegation.delegation_service.service import get_delegation_vault_revoke_failures_total as _gd  # type: ignore
+                vault_total += _gd()
+            except Exception:
+                pass
+        lines.append(f"oaos_vault_revoke_failures_total {vault_total}")
         if s["latency_avg_ms"] is not None:
             lines.append("# HELP oaos_latency_avg_ms Average latency ms")
             lines.append("# TYPE oaos_latency_avg_ms gauge")
@@ -194,6 +226,7 @@ class MetricsCollector:
             self._failure_count = 0
             self._policy_deny_count = 0
             self._audit_event_count = 0
+            self._vault_revoke_failures = 0
             self._latencies.clear()
             self._tool_calls.clear()
             self._tool_failures.clear()

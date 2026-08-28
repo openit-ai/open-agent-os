@@ -13,11 +13,93 @@ import hashlib
 import uuid
 import os
 import logging
+import time
+import threading
 from datetime import datetime, timezone
 
 from delegation_model import CredentialBinding, CredentialBindingStatus, Delegation, DelegationStatus
 
 logger = logging.getLogger(__name__)
+
+# ── Vault revoke retry metrics (shared with vault module) ─────────────
+# Prometheus counter oaos_vault_revoke_failures_total + dead-letter log
+_delegation_vault_revoke_failures_total: int = 0
+_delegation_vault_revoke_failures_lock = threading.Lock()
+_delegation_vault_dead_letters: list[dict] = []
+_delegation_vault_dead_letters_lock = threading.Lock()
+_VAULT_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
+
+
+def _inc_delegation_vault_revoke_failures() -> None:
+    global _delegation_vault_revoke_failures_total
+    with _delegation_vault_revoke_failures_lock:
+        _delegation_vault_revoke_failures_total += 1
+
+
+def get_delegation_vault_revoke_failures_total() -> int:
+    with _delegation_vault_revoke_failures_lock:
+        return _delegation_vault_revoke_failures_total
+
+
+def get_delegation_vault_dead_letters() -> list[dict]:
+    with _delegation_vault_dead_letters_lock:
+        return list(_delegation_vault_dead_letters)
+
+
+def delegation_vault_revoke_metrics_prometheus() -> str:
+    # unified metric name — include delegation-side failures
+    # vault module already exposes same name; this aggregates for convenience
+    total = get_delegation_vault_revoke_failures_total()
+    # also try to add vault module total for total view
+    try:
+        from vault.vault import get_vault_revoke_failures_total  # type: ignore
+
+        total += get_vault_revoke_failures_total()
+    except Exception:
+        try:
+            from security.credential_vault.vault.vault import get_vault_revoke_failures_total as _g  # type: ignore
+
+            total += _g()
+        except Exception:
+            pass
+    lines = [
+        "# HELP oaos_vault_revoke_failures_total Vault revoke failures after retries (dead-letter)",
+        "# TYPE oaos_vault_revoke_failures_total counter",
+        f"oaos_vault_revoke_failures_total {total}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _should_skip_sleep() -> bool:
+    return os.getenv("OAOS_VAULT_REVOKE_SLEEP", "").strip() == "0"
+
+
+def _record_delegation_dead_letter(secret_ref: str, delegation_id: str, error: str) -> None:
+    entry = {
+        "secret_ref": secret_ref,
+        "delegation_id": delegation_id,
+        "error": str(error)[:500],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    with _delegation_vault_dead_letters_lock:
+        _delegation_vault_dead_letters.append(entry)
+    logger.error(
+        "vault revoke dead-letter delegation=%s secret_ref=%s error=%s",
+        delegation_id,
+        secret_ref,
+        error,
+        extra={"secret_ref": secret_ref, "delegation_id": delegation_id, "dead_letter": True},
+    )
+    _inc_delegation_vault_revoke_failures()
+    try:
+        from execution_gateway.metrics import default_metrics  # type: ignore
+        default_metrics.record_vault_revoke_failure()
+    except Exception:
+        try:
+            from execution_gateway.execution_gateway.metrics import default_metrics as _dm2  # type: ignore
+            _dm2.record_vault_revoke_failure()
+        except Exception:
+            pass
 
 
 def _delegation_hash(d: Delegation) -> str:
@@ -427,26 +509,102 @@ class DelegationService:
                     except Exception:
                         pass
                 for sr in secret_refs:
-                    try:
-                        import asyncio
-                        import inspect
+                    import asyncio as _asyncio
+                    import inspect as _inspect
 
-                        res = vault.revoke(sr)
-                        if inspect.isawaitable(res):
+                    _is_async = _inspect.iscoroutinefunction(getattr(vault.revoke, "__wrapped__", vault.revoke))
+                    if _is_async:
+                        try:
+                            _loop = _asyncio.get_event_loop()
+                            _running = _loop.is_running()
+                        except RuntimeError:
+                            _loop = None  # type: ignore
+                            _running = False
+                        if _running and _loop is not None:
+                            async def _deleg_async_retry(_sr=sr, _vid=delegation_id):
+                                for a in range(3):
+                                    try:
+                                        await vault.revoke(_sr)
+                                        return
+                                    except Exception as e2:
+                                        if a < 2:
+                                            dly = _VAULT_RETRY_DELAYS[a]
+                                            logger.warning(
+                                                "delegation vault revoke (async task) attempt %d/3 failed sr=%s: %s — retry in %ss",
+                                                a + 1, _sr, e2, dly,
+                                            )
+                                            if not _should_skip_sleep():
+                                                await _asyncio.sleep(dly)
+                                        else:
+                                            logger.warning(
+                                                "delegation vault revoke (async task) attempt %d/3 failed sr=%s: %s",
+                                                a + 1, _sr, e2,
+                                            )
+                                            if not _should_skip_sleep():
+                                                await _asyncio.sleep(_VAULT_RETRY_DELAYS[2])
+                                            _record_delegation_dead_letter(_sr, _vid, str(e2))
+
                             try:
-                                loop = asyncio.get_event_loop()
-                                if loop.is_running():
-                                    # schedule as task, don't block
-                                    loop.create_task(res)  # type: ignore
-                                else:
-                                    asyncio.run(res)
-                            except RuntimeError:
+                                _loop.create_task(_deleg_async_retry())  # type: ignore[attr-defined]
+                            except Exception as e:
+                                logger.debug("Failed to schedule vault revoke task for %s: %s", sr, e)
+                            continue
+                        else:
+                            last_exc = None
+                            for attempt in range(3):
                                 try:
-                                    asyncio.run(res)
-                                except Exception:
-                                    pass
-                    except Exception as e:
-                        logger.debug("Vault revoke failed for %s: %s", sr, e)
+                                    _asyncio.run(vault.revoke(sr))  # type: ignore[arg-type]
+                                    last_exc = None
+                                    break
+                                except Exception as e:
+                                    last_exc = e
+                                    if attempt < 2:
+                                        dly = _VAULT_RETRY_DELAYS[attempt]
+                                        logger.warning(
+                                            "delegation vault revoke attempt %d/3 failed sr=%s: %s — retry in %ss",
+                                            attempt + 1, sr, e, dly,
+                                        )
+                                        if not _should_skip_sleep():
+                                            time.sleep(dly)
+                                    else:
+                                        logger.warning(
+                                            "delegation vault revoke attempt %d/3 failed sr=%s: %s — no more retries",
+                                            attempt + 1, sr, e,
+                                        )
+                                        if not _should_skip_sleep():
+                                            time.sleep(_VAULT_RETRY_DELAYS[2])
+                                        _record_delegation_dead_letter(sr, delegation_id, str(e))
+                            if last_exc is not None:
+                                logger.debug("Vault revoke failed for %s after retries: %s", sr, last_exc)
+                            continue
+                    else:
+                        last_exc = None  # type: ignore[no-redef]
+                        for attempt in range(3):
+                            try:
+                                vault.revoke(sr)  # type: ignore
+                                last_exc = None
+                                break
+                            except Exception as e:
+                                last_exc = e
+                                if attempt < 2:
+                                    dly = _VAULT_RETRY_DELAYS[attempt]
+                                    logger.warning(
+                                        "delegation vault revoke attempt %d/3 failed sr=%s: %s — retry in %ss",
+                                        attempt + 1, sr, e, dly,
+                                    )
+                                    if not _should_skip_sleep():
+                                        time.sleep(dly)
+                                else:
+                                    logger.warning(
+                                        "delegation vault revoke attempt %d/3 failed sr=%s: %s — no more retries",
+                                        attempt + 1, sr, e,
+                                    )
+                                    if not _should_skip_sleep():
+                                        time.sleep(_VAULT_RETRY_DELAYS[2])
+                                    _record_delegation_dead_letter(sr, delegation_id, str(e))
+                        if last_exc is not None:
+                            logger.debug("Vault revoke failed for %s after retries: %s", sr, last_exc)
+                        continue
         except Exception:
             pass
         return d

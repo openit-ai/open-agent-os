@@ -5,6 +5,9 @@
 - DB persistence: when DATABASE_URL/OAOS_DATABASE_URL is set, approval_requests
   are persisted to approval_requests table (sync SQLAlchemy, sqlite compat).
   Falls back to in-memory dicts. All DB imports are lazy.
+- Nonce replay protection: approval_nonces table (nonce TEXT PK, created_at,
+  expires_at) with TTL 300s. DB primary, in-memory fallback. Survives restart
+  via DB query. postgresql+psycopg when DATABASE_URL is postgres, sqlite for tests.
 """
 from __future__ import annotations
 
@@ -21,6 +24,9 @@ from pydantic import BaseModel
 
 
 logger = logging.getLogger(__name__)
+
+# ── constants ──────────────────────────────────────────────────
+NONCE_TTL_SECONDS = 300  # token expiry for replay protection
 
 
 class ApprovalDecision(str, Enum):
@@ -62,9 +68,12 @@ def _normalize_sync_url(url: str) -> str:
     if "+aiosqlite" in u:
         u = u.replace("+aiosqlite", "")
     if u.startswith("postgresql+asyncpg://"):
-        u = u.replace("postgresql+asyncpg://", "postgresql://", 1)
+        u = u.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
     if u.startswith("sqlite+aiosqlite://"):
         u = u.replace("sqlite+aiosqlite://", "sqlite://", 1)
+    # ensure postgres uses psycopg (psycopg[binary] / psycopg3) driver
+    if u.startswith("postgresql://"):
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
     return u
 
 
@@ -91,17 +100,18 @@ def _db_get_session():
         engine = create_engine(url, echo=False, pool_pre_ping=False, connect_args=connect_args)
         try:
             from security.models.db import Base  # type: ignore
-            from security.models.orm import ApprovalRequestORM  # noqa: F401  # type: ignore
+            from security.models.orm import ApprovalRequestORM, ApprovalNonceORM  # noqa: F401  # type: ignore
             Base.metadata.create_all(bind=engine)
         except Exception:
             try:
                 import sys
                 from pathlib import Path
+
                 sec = Path(__file__).resolve().parents[2]
                 if str(sec) not in sys.path:
                     sys.path.insert(0, str(sec))
                 from security.models.db import Base  # type: ignore
-                from security.models.orm import ApprovalRequestORM  # noqa: F401  # type: ignore
+                from security.models.orm import ApprovalRequestORM, ApprovalNonceORM  # noqa: F401  # type: ignore
                 Base.metadata.create_all(bind=engine)
             except Exception:
                 pass
@@ -126,12 +136,131 @@ def _db_close(session, engine) -> None:
         pass
 
 
+# ── in-memory fallback dict with set-compatible .add ───────────
+class _SeenNonces(dict):  # type: ignore
+    """dict nonce->expires_at with .add for set-compat (old code used set)."""
+
+    def add(self, nonce: str) -> None:  # set-like
+        self[nonce] = datetime.now(timezone.utc) + timedelta(seconds=NONCE_TTL_SECONDS)
+        try:
+            _db_nonce_insert(nonce)
+        except Exception:
+            pass
+
+    def discard(self, nonce: str) -> None:
+        self.pop(nonce, None)
+
+
+# ── approval_nonces helpers (DB + psycopg + in-memory fallback) ──
+
+def _db_nonce_cleanup(session) -> int:
+    """Delete expired nonces (TTL 300s). Returns deleted count. No-throw."""
+    try:
+        from security.models.orm import ApprovalNonceORM  # type: ignore
+
+        now = datetime.now(timezone.utc)
+        deleted = session.query(ApprovalNonceORM).filter(ApprovalNonceORM.expires_at < now).delete()  # type: ignore
+        try:
+            session.commit()
+        except Exception:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        return int(deleted or 0)
+    except Exception:
+        return 0
+
+
+def _db_nonce_exists(nonce: str) -> bool:
+    """Check if nonce exists in DB (with TTL cleanup). Falls back to False on DB error."""
+    if not _db_enabled():
+        return False
+    session, engine = _db_get_session()
+    if session is None:
+        return False
+    try:
+        # opportunistic GC
+        try:
+            _db_nonce_cleanup(session)
+        except Exception:
+            pass
+        try:
+            from security.models.orm import ApprovalNonceORM  # type: ignore
+
+            row = session.query(ApprovalNonceORM).filter(ApprovalNonceORM.nonce == nonce).first()  # type: ignore
+            return row is not None
+        except Exception as e:
+            logger.debug("nonce DB exists check failed: %s", e)
+            return False
+    finally:
+        _db_close(session, engine)
+
+
+def _db_nonce_insert(nonce: str, expires_at: datetime | None = None) -> bool:
+    """Insert nonce into approval_nonces with TTL. Returns True if inserted or already exists.
+
+    Uses postgresql+psycopg via SQLAlchemy when DATABASE_URL is postgres,
+    sqlite for tests. On DB error returns False (caller falls back to in-memory).
+    """
+    if not _db_enabled():
+        return False
+    session, engine = _db_get_session()
+    if session is None:
+        return False
+    try:
+        # GC expired first
+        try:
+            _db_nonce_cleanup(session)
+        except Exception:
+            pass
+        from security.models.orm import ApprovalNonceORM  # type: ignore
+
+        # dedup: if already exists, keep it (replay)
+        try:
+            existing = session.query(ApprovalNonceORM).filter(ApprovalNonceORM.nonce == nonce).first()  # type: ignore
+            if existing is not None:
+                return True
+        except Exception:
+            pass
+        now = datetime.now(timezone.utc)
+        exp = expires_at
+        if exp is None:
+            exp = now + timedelta(seconds=NONCE_TTL_SECONDS)
+        else:
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            # cap to TTL from now if request expiry is longer (replay window = 300s)
+            ttl_exp = now + timedelta(seconds=NONCE_TTL_SECONDS)
+            # keep the earlier of the two so GC is correct (use min)
+            if exp > ttl_exp:
+                exp = ttl_exp
+        row = ApprovalNonceORM(nonce=nonce, created_at=now, expires_at=exp)
+        session.add(row)
+        session.commit()
+        return True
+    except Exception as e:
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        # unique violation means already exists -> treat as success (replay already persisted)
+        msg = str(e).lower()
+        if "unique" in msg or "duplicate" in msg or "already exists" in msg:
+            return True
+        logger.debug("nonce DB insert failed: %s", e)
+        return False
+    finally:
+        _db_close(session, engine)
+
+
 def _to_orm(req: ApprovalRequest):
     try:
         from security.models.orm import ApprovalRequestORM  # type: ignore
     except ImportError:
         import sys
         from pathlib import Path
+
         sec = Path(__file__).resolve().parents[2]
         if str(sec) not in sys.path:
             sys.path.insert(0, str(sec))
@@ -185,15 +314,58 @@ def _from_orm(row) -> ApprovalRequest:
 
 
 class ApprovalStore:
-    """In-memory approval lifecycle 관리 with optional DB persistence."""
+    """In-memory approval lifecycle 관리 with optional DB persistence.
+
+    Nonce replay protection persists to approval_nonces (DB) with TTL 300s.
+    Falls back to in-memory dict when DB unavailable (e.g. tests / no DATABASE_URL).
+    verify replay survives restart via DB query.
+    """
 
     def __init__(self, signing_key: str) -> None:
         self.signing_key = signing_key
         self._requests: dict[str, ApprovalRequest] = {}
-        self._seen_nonces: set[str] = set()
-        # persistent grants (user-always / group-always)
+        # in-memory fallback: nonce -> expires_at (dict with .add for set compat)
+        self._seen_nonces: _SeenNonces = _SeenNonces()
+        # backwards compat: expose set-like view for older callers that do `in` checks
         self._user_grants: set[tuple[str, str, str]] = set()  # (user_id, action, resource_pattern)
         self._group_grants: set[tuple[str, str, str]] = set()  # (group_id, action, resource_pattern)
+
+    # ── internal nonce helpers ────────────────────────────────
+    def _purge_expired_nonces(self) -> None:
+        now = datetime.now(timezone.utc)
+        expired = [k for k, exp in list(self._seen_nonces.items()) if exp < now]
+        for k in expired:
+            self._seen_nonces.pop(k, None)
+
+    def _is_nonce_seen(self, nonce: str) -> bool:
+        # check in-memory (with TTL)
+        self._purge_expired_nonces()
+        if nonce in self._seen_nonces:
+            return True
+        # check DB (survives restart)
+        if _db_enabled() and _db_nonce_exists(nonce):
+            # hydrate in-memory for faster next check
+            self._seen_nonces[nonce] = datetime.now(timezone.utc) + timedelta(seconds=NONCE_TTL_SECONDS)
+            return True
+        return False
+
+    def _mark_nonce_seen(self, nonce: str, expires_at: datetime | None = None) -> None:
+        exp = expires_at
+        if exp is None:
+            exp = datetime.now(timezone.utc) + timedelta(seconds=NONCE_TTL_SECONDS)
+        else:
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            # cap to TTL
+            ttl_exp = datetime.now(timezone.utc) + timedelta(seconds=NONCE_TTL_SECONDS)
+            if exp > ttl_exp:
+                exp = ttl_exp
+        self._seen_nonces[nonce] = exp
+        # persist to DB (ignore failure -> in-memory fallback keeps protection for this process)
+        try:
+            _db_nonce_insert(nonce, exp)
+        except Exception:
+            pass
 
     # ── 생성 ───────────────────────────────────────────────────
     def create(
@@ -309,10 +481,10 @@ class ApprovalStore:
             raise ValueError("approval expired")
         if req.decision != ApprovalDecision.PENDING:
             raise ValueError(f"already decided: {req.decision}")
-        # nonce replay 방지: 결정 시 nonce 를 seen 에 기록
-        if req.nonce in self._seen_nonces:
+        # nonce replay 방지: 결정 시 nonce 를 seen 에 기록 (DB + memory with TTL)
+        if self._is_nonce_seen(req.nonce):
             raise ValueError("nonce replay detected")
-        self._seen_nonces.add(req.nonce)
+        self._mark_nonce_seen(req.nonce, req.expires_at)
 
         req.decision = decision
         req.decided_at = datetime.now(timezone.utc)
@@ -381,6 +553,7 @@ class ApprovalStore:
 
     def has_user_grant(self, user_id: str, action: str, resource: str) -> bool:
         import fnmatch
+
         # try hydrate from DB if not in memory (scan DB for user grants)
         if _db_enabled() and not self._user_grants:
             try:
@@ -403,6 +576,7 @@ class ApprovalStore:
 
     def has_group_grant(self, group_id: str, action: str, resource: str) -> bool:
         import fnmatch
+
         if _db_enabled() and not self._group_grants:
             try:
                 session, engine = _db_get_session()
@@ -423,6 +597,22 @@ class ApprovalStore:
             if g == group_id and a == action and fnmatch.fnmatch(resource, pattern):
                 return True
         return False
+
+    # ── explicit nonce GC (callable externally / cron) ────────
+    def cleanup_expired_nonces(self) -> int:
+        """Purge expired nonces from memory and DB (TTL 300s). Returns total removed."""
+        removed = 0
+        before = len(self._seen_nonces)
+        self._purge_expired_nonces()
+        removed += before - len(self._seen_nonces)
+        if _db_enabled():
+            session, engine = _db_get_session()
+            if session is not None:
+                try:
+                    removed += _db_nonce_cleanup(session)
+                finally:
+                    _db_close(session, engine)
+        return removed
 
 
 # ── 모듈 레벨 헬퍼 (기존 import 호환) ───────────────────────────
