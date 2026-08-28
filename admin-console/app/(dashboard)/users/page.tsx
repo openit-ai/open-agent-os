@@ -476,18 +476,18 @@ export default function UsersPage() {
             <CardContent>
               <form onSubmit={handleCreateMapping} className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-1">
-                  <Label htmlFor="mm_user_id">MM User ID *</Label>
-                  <Input id="mm_user_id" placeholder="비우면 Username으로 자동 조회" value={mmUserId} onChange={(e) => setMmUserId(e.target.value)} />
-                  {resolveMsg && <p className="text-xs text-muted-foreground">{resolveMsg}</p>}
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="mm_username">MM Username</Label>
+                  <Label htmlFor="mm_username">MM Username *</Label>
                   <div className="flex gap-1.5">
                     <Input id="mm_username" placeholder="e.g. mykim" value={mmUsername} onChange={(e) => setMmUsername(e.target.value)} className="flex-1" />
                     <Button type="button" variant="outline" size="sm" onClick={handleResolve} disabled={resolving || (!mmUsername.trim() && !mmUserId.trim())} className="shrink-0">
                       {resolving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "ID 조회"}
                     </Button>
                   </div>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="mm_user_id">MM User ID</Label>
+                  <Input id="mm_user_id" placeholder="Username 입력 후 ID 조회" value={mmUserId} onChange={(e) => setMmUserId(e.target.value)} />
+                  {resolveMsg && <p className="text-xs text-muted-foreground">{resolveMsg}</p>}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="employee_principal">Employee Principal</Label>
@@ -546,8 +546,8 @@ export default function UsersPage() {
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>MM User ID</TableHead>
                             <TableHead>Username</TableHead>
+                            <TableHead>MM User ID</TableHead>
                             <TableHead>Principal</TableHead>
                             <TableHead>Agent</TableHead>
                             <TableHead>Status</TableHead>
@@ -556,8 +556,8 @@ export default function UsersPage() {
                         <TableBody>
                           {preview.map((p, idx) => (
                             <TableRow key={`${p.mm_user_id}-${idx}`}>
-                              <TableCell className="font-mono text-xs">{p.mm_user_id}</TableCell>
                               <TableCell className="text-xs">{p.mm_username}</TableCell>
+                              <TableCell className="font-mono text-xs">{p.mm_user_id}</TableCell>
                               <TableCell className="font-mono text-xs">{p.employee_principal}</TableCell>
                               <TableCell className="font-mono text-xs text-muted-foreground">{p.agent_id}</TableCell>
                               <TableCell>
@@ -579,7 +579,7 @@ export default function UsersPage() {
               <div>
                 <CardTitle className="text-base">매핑 목록</CardTitle>
                 <CardDescription>
-                  총 {mappings.length}건 · 375px에서도 가로 스크롤로 확인 · MM User ID / Username / Employee Principal / Agent ID / Status / Created / Delete
+                  총 {mappings.length}건 · 375px에서도 가로 스크롤로 확인 · Username / MM User ID / Employee Principal / Agent ID / Status / Created / Delete
                 </CardDescription>
               </div>
               <Button variant="outline" size="sm" onClick={fetchMappings} disabled={mapLoading}>
@@ -592,8 +592,8 @@ export default function UsersPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="min-w-[120px]">MM User ID</TableHead>
                       <TableHead className="min-w-[110px]">Username</TableHead>
+                      <TableHead className="min-w-[120px]">MM User ID</TableHead>
                       <TableHead className="min-w-[150px]">Employee Principal</TableHead>
                       <TableHead className="min-w-[150px]">Agent ID</TableHead>
                       <TableHead>Status</TableHead>
@@ -619,10 +619,10 @@ export default function UsersPage() {
                         const uname = m.mm_username ?? m.username ?? "-";
                         return (
                           <TableRow key={m.id}>
+                            <TableCell className="text-xs">{uname || "-"}</TableCell>
                             <TableCell className="font-mono text-xs" title={m.mm_user_id}>
                               {m.mm_user_id}
                             </TableCell>
-                            <TableCell className="text-xs">{uname || "-"}</TableCell>
                             <TableCell className="font-mono text-xs">{m.employee_principal}</TableCell>
                             <TableCell className="font-mono text-xs text-muted-foreground">{m.agent_id}</TableCell>
                             <TableCell>
