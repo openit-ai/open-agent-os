@@ -11,15 +11,17 @@ import { getToken, listLLMProviders, createLLMProvider, updateLLMProvider, delet
 import { RefreshCw, Trash2, Pencil, Plus, Cpu, Plug2, Ban, CheckCircle2, Info } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
-const PROVIDER_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "opencode", "ollama"];
-const APIKEY_TYPES: LLMProviderType[] = ["claude", "codex", "gemini"];
+const PROVIDER_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "opencode-go", "openrouter", "ollama"];
+const APIKEY_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "openrouter"];
 
 function providerBadge(p: string) {
   const map: Record<string, string> = {
     claude: "bg-purple-600 text-white",
     codex: "bg-black text-white",
     gemini: "bg-blue-600 text-white",
-    opencode: "bg-zinc-700 text-white",
+    "opencode-go": "bg-zinc-700 text-white",
+    "opencode": "bg-zinc-700 text-white",
+    openrouter: "bg-pink-600 text-white",
     ollama: "bg-orange-500 text-white",
   };
   return map[p] ?? "bg-secondary";
@@ -109,7 +111,7 @@ export default function ProvidersPage() {
     if (APIKEY_TYPES.includes(provider) && !apiKey && editingId) {
       // allow empty apiKey on edit (keep existing) but if we cleared, it's okay
     }
-    if (provider === "opencode" && !path) {
+    if (provider === "opencode-go" && !path) {
       setFormError(t("providers.validationPath"));
       return;
     }
@@ -123,10 +125,10 @@ export default function ProvidersPage() {
       if (APIKEY_TYPES.includes(provider)) {
         if (apiKey) payload.apiKey = apiKey;
       }
-      if (provider === "opencode") payload.path = path;
+      if (provider === "opencode-go") payload.path = path;
       if (provider === "ollama") payload.url = url;
       // for other types include optional baseUrl/model already
-      if (provider !== "opencode" && provider !== "ollama") {
+      if (provider !== "opencode-go" && provider !== "ollama") {
         // keep path/url undefined
       }
       // clean empty strings
@@ -264,7 +266,7 @@ export default function ProvidersPage() {
                     <Input id="apiKey" type="password" placeholder={t("providers.apiKeyPlaceholder")} value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
                   </div>
                 )}
-                {provider === "opencode" && (
+                {provider === "opencode-go" && (
                   <div className="space-y-1">
                     <Label htmlFor="path">{t("providers.path")}</Label>
                     <Input id="path" placeholder={t("providers.pathPlaceholder")} value={path} onChange={(e) => setPath(e.target.value)} required />
@@ -317,7 +319,7 @@ export default function ProvidersPage() {
                   ) : items.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">{t("providers.noData")}</TableCell></TableRow>
                   ) : items.map((it) => {
-                    const cred = it.provider === "opencode" ? it.path : it.provider === "ollama" ? (it.url ?? it.base_url ?? it.baseUrl) : (it.api_key_masked ?? it.apiKey ?? "***");
+                    const cred = it.provider === "opencode-go" || (it.provider as string) === "opencode" ? it.path : it.provider === "ollama" ? (it.url ?? it.base_url ?? it.baseUrl) : (it.api_key_masked ?? it.apiKey ?? "***");
                     const isEnabled = it.enabled;
                     const tr = testResult[it.id];
                     return (

@@ -242,8 +242,11 @@ async def test_stream_via_http_sse():
 # Provider registry exposure
 def test_provider_map_includes_opencode():
     from agent_runtime.providers import PROVIDER_MAP
+    from agent_runtime.providers.opencode_go import OpenCodeProvider as GoProvider
     assert "opencode" in PROVIDER_MAP
-    assert PROVIDER_MAP["opencode"] is OpenCodeProvider
+    assert "opencode-go" in PROVIDER_MAP
+    assert PROVIDER_MAP["opencode"] is GoProvider
+    assert PROVIDER_MAP["opencode-go"] is GoProvider
 
 
 def test_call_via_binary_plain_text(tmp_path):

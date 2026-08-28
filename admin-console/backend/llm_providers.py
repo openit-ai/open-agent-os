@@ -9,10 +9,11 @@ Routes:
 - POST /v1/llm/providers/{id}/test  — test connection (L5, mock)
 - PATCH /v1/llm/providers/{id}/toggle — toggle enabled (L5) alternative POST /toggle
 
-Provider types: claude, codex, gemini, opencode, ollama
+Provider types: claude, codex, gemini, opencode-go, openrouter, ollama
 Field mapping:
   claude/codex/gemini -> apiKey (+ baseUrl optional, model)
-  opencode            -> path (+ model optional)
+  opencode-go         -> path (+ model optional)
+  openrouter           -> apiKey (+ baseUrl optional, model)
   ollama              -> url (+ model)
 
 Production-grade: Fernet encryption (OAOS_VAULT_KEY / VAULT_ENCRYPTION_KEY),
@@ -49,11 +50,19 @@ class ProviderType(str, Enum):
     claude = "claude"
     codex = "codex"
     gemini = "gemini"
-    opencode = "opencode"
+    opencode_go = "opencode-go"
+    openrouter = "openrouter"
     ollama = "ollama"
 
+    # backward compat: opencode -> opencode-go
+    @classmethod
+    def _missing_(cls, value):
+        if value == "opencode":
+            return cls.opencode_go
+        return None
 
-_APIKEY_TYPES = {ProviderType.claude, ProviderType.codex, ProviderType.gemini}
+
+_APIKEY_TYPES = {ProviderType.claude, ProviderType.codex, ProviderType.gemini, ProviderType.openrouter}
 
 # ---------------------------------------------------------------------------
 # Crypto helpers — Fernet, key from OAOS_VAULT_KEY / VAULT_ENCRYPTION_KEY
@@ -227,9 +236,9 @@ def _validate_fields(provider: ProviderType, data: dict, is_update: bool = False
     if provider in _APIKEY_TYPES:
         if not is_update and not data.get("api_key"):
             raise HTTPException(status_code=400, detail=f"apiKey is required for provider '{provider.value}'")
-    elif provider == ProviderType.opencode:
+    elif provider == ProviderType.opencode_go:
         if not is_update and not data.get("path"):
-            raise HTTPException(status_code=400, detail="path is required for provider 'opencode'")
+            raise HTTPException(status_code=400, detail="path is required for provider 'opencode-go'")
     elif provider == ProviderType.ollama:
         if not is_update and not data.get("url"):
             raise HTTPException(status_code=400, detail="url is required for provider 'ollama'")
@@ -844,7 +853,7 @@ def test_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
     if p.provider in _APIKEY_TYPES and not p.api_key:
         ok = False
         reason = "missing apiKey"
-    elif p.provider == ProviderType.opencode and not p.path:
+    elif p.provider == ProviderType.opencode_go and not p.path:
         ok = False
         reason = "missing path"
     elif p.provider == ProviderType.ollama and not p.url:

@@ -454,7 +454,7 @@ export function getUpgradeStatus(): Promise<UpgradeStatusResponse> {
 }
 
 // ---- LLM Providers ----
-export type LLMProviderType = "claude" | "codex" | "gemini" | "opencode" | "ollama";
+export type LLMProviderType = "claude" | "codex" | "gemini" | "opencode-go" | "openrouter" | "ollama";
 export interface LLMProvider {
   id: string;
   provider: LLMProviderType;
