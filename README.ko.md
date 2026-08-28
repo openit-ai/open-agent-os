@@ -5,8 +5,8 @@
 **한국어** | [English](README.md)
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.3.md` (Sections 1–47 + §§16A–16E) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (_v1.1 preserved as `docs/architecture-v1.1.md`_)
-- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `108 tests pass`, `npm run build ✓`
+- **Architecture:** `docs/architecture-v1.5.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8`) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (_v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `180 tests pass`, `npm run build ✓`
 
 ## 왜 Open Agent OS인가 — 시장이 풀지 못한 두 가지 모순
 
@@ -49,7 +49,7 @@ AI가 질의응답을 넘어 `파악→정리→탐색→조율→실행→승�
 ## 핵심 가치 5가지
 
 1. **Personal-First, Enterprise-Safe** — 내 Calendar/Gmail은 내가 위임(§9), Production/ERP/고객DB는 회사 정책+승인(§11). UX와 보안이 동시에 자연스럽다. (§13)
-2. **진짜 격리** — `agent:assistant:kim`은 `employee:kim` 소유 자원만 본다. Cross-user는 항상 DENY, plaintext token 저장 금지, Hermes 프로세스에 장기 저장 금지(§10). 108 tests로 검증.
+2. **진짜 격리** — `agent:assistant:kim`은 `employee:kim` 소유 자원만 본다. Cross-user는 항상 DENY, plaintext token 저장 금지, Hermes 프로세스에 장기 저장 금지(§10). 180 tests로 검증.
 3. **사람이 승인하는 고위험 실행** — `MERGE/DEPLOY/PAY/EXPORT` 등 HIGH risk(§21)는 Capability Token(HS256 300s, nonce/jti replay 방지) + HMAC 승인 요청(§24) + Admin Console 4버튼으로만 실행.
 4. **감사 가능한 운영** — 모든 권한·위임·실행은 Audit Ledger에 hash-chain+HMAC checkpoint로 기록, 변조 즉시 탐지(§30-31). `verify_chain` / `checkpoint` API 제공.
 5. **설치형 Source-Available** — BSL 1.1 (4년 후 Apache 2.0 전환), 고객 인프라에 그대로 설치. SaaS 종속 없이 평가(Developer) → 운영(Business/Managed)으로 확장. (§5, Editions)
@@ -78,8 +78,8 @@ admin-console/             # Admin — Next.js 15 + shadcn Financial(#22C55E/#F5
 adapters/                  # Mattermost/Slack/Outline/Notion/Hermes/IAM/Google/Microsoft
 examples/morning-briefing/ # MVP — orchestrator(per-user kim vs lee) + output.json(13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
-tests/                     # 108 tests: control-plane 5 + A 7 + B 35 + C 33 + admin 17 + MVP 5 + e2e 6
-docs/architecture-v1.1.md  # Truth (47 Sections)
+tests/                     # 180 tests
+docs/architecture-v1.5.md  # Canonical (47 Sections + §§16A–16K, Previous v1.4.1/v1.3 보관, v1.1 preserved)
 ```
 
 ## Quick Start
@@ -90,7 +90,7 @@ git clone https://github.com/openit-ai/open-agent-os.git && cd open-agent-os
 # 1) Python (3.11) — 전체 테스트
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"  # 또는 pip install -r requirements.txt
-pytest -q                # 108 passed (12.8s)
+pytest -q                # 180 passed (12.8s)
 
 # 2) Admin Console
 cd admin-console && npm install && npm run build   # 11 routes, 114–115kB
@@ -138,12 +138,13 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 - **Token:** HS256 300s short-lived + nonce/jti replay store
 - **Approval:** HMAC-SHA256, 4 decisions(`DENIED/APPROVED_ONCE/APPROVED_USER_ALWAYS/APPROVED_GROUP_ALWAYS`), nonce/signature/expiry
 - **Audit:** hash-chain + HMAC checkpoint(`verify_chain`, `checkpoint`)
-- **Isolation 검증:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` 등 108 tests
+- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options, Router 5-step, Capability `EXECUTE runtime/*`, §16G/§16H/§16I 동일 — 180 tests
+- **Isolation 검증:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` 등 180 tests
 
 ## Tests
 
 ```bash
-pytest -q                          # 108 passed
+pytest -q                          # 180 passed
 pytest tests/test_workstream_a.py tests/test_control_plane_api.py -v  # 12 (A isolation/SSE)
 pytest tests/test_workstream_b.py -v  # 35 (cross-user deny/HIGH token/trace)
 pytest tests/test_workstream_c.py -v  # 33 (policy/audit/vault/approval)
@@ -163,7 +164,7 @@ pytest tests/test_admin_backend.py -v # 17 (register/login/JWT/bcrypt/RBAC/healt
 
 ## Docs
 
-- `docs/architecture-v1.1.md` — Truth (47 Sections: §3.1/36 morning briefing, §5 설치형, §7.2 Gateway, §21 risk, §25 policy, §40 보안 테스트)
+- `docs/architecture-v1.5.md` — Canonical (47 Sections + §§16A–16K, SHA `b19f54ab`) — Previous: `docs/architecture-v1.4.1.md`/`v1.3.md` preserved
 - `docs/api/` — Internal Agent Interface, Capability, Approval API
 - `examples/morning-briefing/README.md` — MVP 브리핑 형식(09:30/11:00/오늘 반드시 처리)
 

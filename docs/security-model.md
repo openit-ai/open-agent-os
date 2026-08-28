@@ -1,9 +1,14 @@
-# Security Model — Personal Delegation vs Enterprise Authorization (Sections 8-13)
+# Security Model — Personal Delegation vs Enterprise Authorization (§§16A–16I, v1.5)
 
-## 16G. Hermes Security Model: Untrusted Execution Worker (v1.4.1)
+## 16F. Dual Runtime — LLM Runtime / Hermes Runtime (v1.5, alias §16E.6)
+
+Open Agent OS는 모든 Personal Agent를 단일 고자율 Runtime으로 실행하지 않는다. 기본은 **LLM Runtime**(`llm` canonical — `safe`는 deprecated alias로 유지, 하위호환)으로 통제성과 예측성을 확보하고, 고복잡·고자율 작업에만 **Hermes Runtime**을 사용한다. Registry는 YAML `runtimes.llm`/`runtimes.hermes`의 `installed/enabled/security_level` 3옵션(LLM Only / Hermes Only / Both)을, Router는 5-step(Installed → Enabled → Capability `EXECUTE runtime/*` → Task suitability → Resource)으로 `llm`/`hermes`를 선택한다. Hermes 미설치 시에도 Personal Delegation / Policy / Vault / Audit 등 핵심 기능은 LLM Runtime만으로 정상 동작한다. Capability `EXECUTE runtime/*`는 JIT 부여 가능. Blast Radius(16G) 경계와 연계되어 Hermes가 compromised 되어도 Production 자원에 직접 도달하지 못하도록 한다. — 코드: `packages/runtime-adapter/runtime_adapter/{registry,router,safe_adapter,hermes_adapter} + security_notes.py`
+
+---
+
+## 16G. Hermes Security Model: Untrusted Execution Worker (v1.5)
 
 Open Agent OS는 Hermes의 정상 동작을 전제로 하지 않는다. Hermes는 trusted security component가 아니라 **potentially compromised / untrusted execution worker**로 취급한다.
-
 ### 16G.1 Capability vs Authority 분리
 
 - Hermes Capability: Reasoning / Planning / Shell / Python / Local Files / Skills / Task Orchestration / MCP
@@ -88,6 +93,12 @@ Cannot directly access:
 
 ---
 
+## 16H. Execution Gateway — Tool Policy (§16H, v1.5)
+
+Capability만으로는 위험한 argument/대량 호출을 막지 못한다. Tool Policy는 `validate_tool_call` — allowed/denied fields, `max_results` 등) + per-tenant/user/tool token-bucket rate limit(`ToolRateLimiter`) + bulk protection(`is_bulk` threshold 100, BULK_* HIGH escalation)을 결정론적으로 적용한다. LLM이 아닌 코드로 강제되며, `execution-gateway/proxy`와 `risk`에서 HIGH로 승격된다. — 코드: `execution-gateway/execution_gateway/tool_policy.py`
+
+---
+
 ## 16I. Enterprise Data Access Pattern
 
 기업 데이터 접근은 직접 DB access보다 정형 API/Gateway를 우선한다.
@@ -125,3 +136,9 @@ Agent Runtime → Production DB = DENY
 원칙적으로 Agent Runtime의 Production DB 직접접속을 금지한다. 필요한 접근은 `MCP → Query Service → Read-only API`를 우선한다. 코드: `DataAccessPolicy.direct_db_access(user, resource)`는 항상 DENY 반환.
 
 ---
+
+## References
+
+- Canonical: `docs/architecture-v1.5.md` (3417 lines, SHA `b19f54ab`) — §§16F/16G/16H/16I, §§16A–16E carryover — §§16A–16I zero-trust boundary
+- Conformance: `docs/architecture-conformance.md` v1.5 (180 tests, SHA `b19f54ab`) — Previous `v1.4.1` `646a8fe` / `v1.3` `4a0383c8` preserved
+- Code: `packages/runtime-adapter/runtime_adapter/security_notes.py` (§16F/§16G Blast Radius), `packages/runtime-adapter/runtime_adapter/{registry,router,safe_adapter}`, `execution-gateway/execution_gateway/{tool_policy,data_access,proxy,risk}`, `security/*`
