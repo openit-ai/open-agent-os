@@ -4,7 +4,7 @@
 
 | Version | Supported | Notes |
 |---|---|---|
-| `v1.6.3` | ✅ | Current canonical — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.3.md` (§§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault, 4729 lines, SHA `e7b7796c`) |
+| `v1.6.3` | ✅ | Current canonical — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.3.md` (§§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault, 4732 lines, SHA `2868226b`) |
 | `v1.6.2` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.2.md` (4526 lines, SHA `4456bd4c`) |
 | `v1.5.1` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.1.md` (3615 lines, SHA `4c2c1b85`) |
 | `v1.5` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.md` (3417 lines, SHA `b19f54ab`) |
@@ -44,7 +44,7 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 ## Canonical Architecture
 
-- `docs/architecture-v1.6.3.md` — 47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy / 16C Core·Advanced split / 16F Dual Runtime / §16.1.1 OAOSContext·output_type·ToolOutputLimits / §16.1.2 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, runtime_mode conditional) / §17 ACP=Hermes-specific / §27B Vault / §40 security tests (SHA `e7b7796c`, 4729 lines) — conformance: `docs/architecture-conformance.md` v1.6.3; Previous `v1.6.2` `4456bd4c` / `v1.5.1` `4c2c1b85` preserved; code: `packages/agent-runtime` (LLM) + `admin-console/backend/llm_providers` (Fernet Vault) + `execution-gateway/tool_policy` + `data_access` (590 tests)
+- `docs/architecture-v1.6.3.md` — 47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy / 16C Core·Advanced split / 16F Dual Runtime / §16.1.1 OAOSContext·output_type·ToolOutputLimits / §16.1.2 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, runtime_mode conditional) / §17 ACP=Hermes-specific / §27B Vault / §40 security tests (SHA `2868226b`, 4732 lines) — conformance: `docs/architecture-conformance.md` v1.6.3; Previous `v1.6.2` `4456bd4c` / `v1.5.1` `4c2c1b85` preserved; code: `packages/agent-runtime` (LLM) + `admin-console/backend/llm_providers` (Fernet Vault) + `execution-gateway/tool_policy` + `data_access` (595 tests)
 - `docs/security-model.md` — §§16F/16G/16H/16I reference
 
 ## Scope
@@ -70,9 +70,9 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 Open Agent OS is a **Self-Hosted Enterprise Personal Agent Platform** — `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + JIT approval)`, `Cross-user always DENY`, `Auditable (hash-chain)`.
 
-- Architecture: [`docs/architecture-v1.6.3.md`](docs/architecture-v1.6.3.md) (§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — canonical v1.6.3 `e7b7796c`) — Previous `v1.6.2` `4456bd4c` / `v1.5.1` `4c2c1b85` preserved
+- Architecture: [`docs/architecture-v1.6.3.md`](docs/architecture-v1.6.3.md) (§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault — canonical v1.6.3 `2868226b`) — Previous `v1.6.2` `4456bd4c` / `v1.5.1` `4c2c1b85` preserved
 - Security Model: [`docs/security-model.md`](docs/security-model.md) (§§16A–16I — Dual Runtime / Untrusted Worker / Tool Policy / Data Access, v1.5.1: 16A.3.1 workspace isolation + 16A.6 Controlled Egress Proxy)
-- Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.6.3 — 590 tests passed
+- Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.6.3 — 595 tests passed
 - Threat review — Execution Gateway bypass: [`docs/security-review-gateway-bypass.md`](docs/security-review-gateway-bypass.md) — why "cannot bypass" matters more than "gateway exists", and the 3 remaining production hardenings (NetworkPolicy / Runtime hardening / DB re-verification)
 
 A bypass of the Gateway via direct Hermes → DB / Internal API / credential access is considered a **security boundary failure**, not a feature.
@@ -91,4 +91,4 @@ Self-hosted operators should:
 
 ---
 
-*Last updated: 2026-08-28 — v1.6.3 canonical (4729 lines, SHA e7b7796c, 590 tests). For general questions (non-security), use GitHub Issues.*
+*Last updated: 2026-08-29 — v1.6.3 canonical (P1-P3 hotfix) (4732 lines, SHA 2868226b, 595 tests). For general questions (non-security), use GitHub Issues.*
