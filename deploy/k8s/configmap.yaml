@@ -1,4 +1,9 @@
 # ConfigMap — non-secret env (override per env)
+# GRANT isolation: openagentos must NOT access external DBs (mattermost, outline) on shared clusters.
+# Apply docs/k8s-grant-isolation.sql as superuser after provisioning:
+#   REVOKE ALL ON DATABASE mattermost FROM openagentos;
+#   REVOKE ALL ON DATABASE outline FROM openagentos;
+# See docs/k8s-grant-isolation.sql and SECURITY.md § DB isolation.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,6 +18,8 @@ data:
   AWS_S3_PREFIX: "audit-checkpoints/"
   AWS_S3_BUCKET: ""  # set via: kubectl patch configmap oaos-config -p '{"data":{"AWS_S3_BUCKET":"my-bucket"}}'
   LOG_LEVEL: "info"
+  # CORS whitelist (comma-separated origins); default allows localhost:3012,3000,8010,8100
+  # OAOS_CORS_ORIGINS: "http://localhost:3012,http://localhost:3000,http://localhost:8010,http://localhost:8100"
   # Service URLs (intra-cluster)
   DATABASE_URL: "postgresql+asyncpg://openagentos:$(POSTGRES_PASSWORD)@postgres:5432/openagentos"
   REDIS_URL: "redis://:$(REDIS_PASSWORD)@redis:6379/0"

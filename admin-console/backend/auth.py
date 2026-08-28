@@ -15,10 +15,37 @@ from enum import Enum
 from typing import Optional
 
 import bcrypt
+import logging as _logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr, Field
+
+logger = _logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Password hashing — Argon2id primary, bcrypt fallback + verify-both
+# ---------------------------------------------------------------------------
+_argon2_hasher = None
+try:
+    from argon2 import PasswordHasher as _Argon2PasswordHasher  # type: ignore
+    from argon2.exceptions import VerifyMismatchError as _Argon2VerifyError  # type: ignore
+    from argon2.exceptions import InvalidHash as _Argon2InvalidHash  # type: ignore
+
+    # Argon2id with OWASP-recommended params
+    _argon2_hasher = _Argon2PasswordHasher(
+        time_cost=2,
+        memory_cost=19456,  # 19 MiB
+        parallelism=1,
+        hash_len=32,
+        salt_len=16,
+    )
+    logger.info("Password hashing: Argon2id available (argon2-cffi)")
+except Exception as _argon2_import_exc:  # pragma: no cover - missing lib path
+    _argon2_hasher = None
+    _logging.getLogger(__name__).warning(
+        f"Password hashing: argon2-cffi unavailable, falling back to bcrypt ({_argon2_import_exc})"
+    )
 
 # ---------------------------------------------------------------------------
 # Config
@@ -88,11 +115,48 @@ _users_by_id: dict[str, AdminUser] = {}
 _users_by_email: dict[str, AdminUser] = {}
 
 def _hash_password(password: str) -> str:
+    """Hash with Argon2id when available, else bcrypt (with warning already logged at import)."""
+    if _argon2_hasher is not None:
+        try:
+            return _argon2_hasher.hash(password)
+        except Exception as exc:  # pragma: no cover - extremely rare
+            logger.warning(f"Argon2id hash failed, falling back to bcrypt: {exc}")
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    """Verify against Argon2id or bcrypt — detects hash prefix."""
+    if not hashed:
+        return False
+    # Argon2 hashes start with $argon2id$ / $argon2i$ / $argon2d$
+    if hashed.startswith("$argon2"):
+        if _argon2_hasher is None:
+            # Argon2 hash but lib missing — cannot verify (fail closed, but log)
+            logger.warning("Password verify: argon2 hash present but argon2-cffi unavailable")
+            return False
+        try:
+            return _argon2_hasher.verify(hashed, password)
+        except Exception:
+            # VerifyMismatchError, InvalidHash, etc. -> wrong password
+            return False
+    # legacy bcrypt (and fallback)
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        # In case hash was argon2 but without prefix detection edge — try argon2 as last resort
+        if _argon2_hasher is not None:
+            try:
+                return _argon2_hasher.verify(hashed, password)
+            except Exception:
+                pass
+        return False
+
+
+def _needs_rehash(hashed: str) -> bool:
+    """True if stored hash is legacy bcrypt and Argon2id is available (opportunistic upgrade)."""
+    if _argon2_hasher is None:
+        return False
+    return hashed.startswith("$2")
 
 
 def _create_jwt(email: str, role: str) -> tuple[str, int]:

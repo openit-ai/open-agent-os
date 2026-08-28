@@ -4,7 +4,7 @@
 - auth router + infra router
 - Section 22 dashboard proxy: stats (users/policy/audit counts, approvals pending)
 - Section 23-24 approvals proxy, 30-31 audit proxy, credentials proxy
-- CORS allow all
+- CORS: whitelist via OAOS_CORS_ORIGINS (default localhost:3012,3000,8010,8100), deny * with credentials
 """
 from __future__ import annotations
 
@@ -40,10 +40,46 @@ except ImportError:
 
 app = FastAPI(title="Open Agent OS Admin API", version="0.1.1")
 
-# ── CORS ─────────────────────────────────────────────────────────
+# ── CORS — whitelist via OAOS_CORS_ORIGINS, deny * when credentials true ─
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3012",
+    "http://localhost:3000",
+    "http://localhost:8010",
+    "http://localhost:8100",
+]
+
+
+def _get_cors_origins() -> list[str]:
+    raw = os.environ.get("OAOS_CORS_ORIGINS", "")
+    if not raw or not raw.strip():
+        return list(_DEFAULT_CORS_ORIGINS)
+    parts = [p.strip() for p in raw.split(",")]
+    # filter empty, normalize
+    origins = [p for p in parts if p]
+    # SECURITY: never allow "*" together with allow_credentials=True
+    if "*" in origins:
+        logger.warning(
+            "CORS: OAOS_CORS_ORIGINS contains '*', which is incompatible with allow_credentials=True — "
+            "falling back to default whitelist (deny *)"
+        )
+        origins = [o for o in origins if o != "*"]
+        if not origins:
+            origins = list(_DEFAULT_CORS_ORIGINS)
+    # dedupe preserve order
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for o in origins:
+        if o not in seen:
+            seen.add(o)
+            deduped.append(o)
+    return deduped
+
+
+_CORS_ORIGINS = _get_cors_origins()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,14 +100,22 @@ except ImportError:
 async def _admin_persistence_startup() -> None:
     """Startup hook — ensure admin tables if DB configured, else fallback.
 
-    Must never raise; logs the required persistence readiness line so
-    Admin Web UI persistence is documented even when running in-memory.
+    Fail-closed in production: if OAOS_ENV=production and no DATABASE_URL is
+    configured, the underlying ensure_admin_tables() will raise and we do NOT
+    swallow it — the app fails to start rather than silently running in-memory.
+
+    In non-prod, falls back to in-memory and never raises.
     """
     if ensure_admin_tables is not None:
-        try:
+        is_prod = os.environ.get("OAOS_ENV", "").lower() == "production"
+        if is_prod:
+            # fail-closed: let RuntimeError propagate
             await ensure_admin_tables()
-        except Exception as exc:  # pragma: no cover - safety net
-            logger.warning(f"Admin persistence startup fallback: {exc}")
+        else:
+            try:
+                await ensure_admin_tables()
+            except Exception as exc:  # pragma: no cover - safety net
+                logger.warning(f"Admin persistence startup fallback: {exc}")
     # Required log line per spec (exact substring match)
     logger.info("Admin persistence: openagentos ready (or in-memory fallback)")
 

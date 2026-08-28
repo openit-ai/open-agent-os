@@ -158,7 +158,8 @@ def test_bcrypt_hash_not_plaintext():
     user = auth_mod.get_user_by_email("chk@test.co.kr")
     assert user is not None
     assert user.hashed_password != "Password123!"
-    assert user.hashed_password.startswith("$2")
+    # Argon2id for new hashes when available, bcrypt fallback otherwise — both are valid
+    assert user.hashed_password.startswith("$2") or user.hashed_password.startswith("$argon2")
 
 
 # ---------------------------------------------------------------------------

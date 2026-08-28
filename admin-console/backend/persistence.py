@@ -8,12 +8,13 @@ pass without a real DB.
 - ensure_admin_tables(): async no-op if no DATABASE_URL, otherwise tries to
   create minimal admin tables (sqlite compat + postgres). No DB call at import
   time; all imports/IO are lazy inside the async function with graceful
-  fallback to in-memory.
+  fallback to in-memory. In production (OAOS_ENV=production) fails closed:
+  requires DATABASE_URL/OAOS_DATABASE_URL or raises RuntimeError.
 
 Usage:
     from persistence import get_database_url, ensure_admin_tables
 
-    await ensure_admin_tables()  # safe to call on startup; never raises
+    await ensure_admin_tables()  # safe to call on startup; raises in prod if no DB
 """
 from __future__ import annotations
 
@@ -143,11 +144,21 @@ async def ensure_admin_tables() -> None:
     - On any DB error (unreachable, missing driver, auth failure), logs
       warning and returns without raising — caller continues with in-memory
       dicts (auth.py, infra.py, user_mappings.py).
+      EXCEPTION: when OAOS_ENV=production, missing DATABASE_URL fails closed
+      (raises RuntimeError) and DB errors also propagate instead of falling back.
     - Safe to call multiple times; uses CREATE TABLE IF NOT EXISTS.
     - No DB work happens at import time.
     """
+    is_prod = os.environ.get("OAOS_ENV", "").lower() == "production"
     url = get_database_url()
     if not url:
+        if is_prod:
+            logger.error(
+                "Admin persistence: fail-closed — DATABASE_URL/OAOS_DATABASE_URL required when OAOS_ENV=production"
+            )
+            raise RuntimeError(
+                "DATABASE_URL/OAOS_DATABASE_URL required when OAOS_ENV=production (fail-closed)"
+            )
         logger.info("Admin persistence: openagentos ready (or in-memory fallback) — no DATABASE_URL, using in-memory")
         return
 
@@ -159,6 +170,8 @@ async def ensure_admin_tables() -> None:
         from sqlalchemy.ext.asyncio import create_async_engine
         from sqlalchemy import text
     except Exception as e:
+        if is_prod:
+            raise RuntimeError(f"sqlalchemy not available in production: {e}") from e
         logger.warning(f"Admin persistence: in-memory fallback (sqlalchemy not available: {e})")
         return
 
@@ -177,7 +190,9 @@ async def ensure_admin_tables() -> None:
                 await conn.execute(text(ddl))
         logger.info("Admin persistence: openagentos ready")
     except Exception as e:
-        # Any failure -> fallback, never raise to caller
+        if is_prod:
+            raise
+        # Any failure -> fallback, never raise to caller (non-prod)
         logger.warning(f"Admin persistence: in-memory fallback (DB unavailable: {e})")
         return
     finally:

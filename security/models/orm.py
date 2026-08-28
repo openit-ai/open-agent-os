@@ -132,7 +132,13 @@ class SessionRecordORM(Base):
 
 
 class VaultCredentialORM(Base):
-    """DB-encrypted vault row — encrypted_token is Fernet ciphertext (bytes as LargeBinary)."""
+    """DB-encrypted vault row — encrypted_token is Fernet ciphertext (bytes as LargeBinary).
+
+    Phase B externalization: encrypted_token is nullable (NULL when secret_ref
+    only is stored and bytes live in external backend). secret_ref remains PK.
+    vault_backend / vault_path / version added for migration observability
+    (all nullable for zero-downtime migration).
+    """
 
     __tablename__ = "vault_credentials"
 
@@ -141,8 +147,13 @@ class VaultCredentialORM(Base):
     owner_agent_id: Mapped[str] = mapped_column(String(256), nullable=False)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     scope: Mapped[str] = mapped_column(String(256), nullable=False)
-    encrypted_token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Nullable for externalization: NULL when external backend holds the secret
+    encrypted_token: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Externalization metadata (nullable until fully migrated)
+    vault_backend: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    vault_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 # ── v1.6 §27 Persistent Memory (pgvector ready, sqlite compatible) ────────────
