@@ -26,7 +26,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
-ALLOWED_NAMES = ("mattermost", "outline", "hermes", "control-plane", "execution-gateway")
+ALLOWED_NAMES = ("mattermost", "outline", "hermes", "control-plane", "execution-gateway", "postgres", "redis", "security")
 
 
 class InfraStatus(str, Enum):
@@ -232,6 +232,107 @@ async def health_probe(admin: AdminUser = Depends(get_current_admin)):
         "services": [s.model_dump(mode="json") for s in results],
         "audit_events_count": len(_audit_events),
     }
+
+
+# ---------------------------------------------------------------------------
+# Aliases for admin-console frontend (/v1/infra without /services)
+# Frontend sends { service, host, port, health_path } and expects /v1/infra
+# ---------------------------------------------------------------------------
+class InfraAliasCreate(BaseModel):
+    service: Optional[str] = None
+    name: Optional[str] = None
+    display_name: Optional[str] = None
+    host: str
+    port: int = Field(ge=1, le=65535)
+    health_path: str = "/health"
+    expected_status: int = 200
+
+class InfraAliasUpdate(BaseModel):
+    service: Optional[str] = None
+    name: Optional[str] = None
+    display_name: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    health_path: Optional[str] = None
+    expected_status: Optional[int] = None
+
+
+def _resolve_name(data: dict) -> str:
+    n = data.get("name") or data.get("service")
+    if not n:
+        raise HTTPException(status_code=400, detail="service/name is required")
+    return n
+
+
+@router.get("", response_model=dict)
+def list_services_alias(admin: AdminUser = Depends(get_current_admin)):
+    items = list(_services.values())
+    return {"items": [s.model_dump(mode="json") for s in items]}
+
+
+@router.post("", response_model=InfraService, status_code=201)
+def create_service_alias(req: InfraAliasCreate, admin: AdminUser = Depends(require_l5)):
+    data = req.model_dump(exclude_unset=True)
+    name = _resolve_name(data)
+    _validate_name(name)
+    sid = f"infra_{uuid.uuid4().hex[:8]}"
+    svc = InfraService(
+        id=sid,
+        name=name,
+        display_name=data.get("display_name") or name,
+        host=data["host"],
+        port=data["port"],
+        health_path=data.get("health_path", "/health"),
+        expected_status=data.get("expected_status", 200),
+    )
+    _services[sid] = svc
+    return svc
+
+
+@router.get("/{service_id}", response_model=InfraService)
+def get_service_alias(service_id: str, admin: AdminUser = Depends(get_current_admin)):
+    svc = _services.get(service_id)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="service not found")
+    return svc
+
+
+@router.patch("/{service_id}", response_model=InfraService)
+def patch_service_alias(service_id: str, req: InfraAliasUpdate, admin: AdminUser = Depends(require_l5)):
+    svc = _services.get(service_id)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="service not found")
+    data = req.model_dump(exclude_unset=True)
+    # map service -> name
+    if "service" in data and data["service"] is not None:
+        data["name"] = data.pop("service")
+    if "name" in data and data["name"] is not None:
+        _validate_name(data["name"])
+    for k, v in data.items():
+        setattr(svc, k, v)
+    _services[service_id] = svc
+    return svc
+
+
+@router.post("/{service_id}/probe", response_model=InfraService)
+async def probe_one_alias(service_id: str, admin: AdminUser = Depends(get_current_admin)):
+    svc = _services.get(service_id)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="service not found")
+    updated = await _probe_one(svc)
+    _services[service_id] = updated
+    _audit_events.append(
+        {
+            "event_id": f"evt_{uuid.uuid4().hex[:8]}",
+            "type": "infra.health_probe",
+            "service_id": svc.id,
+            "service_name": svc.name,
+            "status": updated.status.value,
+            "latency_ms": updated.latency_ms,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    return updated
 
 
 @router.get("/audit/events")
