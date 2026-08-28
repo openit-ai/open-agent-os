@@ -125,6 +125,96 @@ export function deleteUser(id: string): Promise<{ status: string; id: string }> 
   return apiFetch(`/v1/auth/users/${id}`, { method: "DELETE" });
 }
 
+// ---- Mattermost → Agent user mappings (§14) ----
+export interface UserMapping {
+  id: string;
+  mm_user_id: string;
+  mm_username: string | null;
+  username?: string | null;
+  employee_principal: string;
+  agent_id: string;
+  status: string;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+export interface UserMappingCreatePayload {
+  mm_user_id: string;
+  mm_username?: string;
+  employee_principal?: string;
+}
+
+export interface UserMappingListResponse {
+  mappings: UserMapping[];
+  items?: UserMapping[];
+  count: number;
+}
+
+export interface SyncPreviewItem {
+  mm_user_id: string;
+  mm_username: string;
+  employee_principal: string;
+  agent_id: string;
+  status: string;
+  already_mapped: boolean;
+}
+
+export interface SyncPreviewResponse {
+  preview: SyncPreviewItem[];
+  items?: SyncPreviewItem[];
+  count: number;
+  total?: number;
+}
+
+export function listMappings(): Promise<UserMapping[] | UserMappingListResponse> {
+  return apiFetch("/v1/user-mappings");
+}
+
+export function createMapping(payload: UserMappingCreatePayload): Promise<UserMapping> {
+  return apiFetch<UserMapping>("/v1/user-mappings", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteMapping(id: string): Promise<{ status: string; id: string } | void> {
+  return apiFetch(`/v1/user-mappings/${id}`, { method: "DELETE" });
+}
+
+export function syncPreview(payload?: { users: Array<{ mm_user_id: string; mm_username?: string; employee_principal?: string }> }): Promise<SyncPreviewResponse | SyncPreviewItem[]> {
+  return apiFetch("/v1/user-mappings/sync", {
+    method: "POST",
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
+// ---- Mattermost user-mapping helpers ----
+export function deriveEmployeePrincipal(mm_username: string, mm_user_id: string): string {
+  const raw = (mm_username || mm_user_id || "unknown").toLowerCase();
+  const suffix = raw.replace(/[^a-z0-9_.-]/g, "") || "unknown";
+  return `employee:${suffix}`;
+}
+
+export function deriveAgentId(employee_principal: string): string {
+  const suffix = employee_principal.replace(/^employee:/, "");
+  return `agent:assistant:${suffix}`;
+}
+
+export function getMappingUsername(m: Pick<UserMapping, "mm_username" | "username">): string {
+  return (m.mm_username ?? m.username ?? "") as string;
+}
+
+export function getMappingByPrincipal(
+  mappings: UserMapping[],
+  principal: string,
+): UserMapping | undefined {
+  return mappings.find((x) => x.employee_principal === principal);
+}
+
+export function getMappingByMmId(mappings: UserMapping[], mmId: string): UserMapping | undefined {
+  return mappings.find((x) => x.mm_user_id === mmId);
+}
+
 // ---- policy ----
 export interface PolicyRule {
   id: string;

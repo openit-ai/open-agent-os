@@ -26,11 +26,13 @@ try:
     from infra import router as infra_router  # type: ignore
     from business import router as business_router  # type: ignore
     from managed import router as managed_router  # type: ignore
+    from user_mappings import router as user_mappings_router  # type: ignore
 except ImportError:
     from .auth import router as auth_router, get_current_admin, AdminUser  # type: ignore
     from .infra import router as infra_router  # type: ignore
     from .business import router as business_router  # type: ignore
     from .managed import router as managed_router  # type: ignore
+    from .user_mappings import router as user_mappings_router  # type: ignore
 
 app = FastAPI(title="Open Agent OS Admin API", version="0.1.1")
 
@@ -48,6 +50,7 @@ app.include_router(auth_router)
 app.include_router(infra_router)
 app.include_router(business_router)
 app.include_router(managed_router)
+app.include_router(user_mappings_router)
 
 
 # ── Health ───────────────────────────────────────────────────────

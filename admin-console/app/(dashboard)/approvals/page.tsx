@@ -1,13 +1,23 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getToken, getPendingApprovals, decideApproval, type ApprovalRequestItem, type ApprovalDecisionType } from "@/lib/api";
-import { ClipboardCheck, RefreshCw, ShieldAlert } from "lucide-react";
+import {
+  getToken,
+  getPendingApprovals,
+  decideApproval,
+  listMappings,
+  deriveAgentId,
+  deriveEmployeePrincipal,
+  type ApprovalRequestItem,
+  type ApprovalDecisionType,
+  type UserMapping,
+} from "@/lib/api";
+import { ClipboardCheck, RefreshCw, ShieldAlert, Link2, Users } from "lucide-react";
 
 function riskVariant(risk: string) {
   const r = risk?.toUpperCase();
@@ -27,6 +37,52 @@ function formatTime(iso?: string | null) {
   }
 }
 
+function buildMappingIndex(mappings: UserMapping[]) {
+  const byPrincipal = new Map<string, UserMapping>();
+  const byMmId = new Map<string, UserMapping>();
+  const byUsername = new Map<string, UserMapping>();
+  for (const m of mappings) {
+    if (m.employee_principal) byPrincipal.set(m.employee_principal, m);
+    if (m.mm_user_id) byMmId.set(m.mm_user_id, m);
+    const uname = m.mm_username ?? m.username ?? "";
+    if (uname) byUsername.set(uname, m);
+  }
+  return { byPrincipal, byMmId, byUsername };
+}
+
+function resolveLinkedAgent(userId: string, idx: ReturnType<typeof buildMappingIndex>): { mapping: UserMapping | null; agentId: string | null; hint: string } {
+  // direct principal match
+  if (idx.byPrincipal.has(userId)) {
+    const m = idx.byPrincipal.get(userId)!;
+    return { mapping: m, agentId: m.agent_id, hint: "principal 일치" };
+  }
+  if (idx.byMmId.has(userId)) {
+    const m = idx.byMmId.get(userId)!;
+    return { mapping: m, agentId: m.agent_id, hint: "MM ID 일치" };
+  }
+  if (idx.byUsername.has(userId)) {
+    const m = idx.byUsername.get(userId)!;
+    return { mapping: m, agentId: m.agent_id, hint: "username 일치" };
+  }
+  // not mapped — derive hint if looks like employee: or username
+  if (userId.startsWith("employee:")) {
+    try {
+      return { mapping: null, agentId: deriveAgentId(userId), hint: "미매핑 · 자동 유도" };
+    } catch {
+      return { mapping: null, agentId: null, hint: "미매핑" };
+    }
+  }
+  if (userId) {
+    try {
+      const principal = deriveEmployeePrincipal(userId, userId);
+      return { mapping: null, agentId: deriveAgentId(principal), hint: "미매핑 · 자동 유도" };
+    } catch {
+      return { mapping: null, agentId: null, hint: "미매핑" };
+    }
+  }
+  return { mapping: null, agentId: null, hint: "" };
+}
+
 export default function ApprovalsPage() {
   const router = useRouter();
   const [items, setItems] = useState<ApprovalRequestItem[]>([]);
@@ -35,6 +91,9 @@ export default function ApprovalsPage() {
   const [deciding, setDeciding] = useState<string | null>(null);
   const [groupId, setGroupId] = useState("default-group");
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [mappings, setMappings] = useState<UserMapping[]>([]);
+
+  const mappingIndex = useMemo(() => buildMappingIndex(mappings), [mappings]);
 
   const fetchList = useCallback(async () => {
     setError(null);
@@ -48,10 +107,25 @@ export default function ApprovalsPage() {
     }
   }, []);
 
+  const fetchMappings = useCallback(async () => {
+    try {
+      const res = await listMappings();
+      const arr: UserMapping[] = Array.isArray(res)
+        ? (res as UserMapping[])
+        : ((res as { mappings?: UserMapping[] }).mappings ??
+          (res as { items?: UserMapping[] }).items ??
+          []);
+      setMappings(arr);
+    } catch {
+      // silent — mapping context is optional
+    }
+  }, []);
+
   useEffect(() => {
     if (!getToken()) { router.replace("/login"); return; }
     fetchList();
-  }, [fetchList, router]);
+    fetchMappings();
+  }, [fetchList, fetchMappings, router]);
 
   async function handleDecide(id: string, decision: ApprovalDecisionType) {
     setDeciding(id + decision);
@@ -82,9 +156,9 @@ export default function ApprovalsPage() {
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <ClipboardCheck className="h-6 w-6" /> Approvals
           </h1>
-          <p className="text-sm text-muted-foreground">승인 대기 — 위험도 기반 JIT 승인 (Once / Always 사용자·그룹 / Deny)</p>
+          <p className="text-sm text-muted-foreground">승인 대기 — 위험도 기반 JIT 승인 (Once / Always 사용자·그룹 / Deny) · 요청자 매핑 컨텍스트 표시</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchList(); }} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchList(); fetchMappings(); }} disabled={loading}>
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> 새로고침
         </Button>
       </div>
@@ -102,13 +176,22 @@ export default function ApprovalsPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">승인 대기 목록</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Users className="h-4 w-4" />
+            승인 대기 목록
+          </CardTitle>
           <CardDescription>
             {loading ? "로딩 중..." : `${items.length}건 대기 중`}
             <span className="ml-3 inline-flex items-center gap-1">
               <span className="text-xs">그룹 ID:</span>
               <Input value={groupId} onChange={(e) => setGroupId(e.target.value)} placeholder="group id" className="h-7 w-36 text-xs" />
             </span>
+            {mappings.length > 0 && (
+              <span className="ml-3 inline-flex items-center gap-1 text-xs text-muted-foreground">
+                <Link2 className="h-3 w-3" />
+                매핑 {mappings.length}건 로드됨
+              </span>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -130,8 +213,14 @@ export default function ApprovalsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="min-w-[140px]">Approval ID</TableHead>
-                    <TableHead>User</TableHead>
+                    <TableHead className="min-w-[130px]">Approval ID</TableHead>
+                    <TableHead className="min-w-[140px]">Requester</TableHead>
+                    <TableHead className="min-w-[160px]">
+                      <span className="inline-flex items-center gap-1">
+                        <Link2 className="h-3.5 w-3.5" />
+                        Linked Agent
+                      </span>
+                    </TableHead>
                     <TableHead>Agent</TableHead>
                     <TableHead>Action</TableHead>
                     <TableHead className="min-w-[160px]">Resource</TableHead>
@@ -144,22 +233,48 @@ export default function ApprovalsPage() {
                 <TableBody>
                   {items.map((it) => {
                     const aid = (it.approval_id as string) || (it as unknown as { id: string }).id || "-";
-                    // created_at fallback: try to infer from expires? use expires_at minus ttl? just show expires
-                    const reqTime = (it as unknown as { created_at?: string }).created_at || (it.request_hash ? "-" : "-");
-                    // Try to show expires_at as request time is not stored; use expires_at
+                    const reqTime = (it as unknown as { created_at?: string }).created_at || undefined;
+                    const { mapping, agentId, hint } = resolveLinkedAgent(it.user_id, mappingIndex);
+                    const isMapped = !!mapping;
                     return (
                       <TableRow key={aid}>
                         <TableCell className="font-mono text-xs">
                           <span className="truncate" title={aid}>{aid}</span>
                         </TableCell>
-                        <TableCell className="text-xs">{it.user_id}</TableCell>
-                        <TableCell className="text-xs">{it.agent_id}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-mono text-xs" title={it.user_id}>{it.user_id}</span>
+                            {mapping && (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground" title={mapping.employee_principal}>
+                                <Link2 className="h-3 w-3" />
+                                {mapping.mm_username ?? mapping.mm_user_id}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {agentId ? (
+                            <span
+                              className={`inline-flex max-w-[170px] items-center gap-1 truncate font-mono text-xs ${isMapped ? "text-foreground" : "text-muted-foreground"}`}
+                              title={`${hint}: ${agentId}${mapping ? ` (principal: ${mapping.employee_principal})` : ""}`}
+                            >
+                              <Badge variant={isMapped ? "success" : "secondary"} className="shrink-0 gap-1">
+                                <Link2 className="h-3 w-3" />
+                                {isMapped ? "매핑" : "유도"}
+                              </Badge>
+                              <span className="truncate">{agentId}</span>
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground" title={hint}>-</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground" title={it.agent_id}>{it.agent_id}</TableCell>
                         <TableCell className="text-xs font-medium">{it.action}</TableCell>
                         <TableCell className="max-w-[200px] truncate text-xs" title={it.resource}>{it.resource}</TableCell>
                         <TableCell>
                           <Badge variant={riskVariant(it.risk)}>{it.risk}</Badge>
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{formatTime(reqTime !== "-" ? reqTime : undefined)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{formatTime(reqTime)}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{formatTime(it.expires_at)}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap justify-end gap-1">
@@ -188,7 +303,7 @@ export default function ApprovalsPage() {
       </Card>
 
       <p className="text-xs text-muted-foreground">
-        * Approve Once: 이번 요청만 승인 · Always(사용자): 동일 사용자·동일 action/resource 영구 승인 · Always(그룹): 그룹 전체 영구 승인 · Deny: 거부. 결정 후 즉시 갱신됩니다.
+        * Approve Once: 이번 요청만 승인 · Always(사용자): 동일 사용자·동일 action/resource 영구 승인 · Always(그룹): 그룹 전체 영구 승인 · Deny: 거부. Requester의 Mattermost 매핑이 있으면 Linked Agent에 <span className="inline-flex items-center gap-1"><Link2 className="h-3 w-3" />매핑</span> 배지, 없으면 자동 유도값(<span className="font-mono">agent:assistant:&lt;suffix&gt;</span>)을 표시합니다.
       </p>
     </div>
   );
