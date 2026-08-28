@@ -17,6 +17,7 @@ import {
   listMappings,
   createMapping,
   deleteMapping,
+  resolveMmUser,
   syncPreview,
   deriveEmployeePrincipal,
   deriveAgentId,
@@ -71,6 +72,8 @@ export default function UsersPage() {
   const [mapFormError, setMapFormError] = useState<string | null>(null);
   const [mapFormLoading, setMapFormLoading] = useState(false);
   const [deletingMap, setDeletingMap] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveMsg, setResolveMsg] = useState<string | null>(null);
   const [preview, setPreview] = useState<SyncPreviewItem[] | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -190,22 +193,58 @@ export default function UsersPage() {
   }
 
   // ---- mapping handlers ----
+  async function handleResolve() {
+    setResolveMsg(null);
+    const uname = mmUsername.trim() || mmUserId.trim();
+    if (!uname) { setResolveMsg("Username을 먼저 입력하세요."); return; }
+    setResolving(true);
+    try {
+      const r = await resolveMmUser(uname);
+      setMmUserId(r.mm_user_id);
+      if (r.mm_username) setMmUsername(r.mm_username);
+      setResolveMsg(`조회 성공: ${r.mm_username} → ${r.mm_user_id.slice(0,8)}...`);
+    } catch (err) {
+      setResolveMsg(err instanceof Error ? err.message : "조회 실패");
+    } finally {
+      setResolving(false);
+    }
+  }
+
   async function handleCreateMapping(e: React.FormEvent) {
     e.preventDefault();
     setMapFormError(null);
-    if (!mmUserId.trim()) {
-      setMapFormError("MM User ID는 필수입니다.");
+    let finalId = mmUserId.trim();
+    let finalUsername = mmUsername.trim() || undefined;
+    // Username만 입력한 경우 자동 조회 시도
+    if (!finalId && finalUsername) {
+      try {
+        setMapFormLoading(true);
+        const r = await resolveMmUser(finalUsername);
+        finalId = r.mm_user_id;
+        finalUsername = r.mm_username || finalUsername;
+        setMmUserId(finalId);
+      } catch {
+        setMapFormError("MM User ID가 비어있고 Username 조회도 실패했습니다. ID를 직접 입력하거나 Username을 확인하세요.");
+        setMapFormLoading(false);
+        return;
+      } finally {
+        // keep loading for next step
+      }
+    }
+    if (!finalId) {
+      setMapFormError("MM User ID는 필수입니다. Username으로 자동 조회하려면 Username을 입력하고 다시 시도하세요.");
+      setMapFormLoading(false);
       return;
     }
     if (employeePrincipal.trim() && !employeePrincipal.trim().startsWith("employee:")) {
       setMapFormError("employee_principal은 employee: 로 시작해야 합니다.");
       return;
     }
-    setMapFormLoading(true);
+    if (!mapFormLoading) setMapFormLoading(true);
     try {
       await createMapping({
-        mm_user_id: mmUserId.trim(),
-        mm_username: mmUsername.trim() || undefined,
+        mm_user_id: finalId,
+        mm_username: finalUsername,
         employee_principal: employeePrincipal.trim() || undefined,
       });
       setMmUserId("");
@@ -431,18 +470,24 @@ export default function UsersPage() {
                 Mattermost → Agent 매핑 등록
               </CardTitle>
               <CardDescription>
-                MM User ID 필수 · Username 선택 · Employee Principal 미입력 시 자동 유도 (<span className="font-mono text-xs">employee:&lt;username|id&gt;</span> → <span className="font-mono text-xs">agent:assistant:&lt;suffix&gt;</span>)
+                Username만 입력해도 ID 자동 조회 가능 · Employee Principal 미입력 시 자동 유도 (<span className="font-mono text-xs">employee:&lt;username|id&gt;</span> → <span className="font-mono text-xs">agent:assistant:&lt;suffix&gt;</span>)
               </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleCreateMapping} className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-1">
                   <Label htmlFor="mm_user_id">MM User ID *</Label>
-                  <Input id="mm_user_id" placeholder="e.g. 8w9q1..." value={mmUserId} onChange={(e) => setMmUserId(e.target.value)} required />
+                  <Input id="mm_user_id" placeholder="비우면 Username으로 자동 조회" value={mmUserId} onChange={(e) => setMmUserId(e.target.value)} />
+                  {resolveMsg && <p className="text-xs text-muted-foreground">{resolveMsg}</p>}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="mm_username">MM Username</Label>
-                  <Input id="mm_username" placeholder="e.g. kim.mattermost" value={mmUsername} onChange={(e) => setMmUsername(e.target.value)} />
+                  <div className="flex gap-1.5">
+                    <Input id="mm_username" placeholder="e.g. mykim" value={mmUsername} onChange={(e) => setMmUsername(e.target.value)} className="flex-1" />
+                    <Button type="button" variant="outline" size="sm" onClick={handleResolve} disabled={resolving || (!mmUsername.trim() && !mmUserId.trim())} className="shrink-0">
+                      {resolving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "ID 조회"}
+                    </Button>
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="employee_principal">Employee Principal</Label>

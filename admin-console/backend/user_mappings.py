@@ -20,8 +20,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+import os
+import httpx
 
 try:
     from .auth import AdminUser, get_current_admin, require_l5  # type: ignore
@@ -107,9 +109,72 @@ def _validate_principal(principal: str) -> None:
     if not principal.startswith("employee:"):
         raise HTTPException(status_code=400, detail="employee_principal must start with 'employee:'")
 
+def _load_mm_config() -> tuple[str | None, str | None]:
+    url = os.getenv("MATTERMOST_URL")
+    token = os.getenv("MATTERMOST_TOKEN")
+    if url and token:
+        return url, token
+    # fallback: read from known env files
+    for env_path in ["/home/openitsvc/.hermes/.env", "/root/.hermes/.env", os.path.expanduser("~/.hermes/.env")]:
+        try:
+            if os.path.exists(env_path):
+                txt = open(env_path).read()
+                for line in txt.splitlines():
+                    if line.startswith("MATTERMOST_URL=") and not url:
+                        url = line.split("=",1)[1].strip().strip('"')
+                    if line.startswith("MATTERMOST_TOKEN=") and not token:
+                        token = line.split("=",1)[1].strip().strip('"').strip()
+        except Exception:
+            pass
+    return url, token
+
+def _is_mm_id(s: str) -> bool:
+    import re
+    return bool(re.fullmatch(r"[a-z0-9]{26}", s.strip()))
+
+def _resolve_username_to_id(username: str) -> tuple[str, dict] | None:
+    """Try to resolve username -> mm_user_id via Mattermost API. Returns (id, raw_json) or None."""
+    username = username.strip()
+    if not username:
+        return None
+    url, token = _load_mm_config()
+    if not url or not token:
+        return None
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/v4/users/username/{username}", headers={"Authorization": f"Bearer {token}"}, timeout=5.0)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("id"), data
+    except Exception:
+        pass
+    return None
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.get("/resolve", response_model=None)
+def resolve_mm_user(username: str = Query(..., min_length=1), admin: AdminUser = Depends(get_current_admin)):
+    """GET /v1/user-mappings/resolve?username=mykim — resolve Mattermost username to 26-char ID."""
+    username = username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="username required")
+    url, token = _load_mm_config()
+    if not url or not token:
+        raise HTTPException(status_code=503, detail="Mattermost not configured on server")
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/v4/users/username/{username}", headers={"Authorization": f"Bearer {token}"}, timeout=5.0)
+        if r.status_code == 200:
+            data = r.json()
+            return {"found": True, "mm_user_id": data.get("id"), "mm_username": data.get("username"), "email": data.get("email"), "display_name": f"{data.get('first_name','')} {data.get('last_name','')}".strip()}
+        elif r.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Mattermost user '{username}' not found")
+        else:
+            raise HTTPException(status_code=r.status_code, detail=r.text[:500])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)[:300])
 
 @router.get("", response_model=None)
 @router.get("/", response_model=None)
@@ -130,6 +195,22 @@ def create_user_mapping(req: CreateMappingRequest, admin: AdminUser = Depends(re
     if not mm_user_id:
         raise HTTPException(status_code=400, detail="mm_user_id required")
     mm_username = req.mm_username.strip() if req.mm_username else None
+    # Auto-resolve: if mm_user_id looks like a username (not 26-char ID) and no explicit lookup yet, try Mattermost API
+    if not _is_mm_id(mm_user_id):
+        # treat mm_user_id as username candidate
+        candidate = mm_username or mm_user_id
+        # if mm_user_id itself is username-like, try resolve it
+        resolved = _resolve_username_to_id(mm_user_id) if not _is_mm_id(mm_user_id) else None
+        if resolved and resolved[0]:
+            # keep original username if provided, else use resolved username
+            if not mm_username:
+                mm_username = resolved[1].get("username") or mm_user_id
+            mm_user_id = resolved[0]
+        elif mm_username and not _is_mm_id(mm_user_id):
+            # try username field
+            resolved2 = _resolve_username_to_id(mm_username)
+            if resolved2 and resolved2[0]:
+                mm_user_id = resolved2[0]
     if mm_username == "":
         mm_username = None
 

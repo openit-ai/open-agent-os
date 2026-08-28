@@ -198,6 +198,11 @@ export function deleteMapping(id: string): Promise<{ status: string; id: string 
   return apiFetch(`/v1/user-mappings/${id}`, { method: "DELETE" });
 }
 
+export interface MmResolveResponse { found: boolean; mm_user_id: string; mm_username: string; email?: string; display_name?: string }
+export function resolveMmUser(username: string): Promise<MmResolveResponse> {
+  return apiFetch(`/v1/user-mappings/resolve?username=${encodeURIComponent(username)}`);
+}
+
 export function syncPreview(payload?: { users: Array<{ mm_user_id: string; mm_username?: string; employee_principal?: string }> }): Promise<SyncPreviewResponse | SyncPreviewItem[]> {
   return apiFetch("/v1/user-mappings/sync", {
     method: "POST",
