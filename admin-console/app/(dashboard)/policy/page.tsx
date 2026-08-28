@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 import { getToken, getPolicyBundles, type PolicyBundle, type PolicyRule } from "@/lib/api";
 import { RefreshCw, Shield, AlertTriangle } from "lucide-react";
 
@@ -44,6 +45,7 @@ function orderIndex(source: string, order: string[]) {
 
 export default function PolicyPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [bundles, setBundles] = useState<PolicyBundle[]>([]);
   const [evalOrder, setEvalOrder] = useState<string[]>(EVALUATION_ORDER_FALLBACK);
   const [loading, setLoading] = useState(true);
@@ -57,7 +59,7 @@ export default function PolicyPage() {
       setBundles(res.bundles ?? []);
       if (res.evaluation_order?.length) setEvalOrder(res.evaluation_order);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "조회 실패");
+      setError(e instanceof Error ? e.message : t("common.fetchFailed"));
     } finally {
       setLoading(false);
     }
@@ -80,7 +82,7 @@ export default function PolicyPage() {
         </h1>
         <Button variant="outline" size="sm" onClick={fetchBundles} disabled={loading}>
           <RefreshCw className="mr-1 h-4 w-4" />
-          새로고침
+          {t("common.refresh")}
         </Button>
       </div>
 
@@ -93,8 +95,8 @@ export default function PolicyPage() {
       {/* Section 25 fixed order */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Section 25 — 평가 순서 (고정)</CardTitle>
-          <CardDescription>낮은 번호가 먼저 평가. Explicit Deny가 Personal Delegation을 override합니다.</CardDescription>
+          <CardTitle className="text-base">{t("policy.section25Title")}</CardTitle>
+          <CardDescription>{t("policy.section25Desc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap gap-2">
@@ -115,14 +117,14 @@ export default function PolicyPage() {
           <div className="flex flex-wrap gap-2 pt-1">
             <Badge variant="danger" className="gap-1">
               <AlertTriangle className="h-3 w-3" />
-              Explicit Deny는 Personal Delegation보다 먼저 평가되어 override
+              {t("policy.explicitDenyOverride")}
             </Badge>
             <Badge variant="success" className="gap-1">
-              Personal Delegation override — Explicit Deny에 의해 차단될 수 있음
+              {t("policy.personalDelegationNote")}
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground">
-            동일 source 내에서는 priority 낮은 값 → id 사전순으로 정렬. resource_pattern은 fnmatch glob으로 매칭.
+            {t("policy.sortingNote")}
           </p>
         </CardContent>
       </Card>
@@ -130,11 +132,11 @@ export default function PolicyPage() {
       {/* Bundles */}
       {loading ? (
         <Card>
-          <CardContent className="pt-6 text-center text-sm text-muted-foreground">로딩 중...</CardContent>
+          <CardContent className="pt-6 text-center text-sm text-muted-foreground">{t("policy.loading")}</CardContent>
         </Card>
       ) : bundles.length === 0 ? (
         <Card>
-          <CardContent className="pt-6 text-center text-sm text-muted-foreground">Bundle이 없습니다.</CardContent>
+          <CardContent className="pt-6 text-center text-sm text-muted-foreground">{t("policy.noBundles")}</CardContent>
         </Card>
       ) : (
         bundles.map((bundle) => (
@@ -147,10 +149,10 @@ export default function PolicyPage() {
               </CardTitle>
               <CardDescription className="flex flex-wrap gap-2">
                 <span>
-                  tenant: <span className="font-mono font-medium text-foreground">{bundle.tenant_id}</span>
+                  {t("policy.tenant")} <span className="font-mono font-medium text-foreground">{bundle.tenant_id}</span>
                 </span>
                 <span>·</span>
-                <span>rules: {bundle.rules?.length ?? 0}개</span>
+                <span>{t("policy.bundleRules", { count: String(bundle.rules?.length ?? 0) })}</span>
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
@@ -197,7 +199,7 @@ export default function PolicyPage() {
                               {isPersonal && (
                                 <div className="mt-1">
                                   <Badge variant="outline" className="text-[10px] leading-none">
-                                    Explicit Deny에 의해 override 가능
+                                    {t("policy.explicitDenyBadge")}
                                   </Badge>
                                 </div>
                               )}
@@ -217,7 +219,7 @@ export default function PolicyPage() {
               {/* Rule description footnote */}
               <div className="border-t bg-muted/20 p-3">
                 <p className="text-xs text-muted-foreground">
-                  Explicit Deny 행은 <span className="font-medium text-[#DC2626]">빨강 강조</span>로 표시. Personal Delegation 행에는 override 설명 배지가 표시됩니다.
+                  {t("policy.explicitDenyHint")}
                 </p>
               </div>
             </CardContent>
@@ -226,7 +228,7 @@ export default function PolicyPage() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        데이터: <span className="font-mono">GET /v1/policy/bundles</span> (security policy_engine bundles 프록시). JWT 인증 필요. 375px에서는 좌우 스크롤로 확인.
+        {t("policy.dataNote")}
       </p>
     </div>
   );

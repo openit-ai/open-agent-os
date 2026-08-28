@@ -17,6 +17,7 @@ import {
   type ApprovalDecisionType,
   type UserMapping,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { ClipboardCheck, RefreshCw, ShieldAlert, Link2, Users } from "lucide-react";
 
 function riskVariant(risk: string) {
@@ -85,6 +86,7 @@ function resolveLinkedAgent(userId: string, idx: ReturnType<typeof buildMappingI
 
 export default function ApprovalsPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [items, setItems] = useState<ApprovalRequestItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +103,7 @@ export default function ApprovalsPage() {
       const res = await getPendingApprovals();
       setItems(res.pending ?? []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "조회 실패");
+      setError(e instanceof Error ? e.message : t("common.fetchFailed"));
     } finally {
       setLoading(false);
     }
@@ -132,7 +134,7 @@ export default function ApprovalsPage() {
     setActionMsg(null);
     try {
       if (decision === "APPROVED_GROUP_ALWAYS" && !groupId.trim()) {
-        setActionMsg("그룹 ID를 입력하세요.");
+        setActionMsg(t("approvals.needGroupId"));
         return;
       }
       await decideApproval({
@@ -140,10 +142,10 @@ export default function ApprovalsPage() {
         decision,
         group_id: decision === "APPROVED_GROUP_ALWAYS" ? groupId.trim() : undefined,
       });
-      setActionMsg(`${decision} 처리 완료`);
+      setActionMsg(t("approvals.done", { decision }));
       await fetchList();
     } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : "결정 실패");
+      setActionMsg(e instanceof Error ? e.message : t("approvals.actionFailed"));
     } finally {
       setDeciding(null);
     }
@@ -156,10 +158,10 @@ export default function ApprovalsPage() {
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <ClipboardCheck className="h-6 w-6" /> Approvals
           </h1>
-          <p className="text-sm text-muted-foreground">승인 대기 — 위험도 기반 JIT 승인 (Once / Always 사용자·그룹 / Deny) · 요청자 매핑 컨텍스트 표시</p>
+          <p className="text-sm text-muted-foreground">{t("approvals.subtitle")}</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchList(); fetchMappings(); }} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> 새로고침
+          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> {t("common.refresh")}
         </Button>
       </div>
 
@@ -178,35 +180,35 @@ export default function ApprovalsPage() {
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Users className="h-4 w-4" />
-            승인 대기 목록
+            {t("approvals.pendingTitle")}
           </CardTitle>
           <CardDescription>
-            {loading ? "로딩 중..." : `${items.length}건 대기 중`}
+            {loading ? t("common.loading") : t("approvals.pendingDesc", { count: String(items.length) })}
             <span className="ml-3 inline-flex items-center gap-1">
-              <span className="text-xs">그룹 ID:</span>
+              <span className="text-xs">{t("approvals.groupId")}</span>
               <Input value={groupId} onChange={(e) => setGroupId(e.target.value)} placeholder="group id" className="h-7 w-36 text-xs" />
             </span>
             {mappings.length > 0 && (
               <span className="ml-3 inline-flex items-center gap-1 text-xs text-muted-foreground">
                 <Link2 className="h-3 w-3" />
-                매핑 {mappings.length}건 로드됨
+                {t("approvals.mappingsLoaded", { count: String(mappings.length) })}
               </span>
             )}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <div className="px-6 py-12 text-center text-sm text-muted-foreground">로딩 중...</div>
+            <div className="px-6 py-12 text-center text-sm text-muted-foreground">{t("common.loading")}</div>
           ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
                 <ShieldAlert className="h-6 w-6 text-muted-foreground" />
               </div>
-              <p className="text-sm font-medium">대기 중인 승인이 없습니다</p>
+              <p className="text-sm font-medium">{t("approvals.emptyTitle")}</p>
               <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-                새로운 고위험 작업이 요청되면 이 목록에 표시됩니다. 정책에 따라 APPROVAL_REQUIRED가 발생한 요청이 여기에 쌓입니다.
+                {t("approvals.emptyDesc")}
               </p>
-              <Button variant="outline" size="sm" className="mt-4" onClick={fetchList}>새로고침</Button>
+              <Button variant="outline" size="sm" className="mt-4" onClick={fetchList}>{t("common.refresh")}</Button>
             </div>
           ) : (
             <div className="relative w-full overflow-auto">
@@ -225,9 +227,9 @@ export default function ApprovalsPage() {
                     <TableHead>Action</TableHead>
                     <TableHead className="min-w-[160px]">Resource</TableHead>
                     <TableHead>Risk</TableHead>
-                    <TableHead className="min-w-[130px]">요청시각</TableHead>
-                    <TableHead className="min-w-[130px]">만료</TableHead>
-                    <TableHead className="min-w-[360px] text-right">결정</TableHead>
+                    <TableHead className="min-w-[130px]">{t("approvals.requestedAt")}</TableHead>
+                    <TableHead className="min-w-[130px]">{t("approvals.expires")}</TableHead>
+                    <TableHead className="min-w-[360px] text-right">{t("approvals.decision")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -256,11 +258,11 @@ export default function ApprovalsPage() {
                           {agentId ? (
                             <span
                               className={`inline-flex max-w-[170px] items-center gap-1 truncate font-mono text-xs ${isMapped ? "text-foreground" : "text-muted-foreground"}`}
-                              title={`${hint}: ${agentId}${mapping ? ` (principal: ${mapping.employee_principal})` : ""}`}
+                              title={`${(t as any)("approvals."+hint) || hint}: ${agentId}${mapping ? ` (principal: ${mapping.employee_principal})` : ""}`}
                             >
                               <Badge variant={isMapped ? "success" : "secondary"} className="shrink-0 gap-1">
                                 <Link2 className="h-3 w-3" />
-                                {isMapped ? "매핑" : "유도"}
+                                {isMapped ? t("approvals.mappedBadge") : t("approvals.derivedBadge")}
                               </Badge>
                               <span className="truncate">{agentId}</span>
                             </span>
@@ -282,10 +284,10 @@ export default function ApprovalsPage() {
                               Approve Once
                             </Button>
                             <Button size="sm" variant="secondary" disabled={!!deciding} onClick={() => handleDecide(aid, "APPROVED_USER_ALWAYS")} className="h-7 px-2 text-xs">
-                              Always(사용자)
+                              {t("approvals.decideUserAlways")}
                             </Button>
                             <Button size="sm" variant="outline" disabled={!!deciding} onClick={() => handleDecide(aid, "APPROVED_GROUP_ALWAYS")} className="h-7 px-2 text-xs">
-                              Always(그룹)
+                              {t("approvals.decideGroupAlways")}
                             </Button>
                             <Button size="sm" variant="destructive" disabled={!!deciding} onClick={() => handleDecide(aid, "DENIED")} className="h-7 px-2 text-xs">
                               Deny
@@ -303,7 +305,7 @@ export default function ApprovalsPage() {
       </Card>
 
       <p className="text-xs text-muted-foreground">
-        * Approve Once: 이번 요청만 승인 · Always(사용자): 동일 사용자·동일 action/resource 영구 승인 · Always(그룹): 그룹 전체 영구 승인 · Deny: 거부. Requester의 Mattermost 매핑이 있으면 Linked Agent에 <span className="inline-flex items-center gap-1"><Link2 className="h-3 w-3" />매핑</span> 배지, 없으면 자동 유도값(<span className="font-mono">agent:assistant:&lt;suffix&gt;</span>)을 표시합니다.
+        {t("approvals.footnote")}
       </p>
     </div>
   );

@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getToken, getAuditEvents, verifyAuditChain, getAuditCheckpoint, type AuditEventItem, type AuditVerifyResponse, type AuditCheckpoint } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { ScrollText, ShieldCheck, ShieldAlert, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 
 function eventBadgeVariant(t: string) {
@@ -21,12 +22,14 @@ function formatTime(iso: string) {
   try {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
-    return d.toLocaleString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const locale = typeof window !== "undefined" && localStorage.getItem("oaos_lang") === "ko" ? "ko-KR" : "en-US";
+    return d.toLocaleString(locale, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
   } catch { return iso; }
 }
 
 export default function AuditPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [events, setEvents] = useState<AuditEventItem[]>([]);
   const [head, setHead] = useState<string | null>(null);
   const [count, setCount] = useState(0);
@@ -58,7 +61,7 @@ export default function AuditPage() {
         if (typeof v.event_count === "number") setCount(v.event_count);
       } catch { /* ignore */ }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "조회 실패");
+      setError(e instanceof Error ? e.message : t("common.fetchFailed"));
     } finally {
       setLoading(false);
     }
@@ -79,7 +82,7 @@ export default function AuditPage() {
       if (v.checkpoint) setCheckpoint(v.checkpoint);
       if (v.head) setHead(v.head);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "검증 실패");
+      setMsg(e instanceof Error ? e.message : t("common.verifyFailed"));
     } finally {
       setVerifying(false);
     }
@@ -92,14 +95,14 @@ export default function AuditPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold"><ScrollText className="h-6 w-6" /> Audit</h1>
-          <p className="text-sm text-muted-foreground">Hash-chain 감사 로그 — 시간 역순 타임라인 · 무결성 검증</p>
+          <p className="text-sm text-muted-foreground">{t("audit.subtitle")}</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchAll(); }} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> 새로고침
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> {t("common.refresh")}
           </Button>
           <Button size="sm" onClick={handleVerify} disabled={verifying}>
-            <ShieldCheck className="h-4 w-4" /> {verifying ? "검증 중..." : "Verify"}
+            <ShieldCheck className="h-4 w-4" /> {verifying ? t("common.verifying") : t("common.verify")}
           </Button>
         </div>
       </div>
@@ -110,18 +113,18 @@ export default function AuditPage() {
       {/* 검증 배지 / 카운트 / checkpoint 요약 */}
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">이벤트 수</CardTitle></CardHeader>
-          <CardContent><div className="text-2xl font-bold">{loading ? "-" : count}</div><CardDescription>전체 체인 길이</CardDescription></CardContent>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">{t("audit.eventCount")}</CardTitle></CardHeader>
+          <CardContent><div className="text-2xl font-bold">{loading ? "-" : count}</div><CardDescription>{t("audit.chainLengthDesc")}</CardDescription></CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">Chain 무결성</CardTitle></CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">{t("audit.chainIntegrity")}</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {verify ? (
               <div className="flex items-center gap-2">
                 {verify.chain_valid ? <CheckCircle2 className="h-5 w-5 text-[#22C55E]" /> : <XCircle className="h-5 w-5 text-[#DC2626]" />}
                 <Badge variant={verify.chain_valid ? "success" : "danger"}>{verify.chain_valid ? "chain_valid" : "tampered"}</Badge>
               </div>
-            ) : <span className="text-sm text-muted-foreground">Verify 버튼으로 확인</span>}
+            ) : <span className="text-sm text-muted-foreground">{t("audit.verifyToCheck")}</span>}
             {verify?.checkpoint_valid !== undefined && (
               <div className="flex items-center gap-2">
                 {verify.checkpoint_valid ? <CheckCircle2 className="h-4 w-4 text-[#22C55E]" /> : <XCircle className="h-4 w-4 text-[#DC2626]" />}
@@ -141,7 +144,7 @@ export default function AuditPage() {
                 <div className="pt-1"><span className="text-muted-foreground">signature</span><div className="mt-1 break-all rounded bg-muted p-2 font-mono text-[10px] leading-relaxed">{checkpoint.signature}</div></div>
               </>
             ) : (
-              <span className="text-muted-foreground">checkpoint 없음</span>
+              <span className="text-muted-foreground">{t("audit.noCheckpoint")}</span>
             )}
             {head && (
               <div className="pt-2 border-t mt-2"><span className="text-muted-foreground">current head</span><div className="mt-1 break-all font-mono text-[10px]">{head}</div></div>
@@ -153,17 +156,17 @@ export default function AuditPage() {
       {/* 타임라인 */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Audit 이벤트 타임라인</CardTitle>
-          <CardDescription>시간 역순 · 최신 이벤트가 가장 위에 표시됩니다 ({sorted.length}건)</CardDescription>
+          <CardTitle className="text-base">{t("audit.timelineTitle")}</CardTitle>
+          <CardDescription>{t("audit.timelineDesc", { count: String(sorted.length) })}</CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">로딩 중...</div>
+            <div className="py-12 text-center text-sm text-muted-foreground">{t("common.loading")}</div>
           ) : sorted.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted"><ScrollText className="h-6 w-6 text-muted-foreground" /></div>
-              <p className="text-sm font-medium">감사 이벤트가 없습니다</p>
-              <p className="mt-1 text-xs text-muted-foreground">정책 평가·위임·승인 등이 발생하면 hash-chain에 기록됩니다.</p>
+              <p className="text-sm font-medium">{t("audit.noEvents")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("audit.noEventsDesc")}</p>
             </div>
           ) : (
             <div className="relative">

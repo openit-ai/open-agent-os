@@ -40,7 +40,8 @@ function fmtDate(iso?: string | null) {
   try {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
-    return d.toLocaleString("ko-KR");
+    const locale = typeof window !== "undefined" && localStorage.getItem("oaos_lang") === "ko" ? "ko-KR" : "en-US";
+    return d.toLocaleString(locale);
   } catch {
     return iso;
   }
@@ -233,7 +234,7 @@ export default function UsersPage() {
       } catch (err) {
         // 백엔드가 자동 조회하므로 그대로 제출 시도 — 실패 시 백엔드 에러 표시
         // 하지만 UX상 메시지 유지
-        setResolveMsg(err instanceof Error ? err.message : "조회 실패 — 그래도 등록 시도합니다");
+        setResolveMsg(err instanceof Error ? err.message : t("users.resolveRetry"));
       } finally {
         // keep loading for next step
       }
@@ -309,7 +310,7 @@ export default function UsersPage() {
           disabled={loading || mapLoading}
         >
           <RefreshCw className={`mr-1 h-4 w-4 ${loading || mapLoading ? "animate-spin" : ""}`} />
-          새로고침
+          {t("common.refresh")}
         </Button>
       </div>
 
@@ -344,32 +345,32 @@ export default function UsersPage() {
               <CardContent>
                 <form onSubmit={handleRegister} className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1">
-                    <Label htmlFor="email">이메일</Label>
-                    <Input id="email" type="email" placeholder="user@openit.co.kr" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                    <Label htmlFor="email">{t("users.email")}</Label>
+                    <Input id="email" type="email" placeholder={t("users.emailPlaceholder")} value={email} onChange={(e) => setEmail(e.target.value)} required />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="displayName">이름 (display_name)</Label>
-                    <Input id="displayName" placeholder="홍길동" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
+                    <Label htmlFor="displayName">{t("users.displayName")}</Label>
+                    <Input id="displayName" placeholder={t("users.displayNamePlaceholder")} value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="password">비밀번호 (8자 이상)</Label>
-                    <Input id="password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                    <Label htmlFor="password">{t("users.password")}</Label>
+                    <Input id="password" type="password" placeholder={t("users.passwordPlaceholder")} value={password} onChange={(e) => setPassword(e.target.value)} required />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="role">Role</Label>
+                    <Label htmlFor="role">{t("users.role")}</Label>
                     <select
                       id="role"
                       value={role}
                       onChange={(e) => setRole(e.target.value as "L5" | "L4")}
                       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                     >
-                      <option value="L4">L4 (읽기 전용)</option>
-                      <option value="L5">L5 (Infra Admin)</option>
+                      <option value="L4">{t("users.roleL4")}</option>
+                      <option value="L5">{t("users.roleL5")}</option>
                     </select>
                   </div>
                   <div className="sm:col-span-2 flex items-end">
                     <Button type="submit" disabled={formLoading} className="w-full sm:w-auto">
-                      {formLoading ? "등록 중..." : "등록"}
+                      {formLoading ? t("users.registering") : t("users.register")}
                     </Button>
                   </div>
                   {formError && (
@@ -383,39 +384,39 @@ export default function UsersPage() {
           ) : me ? (
             <Card>
               <CardContent className="pt-6">
-                <p className="text-sm text-muted-foreground">현재 계정은 L4 (읽기 전용)입니다. {t("users.adminRegisterTitle")}은 L5만 가능합니다.</p>
+                <p className="text-sm text-muted-foreground">{t("users.l4Notice")}</p>
               </CardContent>
             </Card>
           ) : null}
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">사용자 목록</CardTitle>
-              <CardDescription>총 {users.length}명 · 375px 모바일에서도 가로 스크롤로 확인 가능</CardDescription>
+              <CardTitle className="text-base">{t("users.userList")}</CardTitle>
+              <CardDescription>{t("users.userListDesc", { count: String(users.length) })}</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <div className="w-full overflow-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>이메일</TableHead>
-                      <TableHead>이름</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>생성일</TableHead>
-                      <TableHead className="text-right">작업</TableHead>
+                      <TableHead>{t("users.tableEmail")}</TableHead>
+                      <TableHead>{t("users.tableName")}</TableHead>
+                      <TableHead>{t("users.tableRole")}</TableHead>
+                      <TableHead>{t("users.tableCreated")}</TableHead>
+                      <TableHead className="text-right">{t("users.tableActions")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loading ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center text-muted-foreground">
-                          로딩 중...
+                          {t("common.loading")}
                         </TableCell>
                       </TableRow>
                     ) : users.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center text-muted-foreground">
-                          등록된 사용자가 없습니다.
+                          {t("users.noUsers")}
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -425,7 +426,7 @@ export default function UsersPage() {
                           <TableRow key={u.id} className={isSelf ? "bg-muted/30" : ""}>
                             <TableCell className="font-mono text-xs">
                               {u.email}
-                              {isSelf && <span className="ml-2 rounded bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground">나</span>}
+                              {isSelf && <span className="ml-2 rounded bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground">{t("users.meBadge")}</span>}
                             </TableCell>
                             <TableCell className="text-sm">{u.display_name}</TableCell>
                             <TableCell>
@@ -438,11 +439,11 @@ export default function UsersPage() {
                                 size="sm"
                                 disabled={!!isSelf || deleting === u.id || !isL5}
                                 onClick={() => handleDelete(u.id)}
-                                title={isSelf ? "자기 자신은 삭제할 수 없습니다" : isL5 ? "삭제" : "L5만 삭제 가능"}
-                                aria-label={`삭제 ${u.email}`}
+                                title={isSelf ? t("users.selfDeleteError") : isL5 ? t("users.delete") : t("users.l5Only")}
+                                aria-label={`${t("users.delete")} ${u.email}`}
                               >
                                 <Trash2 className="h-4 w-4" />
-                                {deleting === u.id ? "..." : "삭제"}
+                                {deleting === u.id ? "..." : t("users.delete")}
                               </Button>
                             </TableCell>
                           </TableRow>
@@ -454,7 +455,7 @@ export default function UsersPage() {
               </div>
             </CardContent>
           </Card>
-          <p className="text-xs text-muted-foreground">JWT 기반 인증. 삭제는 L5만 가능하며 자기 자신 삭제는 차단됩니다.</p>
+          <p className="text-xs text-muted-foreground">{t("users.jwtNote")}</p>
         </TabsContent>
 
         {/* {t("users.tabsMapping")} tab */}
@@ -472,7 +473,7 @@ export default function UsersPage() {
                 {t("users.tabsMapping")} 등록
               </CardTitle>
               <CardDescription>
-                Username만 입력해도 ID 자동 조회 가능 · Employee Principal 미입력 시 자동 유도 (<span className="font-mono text-xs">employee:&lt;username|id&gt;</span> → <span className="font-mono text-xs">agent:assistant:&lt;suffix&gt;</span>)
+                {t("users.mappingDesc")}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -480,54 +481,54 @@ export default function UsersPage() {
                 <div className="space-y-1">
                   <Label htmlFor="mm_username">MM Username *</Label>
                   <div className="flex gap-1.5">
-                    <Input id="mm_username" placeholder="e.g. mykim" value={mmUsername} onChange={(e) => setMmUsername(e.target.value)} className="flex-1" />
+                    <Input id="mm_username" placeholder={t("users.mmUsernamePlaceholder")} value={mmUsername} onChange={(e) => setMmUsername(e.target.value)} className="flex-1" />
                     <Button type="button" variant="outline" size="sm" onClick={handleResolve} disabled={resolving || (!mmUsername.trim() && !mmUserId.trim())} className="shrink-0">
-                      {resolving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "ID 조회"}
+                      {resolving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("users.lookupId")}
                     </Button>
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="mm_user_id">MM User ID (자동)</Label>
-                  <Input id="mm_user_id" placeholder="Username 입력 후 ID 조회" value={mmUserId} onChange={(e) => setMmUserId(e.target.value)} />
+                  <Label htmlFor="mm_user_id">{t("users.mmUserId")}</Label>
+                  <Input id="mm_user_id" placeholder={t("users.mmUserIdPlaceholder")} value={mmUserId} onChange={(e) => setMmUserId(e.target.value)} />
                   {resolveMsg && <p className="text-xs text-muted-foreground">{resolveMsg}</p>}
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="employee_principal">Employee Principal</Label>
-                  <Input id="employee_principal" placeholder="employee:kim (비우면 자동 유도)" value={employeePrincipal} onChange={(e) => setEmployeePrincipal(e.target.value)} />
+                  <Label htmlFor="employee_principal">{t("users.employeePrincipal")}</Label>
+                  <Input id="employee_principal" placeholder={t("users.employeePrincipalPlaceholder")} value={employeePrincipal} onChange={(e) => setEmployeePrincipal(e.target.value)} />
                 </div>
                 <div className="sm:col-span-3 rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs leading-relaxed">
-                  <span className="font-medium">자동 유도 힌트:</span>{" "}
+                  <span className="font-medium">{t("users.hintTitle")}</span>{" "}
                   {derivedPrincipal ? (
                     <>
                       <span className="font-mono">{derivedPrincipal}</span>
                       <span className="mx-1">→</span>
                       <span className="font-mono">{derivedAgent}</span>
                       {employeePrincipal.trim() ? (
-                        <span className="ml-2 text-muted-foreground">(직접 입력값 사용)</span>
+                        <span className="ml-2 text-muted-foreground">{t("users.hintManual")}</span>
                       ) : (
-                        <span className="ml-2 text-muted-foreground">(username/id 기반 자동 유도)</span>
+                        <span className="ml-2 text-muted-foreground">{t("users.hintAuto")}</span>
                       )}
                     </>
                   ) : (
-                    <span className="text-muted-foreground">MM User ID / Username 입력 시 principal/agent 미리보기</span>
+                    <span className="text-muted-foreground">{t("users.hintEmpty")}</span>
                   )}
                 </div>
                 <div className="flex flex-col gap-2 sm:col-span-3 sm:flex-row sm:items-center">
                   <Button type="submit" disabled={mapFormLoading || !isL5} className="w-full sm:w-auto">
                     {mapFormLoading ? (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin" /> 등록 중...
+                        <Loader2 className="h-4 w-4 animate-spin" /> {t("users.creating")}
                       </>
                     ) : (
                       <>
-                        <Link2 className="h-4 w-4" /> 매핑 등록
+                        <Link2 className="h-4 w-4" /> {t("users.createMapping")}
                       </>
                     )}
                   </Button>
-                  {!isL5 && <span className="text-xs text-muted-foreground">L5만 쓰기 가능 (L4는 읽기 전용)</span>}
+                  {!isL5 && <span className="text-xs text-muted-foreground">{t("users.l5Only")}</span>}
                   <Button type="button" variant="outline" onClick={handleSyncPreview} disabled={previewLoading} className="w-full sm:w-auto">
                     {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
-                    Sync 미리보기
+                    {t("users.syncPreview")}
                   </Button>
                   {mapFormError && <span className="text-sm text-[#DC2626]">{mapFormError}</span>}
                 </div>
@@ -538,11 +539,11 @@ export default function UsersPage() {
               {preview !== null && (
                 <div className="mt-4 rounded-md border bg-card">
                   <div className="flex items-center justify-between border-b px-3 py-2">
-                    <span className="text-sm font-medium">Sync 미리보기</span>
+                    <span className="text-sm font-medium">{t("users.syncPreviewTitle")}</span>
                     <Badge variant="secondary">{preview.length}건</Badge>
                   </div>
                   {preview.length === 0 ? (
-                    <p className="px-3 py-6 text-center text-sm text-muted-foreground">미리볼 항목이 없습니다.</p>
+                    <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t("users.syncPreviewEmpty")}</p>
                   ) : (
                     <div className="w-full overflow-auto">
                       <Table>
@@ -563,7 +564,7 @@ export default function UsersPage() {
                               <TableCell className="font-mono text-xs">{p.employee_principal}</TableCell>
                               <TableCell className="font-mono text-xs text-muted-foreground">{p.agent_id}</TableCell>
                               <TableCell>
-                                <Badge variant={p.already_mapped ? "secondary" : mappingStatusVariant(p.status)}>{p.already_mapped ? "이미 매핑" : p.status}</Badge>
+                                <Badge variant={p.already_mapped ? "secondary" : mappingStatusVariant(p.status)}>{p.already_mapped ? t("users.alreadyMapped") : p.status}</Badge>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -579,14 +580,14 @@ export default function UsersPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <div>
-                <CardTitle className="text-base">매핑 목록</CardTitle>
+                <CardTitle className="text-base">{t("users.mappingList")}</CardTitle>
                 <CardDescription>
-                  총 {mappings.length}건 · 375px에서도 가로 스크롤로 확인 · Username / MM User ID / Employee Principal / Agent ID / Status / Created / Delete
+                  {t("users.mappingListDesc", { count: String(mappings.length) })}
                 </CardDescription>
               </div>
               <Button variant="outline" size="sm" onClick={fetchMappings} disabled={mapLoading}>
                 <RefreshCw className={`h-4 w-4 ${mapLoading ? "animate-spin" : ""}`} />
-                새로고침
+                {t("common.refresh")}
               </Button>
             </CardHeader>
             <CardContent className="p-0">
@@ -607,13 +608,13 @@ export default function UsersPage() {
                     {mapLoading ? (
                       <TableRow>
                         <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                          로딩 중...
+                          {t("common.loading")}
                         </TableCell>
                       </TableRow>
                     ) : mappings.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                          등록된 매핑이 없습니다. 위 폼에서 등록하세요.
+                          {t("users.noMappings")}
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -637,11 +638,11 @@ export default function UsersPage() {
                                 size="sm"
                                 disabled={deletingMap === m.id || !isL5}
                                 onClick={() => handleDeleteMapping(m.id)}
-                                title={!isL5 ? "L5만 삭제 가능" : "매핑 삭제"}
-                                aria-label={`매핑 삭제 ${m.mm_user_id}`}
+                                title={!isL5 ? t("users.l5Only") : t("users.tableDelete")}
+                                aria-label={`${t("users.tableDelete")} ${m.mm_user_id}`}
                               >
                                 <Trash2 className="h-4 w-4" />
-                                {deletingMap === m.id ? "..." : "삭제"}
+                                {deletingMap === m.id ? "..." : t("users.tableDelete")}
                               </Button>
                             </TableCell>
                           </TableRow>
@@ -655,7 +656,7 @@ export default function UsersPage() {
           </Card>
 
           <p className="text-xs text-muted-foreground">
-            §14 1인 1 Logical Agent: <span className="font-mono">employee:&lt;suffix&gt;</span> ↔ <span className="font-mono">agent:assistant:&lt;suffix&gt;</span>. 미입력 시 username/id로 자동 유도. L4 읽기 / L5 쓰기.
+            {t("users.oneOneNote")}
           </p>
         </TabsContent>
       </Tabs>

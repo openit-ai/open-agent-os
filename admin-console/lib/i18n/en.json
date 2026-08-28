@@ -28,7 +28,12 @@
     "actions": "Actions",
     "status": "Status",
     "autoRefreshNote": "Auto-refreshed every 15s. Use Probe for manual check.",
-    "mobileScrollNote": "Scrollable horizontally on mobile (375px)."
+    "mobileScrollNote": "Scrollable horizontally on mobile (375px).",
+    "fetchFailed": "Fetch failed",
+    "verifyFailed": "Verification failed",
+    "actionFailed": "Action failed",
+    "id": "ID",
+    "created": "Created"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -194,7 +199,10 @@
     "lookupSuccess": "Resolved: {username} → {id}...",
     "lookupFailed": "Lookup failed",
     "resolveHint": "Auto-resolved — review before saving",
-    "alreadyMapped": "Already mapped"
+    "alreadyMapped": "Already mapped",
+    "noUsers": "No users registered.",
+    "resolveRetry": "Lookup failed — will try to register anyway",
+    "l4ReadOnlyDetail": "Current account is L4 (read-only). Registration requires L5."
   },
   "policy": {
     "title": "Policy Bundles",
@@ -249,7 +257,13 @@
     "mmIdMatch": "MM ID match",
     "usernameMatch": "username match",
     "unmappedAuto": "Unmapped · auto-derived",
-    "unmapped": "Unmapped"
+    "unmapped": "Unmapped",
+    "groupIdEnter": "Please enter Group ID.",
+    "decisionDone": "{decision} processed",
+    "actionFailed": "Action failed",
+    "mappedBadge": "Mapped",
+    "derivedBadge": "Derived",
+    "footnote": "* Approve Once: single approval · Always (User): permanent for same user·action/resource · Always (Group): permanent for group · Deny: rejected. Linked Agent shows Mapped badge if Mattermost mapping exists, otherwise derived value (agent:assistant:<suffix>)."
   },
   "audit": {
     "title": "Audit",
@@ -275,7 +289,13 @@
     "resource": "resource",
     "action": "action",
     "hash": "hash",
-    "prev": "prev"
+    "prev": "prev",
+    "eventCount": "Event Count",
+    "chainLengthDesc": "Total chain length",
+    "chainIntegrity": "Chain Integrity",
+    "verifyToCheck": "Click Verify to check",
+    "chainValid": "chain_valid",
+    "tampered": "tampered"
   },
   "credentials": {
     "title": "Credentials",
@@ -323,7 +343,8 @@
     "licenseKeyLabel": "License Key",
     "licenseKeyPlaceholder": "OPENIT-BUSINESS-XXXX-XXXX",
     "verifyBtn": "Verify",
-    "licenseKeyRequired": "Please enter license key."
+    "licenseKeyRequired": "Please enter license key.",
+    "fetchFailed": "Fetch failed"
   },
   "securityUpdates": {
     "title": "Security Updates",
@@ -366,7 +387,8 @@
     "retention": "Retention",
     "triggeredBy": "Triggered By",
     "expired": "expired",
-    "retentionNote": "§16A.3.1 Workspace-isolated backups expire automatically after 30-day retention. Trigger requires L5."
+    "retentionNote": "§16A.3.1 Workspace-isolated backups expire automatically after 30-day retention. Trigger requires L5.",
+    "triggerFailed": "Backup failed — L5 required"
   },
   "modals": {
     "changePasswordTitle": "Change Password",
