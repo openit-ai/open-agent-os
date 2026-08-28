@@ -66,19 +66,25 @@ __all__ = [
 from enum import Enum
 
 class ProviderType(str, Enum):
-    """LLM provider type — 5 providers (Argo runners style)."""
+    """LLM provider type — 6 providers (Argo runners style)."""
     CLAUDE = "claude"
     CODEX = "codex"
     GEMINI = "gemini"
-    OPENCODE = "opencode"
+    OPENCODE_GO = "opencode-go"
+    OPENROUTER = "openrouter"
     OLLAMA = "ollama"
+    # backward compat: opencode -> opencode-go
+    OPENCODE = "opencode"
 
     @classmethod
     def from_str(cls, v: str | None) -> "ProviderType | None":
         if not v:
             return None
+        s = v.lower().strip()
+        if s == "opencode":
+            s = "opencode-go"
         try:
-            return cls(v.lower().strip())
+            return cls(s)
         except ValueError:
             return None
 
@@ -214,10 +220,18 @@ def _provider_env_config(provider: ProviderType | str | None) -> dict[str, Any]:
     if key in ("gemini", ""):
         out["gemini_api_key"] = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_GENAI_API_KEY") or os.getenv("OAOS_GEMINI_API_KEY") or ""
         out["gemini_model"] = os.getenv("GEMINI_MODEL") or os.getenv("GOOGLE_GEMINI_MODEL") or ""
-    if key in ("opencode", ""):
-        out["opencode_api_key"] = os.getenv("OPENCODE_API_KEY") or os.getenv("OAOS_OPENCODE_API_KEY") or ""
-        out["opencode_base_url"] = os.getenv("OPENCODE_API_URL") or os.getenv("OPENCODE_BASE_URL") or os.getenv("OAOS_OPENCODE_BASE_URL") or "http://localhost:4096"
-        out["opencode_model"] = os.getenv("OPENCODE_MODEL") or ""
+    if key in ("opencode-go", "opencode", ""):
+        out["opencode_go_api_key"] = os.getenv("OPENCODE_API_KEY") or os.getenv("OAOS_OPENCODE_API_KEY") or ""
+        out["opencode_go_base_url"] = os.getenv("OPENCODE_API_URL") or os.getenv("OPENCODE_BASE_URL") or os.getenv("OAOS_OPENCODE_BASE_URL") or "http://localhost:4096"
+        out["opencode_go_model"] = os.getenv("OPENCODE_MODEL") or os.getenv("OAOS_OPENCODE_GO_MODEL") or ""
+        # legacy keys for compat
+        out["opencode_api_key"] = out["opencode_go_api_key"]
+        out["opencode_base_url"] = out["opencode_go_base_url"]
+        out["opencode_model"] = out["opencode_go_model"]
+    if key in ("openrouter", ""):
+        out["openrouter_api_key"] = os.getenv("OPENROUTER_API_KEY") or os.getenv("OAOS_OPENROUTER_API_KEY") or ""
+        out["openrouter_base_url"] = os.getenv("OPENROUTER_BASE_URL") or os.getenv("OAOS_OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        out["openrouter_model"] = os.getenv("OPENROUTER_MODEL") or os.getenv("OAOS_OPENROUTER_MODEL") or "openrouter/auto"
     if key in ("ollama", ""):
         out["ollama_base_url"] = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST") or os.getenv("OAOS_OLLAMA_BASE_URL") or "http://localhost:11434"
         out["ollama_model"] = os.getenv("OLLAMA_MODEL") or os.getenv("OAOS_OLLAMA_MODEL") or "llama3"

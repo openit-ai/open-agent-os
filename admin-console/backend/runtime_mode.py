@@ -5,7 +5,7 @@ POST /v1/runtime/mode — sets mode (L5 only), body {mode: "hermes"|"llm"}
 
 Persisted in-memory + env fallback. When OAOS_RUNTIME_MODE env is set, it initializes from there.
 Hermes uses internal LLM via Hermes Agent, so no external provider config needed.
-LLM Runtime requires multi-provider config (claude/codex/gemini/opencode/ollama).
+LLM Runtime requires multi-provider config (claude/codex/gemini/opencode-go/openrouter/ollama).
 """
 from __future__ import annotations
 

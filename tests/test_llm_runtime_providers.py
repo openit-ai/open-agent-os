@@ -28,11 +28,14 @@ def test_provider_type_enum():
     assert ProviderType.CLAUDE.value == "claude"
     assert ProviderType.CODEX.value == "codex"
     assert ProviderType.GEMINI.value == "gemini"
-    assert ProviderType.OPENCODE.value == "opencode"
+    assert ProviderType.OPENCODE_GO.value == "opencode-go"
+    assert ProviderType.OPENROUTER.value == "openrouter"
     assert ProviderType.OLLAMA.value == "ollama"
+    assert ProviderType.OPENCODE.value == "opencode"  # alias
     assert ProviderType.from_str("OLLAMA") == ProviderType.OLLAMA
+    assert ProviderType.from_str("opencode") == ProviderType.OPENCODE_GO  # alias normalization
     assert ProviderType.from_str("unknown") is None
-    assert len(list(ProviderType)) == 5
+    assert len(list(ProviderType)) == 7
 
 
 def test_runtime_mode_enum():
@@ -46,7 +49,9 @@ def test_runtime_mode_enum():
 
 # ── Providers have call() ───────────────────────────────────────────
 def test_providers_have_call():
-    for cls in [ClaudeProvider, CodexProvider, GeminiProvider, OpenCodeProvider, OllamaProvider]:
+    from agent_runtime.providers.openrouter import OpenRouterProvider
+    from agent_runtime.providers.opencode_go import OpenCodeProvider as OpenCodeGoProvider
+    for cls in [ClaudeProvider, CodexProvider, GeminiProvider, OpenCodeProvider, OpenCodeGoProvider, OpenRouterProvider, OllamaProvider]:
         inst = cls()
         assert hasattr(inst, "call")
         assert callable(getattr(inst, "call"))
