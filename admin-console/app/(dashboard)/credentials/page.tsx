@@ -6,14 +6,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getToken, getCredentialsStatus, type CredentialsStatusResponse } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { KeyRound, RefreshCw, ShieldAlert } from "lucide-react";
 
-function formatTime(iso?: string | null) {
+function formatTime(iso: string | null | undefined, lang: string) {
   if (!iso) return "-";
   try {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
-    return d.toLocaleString("ko-KR", { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleString(lang === "ko" ? "ko-KR" : "en-US", { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
   } catch { return iso; }
 }
 
@@ -26,6 +27,7 @@ function statusVariant(s: string) {
 }
 
 export default function CredentialsPage() {
+  const { t, lang } = useI18n();
   const router = useRouter();
   const [data, setData] = useState<CredentialsStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,7 +39,7 @@ export default function CredentialsPage() {
       const res = await getCredentialsStatus();
       setData(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "조회 실패");
+      setError(e instanceof Error ? e.message : t("common.fetchFailed"));
     } finally {
       setLoading(false);
     }
@@ -53,10 +55,10 @@ export default function CredentialsPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold"><KeyRound className="h-6 w-6" /> Credentials</h1>
-          <p className="text-sm text-muted-foreground">Provider별 자격증명 현황 · 활성/만료/취소 집계 · 최근 위임 목록</p>
+          <p className="text-sm text-muted-foreground">{t("credentials.subtitle")}</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchData(); }} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> 새로고침
+          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> {t("common.refresh")}
         </Button>
       </div>
 
@@ -64,38 +66,38 @@ export default function CredentialsPage() {
 
       {/* summary cards */}
       <div className="grid gap-4 sm:grid-cols-4">
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">전체</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{data?.total ?? (loading ? "-" : 0)}</div><CardDescription>모든 위임</CardDescription></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-[#22C55E]">활성</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-[#22C55E]">{data?.active ?? (loading ? "-" : 0)}</div><CardDescription>사용 가능</CardDescription></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-[#DC2626]">취소</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-[#DC2626]">{data?.revoked ?? (loading ? "-" : 0)}</div><CardDescription>revoked</CardDescription></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-[#F59E0B]">만료</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-[#F59E0B]">{data?.expired ?? (loading ? "-" : 0)}</div><CardDescription>expired</CardDescription></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">{t("credentials.total")}</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{data?.total ?? (loading ? "-" : 0)}</div><CardDescription>{t("credentials.totalDesc")}</CardDescription></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-[#22C55E]">{t("credentials.active")}</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-[#22C55E]">{data?.active ?? (loading ? "-" : 0)}</div><CardDescription>{t("credentials.activeDesc")}</CardDescription></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-[#DC2626]">{t("credentials.revoked")}</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-[#DC2626]">{data?.revoked ?? (loading ? "-" : 0)}</div><CardDescription>{t("credentials.revokedDesc")}</CardDescription></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-[#F59E0B]">{t("credentials.expired")}</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-[#F59E0B]">{data?.expired ?? (loading ? "-" : 0)}</div><CardDescription>{t("credentials.expiredDesc")}</CardDescription></CardContent></Card>
       </div>
 
       {/* provider table */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Provider별 현황</CardTitle>
-          <CardDescription>provider · 활성 / 만료 / 취소 · bindings</CardDescription>
+          <CardTitle className="text-base">{t("credentials.providerStatus")}</CardTitle>
+          <CardDescription>{t("credentials.providerStatusDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <div className="px-6 py-12 text-center text-sm text-muted-foreground">로딩 중...</div>
+            <div className="px-6 py-12 text-center text-sm text-muted-foreground">{t("common.loading")}</div>
           ) : !data || data.providers.length === 0 ? (
             <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted"><ShieldAlert className="h-6 w-6 text-muted-foreground" /></div>
-              <p className="text-sm font-medium">위임 데이터가 없습니다</p>
-              <p className="mt-1 text-xs text-muted-foreground">delegation/grant를 통해 자격증명 위임이 생성되면 여기에 표시됩니다.</p>
+              <p className="text-sm font-medium">{t("credentials.noProviderData")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("credentials.noProviderDataDesc")}</p>
             </div>
           ) : (
             <div className="relative w-full overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Provider</TableHead>
-                    <TableHead className="text-right">활성</TableHead>
-                    <TableHead className="text-right">취소</TableHead>
-                    <TableHead className="text-right">만료</TableHead>
-                    <TableHead className="text-right">Bindings</TableHead>
-                    <TableHead className="text-right">전체</TableHead>
+                    <TableHead>{t("credentials.provider")}</TableHead>
+                    <TableHead className="text-right">{t("credentials.active")}</TableHead>
+                    <TableHead className="text-right">{t("credentials.revoked")}</TableHead>
+                    <TableHead className="text-right">{t("credentials.expired")}</TableHead>
+                    <TableHead className="text-right">{t("credentials.bindings")}</TableHead>
+                    <TableHead className="text-right">{t("credentials.total")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -119,26 +121,26 @@ export default function CredentialsPage() {
       {/* recent delegations */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">최근 위임 목록</CardTitle>
-          <CardDescription>최근 10건 · 생성시각 역순</CardDescription>
+          <CardTitle className="text-base">{t("credentials.recentList")}</CardTitle>
+          <CardDescription>{t("credentials.recentListDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <div className="px-6 py-12 text-center text-sm text-muted-foreground">로딩 중...</div>
+            <div className="px-6 py-12 text-center text-sm text-muted-foreground">{t("common.loading")}</div>
           ) : !data || data.recent.length === 0 ? (
-            <div className="px-6 py-12 text-center text-sm text-muted-foreground">최근 위임이 없습니다.</div>
+            <div className="px-6 py-12 text-center text-sm text-muted-foreground">{t("credentials.noRecent")}</div>
           ) : (
             <div className="relative w-full overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="min-w-[130px]">ID</TableHead>
-                    <TableHead>User</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Provider</TableHead>
-                    <TableHead>Scope</TableHead>
-                    <TableHead>상태</TableHead>
-                    <TableHead className="min-w-[130px]">생성</TableHead>
+                    <TableHead className="min-w-[130px]">{t("common.id")}</TableHead>
+                    <TableHead>{t("credentials.user")}</TableHead>
+                    <TableHead>{t("credentials.agent")}</TableHead>
+                    <TableHead>{t("credentials.provider")}</TableHead>
+                    <TableHead>{t("credentials.scope")}</TableHead>
+                    <TableHead>{t("common.status")}</TableHead>
+                    <TableHead className="min-w-[130px]">{t("credentials.created")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -150,7 +152,7 @@ export default function CredentialsPage() {
                       <TableCell className="text-xs">{r.provider}</TableCell>
                       <TableCell className="max-w-[160px] truncate text-xs" title={r.scope}>{r.scope}</TableCell>
                       <TableCell><Badge variant={statusVariant(r.status)}>{r.status}</Badge></TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{formatTime(r.created_at)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{formatTime(r.created_at, lang)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

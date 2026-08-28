@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getToken, getSecurityUpdates, type SecurityUpdatesResponse } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { ShieldAlert, RefreshCw } from "lucide-react";
 
 function severityVariant(s: string) {
@@ -16,6 +17,7 @@ function severityVariant(s: string) {
 }
 
 export default function SecurityUpdatesPage() {
+  const { t } = useI18n();
   const router = useRouter();
   const [data, setData] = useState<SecurityUpdatesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,7 +30,7 @@ export default function SecurityUpdatesPage() {
       const res = await getSecurityUpdates();
       setData(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "조회 실패");
+      setError(e instanceof Error ? e.message : t("common.fetchFailed"));
     } finally {
       setLoading(false);
     }
@@ -44,9 +46,9 @@ export default function SecurityUpdatesPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold"><ShieldAlert className="h-6 w-6" /> Security Updates</h1>
-          <p className="text-sm text-muted-foreground">업데이트 가능 버전 · CVE 목록 · Viewer 조회 가능 (§22)</p>
+          <p className="text-sm text-muted-foreground">{t("securityUpdates.subtitle")}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchData(); }} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> 새로고침</Button>
+        <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchData(); }} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> {t("common.refresh")}</Button>
       </div>
 
       {error && <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">{error}</div>}
@@ -54,12 +56,12 @@ export default function SecurityUpdatesPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">업데이트 목록</CardTitle>
-          <CardDescription>현재 버전: {data?.current_version ?? (loading ? "..." : "-")} · {data?.count ?? 0}건 available</CardDescription>
+          <CardTitle className="text-base">{t("securityUpdates.listTitle")}</CardTitle>
+          <CardDescription>{t("securityUpdates.listDesc", { version: data?.current_version ?? (loading ? "..." : "-"), count: String(data?.count ?? 0) })}</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {loading ? <div className="px-6 py-12 text-center text-sm text-muted-foreground">로딩 중...</div> : !data || data.updates.length === 0 ? (
-            <div className="px-6 py-12 text-center text-sm text-muted-foreground">사용 가능한 업데이트가 없습니다.</div>
+          {loading ? <div className="px-6 py-12 text-center text-sm text-muted-foreground">{t("common.loading")}</div> : !data || data.updates.length === 0 ? (
+            <div className="px-6 py-12 text-center text-sm text-muted-foreground">{t("securityUpdates.noUpdates")}</div>
           ) : (
             <div className="space-y-4 p-4">
               {data.updates.map((u) => (
@@ -74,9 +76,9 @@ export default function SecurityUpdatesPage() {
                     <CardDescription>{u.changelog}</CardDescription>
                   </CardHeader>
                   <CardContent className="pt-0">
-                    <div className="text-xs font-medium mb-1">CVEs ({u.cves.length})</div>
+                    <div className="text-xs font-medium mb-1">{t("securityUpdates.cves", { count: String(u.cves.length) })}</div>
                     <Table>
-                      <TableHeader><TableRow><TableHead>CVE</TableHead><TableHead>Severity</TableHead><TableHead>Summary</TableHead></TableRow></TableHeader>
+                      <TableHeader><TableRow><TableHead>{t("securityUpdates.cve")}</TableHead><TableHead>{t("securityUpdates.severity")}</TableHead><TableHead>{t("securityUpdates.summary")}</TableHead></TableRow></TableHeader>
                       <TableBody>
                         {u.cves.map((c) => (
                           <TableRow key={c.id}><TableCell className="font-mono text-xs">{c.id}</TableCell><TableCell><Badge variant={severityVariant(c.severity)}>{c.severity}</Badge></TableCell><TableCell className="text-xs">{c.summary}</TableCell></TableRow>
@@ -84,7 +86,7 @@ export default function SecurityUpdatesPage() {
                       </TableBody>
                     </Table>
                     <div className="mt-3 flex gap-2">
-                      <Button size="sm" variant="outline" onClick={() => setMsg(`Apply v${u.version} — upgrade는 관리 콘솔/CLI에서 수행하세요 (Business)`)}>Apply (준비)</Button>
+                      <Button size="sm" variant="outline" onClick={() => setMsg(t("securityUpdates.applyMsg", { version: u.version }))}>{t("securityUpdates.apply")}</Button>
                     </div>
                   </CardContent>
                 </Card>
