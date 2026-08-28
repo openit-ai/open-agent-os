@@ -5,7 +5,7 @@
 **한국어** | [English](README.md)
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.5.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8`) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (_v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Architecture:** `docs/architecture-v1.5.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `180 tests pass`, `npm run build ✓`
 
 ## 왜 Open Agent OS인가 — 시장이 풀지 못한 두 가지 모순
@@ -78,7 +78,7 @@ admin-console/             # Admin — Next.js 15 + shadcn Financial(#22C55E/#F5
 adapters/                  # Mattermost/Slack/Outline/Notion/Hermes/IAM/Google/Microsoft
 examples/morning-briefing/ # MVP — orchestrator(per-user kim vs lee) + output.json(13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
-tests/                     # 180 tests
+tests/                     # 180 tests (incl. §16F/16H/16I data-access, tool-policy, blast-radius)
 docs/architecture-v1.5.md  # Canonical (47 Sections + §§16A–16K, Previous v1.4.1/v1.3 보관, v1.1 preserved)
 ```
 
