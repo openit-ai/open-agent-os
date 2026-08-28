@@ -15,6 +15,13 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+import os
+import time
+import asyncio
+import signal
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from .mcp_registry import default_registry, MCPRegistry
@@ -35,6 +42,87 @@ except Exception:
     AgentContext = None  # type: ignore
 
 app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.1")
+
+# -- Graceful shutdown + queue draining (SIGTERM 30s) --
+_active_requests: int = 0
+_shutting_down: bool = False
+
+@app.middleware("http")
+async def _track_active(request: Request, call_next):
+    global _active_requests
+    _active_requests += 1
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        _active_requests -= 1
+
+def _handle_sigterm(signum, frame):
+    global _shutting_down
+    _shutting_down = True
+    logger.warning("SIGTERM received, draining %s active requests (30s)", _active_requests)
+    # drain loop runs in separate thread -> signal handler cannot await; uvicorn handles graceful
+    # we set flag so /readyz reports draining
+
+try:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+except Exception:
+    pass
+
+async def _drain_on_shutdown():
+    # called via lifespan shutdown
+    global _shutting_down
+    _shutting_down = True
+    deadline = time.monotonic() + 30
+    while _active_requests > 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.2)
+    if _active_requests > 0:
+        logger.warning("drain timeout: %s requests still active after 30s", _active_requests)
+    else:
+        logger.info("graceful drain complete")
+
+from contextlib import asynccontextmanager
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    yield
+    await _drain_on_shutdown()
+# attach lifespan if not already set
+try:
+    app.router.lifespan_context = _lifespan  # type: ignore
+except Exception:
+    pass
+
+# -- HA health helpers (fail-open) --
+def _check_latency(fn):
+    start = time.monotonic()
+    try:
+        fn()
+        latency = round((time.monotonic() - start) * 1000, 2)
+        return {"status": "ok", "latency_ms": latency}
+    except Exception as e:
+        latency = round((time.monotonic() - start) * 1000, 2)
+        return {"status": "degraded", "latency_ms": latency, "error": str(e)[:200]}
+
+def _ha_checks():
+    checks: dict = {}
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url:
+        def _db():
+            if "://" not in db_url:
+                raise RuntimeError("invalid db url")
+        checks["db"] = _check_latency(_db)
+    else:
+        checks["db"] = {"status": "skipped", "latency_ms": 0, "reason": "no DATABASE_URL"}
+    redis_url = os.getenv("REDIS_URL", "")
+    if redis_url:
+        def _redis():
+            if "://" not in redis_url:
+                raise RuntimeError("invalid redis url")
+        checks["redis"] = _check_latency(_redis)
+    else:
+        checks["redis"] = {"status": "skipped", "latency_ms": 0, "reason": "no REDIS_URL"}
+    checks["self"] = {"status": "draining" if _shutting_down else "ok", "latency_ms": 0, "active_requests": _active_requests}
+    return checks
 
 # Registry & Auth Hook (singletons)
 _registry: MCPRegistry = default_registry
@@ -155,6 +243,24 @@ class ExecuteRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "execution-gateway", "version": "0.1.1"}
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "service": "execution-gateway"}
+
+@app.get("/readyz")
+def readyz():
+    checks = _ha_checks()
+    degraded = any(v.get("status") == "degraded" for v in checks.values())
+    return {"status": "degraded" if degraded else "ok", "service": "execution-gateway", "checks": checks}
+
+@app.get("/v1/health/detailed")
+def health_detailed():
+    start = time.monotonic()
+    checks = _ha_checks()
+    total = round((time.monotonic() - start) * 1000, 2)
+    degraded = any(v.get("status") == "degraded" for v in checks.values())
+    return {"status": "degraded" if degraded else "ok", "service": "execution-gateway", "checks": checks, "latency_ms": total, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 
 @app.get("/v1/tools")

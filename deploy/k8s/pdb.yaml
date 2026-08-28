@@ -1,0 +1,40 @@
+# PodDisruptionBudgets — HA (§16D) — ensures at least 1 replica stays available during voluntary disruptions
+# Apply: kubectl apply -f deploy/k8s/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane-pdb
+  namespace: open-agent-os
+  labels:
+    app: control-plane
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: control-plane
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: execution-gateway-pdb
+  namespace: open-agent-os
+  labels:
+    app: execution-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: execution-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: security-pdb
+  namespace: open-agent-os
+  labels:
+    app: security
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: security

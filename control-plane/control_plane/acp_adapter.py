@@ -20,6 +20,121 @@ from pathlib import Path
 from typing import AsyncGenerator, Any
 import httpx
 from .session import SessionRecord
+import time as _time
+
+# -- HA: retry (500/429/timeout, 3 retries exponential backoff) + circuit breaker + audit --
+def _is_retryable_status(exc: BaseException) -> bool:
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return True
+    try:
+        import httpx as _hx  # type: ignore
+        if isinstance(exc, _hx.TimeoutException):  # type: ignore
+            return True
+    except Exception:
+        pass
+    for attr in ("status_code", "status", "code"):
+        v = getattr(exc, attr, None)
+        if isinstance(v, int) and v in (429, 500, 502, 503, 504):
+            return True
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        sc = getattr(resp, "status_code", None)
+        if sc in (429, 500, 502, 503, 504):
+            return True
+    msg = str(exc).lower()
+    if "429" in msg or "too many requests" in msg:
+        return True
+    if "timeout" in msg or "timed out" in msg:
+        return True
+    if any(x in msg for x in ("500", "502", "503", "504")):
+        return True
+    return False
+
+class CircuitBreaker:
+    def __init__(self, failure_threshold: int = 3, reset_timeout_s: float = 30.0, name: str = "acp"):
+        self.failure_threshold = failure_threshold
+        self.reset_timeout_s = reset_timeout_s
+        self.name = name
+        self._failures = 0
+        self._state = "CLOSED"
+        self._opened_at: float | None = None
+
+    def can_execute(self) -> bool:
+        if self._state == "CLOSED":
+            return True
+        if self._state == "OPEN":
+            if self._opened_at is not None and (_time.monotonic() - self._opened_at) >= self.reset_timeout_s:
+                self._state = "HALF_OPEN"
+                return True
+            return False
+        return True
+
+    def record_success(self) -> None:
+        self._failures = 0
+        self._state = "CLOSED"
+        self._opened_at = None
+
+    def record_failure(self) -> None:
+        self._failures += 1
+        if self._failures >= self.failure_threshold:
+            self._state = "OPEN"
+            self._opened_at = _time.monotonic()
+
+    @property
+    def state(self) -> str:
+        if self._state == "OPEN" and self._opened_at is not None and (_time.monotonic() - self._opened_at) >= self.reset_timeout_s:
+            self._state = "HALF_OPEN"
+        return self._state
+
+_acp_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_timeout_s=30.0, name="acp")
+
+def _audit_emit(event_type: str, trace_id: str, data: dict):
+    try:
+        # try audit_model + ledger if available, else no-op
+        from audit_model import AuditEvent as _AE, AuditEventType as _AET  # type: ignore
+        import uuid as _uuid
+        from datetime import datetime, timezone as _tz
+        # best-effort: emit to security audit_ledger if importable (control-plane may not have ledger)
+        try:
+            from audit.audit_ledger.ledger import AuditLedger as _AL  # type: ignore
+            pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+    # fallback: log via default_audit_log if present (llm_runtime style) or just logging
+    try:
+        import logging
+        logging.getLogger(__name__).info(f"audit {event_type} trace={trace_id} data={data}")
+    except Exception:
+        pass
+
+async def _with_retry_acp(fn, *, max_retries: int = 3, backoff_s: float = 0.2, trace_id: str = ""):
+    # check circuit
+    if not _acp_circuit_breaker.can_execute():
+        _audit_emit("circuit_breaker_open", trace_id, {"breaker": _acp_circuit_breaker.name, "state": _acp_circuit_breaker.state})
+        raise RuntimeError(f"circuit breaker OPEN for {_acp_circuit_breaker.name}")
+    last: BaseException | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            res = await fn()
+            _acp_circuit_breaker.record_success()
+            return res
+        except Exception as e:
+            if not _is_retryable_status(e):
+                _acp_circuit_breaker.record_failure()
+                _audit_emit("acp_failure", trace_id, {"error": str(e)[:300], "retryable": False, "attempt": attempt + 1})
+                raise
+            last = e
+            if attempt >= max_retries:
+                break
+            delay = backoff_s * (2 ** attempt)
+            _audit_emit("retry", trace_id, {"attempt": attempt + 1, "max_retries": max_retries, "error": str(e)[:300], "backoff_s": delay})
+            await asyncio.sleep(delay)
+    assert last is not None
+    _acp_circuit_breaker.record_failure()
+    _audit_emit("acp_failure", trace_id, {"error": str(last)[:500], "retryable": True, "attempts": max_retries + 1, "breaker_state": _acp_circuit_breaker.state})
+    raise last
 
 def _resolve_workspace_for_session(session: SessionRecord) -> str | None:
     """Lazy workspace path — /home/hermes/workspaces/{tenant}/{agent}/{session}"""
@@ -109,11 +224,13 @@ class ACPAdapter:
         if ws is None:
             payload.pop("workspace", None)
             payload.pop("workspace_path", None)
-        try:
+        async def _do():
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 r = await client.post(url, json=payload, headers=self._headers(session))
                 r.raise_for_status()
                 return r.json()
+        try:
+            return await _with_retry_acp(_do, max_retries=3, backoff_s=0.2, trace_id=session.trace_id)
         except Exception as e:
             # Dev fallback — Hermes not yet running
             return {"status": "local_fallback", "reason": str(e), "session_id": session.session_id, "workspace": ws}
@@ -121,11 +238,13 @@ class ACPAdapter:
     async def send_prompt(self, session: SessionRecord, prompt: str, request_id: str) -> dict[str, Any]:
         url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/prompt"
         payload = {"prompt": prompt, "request_id": request_id, "trace_id": session.trace_id}
-        try:
+        async def _do():
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 r = await client.post(url, json=payload, headers=self._headers(session))
                 r.raise_for_status()
                 return r.json()
+        try:
+            return await _with_retry_acp(_do, max_retries=3, backoff_s=0.2, trace_id=session.trace_id)
         except Exception as e:
             return {"status": "queued_local", "reason": str(e), "request_id": request_id}
 

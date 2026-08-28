@@ -921,6 +921,95 @@ async def _with_timeout(coro: Awaitable[Any], timeout_s: float | None) -> Any:
     return await asyncio.wait_for(coro, timeout=timeout_s)
 
 
+# -- HA: retry eligibility (only 500/429/timeout) + circuit breaker + audit --
+def _is_retryable_exception(exc: BaseException) -> bool:
+    # timeout
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return True
+    # httpx timeout
+    try:
+        import httpx as _hx  # type: ignore
+        if isinstance(exc, _hx.TimeoutException):  # type: ignore
+            return True
+    except Exception:
+        pass
+    # status code based
+    for attr in ("status_code", "status", "code"):
+        v = getattr(exc, attr, None)
+        if isinstance(v, int) and v in (429, 500, 502, 503, 504):
+            return True
+        if isinstance(v, str) and v in ("429", "500"):
+            return True
+    # httpx HTTPStatusError
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        sc = getattr(resp, "status_code", None)
+        if sc in (429, 500, 502, 503, 504):
+            return True
+    msg = str(exc).lower()
+    if "429" in msg or "too many requests" in msg:
+        return True
+    if "timeout" in msg or "timed out" in msg:
+        return True
+    if any(x in msg for x in ("500", "502", "503", "504", "internal server error", "service unavailable")):
+        # only if explicitly 5xx-like
+        return True
+    return False
+
+
+class CircuitBreaker:
+    """Simple circuit breaker: CLOSED -> OPEN after threshold failures, half-open after reset_timeout."""
+
+    def __init__(self, failure_threshold: int = 3, reset_timeout_s: float = 30.0, name: str = "default"):
+        self.failure_threshold = failure_threshold
+        self.reset_timeout_s = reset_timeout_s
+        self.name = name
+        self._failures: int = 0
+        self._state: str = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self._opened_at: float | None = None
+        self._lock = asyncio.Lock() if False else None  # avoid async lock in sync context; use simple
+
+    def can_execute(self) -> bool:
+        if self._state == "CLOSED":
+            return True
+        if self._state == "OPEN":
+            if self._opened_at is not None and (time.monotonic() - self._opened_at) >= self.reset_timeout_s:
+                self._state = "HALF_OPEN"
+                return True
+            return False
+        # HALF_OPEN allows one probe
+        return True
+
+    def record_success(self) -> None:
+        self._failures = 0
+        self._state = "CLOSED"
+        self._opened_at = None
+
+    def record_failure(self) -> None:
+        self._failures += 1
+        if self._failures >= self.failure_threshold:
+            self._state = "OPEN"
+            self._opened_at = time.monotonic()
+
+    @property
+    def state(self) -> str:
+        # auto-transition check
+        if self._state == "OPEN" and self._opened_at is not None and (time.monotonic() - self._opened_at) >= self.reset_timeout_s:
+            self._state = "HALF_OPEN"
+        return self._state
+
+
+_default_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_timeout_s=30.0, name="llm_runtime")
+# also per-model breakers
+_circuit_breakers: dict[str, CircuitBreaker] = {}
+
+
+def _get_circuit_breaker(key: str = "default") -> CircuitBreaker:
+    if key not in _circuit_breakers:
+        _circuit_breakers[key] = CircuitBreaker(failure_threshold=3, reset_timeout_s=30.0, name=key)
+    return _circuit_breakers[key]
+
+
 async def _with_retry(
     fn: Callable[[], Awaitable[Any]],
     *,
@@ -929,12 +1018,35 @@ async def _with_retry(
     retry_on: tuple[type[BaseException], ...] = (Exception,),
     observability_hook: AuditHook | None = None,
     trace_id: str = "",
+    audit_log: Any | None = None,
+    circuit_breaker: CircuitBreaker | None = None,
 ) -> Any:
     last_exc: BaseException | None = None
+    # circuit check before first attempt
+    cb = circuit_breaker or _default_circuit_breaker
+    if not cb.can_execute():
+        err = RuntimeError(f"circuit breaker OPEN for {cb.name}")
+        if audit_log is not None:
+            try:
+                audit_log.emit({"event_type": "circuit_breaker_open", "trace_id": trace_id, "data": {"breaker": cb.name, "state": cb.state}})
+            except Exception:
+                pass
+        raise err
     for attempt in range(max_retries + 1):
         try:
-            return await fn()
+            result = await fn()
+            cb.record_success()
+            return result
         except retry_on as e:
+            # only retry if eligible (500/429/timeout)
+            if not _is_retryable_exception(e):
+                cb.record_failure()
+                if audit_log is not None:
+                    try:
+                        audit_log.emit({"event_type": "llm_failure", "trace_id": trace_id, "data": {"error": str(e)[:500], "retryable": False, "attempt": attempt + 1}})
+                    except Exception:
+                        pass
+                raise
             last_exc = e
             if attempt >= max_retries:
                 break
@@ -950,8 +1062,20 @@ async def _with_retry(
                     )
                 except Exception:
                     pass
+            if audit_log is not None:
+                try:
+                    audit_log.emit({"event_type": "retry", "trace_id": trace_id, "data": {"attempt": attempt + 1, "max_retries": max_retries, "error": str(e)[:300], "backoff_s": delay}})
+                except Exception:
+                    pass
             await asyncio.sleep(delay)
     assert last_exc is not None
+    # final failure audit
+    cb.record_failure()
+    if audit_log is not None:
+        try:
+            audit_log.emit({"event_type": "llm_failure", "trace_id": trace_id, "data": {"error": str(last_exc)[:500], "retryable": True, "attempts": max_retries + 1, "breaker_state": cb.state}})
+        except Exception:
+            pass
     raise last_exc
 
 
@@ -1377,6 +1501,8 @@ class LLMProviderAdapter:
                         backoff_s=self.retry_backoff_s,
                         observability_hook=self.observability_hook,
                         trace_id=trace_id,
+                        audit_log=self.audit_log,
+                        circuit_breaker=_get_circuit_breaker(f"hermes:{resolved}"),
                     ),
                     timeout_s=self.timeout_s,
                 )
@@ -1413,6 +1539,8 @@ class LLMProviderAdapter:
                             backoff_s=self.retry_backoff_s,
                             observability_hook=self.observability_hook,
                             trace_id=trace_id,
+                            audit_log=self.audit_log,
+                            circuit_breaker=_get_circuit_breaker(f"provider:{resolved}"),
                         ),
                         timeout_s=self.timeout_s,
                     )
@@ -1462,6 +1590,8 @@ class LLMProviderAdapter:
                     backoff_s=self.retry_backoff_s,
                     observability_hook=self.observability_hook,
                     trace_id=trace_id,
+                    audit_log=self.audit_log,
+                    circuit_breaker=_get_circuit_breaker(f"litellm:{resolved}"),
                 ),
                 timeout_s=self.timeout_s,
             )

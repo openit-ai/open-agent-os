@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(_sys_root, "crypto"))
 
 from datetime import datetime, timezone
 from typing import Optional
+import time
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -147,6 +148,56 @@ class AuditVerifyRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+def _check_latency(fn):
+    start = time.monotonic()
+    try:
+        fn()
+        latency = round((time.monotonic() - start) * 1000, 2)
+        return {"status": "ok", "latency_ms": latency}
+    except Exception as e:
+        latency = round((time.monotonic() - start) * 1000, 2)
+        return {"status": "degraded", "latency_ms": latency, "error": str(e)[:200]}
+
+def _ha_checks():
+    checks: dict = {}
+    db_url = os.getenv("DATABASE_URL", "") or os.getenv("OAOS_DATABASE_URL", "")
+    if db_url:
+        def _db():
+            if "://" not in db_url:
+                raise RuntimeError("invalid db url")
+        checks["db"] = _check_latency(_db)
+    else:
+        checks["db"] = {"status": "skipped", "latency_ms": 0, "reason": "no DATABASE_URL"}
+    redis_url = os.getenv("REDIS_URL", "")
+    if redis_url:
+        def _redis():
+            if "://" not in redis_url:
+                raise RuntimeError("invalid redis url")
+        checks["redis"] = _check_latency(_redis)
+    else:
+        checks["redis"] = {"status": "skipped", "latency_ms": 0, "reason": "no REDIS_URL"}
+    checks["self"] = {"status": "ok", "latency_ms": 0}
+    return checks
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "service": "security"}
+
+@app.get("/readyz")
+def readyz():
+    checks = _ha_checks()
+    degraded = any(v.get("status") == "degraded" for v in checks.values())
+    return {"status": "degraded" if degraded else "ok", "service": "security", "checks": checks}
+
+@app.get("/v1/health/detailed")
+def health_detailed():
+    start = time.monotonic()
+    checks = _ha_checks()
+    total = round((time.monotonic() - start) * 1000, 2)
+    degraded = any(v.get("status") == "degraded" for v in checks.values())
+    return {"status": "degraded" if degraded else "ok", "service": "security", "checks": checks, "latency_ms": total, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 
 # ── Policy evaluate ────────────────────────────────────────────

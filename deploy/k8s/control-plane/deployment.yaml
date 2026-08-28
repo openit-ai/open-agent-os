@@ -12,7 +12,12 @@ metadata:
     oaos.hpa/targetMemory: "80"
     oaos.resources/limits: "cpu=1000m,memory=1Gi"
 spec:
-  replicas: 2  # managed by HPA (deploy/k8s/hpa.yaml) — §16D.1/16D.3
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: control-plane
@@ -21,6 +26,16 @@ spec:
       labels:
         app: control-plane
     spec:
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: control-plane
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: control-plane
           image: open-agent-os/control-plane:latest  # override with registry/tag
@@ -101,19 +116,22 @@ spec:
                   key: POSTGRES_USER
           livenessProbe:
             httpGet:
-              path: /health
+              path: /healthz
               port: 8000
-            initialDelaySeconds: 30
-            periodSeconds: 20
+            initialDelaySeconds: 10
+            periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
+            successThreshold: 1
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
           resources:
             requests:
               cpu: "500m"

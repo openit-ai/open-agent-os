@@ -147,11 +147,11 @@ services:
     volumes:
       - control-plane-logs:/app/logs
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
-      interval: 20s
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -194,11 +194,11 @@ services:
     volumes:
       - execution-gateway-logs:/app/logs
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).status==200 else 1)"]
-      interval: 20s
+      test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
+      interval: 30s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -243,11 +243,11 @@ services:
     volumes:
       - security-logs:/app/logs
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3).status==200 else 1)"]
-      interval: 20s
+      test: ["CMD", "curl", "-f", "http://localhost:8002/healthz"]
+      interval: 30s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
