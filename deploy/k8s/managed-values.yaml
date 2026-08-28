@@ -182,8 +182,8 @@ secrets:
 config:
   logLevel: info
   tenantId: default
-  postgresDb: open_agent_os
-  postgresUser: open_agent_os
+  postgresDb: openagentos
+  postgresUser: openagentos
   hermesBaseUrl: http://execution-gateway:8001
   awsS3Bucket: ""
   awsS3Region: ap-northeast-2
