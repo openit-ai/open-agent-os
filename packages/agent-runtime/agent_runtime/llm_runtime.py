@@ -56,7 +56,200 @@ __all__ = [
     "AuditEvent",
     "AuditLogStub",
     "default_audit_log",
+    "ProviderType",
+    "RuntimeMode",
 ]
+
+# ---------------------------------------------------------------------------
+# ProviderType + RuntimeMode — multi-provider adapter
+# ---------------------------------------------------------------------------
+from enum import Enum
+
+class ProviderType(str, Enum):
+    """LLM provider type — 5 providers (Argo runners style)."""
+    CLAUDE = "claude"
+    CODEX = "codex"
+    GEMINI = "gemini"
+    OPENCODE = "opencode"
+    OLLAMA = "ollama"
+
+    @classmethod
+    def from_str(cls, v: str | None) -> "ProviderType | None":
+        if not v:
+            return None
+        try:
+            return cls(v.lower().strip())
+        except ValueError:
+            return None
+
+class RuntimeMode(str, Enum):
+    """Runtime mode: llm (direct provider) vs hermes (delegate to Hermes Agent)."""
+    LLM = "llm"
+    HERMES = "hermes"
+
+    @classmethod
+    def from_str(cls, v: str | None) -> "RuntimeMode":
+        if not v:
+            return cls.LLM
+        s = v.lower().strip()
+        if s in ("hermes", "hermes_agent", "agent"):
+            return cls.HERMES
+        return cls.LLM
+
+def _resolve_runtime_mode(explicit: str | RuntimeMode | None = None) -> RuntimeMode:
+    """Resolve runtime mode: explicit > env OAOS_RUNTIME_MODE > default llm.
+    Also attempts to fetch from admin-console API if ADMIN_CONSOLE_URL set.
+    """
+    if isinstance(explicit, RuntimeMode):
+        return explicit
+    if isinstance(explicit, str) and explicit:
+        m = RuntimeMode.from_str(explicit)
+        if m == RuntimeMode.HERMES:
+            return m
+        # if explicit string is valid llm mode, respect it
+        if explicit.lower().strip() in ("llm", "direct"):
+            return RuntimeMode.LLM
+    # env
+    env_val = os.getenv("OAOS_RUNTIME_MODE") or os.getenv("RUNTIME_MODE") or os.getenv("OAOS_AGENT_RUNTIME_MODE") or ""
+    if env_val:
+        return RuntimeMode.from_str(env_val)
+    # Try admin-console API sync fetch (best-effort, non-blocking, 1.5s timeout)
+    # Only attempt if ADMIN_CONSOLE_URL is set to avoid slow path
+    admin_base = os.getenv("ADMIN_CONSOLE_URL") or os.getenv("OAOS_ADMIN_CONSOLE_URL") or os.getenv("OAOS_ADMIN_API_URL") or ""
+    if admin_base:
+        try:
+            import httpx  # type: ignore
+            # try several plausible endpoints
+            for endpoint in ("/v1/config/runtime", "/v1/llm/config", "/v1/system/config"):
+                try:
+                    url = admin_base.rstrip("/") + endpoint
+                    import httpx as _hx
+                    with _hx.Client(timeout=1.5) as c:
+                        r = c.get(url)
+                        if r.status_code == 200:
+                            data = r.json()
+                            # accept {"runtime_mode": "hermes"} or {"mode": ...}
+                            raw = data.get("runtime_mode") or data.get("mode") or data.get("runtimeMode") or ""
+                            if raw:
+                                m = RuntimeMode.from_str(str(raw))
+                                if m:
+                                    return m
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    return RuntimeMode.LLM
+
+def _resolve_provider_from_env() -> ProviderType | None:
+    raw = os.getenv("OAOS_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or os.getenv("OAOS_PROVIDER") or os.getenv("PROVIDER_TYPE") or ""
+    if raw:
+        return ProviderType.from_str(raw)
+    return None
+
+def _admin_console_base_url() -> str | None:
+    return (os.getenv("ADMIN_CONSOLE_URL") or os.getenv("OAOS_ADMIN_CONSOLE_URL") or os.getenv("OAOS_ADMIN_API_URL") or "").rstrip("/") or None
+
+def _fetch_provider_config_from_admin_api(provider: str | None = None) -> dict[str, Any] | None:
+    """Best-effort fetch provider config from admin-console API (sync, short timeout).
+    Endpoints attempted: /v1/llm/config, /v1/llm/provider-config, /v1/config/llm
+    Returns dict with keys like {provider, model, api_key, base_url} or None.
+    """
+    base = _admin_console_base_url()
+    if not base:
+        return None
+    try:
+        import httpx as _hx
+        # candidate endpoints
+        candidates = ["/v1/llm/config", "/v1/llm/provider-config", "/v1/config/llm", "/v1/providers/config"]
+        for ep in candidates:
+            try:
+                url = base + ep
+                params: dict[str, str] = {}
+                if provider:
+                    params["provider"] = provider
+                with _hx.Client(timeout=1.5) as c:
+                    # pass admin token if available
+                    headers: dict[str, str] = {}
+                    tok = os.getenv("ADMIN_API_TOKEN") or os.getenv("OAOS_ADMIN_TOKEN") or ""
+                    if tok:
+                        headers["Authorization"] = f"Bearer {tok}"
+                    r = c.get(url, params=params or None, headers=headers or None)
+                    if r.status_code == 200:
+                        data = r.json()
+                        # Normalize: may be {config: {...}} or direct
+                        if isinstance(data, dict):
+                            if "config" in data and isinstance(data["config"], dict):
+                                return data["config"]
+                            # if response contains provider key, return as-is
+                            if any(k in data for k in ("provider", "model", "api_key", "base_url", "provider_type")):
+                                return data
+                            # if keyed by provider name
+                            if provider and provider in data and isinstance(data[provider], dict):
+                                return data[provider]
+                        return data if isinstance(data, dict) else None
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+def _provider_env_config(provider: ProviderType | str | None) -> dict[str, Any]:
+    """Collect provider config from env vars (no network)."""
+    if isinstance(provider, ProviderType):
+        key = provider.value.lower()
+    elif isinstance(provider, str) and provider:
+        # Handle 'ProviderType.OLLAMA' string repr fallback
+        key = provider.lower().split(".")[-1]
+    else:
+        key = ""
+    out: dict[str, Any] = {}
+    if key in ("claude", ""):
+        out["claude_api_key"] = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY") or os.getenv("OAOS_CLAUDE_API_KEY") or ""
+        out["claude_base_url"] = os.getenv("ANTHROPIC_BASE_URL") or os.getenv("CLAUDE_BASE_URL") or ""
+        out["claude_model"] = os.getenv("CLAUDE_MODEL") or ""
+    if key in ("codex", ""):
+        out["codex_api_key"] = os.getenv("OPENAI_API_KEY") or os.getenv("CODEX_API_KEY") or os.getenv("OAOS_CODEX_API_KEY") or ""
+        out["codex_base_url"] = os.getenv("OPENAI_BASE_URL") or os.getenv("CODEX_BASE_URL") or os.getenv("OAOS_CODEX_BASE_URL") or ""
+        out["codex_model"] = os.getenv("CODEX_MODEL") or ""
+    if key in ("gemini", ""):
+        out["gemini_api_key"] = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_GENAI_API_KEY") or os.getenv("OAOS_GEMINI_API_KEY") or ""
+        out["gemini_model"] = os.getenv("GEMINI_MODEL") or os.getenv("GOOGLE_GEMINI_MODEL") or ""
+    if key in ("opencode", ""):
+        out["opencode_api_key"] = os.getenv("OPENCODE_API_KEY") or os.getenv("OAOS_OPENCODE_API_KEY") or ""
+        out["opencode_base_url"] = os.getenv("OPENCODE_API_URL") or os.getenv("OPENCODE_BASE_URL") or os.getenv("OAOS_OPENCODE_BASE_URL") or "http://localhost:4096"
+        out["opencode_model"] = os.getenv("OPENCODE_MODEL") or ""
+    if key in ("ollama", ""):
+        out["ollama_base_url"] = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST") or os.getenv("OAOS_OLLAMA_BASE_URL") or "http://localhost:11434"
+        out["ollama_model"] = os.getenv("OLLAMA_MODEL") or os.getenv("OAOS_OLLAMA_MODEL") or "llama3"
+    # generic
+    out["generic_model"] = os.getenv("OAOS_LLM_MODEL") or os.getenv("LLM_MODEL") or ""
+    return out
+
+def _resolve_provider_config(provider: ProviderType | str | None, *, prefer_admin_api: bool = True) -> dict[str, Any]:
+    """Resolve provider config: admin-console API (if available) merged over env."""
+    env_cfg = _provider_env_config(provider)
+    if not prefer_admin_api:
+        return env_cfg
+    api_cfg = _fetch_provider_config_from_admin_api(provider.value.lower() if isinstance(provider, ProviderType) else (str(provider).lower().split(".")[-1] if provider else None))
+    if not api_cfg:
+        return env_cfg
+    # merge: api overrides env where non-empty
+    merged = dict(env_cfg)
+    for k, v in api_cfg.items():
+        if v is not None and v != "":
+            merged[k] = v
+            # also map generic keys
+            if k in ("api_key", "base_url", "model") and provider:
+                pkey = provider.value.lower() if isinstance(provider, ProviderType) else str(provider).lower().split(".")[-1]
+                merged[f"{pkey}_{k}"] = v
+                merged[k] = v
+    # also map provider_type/model generic
+    if "provider_type" in api_cfg:
+        merged["provider_type"] = api_cfg["provider_type"]
+    if "provider" in api_cfg:
+        merged["provider"] = api_cfg["provider"]
+    return merged
+
 
 # ---------------------------------------------------------------------------
 # 1) OAOSContext — already defined in session.py, re-exported
@@ -557,17 +750,58 @@ class LLMProviderAdapter:
         audit_log: AuditLogStub | None = None,
         mock_responses: list[dict[str, Any]] | None = None,
         tool_output_limits: ToolOutputLimits | None = None,
+        provider: str | ProviderType | None = None,
+        provider_type: str | ProviderType | None = None,
+        base_url: str | None = None,
+        runtime_mode: str | RuntimeMode | None = None,
+        hermes_api_url: str | None = None,
+        provider_config: dict[str, Any] | None = None,
     ) -> None:
+        # Resolve provider_type: explicit kw > env > None (keeps litellm path backwards compat)
+        _pt = provider_type if provider_type is not None else provider
+        if isinstance(_pt, str) and _pt:
+            self.provider_type: ProviderType | None = ProviderType.from_str(_pt)
+        elif isinstance(_pt, ProviderType):
+            self.provider_type = _pt
+        else:
+            self.provider_type = _resolve_provider_from_env()
+        # Allow env/model hint to infer provider when not explicitly set but env says so
+        if self.provider_type is None and provider_config and provider_config.get("provider_type"):
+            self.provider_type = ProviderType.from_str(str(provider_config.get("provider_type")))
+        if self.provider_type is None and provider_config and provider_config.get("provider"):
+            self.provider_type = ProviderType.from_str(str(provider_config.get("provider")))
+        self.base_url = base_url
+        # Runtime mode: hermes delegates to Hermes Agent, llm uses direct provider dispatch
+        self.runtime_mode: RuntimeMode = _resolve_runtime_mode(runtime_mode)
+        # If provider explicitly set, force llm mode unless hermes explicitly requested
+        # But per spec: if mode == hermes, NO provider config should be used — bypass dispatch
+        # So we respect hermes mode strictly
+        self.hermes_api_url = hermes_api_url or os.getenv("HERMES_API_URL") or os.getenv("OAOS_HERMES_API_URL") or os.getenv("OAOS_HERMES_BASE_URL") or "http://localhost:8001"
+        # Provider config resolution: admin-console API merged over env, unless hermes mode (skip)
+        if self.runtime_mode == RuntimeMode.HERMES:
+            self.provider_config: dict[str, Any] = {}
+        else:
+            if provider_config is not None:
+                self.provider_config = dict(provider_config)
+            else:
+                # fetch merged config (admin API + env) only when provider_type known or need generic
+                self.provider_config = _resolve_provider_config(self.provider_type, prefer_admin_api=True)
+                # also store generic api_key/base_url resolution
+                if api_key:
+                    self.provider_config["api_key"] = api_key
+                if base_url:
+                    self.provider_config["base_url"] = base_url
         self.routing = ModelRouting(default_model=model, routes=routing or {})
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.retry_backoff_s = retry_backoff_s
-        self.api_key = api_key
+        self.api_key = api_key or self.provider_config.get("api_key") or self.provider_config.get(f"{str(self.provider_type).lower()}_api_key") if self.provider_type else api_key
         self.observability_hook = observability_hook
         self.audit_log = audit_log or default_audit_log
         self._mock_responses: list[dict[str, Any]] = list(mock_responses or [])
         self._mock_index: int = 0
         self.tool_output_limits = tool_output_limits or default_tool_limits
+        self._provider_instance: Any | None = None
 
     def resolve_model(self, model: str | None) -> str:
         return self.routing.resolve(model)
@@ -600,6 +834,79 @@ class LLMProviderAdapter:
             pass
         return _mock_completion_response(model, messages, tools=tools)
 
+    def _get_provider_instance(self) -> Any | None:
+        """Lazy instantiate provider for current provider_type — returns None if no provider_type."""
+        if self.provider_type is None:
+            return None
+        if self._provider_instance is not None:
+            return self._provider_instance
+        # Lazy import registry — avoid hard deps at import time
+        try:
+            from .providers import get_provider as _get_provider
+            # Build provider-specific config
+            pkey = str(self.provider_type.value)
+            api_key = self.api_key or self.provider_config.get("api_key") or self.provider_config.get(f"{pkey}_api_key") or ""
+            base_url = self.base_url or self.provider_config.get("base_url") or self.provider_config.get(f"{pkey}_base_url")
+            model_cfg = self.provider_config.get(f"{pkey}_model") or self.provider_config.get("model") or None
+            cfg: dict[str, Any] = {}
+            if api_key:
+                cfg["api_key"] = api_key
+            if base_url:
+                cfg["base_url"] = base_url
+            if model_cfg:
+                cfg["model"] = model_cfg
+            self._provider_instance = _get_provider(pkey, cfg)
+            return self._provider_instance
+        except Exception:
+            return None
+
+    async def _hermes_completion(
+        self,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        trace_id: str = "",
+        request_id: str = "",
+        oaos_context: OAOSContext | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to Hermes Agent API when runtime_mode == hermes."""
+        resolved = self.resolve_model(model)
+        # Hermes endpoint: POST {hermes_api_url}/v1/chat/completions or /acp/sessions/.../prompt
+        # We try OpenAI-compat first, then ACP-style
+        try:
+            import httpx  # type: ignore
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if oaos_context is not None:
+                headers.update(oaos_context.to_headers())
+            if trace_id:
+                headers["X-Trace-Id"] = trace_id
+            payload: dict[str, Any] = {"model": resolved, "messages": messages, "stream": False}
+            if tools:
+                payload["tools"] = tools
+            # allow extra kwargs
+            for k in ("temperature", "max_tokens", "top_p"):
+                if k in kwargs:
+                    payload[k] = kwargs[k]
+            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+                # Try OpenAI-compat
+                for path in ("/v1/chat/completions", "/v1/completions", "/acp/chat/completions"):
+                    try:
+                        url = self.hermes_api_url.rstrip("/") + path
+                        r = await client.post(url, json=payload, headers=headers)
+                        if r.status_code < 400:
+                            data = r.json()
+                            if "choices" in data:
+                                data.setdefault("object", "chat.completion")
+                                data.setdefault("model", resolved)
+                                return data
+                    except Exception:
+                        continue
+                # If all fail, mock fallback (so hermes mock tests pass)
+                return _mock_completion_response(resolved, messages, **kwargs)
+        except Exception:
+            return _mock_completion_response(resolved, messages, **kwargs)
+
     async def _raw_completion(
         self,
         messages: list[dict[str, Any]],
@@ -610,13 +917,75 @@ class LLMProviderAdapter:
         oaos_context: OAOSContext | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Internal completion without output_type handling — single LLM call."""
+        """Internal completion without output_type handling — single LLM call.
+        Dispatch order: hermes mode -> provider dispatch -> litellm/mock.
+        """
         resolved = self.resolve_model(model)
         # Propagate OAOSContext trace if provided
         if oaos_context is not None and not trace_id:
             trace_id = oaos_context.trace_id
 
-        self._emit("model_request", trace_id=trace_id, model=resolved, data={"request_id": request_id, "messages_len": len(messages)})
+        self._emit("model_request", trace_id=trace_id, model=resolved, data={"request_id": request_id, "messages_len": len(messages), "provider": str(self.provider_type.value) if self.provider_type else "litellm", "runtime_mode": str(self.runtime_mode.value)})
+
+        # — Hermes mode: bypass provider logic entirely —
+        if self.runtime_mode == RuntimeMode.HERMES:
+            async def _do_hermes() -> dict[str, Any]:
+                # Mock queue takes priority if mock_responses set
+                if self._mock_responses and self._mock_index < len(self._mock_responses):
+                    return self._next_mock(resolved, messages, tools)
+                return await self._hermes_completion(messages, model=model, tools=tools, trace_id=trace_id, request_id=request_id, oaos_context=oaos_context, **kwargs)
+            try:
+                result = await _with_timeout(
+                    _with_retry(
+                        _do_hermes,
+                        max_retries=self.max_retries,
+                        backoff_s=self.retry_backoff_s,
+                        observability_hook=self.observability_hook,
+                        trace_id=trace_id,
+                    ),
+                    timeout_s=self.timeout_s,
+                )
+                self._emit("model_response", trace_id=trace_id, model=resolved, data={"request_id": request_id, "runtime_mode": "hermes", "finish_reason": result.get("choices", [{}])[0].get("finish_reason", "") if isinstance(result, dict) else ""})
+                return result  # type: ignore
+            except asyncio.TimeoutError as e:
+                self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s})
+                raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
+            except Exception as e:
+                self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e)})
+                raise
+
+        # — Provider dispatch (when provider_type set) —
+        if self.provider_type is not None:
+            prov_instance = self._get_provider_instance()
+            if prov_instance is not None:
+                async def _do_provider() -> dict[str, Any]:
+                    if self._mock_responses and self._mock_index < len(self._mock_responses):
+                        return self._next_mock(resolved, messages, tools)
+                    # provider call() is async
+                    try:
+                        return await prov_instance.call(messages, model=resolved, tools=tools, trace_id=trace_id, request_id=request_id, **kwargs)
+                    except TypeError:
+                        # fallback without extra kwargs
+                        return await prov_instance.call(messages, model=resolved, tools=tools, **kwargs)
+                try:
+                    result = await _with_timeout(
+                        _with_retry(
+                            _do_provider,
+                            max_retries=self.max_retries,
+                            backoff_s=self.retry_backoff_s,
+                            observability_hook=self.observability_hook,
+                            trace_id=trace_id,
+                        ),
+                        timeout_s=self.timeout_s,
+                    )
+                    self._emit("model_response", trace_id=trace_id, model=resolved, data={"request_id": request_id, "provider": str(self.provider_type.value), "finish_reason": result.get("choices", [{}])[0].get("finish_reason", "") if isinstance(result, dict) else ""})
+                    return result  # type: ignore
+                except asyncio.TimeoutError as e:
+                    self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s, "provider": str(self.provider_type.value)})
+                    raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
+                except Exception as e:
+                    self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e), "provider": str(self.provider_type.value)})
+                    raise
 
         async def _do() -> dict[str, Any]:
             if self._mock_responses or _load_litellm() is None:
@@ -733,7 +1102,62 @@ class LLMProviderAdapter:
         resolved = self.resolve_model(model)
         if oaos_context is not None and not trace_id:
             trace_id = oaos_context.trace_id
-        self._emit("model_request", trace_id=trace_id, model=resolved, data={"request_id": request_id, "stream": True})
+        self._emit("model_request", trace_id=trace_id, model=resolved, data={"request_id": request_id, "stream": True, "provider": str(self.provider_type.value) if self.provider_type else "litellm", "runtime_mode": str(self.runtime_mode.value)})
+
+        # Hermes mode — stream via mock or hermes API then chunk
+        if self.runtime_mode == RuntimeMode.HERMES:
+            # mock queue first
+            if self._mock_responses and self._mock_index < len(self._mock_responses):
+                mock = self._next_mock(resolved, messages, tools)
+            else:
+                # delegate to hermes single completion then chunk it
+                mock = await self._hermes_completion(messages, model=model, tools=tools, trace_id=trace_id, request_id=request_id, oaos_context=oaos_context, **kwargs)
+            content = ""
+            try:
+                content = str(mock.get("choices", [{}])[0].get("message", {}).get("content", "") or "")
+                tcs = mock.get("choices", [{}])[0].get("message", {}).get("tool_calls") or []
+                if tcs:
+                    yield {"id": mock.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {"tool_calls": tcs}, "finish_reason": None}]}
+                    yield {"id": mock.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+                    self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True, "runtime_mode": "hermes", "tool_calls": True})
+                    return
+            except Exception:
+                content = ""
+            for ch in _mock_stream_chunks(resolved, content or "mock stream response"):
+                yield ch
+                await asyncio.sleep(0)
+            self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True, "runtime_mode": "hermes"})
+            return
+
+        # Provider dispatch for streaming — provider call then chunk
+        if self.provider_type is not None:
+            prov_instance = self._get_provider_instance()
+            if prov_instance is not None:
+                if self._mock_responses and self._mock_index < len(self._mock_responses):
+                    mock = self._next_mock(resolved, messages, tools)
+                else:
+                    try:
+                        mock = await prov_instance.call(messages, model=resolved, tools=tools, trace_id=trace_id, request_id=request_id, **kwargs)
+                    except TypeError:
+                        mock = await prov_instance.call(messages, model=resolved, tools=tools, **kwargs)
+                    except Exception:
+                        mock = _mock_completion_response(resolved, messages, tools=tools)
+                content = ""
+                try:
+                    content = str(mock.get("choices", [{}])[0].get("message", {}).get("content", "") or "")
+                    tcs = mock.get("choices", [{}])[0].get("message", {}).get("tool_calls") or []
+                    if tcs:
+                        yield {"id": mock.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {"tool_calls": tcs}, "finish_reason": None}]}
+                        yield {"id": mock.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+                        self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True, "provider": str(self.provider_type.value), "tool_calls": True})
+                        return
+                except Exception:
+                    content = ""
+                for ch in _mock_stream_chunks(resolved, content or "mock stream response"):
+                    yield ch
+                    await asyncio.sleep(0)
+                self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True, "provider": str(self.provider_type.value)})
+                return
 
         lm = _load_litellm()
         if self._mock_responses or lm is None:

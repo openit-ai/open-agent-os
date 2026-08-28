@@ -3,7 +3,16 @@
 from .session import SessionManager, SessionRecord, OAOSContext
 from .streaming import StreamingEngine, StreamEvent, default_engine
 from .mcp_client import MCPClient, default_client
-from .llm_runtime import LLMRuntime, LLMRuntimeAdapter, default_runtime, ToolOutputLimits, LLMProviderAdapter, StructuredToolLoop
+from .llm_runtime import (
+    LLMRuntime,
+    LLMRuntimeAdapter,
+    default_runtime,
+    ToolOutputLimits,
+    LLMProviderAdapter,
+    StructuredToolLoop,
+    ProviderType,
+    RuntimeMode,
+)
 
 __all__ = [
     "SessionManager",
@@ -20,4 +29,6 @@ __all__ = [
     "ToolOutputLimits",
     "LLMProviderAdapter",
     "StructuredToolLoop",
+    "ProviderType",
+    "RuntimeMode",
 ]

@@ -452,3 +452,77 @@ export interface UpgradeStatusResponse {
 export function getUpgradeStatus(): Promise<UpgradeStatusResponse> {
   return apiFetch<UpgradeStatusResponse>("/v1/upgrade/status");
 }
+
+// ---- LLM Providers ----
+export type LLMProviderType = "claude" | "codex" | "gemini" | "opencode" | "ollama";
+export interface LLMProvider {
+  id: string;
+  provider: LLMProviderType;
+  name?: string;
+  api_key?: string | null;
+  api_key_masked?: string | null;
+  apiKey?: string | null;
+  base_url?: string | null;
+  baseUrl?: string | null;
+  model?: string | null;
+  path?: string | null;
+  url?: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  last_test_at?: string | null;
+  last_test_status?: string | null;
+  last_test_latency_ms?: number | null;
+}
+export interface LLMProvidersResponse {
+  providers: LLMProvider[];
+  items?: LLMProvider[];
+  count: number;
+  total?: number;
+}
+export interface LLMProviderCreatePayload {
+  provider: LLMProviderType;
+  name?: string;
+  apiKey?: string;
+  api_key?: string;
+  baseUrl?: string;
+  base_url?: string;
+  model?: string;
+  path?: string;
+  url?: string;
+  enabled?: boolean;
+}
+export type LLMProviderUpdatePayload = Partial<LLMProviderCreatePayload>;
+
+export function listLLMProviders(): Promise<LLMProvidersResponse | LLMProvider[]> {
+  return apiFetch("/v1/llm/providers");
+}
+export function createLLMProvider(payload: LLMProviderCreatePayload): Promise<LLMProvider> {
+  return apiFetch<LLMProvider>("/v1/llm/providers", { method: "POST", body: JSON.stringify(payload) });
+}
+export function updateLLMProvider(id: string, payload: LLMProviderUpdatePayload): Promise<LLMProvider> {
+  return apiFetch<LLMProvider>(`/v1/llm/providers/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+export function deleteLLMProvider(id: string): Promise<{ status: string; id: string }> {
+  return apiFetch(`/v1/llm/providers/${id}`, { method: "DELETE" });
+}
+export function testLLMProvider(id: string): Promise<{ status: string; latency_ms: number; detail: string; provider_id: string }> {
+  return apiFetch(`/v1/llm/providers/${id}/test`, { method: "POST" });
+}
+export function toggleLLMProvider(id: string): Promise<LLMProvider> {
+  return apiFetch<LLMProvider>(`/v1/llm/providers/${id}/toggle`, { method: "POST" });
+}
+
+// ---- Runtime mode ----
+export type RuntimeMode = "hermes" | "llm";
+export interface RuntimeModeResponse {
+  mode: RuntimeMode;
+  available_modes: RuntimeMode[];
+  updated_by?: string;
+}
+export function getRuntimeMode(): Promise<RuntimeModeResponse> {
+  return apiFetch<RuntimeModeResponse>("/v1/runtime/mode");
+}
+export function setRuntimeMode(mode: RuntimeMode): Promise<RuntimeModeResponse> {
+  return apiFetch<RuntimeModeResponse>("/v1/runtime/mode", { method: "POST", body: JSON.stringify({ mode }) });
+}

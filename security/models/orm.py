@@ -352,3 +352,45 @@ class AdminUserMappingORM(Base):
         Index("ix_admin_user_mappings_mm_user_id", "mm_user_id"),
         Index("ix_admin_user_mappings_mm_username", "mm_username"),
     )
+
+
+class AdminLLMProviderORM(Base):
+    """LLM provider registry — mirrors admin-console/backend/llm_providers.py LLMProvider.
+
+    Encrypted api_key stored as Fernet ciphertext (Text) or external secret_ref.
+    """
+
+    __tablename__ = "admin_llm_providers"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Encrypted api key (Fernet string) — masked on read
+    encrypted_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secret_ref: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    vault_backend: Mapped[str | None] = mapped_column(Text, nullable=True)
+    base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_test_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_test_latency_ms: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+
+    __table_args__ = (Index("ix_admin_llm_providers_provider", "provider"),)
+
+
+class AdminSettingORM(Base):
+    """Generic admin settings key/value — used for runtime_mode (hermes vs llm)."""
+
+    __tablename__ = "admin_settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)

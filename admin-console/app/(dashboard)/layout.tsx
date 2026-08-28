@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut, BadgeCheck, ShieldAlert, DatabaseBackup, Image as ImageIcon, UserCog, ChevronDown, Globe } from "lucide-react";
+import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut, BadgeCheck, ShieldAlert, DatabaseBackup, Image as ImageIcon, UserCog, ChevronDown, Globe, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,6 +29,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const navItems = [
     { href: "/", label: t("nav.dashboard"), icon: LayoutDashboard },
     { href: "/infra", label: t("nav.infra"), icon: Server },
+    { href: "/providers", label: t("nav.providers"), icon: Cpu },
     { href: "/users", label: t("nav.users"), icon: Users },
     { href: "/policy", label: t("nav.policy"), icon: Shield },
     { href: "/approvals", label: t("nav.approvals"), icon: ClipboardCheck },
