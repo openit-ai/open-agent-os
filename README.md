@@ -5,7 +5,7 @@
 [한국어](README.ko.md) | **English**
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.7.0.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27 Personal Wiki Vault + Production Hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets) — `6e80f113`, 5025 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Architecture:** `docs/architecture-v1.7.0.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27 Personal Wiki Vault + §§16.7–16.8 Production Hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets) — `2ebeb981`, 5026 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` · [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes incl. LLM Providers), `648 tests pass`, `npm run build ✓`
 
 ## Why Open Agent OS — Two Contradictions the Market Hasn't Solved
@@ -79,7 +79,7 @@ adapters/                  # Mattermost / Slack / Outline / Notion / Hermes / IA
 examples/morning-briefing/ # MVP — orchestrator (per-user kim vs lee) + output.json (13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
 tests/                     # 648 tests (incl. LLM 6-Provider + Fernet Vault + opencode binary + wiki/pgvector + production hardening)
-docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + Production Hardening — 5025 lines, SHA 6e80f113, Previous v1.6.4 preserved as historical, v1.1 preserved)
+docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — 5026 lines, SHA 2ebeb981, Previous v1.6.4 `e10c1af8` preserved as historical, v1.1 preserved)
 ```
 
 ## Quick Start
@@ -165,7 +165,7 @@ Self-hosted on customer server / VPS / private cloud / K8s — not multi-tenant 
 
 ## Docs
 
-- `docs/architecture-v1.7.0.md` — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + Production Hardening — 5025 lines, SHA `6e80f113`) — Previous: `docs/architecture-v1.6.4.md` `e10c1af8` (historical)
+- `docs/architecture-v1.7.0.md` — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — 5026 lines, SHA `2ebeb981`) — Previous: `docs/architecture-v1.6.4.md` `e10c1af8` (historical, 4945 lines) · `docs/architecture-v1.5.1.md` `4c2c1b85` · `docs/architecture-v1.5.md` `b19f54ab` preserved
 - `docs/api/` — Internal Agent Interface, Capability, Approval APIs
 - `examples/morning-briefing/README.md` — MVP briefing format (09:30 / 11:00 / Must-do today)
 
