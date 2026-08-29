@@ -11,6 +11,15 @@ from .models import SourceDocument, SyncCheckpoint, ResourceState
 from .sync import SyncOrchestrator, SyncResult
 from .store import InMemoryChunkStore, InMemoryCheckpointStore
 
+from .acl import (
+    ACLPolicy,
+    ChunkRecord,
+    InvalidationResult,
+    KnowledgeACLIndex,
+    RevalidationResult,
+    SourceState,
+)
+
 __all__ = [
     "chunk_text",
     "content_hash",
@@ -28,4 +37,10 @@ __all__ = [
     "SyncResult",
     "InMemoryChunkStore",
     "InMemoryCheckpointStore",
+    "ACLPolicy",
+    "ChunkRecord",
+    "InvalidationResult",
+    "KnowledgeACLIndex",
+    "RevalidationResult",
+    "SourceState",
 ]
