@@ -13,10 +13,30 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
+- **Canonical architecture:** [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) — 5026 lines, SHA `2ebeb981`
 
-## Personal Wiki
+---
 
-**Personal Wiki**는 직원별 Personal Agent에 연결된 개인 지식공간입니다. Mattermost와 Slack의 Web·Desktop·Mobile 클라이언트에서 동일한 업무 맥락을 이어가며, 대화·문서·회의·일정·업무 결과를 개인 Agent 중심으로 축적하고 활용합니다.
+## 1. Product Definition
+
+**Open Agent OS (OAOS)** is a **self-hosted Enterprise Personal Agent OS** that gives every employee **one Logical Personal Agent** — the employee's digital work identity — to connect personal work context and enterprise shared context securely.
+
+- **Personal side (delegated by the employee):** Email, Calendar, Drive, Tasks, SaaS, Memory — connected via personal delegation without admin approval.
+- **Enterprise side (governed by policy + JIT approval):** Mattermost / Slack, Outline / Notion, ERP / CRM / GitHub, internal systems — access is decided by the Policy Engine, never by the LLM.
+- **Self-hosted:** Runs on the customer's server / VPS / private cloud / K8s. No multi-tenant SaaS lock-in, data stays on customer infrastructure.
+
+OAOS does not replace Mattermost, Slack, Outline, Notion, or Hermes. It is the **Control + Security + Execution platform** that connects them around the Personal Agent.
+
+**Why this structure exists — two contradictions (§2):**
+
+1. *You cannot entrust personal data to a shared agent.* A shared `company-agent` cannot answer whose Gmail or Drive it is. Centralizing credentials creates exposure, cross-user leakage, and memory contamination.
+2. *An agent that cannot reach personal tools has no reason to be used daily.* Without mail, calendar, documents, tasks, and memory, the agent stays an occasional search bot — low usage, low delegation, no AX transformation.
+
+**OAOS answer:** `Personal Work Environment (Personal Delegation) ↔ Logical Personal Agent ↔ Enterprise Shared Environment (Policy + Approval)` — the agent becomes a daily executor: `discover → organize → search → coordinate → execute → request approval → integrate → remember` (§1, §14).
+
+## 2. Personal Wiki
+
+**Personal Wiki** is the per-employee private knowledge space bound to the Personal Agent. It works consistently across **Mattermost / Slack Web · Desktop · Mobile via ACP**, so work started on a phone continues naturally on a tablet or PC.
 
 ```text
 Mattermost / Slack Web·Desktop·Mobile
@@ -26,113 +46,111 @@ Mattermost / Slack Web·Desktop·Mobile
  Personal Wiki = Vault + Memory + Search
 ```
 
-- 대화와 업무 결과를 시간의 흐름에 따라 축적
-- 개인별 Agent·tenant 기반으로 업무 맥락을 구조화
-- OAOS 서버 Vault와 Memory Service가 원본·검색·출처를 연결
-- 휴대폰에서 시작한 업무를 태블릿·PC에서 자연스럽게 이어서 수행
-- 축적된 지식을 아침 브리핑·문서 탐색·업무 조율·후속 실행에 재활용
+- Accumulates conversations, documents, meetings, schedules, and task outcomes over time.
+- Structured by `tenant_id` / `agent_id` — each employee's context is isolated.
+- Vault (file store) and Memory Service (pgvector + search) are linked via `source_ref` so the original, embedding, and provenance stay connected.
+- Reuses accumulated knowledge for morning briefings, document discovery, coordination, and follow-up execution.
 
-- **Architecture:** `docs/architecture-v1.7.0.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27 Personal Wiki Vault + §§16.7–16.8 Production Hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets) — `2ebeb981`, 5026 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` · [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
-- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes incl. LLM Providers), `648 tests pass` (Production Hardening — fail-closed runtime/deploy/audit/approval/token/rate + secrets), `npm run build ✓` — Previous milestone: `v1.6.4` `612 tests` (historical; `590`/`180` earlier milestones)
+Implementation: `§27B Vault` — layout `/var/lib/oaos/vault/{tenant}/{agent:assistant:*}/{journal,notes,projects,files,attachments}`, attachment extraction (pdf/docx/xlsx/pptx/image OCR), automatic archiving of every tool result via Execution Gateway, and owner-isolated search via `memory_service` (pgvector 1536 + TF-IDF fallback). Details: [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md).
 
-## Why Open Agent OS — Two Contradictions the Market Hasn't Solved
+## 3. Enterprise Knowledge Index & ACL-aware Hybrid RAG
 
-**Contradiction 1. You can't entrust personal data to a shared agent.**
+Enterprise wikis and corporate documents are searched with **ACL-aware Hybrid RAG**. Outline, Notion, and other source systems keep the original documents and authoritative ACLs. OAOS stores a derived **Knowledge Index** in `openagentos` PostgreSQL + pgvector for retrieval.
 
-> "Who would connect their Gmail / Calendar / Drive / Tasks to a shared company agent?"
-
-A shared enterprise agent (`company-agent`) has no structural answer — it is unclear *whose* Gmail it is and *who* owns the credential. Centralizing credentials creates exposure, cross-user leakage, memory contamination, and complex revocation. Useful for knowledge search, but structurally unfit as a Personal Assistant that handles daily work. (§2.1)
-
-**Contradiction 2. An agent that can't reach personal tools has no reason to be used daily.**
-
-An agent without access to mail, calendar, documents, tasks, meetings, and memory becomes "an occasional search bot" — low usage → low delegation → low automation → no AX transformation. (§2.2)
-
-**Open Agent OS answer: One Logical Personal Agent per Employee**
-
-```
-Personal Work Environment (Email / Calendar / Drive / Tasks / SaaS / Memory)
-        +  Personal Delegation (my resources, delegated by me — no admin approval)
-        ↕  Logical Personal Agent — Employee's Digital Work Identity
-        +  Enterprise Authorization (company resources — policy + JIT approval)
-Enterprise Shared Environment (Mattermost / Slack / Outline / ERP / CRM / GitHub)
+```text
+Outline / Notion (originals + current ACLs)
+        ↓ Connector / MCP — chunking, embedding, source reference, content hash, ACL version
+ openagentos PostgreSQL + pgvector
+        ├─ lexical index
+        ├─ semantic vector index
+        ├─ tenant / group / agent metadata
+        ├─ source reference (source_resource_id, source_uri, content_hash, source_updated_at)
+        └─ ACL provenance (acl_version)
+        ↓ verified Agent Context
+ ACL pre-filter → lexical + semantic retrieval → deduplication & reranking → source reference → Personal Agent answer
 ```
 
-Beyond Q&A, the agent becomes a **daily work executor** — `discover → organize → search → coordinate → execute → request approval → integrate → remember`. (§1, §14)
+**Knowledge Index fields:** `index_id, source_system, source_resource_id, source_uri, tenant_id, group_id/agent_id, chunk_id, chunk_text, embedding (pgvector 1536), content_hash, source_updated_at, indexed_at, acl_version, classification, retention_policy, provenance` — the index is a derived search accelerator; the source system remains the source of truth.
 
-## Market Analysis
+**Search order:**
 
-| Dimension | Existing Enterprise AI | Open Agent OS |
-|---|---|---|
-| **Target** | Large enterprise, cloud SaaS | **SME AX transformation** — self-hosted, extensible to public / healthcare / manufacturing (§5) |
-| **Deployment** | Multi-tenant SaaS (data lock-in) | **Customer server / VPS / Private Cloud / K8s** — data ownership, environment isolation, security review, minimal exit lock-in |
-| **Agent model** | One shared agent + shared credentials | **Per-employee Logical Personal Agent** + Hermes Security-Domain Worker Pool (General / Dev / Finance / Admin / High-risk ephemeral) (§16) |
-| **Authorization** | Single RBAC, LLM decides allow/deny | **Personal Delegation ↔ Enterprise Policy separated** — every decision by Policy Engine (§25, not LLM), `Agent Permission ≤ User Permission` |
-| **Trust** | Prompt-based, weak audit | **Least privilege · Human approval · Auditable (hash-chain)** — JIT Approval in 4 levels (Deny / Once / Always for user / Always for group) (§12, §23) |
+1. Resolve `tenant_id` / user / group / agent scope from verified Agent Context.
+2. Build candidate scope from source ACLs and `acl_version`.
+3. Run lexical and semantic retrieval in parallel.
+4. Deduplicate and rerank by metadata, recency, and document type.
+5. Attach `source reference` and provenance to the answer.
+6. On ACL or source change, refresh or revalidate the affected index entries.
 
-**Positioning:** Does not replace Mattermost, Slack, Outline, Notion, or Hermes — it is the **Control + Security + Execution Platform that securely connects them around the Personal Agent**. (§4)
+**Critical invariant:** ACLs are applied **before** candidates are retrieved, not after results are ranked. Personal Wiki search is scoped by `agent_id`; enterprise search is scoped by source ACLs (user / group / collection) and `tenant_id`. Results always carry title, source system, URL, updated time, and provenance so the user can jump from search to the original and to execution.
 
-**Demand proof — Morning Briefing (§3.1):** One message in Mattermost — "Summarize what I need to handle today" — aggregates 4 calendar events + 7 emails needing reply + 3 mentions + 2 deadlines + Drive / Outline / CRM into a `09:30 Client Meeting / 11:00 Dev Meeting / Must-do today` briefing. Only possible with simultaneous access to personal and enterprise context.
+**Continuity across clients:** The same Personal Agent is used from any client; a single question can target Personal Wiki only, the enterprise Knowledge Index only, or both.
 
-## 5 Core Values
-
-1. **Personal-First, Enterprise-Safe** — Calendar / Gmail delegated by me (§9); Production / ERP / customer DB governed by company policy + approval (§11). Natural UX and security at once. (§13)
-2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user always DENY, no plaintext token storage, no long-term storage in Hermes process (§10). Verified by 648 tests (Previous: 612 at v1.6.4).
-3. **Human-approved high-risk execution** — HIGH-risk (§21) actions such as `MERGE / DEPLOY / PAY / EXPORT` run only via Capability Token (HS256, 300s, nonce/jti replay protection) + HMAC approval request (§24) + 4-button Admin Console decision.
-4. **Auditable operations** — Every authorization, delegation, and execution is recorded in the Audit Ledger as a hash-chain with HMAC checkpoint — tampering is immediately detectable (§30–31). `verify_chain` / `checkpoint` APIs.
-5. **Self-Hosted, Source-Available** — BSL 1.1 (converts to Apache 2.0 after 4 years), deploy on customer infrastructure. Evaluate (Developer) → operate (Business / Managed) without SaaS lock-in. (§5, Editions)
-
-## Architecture at a Glance
-
+```text
+"what I handled last week"          → Personal Wiki + work tools
+"company policy and related docs"   → Enterprise Knowledge Index
+"compare my work with company policy" → Personal Wiki + Knowledge Index
 ```
-Mattermost/Slack ──► Control Plane (Identity/Session/ACP) ──► Hermes Runtime (Security-Domain Worker Pool)
-                                  │ Internal Agent API               │ Tool/MCP
-                                  └──────► Execution Gateway (MCP Registry / Risk / AuthZ / Proxy) ──► Personal(Google) / Shared(Outline) / Enterprise(CRM/ERP)
+
+## 4. Architecture Flow
+
+```text
+Mattermost / Slack ──► Control Plane (Identity / Session / ACP) ──► Hermes Runtime (Security-Domain Worker Pool)
+                                  │  Internal Agent API                  │ Tool / MCP
+                                  └──────► Execution Gateway (MCP Registry / Risk / AuthZ / Proxy) ──► Personal (Google) / Shared (Outline) / Enterprise (CRM/ERP)
                                                               ▲
-                                              Security (Delegation/Vault/Policy/Token/Approval/Audit)
-Admin Console (Next.js + shadcn) ──► Security API proxy ──────┘  users/policy/approvals/audit/credentials/infra
+                                              Security (Delegation / Vault / Policy / Token / Approval / Audit)
+Admin Console (Next.js + shadcn) ──► Security API proxy ──────┘  users / policy / approvals / audit / credentials / infra
+
+Personal Wiki (Vault FS + memory_service pgvector) ◄── Execution Gateway auto-archive (every tool call, trace_id)
+Enterprise Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/Notion) — ACL versioned
 ```
 
-Core invariant: **Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + approval), Explicit Deny > Personal, Agent Permission ≤ User Permission, Cross-user always DENY, Auditable (hash-chain)**
+**Invariants:** `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + approval)`, `Explicit Deny > Personal`, `Agent Permission ≤ User Permission`, `Cross-user always DENY`, `Auditable (hash-chain + HMAC checkpoint)`.
 
-## Repository Structure
+**Runtime:** LLM Runtime canonical (`llm`, `safe` is deprecated alias) + Hermes Runtime advanced — Registry YAML (LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker (§16G), tool policy (§16H), data access (§16I). See `docs/architecture-v1.7.0.md` §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.8.
 
-```
-packages/                  # Phase 0 Contracts (Pydantic, immutable): agent-context, policy-model, audit-model, delegation-model, mcp-resource-model, common-types
-control-plane/             # A — Identity (derive_agent_id 1:1), Session (assert_owner→403), Router (HIGH→ephemeral), ACP (X-Agent-Context, SSE), Internal API (§17), Demo (morning briefing)
-execution-gateway/         # B — normalize (domain/scope/path), mcp_registry (wildcard reverse-index), connectors (google check_owner / outline ACL), risk (§21), authz_hook, proxy (trace, HIGH requires token), mock_executor (7 tools / 14 audits)
-security/                  # C — policy-engine (§25 Strict, fnmatch, Explicit Deny > Personal), delegation (fingerprint + cascade revoke), vault (Fernet), token (HS256 300s + nonce/jti replay), approval (HMAC, 4 decisions), audit (hash-chain + checkpoint), app (FastAPI)
-admin-console/             # Admin — Next.js 15 + shadcn Financial (#22C55E/#F59E0B/#DC2626), 375px, 11 routes: login/dashboard/infra/users/policy/approvals/audit/credentials + backend (auth L5/L4 JWT, infra CRUD, health probe, policy/approval/audit/credentials proxy)
-adapters/                  # Mattermost / Slack / Outline / Notion / Hermes / IAM / Google / Microsoft
-examples/morning-briefing/ # MVP — orchestrator (per-user kim vs lee) + output.json (13KB) + README
-deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
-tests/                     # 648 tests (incl. LLM 6-Provider + Fernet Vault + opencode binary + wiki/pgvector + production hardening) — Previous: 612 at v1.6.4
-docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — 5026 lines, SHA 2ebeb981, Previous v1.6.4 `e10c1af8` preserved as historical, v1.1 preserved)
-```
+## 5. Core Values
 
-## Quick Start
+1. **Personal-First, Enterprise-Safe** — Calendar / Gmail delegated by the employee (§9); Production / ERP / customer DB governed by company policy + approval (§11). Natural UX and safety together (§13).
+2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user is always DENY, no plaintext token storage, no long-term credential storage in the Hermes process (§10).
+3. **Human-approved high-risk execution** — HIGH-risk actions (`MERGE / DEPLOY / PAY / EXPORT`, §21) require a Capability Token (HS256, 300s, nonce/jti replay protection) + HMAC approval request (§24) + a 4-choice Admin Console decision (Deny / Once / Always for user / Always for group).
+4. **Auditable operations** — Every authorization, delegation, and execution is recorded in the Audit Ledger as a hash-chain with HMAC checkpoint — tampering is immediately detectable (§30–31). `verify_chain` / `checkpoint` APIs.
+5. **Self-Hosted, Source-Available** — BSL 1.1 (converts to Apache 2.0 after 4 years), deploy on customer infrastructure. Evaluate (Developer) → operate (Business / Managed) without SaaS lock-in (§5).
+
+## 6. Quick Start
 
 ```bash
 git clone https://github.com/openit-ai/open-agent-os.git && cd open-agent-os
 
-# 1) Python 3.11 — run all tests
+# 1) Python 3.11 — tests
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"  # or pip install -r requirements.txt
-pytest -q                # 648 passed
+pytest -q
+```
 
+```bash
 # 2) Admin Console
-cd admin-console && npm install && npm run build   # 11 routes, 114–115kB
+cd admin-console && npm install && npm run build   # static routes
 OAOS_ENV=development ADMIN_JWT_SECRET=dev-only-change-me npm run dev  # :3000 — bootstrap login via ADMIN console
-  # Dev/test only (OAOS_ENV != production): seeded L5 admin via bootstrap — set OAOS_ENV=development explicitly / prod: OAOS_ADMIN_BOOTSTRAP_PASSWORD must be set (never commit, never log) — app fails closed if missing
+  # Dev/test only (OAOS_ENV != production): seeded L5 admin via bootstrap.
+  # Production: set OAOS_ADMIN_BOOTSTRAP_PASSWORD (never commit, never log) — app fails closed if missing.
+```
 
-# 3) Backend (separate terminals, from repo root)
+```bash
+# 3) Backends (separate terminals, from repo root)
 uvicorn security.app:app --port 8001 --reload
 uvicorn admin_console.backend.app:app --port 8002 --reload
-# Control Plane: uvicorn control_plane.app:app --port 8000 --reload
+uvicorn control_plane.app:app --port 8000 --reload
+```
 
-# 4) MVP Demo (without Hermes)
-curl -X POST http://localhost:8000/v1/demo/morning-briefing -H "X-User-Id: employee:kim" -H "X-Tenant-Id: default" | jq
+```bash
+# 4) MVP demo (without Hermes)
+curl -X POST http://localhost:8000/v1/demo/morning-briefing \
+  -H "X-User-Id: employee:kim" -H "X-Tenant-Id: default" | jq
 # → briefing (summary, today_meetings 4, emails 7, trace_id, audit_events 14)
-curl -X POST http://localhost:8000/v1/mattermost/events -H "Content-Type: application/json" \
+
+curl -X POST http://localhost:8000/v1/mattermost/events \
+  -H "Content-Type: application/json" \
   -d '{"text":"summarize","user_id":"employee:kim"}' | jq  # keyword routing
 ```
 
@@ -144,43 +162,7 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 # services: control-plane(:8000) execution-gateway(:8001) admin-api(:8002) admin-console(:3000) postgres redis
 ```
 
-## Admin Console (Section 22 + 23–24, 30–31)
-
-| Screen | Description |
-|---|---|
-| Login | `Bootstrap L5 admin (OAOS_ADMIN_BOOTSTRAP_PASSWORD, never logged) → JWT (HS256, 8h) in localStorage; dev/test seeds via non-prod OAOS_ENV` |
-| Infra | Service registry (host/port/health_path) + `healthy/unhealthy/unknown` badge + `GET /v1/infra/health` parallel probe (3s) + 15s polling, write L5 / read L4 |
-| Users | Email / display_name / role / created_at, L5-only create/delete, self-delete blocked (400) |
-| Policy | Bundle (tenant/version/rules) + Rule table (source/action·resource glob, decision ALLOW/DENY/APPROVAL_REQUIRED, priority §25), Explicit Deny in red |
-| Approvals | Pending queue (approval_id/user/agent/action/resource/risk HIGH/MEDIUM/LOW/expiry) + 4 buttons (Once / Always for user / Always for group / Deny) |
-| Audit | Reverse-chronological timeline (event_type/user/agent/resource/decision, hash/prev_hash) + Verify (chain_valid/checkpoint_valid) + checkpoint card |
-| Credentials | Per-provider active/revoked/expired + last 10 delegations |
-
-All screens: shadcn + WCAG AA, `overflow-auto` for 375px, `npm run build` 11 static routes.
-
-## Security Model
-
-- **Policy Engine (§25):** fnmatch glob, Strict evaluation, Explicit Deny overrides Personal Delegation
-- **Delegation:** fingerprint + binding cascade revoke, immediate effect
-- **Vault:** Fernet AES+HMAC (`OAOS_VAULT_KEY`/`VAULT_ENCRYPTION_KEY` sha256→b64 derive, `vault://admin_llm_providers/{id}/api_key`, `encrypted_api_key=gAAAAA…`, `****` masking), owner `agent:assistant:<user>` isolation, `EncryptedPostgresVault` DB-backed + fail-soft in-memory fallback
-- **Token:** HS256 300s short-lived + nonce/jti replay store
-- **Approval:** HMAC-SHA256, 4 decisions (`DENIED / APPROVED_ONCE / APPROVED_USER_ALWAYS / APPROVED_GROUP_ALWAYS`), nonce/signature/expiry
-- **Audit:** hash-chain + HMAC checkpoint (`verify_chain`, `checkpoint`)
-- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options (LLM Only/Hermes Only/Both), Router 5-step, Capability `EXECUTE runtime/*`, §16G untrusted worker / §16H tool policy / §16I data access + §16.1.1 OAOSContext/output_type/ToolOutputLimits + §16.1.2 LLM 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, `runtime_mode` conditional, `opencode` alias) + opencode-go binary chain (`OPENCODE_BIN`→`opencode serve --model`) + §27B Personal Wiki Vault + Production Hardening — 648 tests (Previous: 612 at v1.6.4)
-- **Isolation verified:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` — 648 tests (Previous: 612 at v1.6.4)
-
-## Tests
-
-```bash
-pytest -q                          # 648 passed
-pytest tests/test_workstream_a.py tests/test_control_plane_api.py -v  # 12 (A isolation/SSE)
-pytest tests/test_workstream_b.py -v  # 35 (cross-user deny/HIGH token/trace)
-pytest tests/test_workstream_c.py -v  # 33 (policy/audit/vault/approval)
-pytest tests/test_mvp_demo.py -v      # 5 (kim vs lee isolation, EXPORT deny)
-pytest tests/test_admin_backend.py -v # 17 (register/login/JWT/bcrypt/RBAC/health mock)
-```
-
-## Editions & Deployment
+## 7. Deployment
 
 | Edition | Includes |
 |---|---|
@@ -188,15 +170,78 @@ pytest tests/test_admin_backend.py -v # 17 (register/login/JWT/bcrypt/RBAC/healt
 | Business | + Vault / JIT Approval / Audit / Admin Console / IAM |
 | Managed | Business + installation / monitoring / backup on customer-owned infra |
 
-Self-hosted on customer server / VPS / private cloud / K8s — not multi-tenant SaaS. Next: single KVM4 VPS integrating Mattermost + Outline + Hermes + O-AOS (`deploy/docker-compose.prod.yml`).
+Self-hosted on customer server / VPS / private cloud / K8s — not multi-tenant SaaS.
 
-## Docs
+**Compose & K8s:**
 
-- `docs/architecture-v1.7.0.md` — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — 5026 lines, SHA `2ebeb981`) — Previous: `docs/architecture-v1.6.4.md` `e10c1af8` (historical)
-- `docs/api/` — Internal Agent Interface, Capability, Approval APIs
-- `examples/morning-briefing/README.md` — MVP briefing format (09:30 / 11:00 / Must-do today)
+- `deploy/docker-compose.dev.yml` — evaluation; `deploy/docker-compose.prod.yml` — healthcheck (`curl -f /healthz`, interval 30s) + `restart: unless-stopped` + `depends_on: service_healthy` for nginx gating.
+- `deploy/k8s/` — `replicas: 2`, `RollingUpdate(maxUnavailable:1,maxSurge:1)`, `livenessProbe` on `/healthz` (30s), `readinessProbe` on `/readyz` (10s), `podAntiAffinity(hostname)`, `PodDisruptionBudget(minAvailable:1)`, `HPA` (2–10, CPU 70% / mem 80%). See [`docs/ha.md`](docs/ha.md) and [`docs/deployment.md`](docs/deployment.md).
+- **Health endpoints:** `GET /healthz` (liveness), `GET /readyz` (readiness, bounded DB/Redis checks), `GET /v1/health/detailed` (detailed latency). In production, failing dependencies cause `/readyz` to return `503` so the pod is removed from traffic.
 
-## License
+Next on the roadmap: single KVM4 VPS integrating Mattermost + Outline + Hermes + OAOS via `deploy/docker-compose.prod.yml`.
+
+## 8. Security Boundaries
+
+- **Policy Engine (§25):** fnmatch glob, strict evaluation, Explicit Deny overrides Personal Delegation.
+- **Delegation:** Fingerprint + binding cascade revoke, immediate effect.
+- **Vault:** Fernet AES+HMAC (`OAOS_VAULT_KEY` / `VAULT_ENCRYPTION_KEY` sha256→b64 derive, `vault://admin_llm_providers/{id}/api_key`, `encrypted_api_key=gAAAAA…`, `****` masking), owner `agent:assistant:<user>` isolation, `EncryptedPostgresVault` DB-backed + fail-soft in-memory fallback.
+- **Token:** HS256 300s short-lived + nonce/jti replay store.
+- **Approval:** HMAC-SHA256, 4 decisions (`DENIED / APPROVED_ONCE / APPROVED_USER_ALWAYS / APPROVED_GROUP_ALWAYS`), nonce/signature/expiry.
+- **Audit:** Hash-chain + HMAC checkpoint (`verify_chain`, `checkpoint`).
+- **Isolation guarantees:** `agent:assistant:kim` cannot access `employee:lee` resources. Verified by `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper`.
+- **Network & worker isolation (§§16A, 16G–16I):** Hermes runs as untrusted worker (`hermes` uid, `/home/hermes` sandbox, `nftables` + Controlled Egress Proxy — only ACP:8000, MCP:8001, LLM Gateway, approved package mirror are allowed; direct access to production DB, ERP/CRM, SSH, other user homes, and vault secrets is denied). See [`docs/security-model.md`](docs/security-model.md) and `deploy/firewall/hermes-egress.nft`.
+
+Admin Console screens (11+ routes: login / dashboard / infra / users / policy / approvals / audit / credentials / providers) are shadcn + WCAG AA, `overflow-auto` for 375px, `npm run build` verified. Infra screen probes `GET /v1/infra/health` in parallel (3s timeout, 15s polling); write requires L5, read requires L4.
+
+## 9. Verification Evidence
+
+Run locally at any commit — no external claims required:
+
+```bash
+pytest -q
+# Expected (2026-08-29, main): 813 passed, 1 skipped, 74 warnings — includes LLM 6-Provider, Fernet Vault,
+# opencode binary chain, wiki/pgvector, and production hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets).
+# Filtered examples:
+pytest tests/test_workstream_a.py tests/test_control_plane_api.py -v  # isolation / SSE
+pytest tests/test_workstream_b.py -v       # cross-user deny / HIGH token / trace
+pytest tests/test_workstream_c.py -v       # policy / audit / vault / approval
+pytest tests/test_mvp_demo.py -v           # kim vs lee isolation, EXPORT deny
+pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / RBAC / health mock
+```
+
+- **This README reports the current measured result** (`pytest -q` on the checked-out commit). Do not treat it as a fixed guarantee — rerun to confirm after changes.
+- **Liveness / readiness (fail-closed in production):** `GET /healthz` always `200`; `GET /readyz` returns `503` when DB/Redis checks fail in production (`non-prod` may return `200 degraded` with `checks` detail), and during `SIGTERM` draining (`terminationGracePeriodSeconds: 30`). K8s `readinessProbe` removes the pod from traffic on `503`.
+- **Audit chain:** `verify_chain` detects tampering; `checkpoint` is HMAC-signed.
+
+> **Historical note (for reference only):** `docs/architecture-v1.7.0.md` (`2ebeb981`, 5026 lines) was recorded at `648 tests` including production hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets). At `v1.6.4` the count was `612`; earlier milestones were `590` / `180`. Those numbers are point-in-time snapshots, not the current result.
+
+## 10. Repository Structure
+
+```text
+packages/                  # Phase 0 contracts (Pydantic, immutable): agent-context, policy-model, audit-model, delegation-model, mcp-resource-model, common-types
+control-plane/             # Identity (derive_agent_id 1:1), Session (assert_owner→403), Router (HIGH→ephemeral), ACP (X-Agent-Context, SSE), Internal API (§17), Demo
+execution-gateway/         # normalize (domain/scope/path), mcp_registry (wildcard reverse-index), connectors (google check_owner / outline ACL), risk (§21), authz_hook, proxy (trace, HIGH requires token), mock_executor, wiki_archive hook
+security/                  # policy-engine (§25), delegation (fingerprint + cascade revoke), vault (Fernet), token (HS256 300s + nonce/jti), approval (HMAC), audit (hash-chain + checkpoint), app (FastAPI)
+admin-console/             # Next.js 15 + shadcn Financial (#22C55E/#F59E0B/#DC2626), 375px, routes: login/dashboard/infra/users/policy/approvals/audit/credentials/providers + backend (auth L5/L4 JWT, infra CRUD, health probe, policy/approval/audit/credentials proxy)
+adapters/                  # Mattermost / Slack / Outline / Notion / Hermes / IAM / Google / Microsoft
+packages/personal-wiki/    # Personal Wiki Vault FS (journal/notes/projects/files/attachments), extractor, consolidate, memory_service client
+examples/morning-briefing/ # MVP — orchestrator (per-user kim vs lee) + output.json (13KB) + README
+deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + firewall (hermes-egress.nft)
+tests/                     # see Verification Evidence — run pytest -q for the current count
+docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — SHA 2ebeb981)
+```
+
+## 11. Docs
+
+- [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening). Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` (historical), `docs/architecture-v1.1.md` preserved.
+- [`docs/architecture-v1.7.1-design.md`](docs/architecture-v1.7.1-design.md) — Critical/High hardening design (C1/H1–H8, Personal Wiki JWT, Enterprise Knowledge Index spec, readiness strict, distributed state).
+- [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service integration.
+- [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.
+- [`docs/ha.md`](docs/ha.md) + [`docs/deployment.md`](docs/deployment.md) — HA probes, PDB, HPA, zero-downtime procedures.
+- `docs/api/` — Internal Agent Interface, Capability, Approval APIs.
+- `examples/morning-briefing/README.md` — MVP briefing format (`09:30 / 11:00 / Must-do today`).
+
+## 12. License
 
 **Business Source License 1.1** — see [`LICENSE`](./LICENSE).
 
