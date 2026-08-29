@@ -1553,7 +1553,7 @@ fail_open_telemetry(component, reason, **fields) → WARNING + stderr
 
 ### 16.8 Secret Lifecycle & Deployment Contract — v1.7.1 신규 (014)
 
-> 구현: `deploy/systemd/install-systemd.sh` (auto-generates 64-hex secrets on new install, preserves on existing, `--rotate-secrets` only), `config/oaos.env.example` (template), `scripts/check-production-config.sh` (preflight, never prints secrets), `tests/test_systemd_installer_secrets.py` (5 cases). Docker와 systemd는 **병렬·분리 배포 경로**로 코드만 공유한다.
+> 구현: `deploy/systemd/install-systemd.sh` (auto-generates 64-hex secrets on new install, preserves on existing, `--rotate-secrets` only), `config/oaos.env.example` (template), `scripts/check-production-config.sh` (preflight, never prints secrets), `tests/test_systemd_installer_secrets.py` (9 cases). Docker와 systemd는 **병렬·분리 배포 경로**로 코드만 공유한다.
 
 #### 16.8.1 Canonical Secrets (독립 4종 + 1 alias)
 
@@ -1610,15 +1610,19 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 - 두 경로는 **코드만 공유** (control-plane/execution-gateway/security 동일 이미지/코드). env 주입 위치만 다르다 (compose `env_file` vs systemd `EnvironmentFile`).
 - 운영 선택: 고객사 서버는 systemd 네이티브, 클라우드/VPS는 Docker 중 택1 — 혼용 시에도 secrets는 각 경로의 canonical 파일에만 존재.
 
-#### 16.8.4 검증 — `tests/test_systemd_installer_secrets.py` (5 cases, TDD)
+#### 16.8.4 검증 — `tests/test_systemd_installer_secrets.py` (9 cases, TDD)
 
 | 테스트 | 의미 | 기대 |
 |--------|------|------|
-| `test_docker_compose_unchanged` | Docker 경로 불변 | installer가 docker-compose 미참조, prod compose에 OAOS_ENCRYPTION_KEY 유지 |
+| `test_docker_compose_unchanged` | Docker 경로 불변 | installer가 Docker 명령을 실행하지 않고, prod compose의 Secret 경로가 유지됨 |
 | `test_new_install_generates_64hex_secrets_user_mode` | 신규 설치 dry-run 생성 예고 | `generate` 로그 + rc 0 |
 | `test_new_install_actually_writes_64hex` | 신규 설치 실제 생성 | canonical 생성, 4종 64-hex, alias 동일 값, 로그에 값 미노출 |
 | `test_existing_strong_preserved` | 기존 strong 보존 | 재실행 시 파일 unchanged, 값 미노출 |
 | `test_existing_weak_without_rotate_fails` | weak + rotate 없이 실패 | rc !=0, `--rotate-secrets` 안내 문구 |
+| `test_existing_weak_with_rotate_succeeds_and_rotates` | weak + 명시적 rotate | canonical Secret 교체, 64-hex, 경고 및 값 미노출 |
+| `test_rotate_strong_also_rotates` | strong + 명시적 rotate | 기존 strong도 명시 옵션에서만 교체 |
+| `test_no_secret_printed_on_generation` | 출력 경계 | Secret 평문 미출력 |
+| `test_encryption_alias_single_value` | 암호화 alias 계약 | `VAULT_ENCRYPTION_KEY`와 `OAOS_ENCRYPTION_KEY` 동일 |
 
 ---
 
