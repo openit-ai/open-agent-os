@@ -206,7 +206,14 @@ class ToolRateLimiter:
             res = r.eval(lua, 1, rk, self.rate, self.burst, tokens, time.time())
             return bool(int(res))
         except Exception as e:
-            if _is_prod():
+            # Handle fakeredis without Lua emulation (unknown command 'eval')
+            if "unknown command" in str(e).lower() and "eval" in str(e).lower():
+                # python emulation fallback for tests already running with fakeredis+lupa missing
+                if _allow_in_memory_fallback() and not _is_prod():
+                    logger.debug("ToolRateLimiter Lua not supported, fallback emulation: %s", e)
+                    return None
+                # in prod without fallback, still fail-closed
+            if _is_prod() and not _allow_in_memory_fallback():
                 raise RuntimeError(f"ToolRateLimiter Redis unavailable in production: {e}") from e
             logger.debug("ToolRateLimiter Redis allow fallback to memory: %s", e)
             return None
@@ -226,7 +233,7 @@ class ToolRateLimiter:
                 return 0.0
             return need / self.rate if self.rate > 0 else 9999.0
         except Exception as e:
-            if _is_prod():
+            if _is_prod() and not _allow_in_memory_fallback():
                 raise RuntimeError(f"ToolRateLimiter Redis retry_after unavailable in production: {e}") from e
             return None
 
@@ -235,7 +242,7 @@ class ToolRateLimiter:
         redis_res = self._redis_allow(key, tokens)
         if redis_res is not None:
             return redis_res
-        if _is_prod() and _redis_url():
+        if _is_prod() and _redis_url() and not _allow_in_memory_fallback():
             # Redis was configured but _redis_allow returned None due to error (non-prod path would fallback, prod raises above)
             raise RuntimeError("ToolRateLimiter: Redis required in production but unavailable (fail-closed)")
         if _is_prod() and not _allow_in_memory_fallback():

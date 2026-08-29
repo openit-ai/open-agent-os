@@ -426,12 +426,98 @@ class ToolOutputLimits:
 default_tool_limits = ToolOutputLimits()
 
 # ---------------------------------------------------------------------------
-# Tenant LLM quota (010) — in-memory + DB, production fail-closed
-# TODO(distributed): quota state is per-replica in-memory; distributed enforcement
-# requires DB/Redis-backed atomic counters. Until then, production DB failures fail-closed.
+# Tenant LLM quota (010) — Redis Lua atomic + DB + in-memory, production fail-closed
+# Distributed: Redis Lua INCR+EXPIRE atomic is primary when REDIS_URL set (H5).
+# Production (OAOS_ENV=production) fail-closed: Redis required, no in-memory fallback.
+# Non-prod fallback preserved for tests (OAOS_ALLOW_TEST_FALLBACK or non-prod).
+# External side effects NOT exactly-once; quota increment is atomic, external LLM
+# calls are at-most-once per increment only (no rollback on downstream failure).
 # ---------------------------------------------------------------------------
 _llm_quota_store = {}
 _llm_quota_window_counts = {}
+
+# Redis Lua quota script — atomic daily+per-minute counter
+_QUOTA_LUA_SCRIPT = """
+local daily = KEYS[1]; local minute = KEYS[2]
+local dlim = tonumber(ARGV[1]); local mlim = tonumber(ARGV[2])
+local dc = redis.call('INCR', daily); if dc==1 then redis.call('EXPIRE', daily, 86400) end
+local mc = redis.call('INCR', minute); if mc==1 then redis.call('EXPIRE', minute, 120) end
+if dc > dlim then return {-1, dc, mc} end
+if mc > mlim then return {-2, dc, mc} end
+return {0, dc, mc}
+"""
+
+# For tests — allow injection of fakeredis client (overrides env URL)
+_quota_redis_override = None
+_quota_redis_override_url = None  # if set, use this url string for production checks
+
+def set_quota_redis_client(client):  # test helper
+    global _quota_redis_override
+    _quota_redis_override = client
+
+def clear_quota_redis_client():  # test helper
+    global _quota_redis_override, _quota_redis_override_url
+    _quota_redis_override = None
+    _quota_redis_override_url = None
+
+def _quota_redis_url() -> str | None:
+    if _quota_redis_override_url is not None:
+        return _quota_redis_override_url
+    for k in ("OAOS_QUOTA_REDIS_URL", "OAOS_REDIS_URL", "REDIS_URL", "OAOS_CP_REDIS_URL", "OAOS_SESSION_REDIS_URL"):
+        v = os.getenv(k, "").strip()
+        if v:
+            return v
+    return None
+
+def _allow_quota_fallback() -> bool:
+    if _is_quota_production():
+        return os.getenv("OAOS_ALLOW_TEST_FALLBACK", "").lower() in ("1", "true", "yes")
+    return True
+
+def _get_quota_redis_client():
+    if _quota_redis_override is not None:
+        return _quota_redis_override
+    url = _quota_redis_url()
+    if not url:
+        return None
+    try:
+        import redis as _r  # type: ignore
+        c = _r.Redis.from_url(url, decode_responses=True, socket_timeout=2, socket_connect_timeout=2)
+        c.ping()
+        return c
+    except Exception as e:
+        if _is_quota_production() and not _allow_quota_fallback():
+            raise _quota_db_failure_exc(f"quota redis unavailable in production: {e}")
+        # non-prod: let caller fall through to DB/memory with telemetry
+        return None
+
+def _quota_redis_eval(client, daily_key: str, minute_key: str, dlim: int, mlim: int):
+    try:
+        return client.eval(_QUOTA_LUA_SCRIPT, 2, daily_key, minute_key, dlim, mlim)
+    except Exception as e:
+        msg = str(e).lower()
+        if "unknown command" in msg and "eval" in msg:
+            # fakeredis without lupa fallback — emulate atomically
+            dc = client.incr(daily_key)
+            if dc == 1:
+                try: client.expire(daily_key, 86400)
+                except: pass
+            mc = client.incr(minute_key)
+            if mc == 1:
+                try: client.expire(minute_key, 120)
+                except: pass
+            if dc > dlim:
+                return [-1, dc, mc]
+            if mc > mlim:
+                return [-2, dc, mc]
+            return [0, dc, mc]
+        raise
+
+def _get_quota_limits(tid: str) -> tuple[int, int]:
+    rec = _llm_quota_store.get(tid)
+    if rec is not None:
+        return int(rec.get("daily_limit", 100)), int(rec.get("per_minute_limit", 10))
+    return 100, 10
 
 def _quota_http_exc(msg):
     try:
@@ -459,6 +545,80 @@ def _llm_quota_check(tenant_id):
     from datetime import datetime, timezone
     import os
     now = datetime.now(timezone.utc)
+    # ── 1) Redis Lua primary (H5) — atomic daily+per-minute ──────────────
+    rc = None
+    try:
+        rc = _get_quota_redis_client()
+    except Exception as e:
+        # production redis unavailable already raised as 503 inside helper
+        raise
+    if rc is not None:
+        dlim, mlim = _get_quota_limits(tid)
+        # If DB is configured and tenant has custom limits stored in DB, prefer those
+        # Non-blocking best-effort: peek DB for limits without increment (fallback to mem defaults on error)
+        db_url_for_limits = (os.getenv("OAOS_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+        if db_url_for_limits:
+            try:
+                from sqlalchemy import create_engine as _ce2  # type: ignore
+                su = db_url_for_limits
+                if su.startswith("postgresql+asyncpg://"): su = su.replace("postgresql+asyncpg://","postgresql+psycopg://",1)
+                elif su.startswith("postgresql://"): su = su.replace("postgresql://","postgresql+psycopg://",1)
+                if "+aiosqlite" in su: su = su.replace("+aiosqlite","")
+                kwargs2: dict = {}
+                if su.startswith("postgresql"): kwargs2 = {"pool_pre_ping": True, "connect_args": {"connect_timeout": 1}}
+                eng2 = _ce2(su, **kwargs2)
+                try:
+                    from security.models.orm import AdminLLMQuotaORM as _Q  # type: ignore
+                    from sqlalchemy.orm import sessionmaker as _sm2
+                    fac2 = _sm2(bind=eng2, autoflush=False, autocommit=False)
+                    with fac2() as s2:
+                        row2 = s2.query(_Q).filter(_Q.tenant_id == tid).first()
+                        if row2 is not None:
+                            dlim = int(row2.daily_limit); mlim = int(row2.per_minute_limit)
+                finally:
+                    try: eng2.dispose()
+                    except: pass
+            except Exception:
+                pass
+        daily_key = f"oaos:quota:{tid}:daily:{now.strftime('%Y-%m-%d')}"
+        minute_key = f"oaos:quota:{tid}:minute:{now.strftime('%Y-%m-%dT%H:%M')}"
+        try:
+            res = _quota_redis_eval(rc, daily_key, minute_key, dlim, mlim)
+            code = int(res[0]) if isinstance(res, (list,tuple)) else int(res)
+            if code == -1:
+                raise _quota_http_exc("daily quota exceeded")
+            if code == -2:
+                raise _quota_http_exc("per-minute quota exceeded")
+            return
+        except Exception as e:
+            if getattr(e, "status_code", None) == 429 or getattr(e, "status_code", None) == 503:
+                raise
+            try:
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, dict) and detail.get("code") in ("QUOTA_EXCEEDED","QUOTA_BACKEND_UNAVAILABLE"):
+                    raise
+            except: pass
+            if "QUOTA_EXCEEDED" in str(e) or "quota exceeded" in str(e).lower():
+                raise
+            if _is_quota_production() and not _allow_quota_fallback():
+                raise _quota_db_failure_exc(f"quota redis backend unavailable: {e}")
+            # non-prod fail-open -> fall through to DB/memory with telemetry
+            try:
+                from .env_gate import fail_open_telemetry
+                fail_open_telemetry("quota","redis_failure_fail_open_nonprod", tenant_id=tid, error=str(e)[:200])
+            except Exception:
+                logger.warning("[fail-open] quota redis failure non-prod tenant=%s err=%s", tid, str(e)[:200])
+            # fall through
+    else:
+        # No redis client available
+        if _is_quota_production() and not _allow_quota_fallback():
+            # In strict prod, redis is mandatory (H5); check if env expected redis
+            url = _quota_redis_url()
+            if url is None:
+                # Explicitly require redis in prod — no in-memory bypass
+                raise _quota_db_failure_exc("quota redis required in production but not configured (fail-closed)")
+            # url was set but client failed (handled above as None only in non-prod); in prod we would have raised already
+            raise _quota_db_failure_exc("quota redis unavailable in production (fail-closed)")
     db_url = (os.getenv("OAOS_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
     # If DB is configured, try DB-backed quota first; production fail-closed on DB error
     if db_url:
@@ -549,7 +709,7 @@ def _llm_quota_check(tenant_id):
             except Exception:
                 logger.warning("[fail-open] quota DB failure non-prod tenant=%s err=%s", tid, str(e)[:200])
             # fall through to in-memory
-    # in-memory (per-replica) — distributed TODO: move to DB/Redis atomic
+    # in-memory (per-replica) — non-prod fallback only; prod uses Redis Lua above (no fallback)
     rec=_llm_quota_store.get(tid)
     if rec is None:
         rec={"daily_limit":100,"per_minute_limit":10,"used_today":0,"window_start":now,"updated_at":now}
@@ -567,6 +727,11 @@ def _llm_quota_check(tenant_id):
 
 def _llm_quota_clear():
     _llm_quota_store.clear(); _llm_quota_window_counts.clear()
+    # also flush redis quota keys for test isolation when using fakeredis override
+    try:
+        if _quota_redis_override is not None:
+            _quota_redis_override.flushdb()
+    except: pass
 
 # ---------------------------------------------------------------------------
 # LLM usage tracking (011) — latency/token/cost, tenant_id aggregated

@@ -161,8 +161,8 @@ class InMemorySessionStore(BaseSessionStore):
 class RedisSessionStore(BaseSessionStore):
     """Redis-backed SessionStore — same interface, JSON serialized.
 
-    Requires `redis>=5.0` (sync client). Falls back to in-memory if Redis unavailable
-    when `fallback=True`.
+    Requires `redis>=5.0` (sync client). H5: production fallback=False (mandatory Redis, fail-closed).
+    Non-prod (OAOS_ENV != production) allows fallback=True when OAOS_ALLOW_TEST_FALLBACK=1 or unset.
     """
 
     def __init__(
@@ -171,12 +171,27 @@ class RedisSessionStore(BaseSessionStore):
         redis_client=None,
         ttl_seconds: int = 3600 * 24,
         key_prefix: str = "oaos:session:",
-        fallback: bool = False,
+        fallback: bool | None = None,
     ) -> None:
         self._url = redis_url or os.environ.get("REDIS_URL") or os.environ.get("OAOS_CP_REDIS_URL") or "redis://localhost:6379/0"
         self._ttl = ttl_seconds
         self._prefix = key_prefix
         self._client = redis_client
+        def _is_prod() -> bool:
+            try:
+                from .env_gate import is_production as _ip
+                return _ip()
+            except:
+                return os.environ.get("OAOS_ENV","").lower() in ("production","prod")
+        def _allow_fallback() -> bool:
+            if _is_prod():
+                return os.environ.get("OAOS_ALLOW_TEST_FALLBACK","").lower() in ("1","true","yes")
+            return True
+        if fallback is None:
+            fallback = _allow_fallback()
+        else:
+            if _is_prod() and fallback and not _allow_fallback():
+                raise RuntimeError("RedisSessionStore fallback not allowed in production (H5 — fallback=False required)")
         self._fallback_store: InMemorySessionStore | None = InMemorySessionStore() if fallback else None
         if self._client is None:
             try:
@@ -186,7 +201,7 @@ class RedisSessionStore(BaseSessionStore):
                 # probe
                 self._client.ping()
             except Exception as e:
-                if fallback and self._fallback_store is not None:
+                if self._fallback_store is not None:
                     self._client = None
                 else:
                     raise RuntimeError(f"Redis unavailable at {self._url}: {e}") from e
@@ -196,7 +211,8 @@ class RedisSessionStore(BaseSessionStore):
 
     def _load(self, session_id: str) -> SessionRecord | None:
         if self._client is None:
-            assert self._fallback_store is not None
+            if self._fallback_store is None:
+                raise RuntimeError(f"Session Redis unavailable (H5 fail-closed, url={self._url})")
             return self._fallback_store.get_any(session_id)
         raw = self._client.get(self._key(session_id))
         if not raw:
@@ -209,7 +225,8 @@ class RedisSessionStore(BaseSessionStore):
 
     def _save(self, rec: SessionRecord) -> None:
         if self._client is None:
-            assert self._fallback_store is not None
+            if self._fallback_store is None:
+                raise RuntimeError(f"Session Redis unavailable (H5 fail-closed, url={self._url})")
             self._fallback_store._store[rec.session_id] = rec
             return
         self._client.set(self._key(rec.session_id), json.dumps(rec.to_dict(), ensure_ascii=False), ex=self._ttl)
@@ -225,7 +242,8 @@ class RedisSessionStore(BaseSessionStore):
             hermes_worker=hermes_worker,
         )
         if self._client is None:
-            assert self._fallback_store is not None
+            if self._fallback_store is None:
+                raise RuntimeError(f"Session Redis unavailable (H5 fail-closed, url={self._url})")
             self._fallback_store._store[rec.session_id] = rec
             return rec
         self._save(rec)
@@ -277,6 +295,7 @@ session_store: BaseSessionStore = InMemorySessionStore()
 # If REDIS_URL is set and reachable, prefer Redis in prod; keep memory for tests
 if os.environ.get("OAOS_SESSION_BACKEND") == "redis":
     try:
-        session_store = RedisSessionStore(fallback=True)
+        # H5: fallback computed inside RedisSessionStore (prod fail-closed)
+        session_store = RedisSessionStore()
     except Exception:
         session_store = InMemorySessionStore()

@@ -189,9 +189,26 @@ class _MemoryStore:
 class _RedisStore:
     """Optional Redis store — used only if configured and redis is installed."""
 
-    def __init__(self, redis_url: str | None = None, prefix: str = "oaos:agent-runtime:session:", ttl: int = 86400, fallback: bool = True) -> None:
+    def __init__(self, redis_url: str | None = None, prefix: str = "oaos:agent-runtime:session:", ttl: int = 86400, fallback: bool | None = None) -> None:
         self._prefix = prefix
         self._ttl = ttl
+        # H5: production mandatory Redis fallback=False (distributed)
+        def _is_prod() -> bool:
+            try:
+                from .env_gate import is_production as _ip
+                return _ip()
+            except:
+                return os.getenv("OAOS_ENV","").lower() in ("production","prod")
+        def _allow_fallback() -> bool:
+            if _is_prod():
+                return os.getenv("OAOS_ALLOW_TEST_FALLBACK","").lower() in ("1","true","yes")
+            return True
+        if fallback is None:
+            fallback = _allow_fallback()
+        else:
+            # caller explicitly requested fallback=True in prod must be rejected
+            if _is_prod() and fallback and not _allow_fallback():
+                raise RuntimeError("Redis session store fallback not allowed in production (OAOS_ENV=production, fallback=False required — H5)")
         self._fallback = _MemoryStore() if fallback else None
         self._client = None
         url = redis_url or os.getenv("OAOS_SESSION_REDIS_URL") or os.getenv("REDIS_URL") or os.getenv("OAOS_CP_REDIS_URL") or "redis://localhost:6379/0"
@@ -201,9 +218,9 @@ class _RedisStore:
             self._client = redis_lib.Redis.from_url(url, decode_responses=True)
             self._client.ping()
             self._url = url
-        except Exception:
+        except Exception as e:
             if self._fallback is None:
-                raise
+                raise RuntimeError(f"Session Redis unavailable at {url}: {e}") from e
             self._client = None
 
     def _key(self, sid: str) -> str:
@@ -211,6 +228,8 @@ class _RedisStore:
 
     def save(self, rec: SessionRecord) -> None:
         if self._client is None:
+            if self._fallback is None:
+                raise RuntimeError("Session Redis unavailable in production (fail-closed, H5 — no in-memory fallback)")
             assert self._fallback is not None
             self._fallback.save(rec)
             return
@@ -218,6 +237,8 @@ class _RedisStore:
 
     def load(self, sid: str) -> SessionRecord | None:
         if self._client is None:
+            if self._fallback is None:
+                raise RuntimeError("Session Redis unavailable in production (fail-closed, H5)")
             assert self._fallback is not None
             return self._fallback.load(sid)
         raw = self._client.get(self._key(sid))
@@ -230,25 +251,44 @@ class _RedisStore:
 
     def delete(self, sid: str) -> None:
         if self._client is None:
+            if self._fallback is None:
+                raise RuntimeError("Session Redis unavailable in production (fail-closed, H5)")
             assert self._fallback is not None
             self._fallback.delete(sid)
             return
         self._client.delete(self._key(sid))
-
 
 def _choose_store() -> Any:
     backend = (os.getenv("OAOS_SESSION_BACKEND") or os.getenv("OAOS_AGENT_RUNTIME_SESSION_BACKEND") or "memory").lower()
     if backend in ("redis", "openagentos", "postgres"):
         # openagentos → try redis first (hot cache), else memory; DB persistence is out of scope for minimal impl
         try:
-            return _RedisStore(fallback=True)
-        except Exception:
+            # H5: in prod fallback=False mandatory
+            return _RedisStore(fallback=None)
+        except Exception as e:
+            # prod will raise above; non-prod fallback to memory
+            try:
+                from .env_gate import is_production as _ip2
+                if _ip2() and os.getenv("OAOS_ALLOW_TEST_FALLBACK","").lower() not in ("1","true","yes"):
+                    raise
+            except RuntimeError:
+                raise
+            except:
+                pass
             return _MemoryStore()
     # also auto-use redis if URL env is set and redis reachable, but keep memory default
     if os.getenv("REDIS_URL") or os.getenv("OAOS_CP_REDIS_URL") or os.getenv("OAOS_SESSION_REDIS_URL"):
         try:
-            return _RedisStore(fallback=True)
-        except Exception:
+            return _RedisStore(fallback=None)
+        except Exception as e:
+            try:
+                from .env_gate import is_production as _ip2
+                if _ip2() and os.getenv("OAOS_ALLOW_TEST_FALLBACK","").lower() not in ("1","true","yes"):
+                    raise
+            except RuntimeError:
+                raise
+            except:
+                pass
             return _MemoryStore()
     return _MemoryStore()
 
