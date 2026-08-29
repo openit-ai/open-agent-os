@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# deploy/systemd/install-systemd.sh — systemd production installer (friendly, no credential invention)
+# deploy/systemd/install-systemd.sh — systemd production installer (auto-generates secrets on new install, preserves on existing)
 # Installs OAOS Control Plane (8100) as systemd unit; optionally Execution/Security if verified.
-# - NEVER invents credentials: if env file has placeholders/missing secrets, abort with clear guidance
+# - NEW install (canonical env missing): auto-generates 64-hex secrets for JWT_SIGNING_KEY, AUDIT_SIGNING_KEY, ADMIN_JWT_SECRET, VAULT/OAOS_ENCRYPTION_KEY (aliases, same value)
+# - Existing install: preserves all existing secrets unless --rotate-secrets is given
+# - Weak/missing secrets on existing install => clear error unless --rotate-secrets
+# - --rotate-secrets: opt-in rotation with warning, never prints secret values
 # - Runs check-production-config.sh preflight before touching systemd
 # - Supports system units (/etc/systemd/system) and user units (~/.config/systemd/user)
-# - Idempotent, dry-run friendly
+# - Idempotent, dry-run friendly; Docker path (deploy/docker-compose.*.yml + .env) unchanged
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,6 +23,7 @@ DRY_RUN=0
 ENABLE_NOW=1
 ONLY_CONTROL_PLANE=0
 WITH_OPTIONAL=0
+ROTATE_SECRETS=0
 
 usage() {
   cat <<'HELP'
@@ -32,12 +36,13 @@ Usage: install-systemd.sh [options]
   --only-control-plane Only install control-plane unit (default without --with-optional)
   --dry-run            Print actions without executing
   --no-enable          Copy units but do not daemon-reload / enable / start
+  --rotate-secrets     Rotate all canonical secrets (JWT_SIGNING_KEY, AUDIT_SIGNING_KEY, ADMIN_JWT_SECRET, VAULT/OAOS_ENCRYPTION_KEY); warns that existing sessions/tokens will be invalidated
   -h, --help           This help
 
 Examples:
   # System (production, as on 192.168.6.61):
   sudo mkdir -p /etc/oaos && sudo cp config/oaos.env.example /etc/oaos/oaos.env
-  sudo chmod 600 /etc/oaos/oaos.env && sudo vi /etc/oaos/oaos.env  # replace CHANGE_ME_*
+  sudo chmod 600 /etc/oaos/oaos.env && sudo vi /etc/oaos/oaos.env  # replace CHANGE_ME_* (secrets auto-generated on new install)
   sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env
   sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env --with-optional
 
@@ -48,8 +53,9 @@ Examples:
   bash deploy/systemd/install-systemd.sh --user --with-optional --dry-run
 
 Security:
-  - Never invents credentials. If check-production-config.sh reports missing/placeholder
-    secrets, install aborts and prints remediation (never prints secret values).
+  - New install: automatically generates 64-hex secrets for missing/placeholder keys (never prints values).
+  - Existing install: preserves all secrets; weak/missing secrets abort unless --rotate-secrets is given.
+  - --rotate-secrets rotates all canonical secrets with a clear warning (existing JWTs/sessions invalidated).
   - Env file must be 0600. Units reference EnvironmentFile without embedding secrets.
 HELP
 }
@@ -63,6 +69,7 @@ while [[ $# -gt 0 ]]; do
     --only-control-plane) ONLY_CONTROL_PLANE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --no-enable) ENABLE_NOW=0; shift ;;
+    --rotate-secrets) ROTATE_SECRETS=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "[WARN] Unknown arg: $1" >&2; shift ;;
   esac
@@ -98,32 +105,438 @@ else
   ENV_ARG=(--env-file "${ENV_FILE}")
 fi
 
-info "Repo root: ${REPO_ROOT}"
-info "Env file: ${ENV_FILE}"
-info "Mode: ${MODE} (dry-run=${DRY_RUN}, with-optional=${WITH_OPTIONAL})"
+# Determine canonical env file for this mode (the only file systemd units read)
+CANONICAL_ENV_FILE=""
+if [[ "${MODE}" == "system" ]]; then
+  CANONICAL_ENV_FILE="/etc/oaos/oaos.env"
+else
+  CANONICAL_ENV_FILE="${REPO_ROOT}/config/oaos.env"
+fi
 
-# --- 1. Preflight: friendly config check (no secret output, no invention) -
+info "Repo root: ${REPO_ROOT}"
+info "Env file: ${ENV_FILE} (canonical for ${MODE}: ${CANONICAL_ENV_FILE})"
+info "Mode: ${MODE} (dry-run=${DRY_RUN}, with-optional=${WITH_OPTIONAL}, rotate-secrets=${ROTATE_SECRETS})"
+
+# --- 0b. Secret helpers: generate 64-hex, detect weak, create/rotate/preserve --
+generate_hex64() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32 2>/dev/null && return 0
+  fi
+  python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null && return 0
+  # fallback: /dev/urandom
+  od -An -tx1 -N 32 /dev/urandom 2>/dev/null | tr -d ' \n' && return 0
+  # last resort (insecure): date sha
+  echo -n "$(date +%s%N)$$" | sha256sum | cut -d' ' -f1
+}
+
+# Python helpers to avoid leaking secrets via bash variables
+is_weak_secret_py() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+val=sys.argv[2] if len(sys.argv)>2 else ""
+s=(val or "").strip()
+low=s.lower()
+if not s: print("weak"); sys.exit(0)
+if "change_me" in low or "changeme" in low: print("weak"); sys.exit(0)
+if s in ("secret","password","changeme","dev-only-change-me","dev-signing-key-please-change"): print("weak"); sys.exit(0)
+if low.startswith("dev-") and len(s)<32: print("weak"); sys.exit(0)
+if len(s)<32: print("weak"); sys.exit(0)
+print("strong")
+PY
+}
+
+ensure_canonical_secrets() {
+  local canonical="$1"
+  local was_new=0
+  local do_generate=0
+  local do_rotate=0
+  local reason=""
+
+  if [[ ! -f "${canonical}" ]]; then
+    was_new=1
+    do_generate=1
+    reason="new install — canonical ${canonical} not found"
+  else
+    # canonical exists: check for weak secrets
+    local weak_found=0
+    # use python to check each key and report weak count
+    weak_found=$(python3 - "${canonical}" <<'PY'
+import pathlib, json, sys
+path=sys.argv[1]
+text=pathlib.Path(path).read_text(encoding="utf-8", errors="ignore")
+env={}
+for raw in text.splitlines():
+    line=raw.strip()
+    if not line or line.startswith("#"): continue
+    # strip inline comment outside quotes (simple)
+    in_s=in_d=False
+    cut=None
+    for i,ch in enumerate(raw):
+        if ch=="'" and not in_d: in_s=not in_s
+        elif ch=='"' and not in_s: in_d=not in_d
+        elif ch=="#" and not in_s and not in_d:
+            cut=i; break
+    if cut is not None: raw=raw[:cut]
+    raw=raw.strip()
+    if raw.startswith("export "): raw=raw[len("export "):].strip()
+    if "=" not in raw: continue
+    k,v=raw.split("=",1)
+    k=k.strip(); v=v.strip()
+    if len(v)>=2 and ((v[0]=='"' and v[-1]=='"') or (v[0]=="'" and v[-1]=="'")): v=v[1:-1]
+    env[k]=v
+
+def is_weak(v):
+    if v is None: return True
+    s=v.strip()
+    if not s: return True
+    low=s.lower()
+    if "change_me" in low or "changeme" in low: return True
+    if s in ("secret","password","changeme","dev-only-change-me","dev-signing-key-please-change"): return True
+    if low.startswith("dev-") and len(s)<32: return True
+    if len(s)<32: return True
+    return False
+
+keys=["JWT_SIGNING_KEY","AUDIT_SIGNING_KEY","ADMIN_JWT_SECRET"]
+weak=0
+for k in keys:
+    v=env.get(k)
+    if is_weak(v or ""):
+        weak+=1
+# encryption is alias: either VAULT_ENCRYPTION_KEY or OAOS_ENCRYPTION_KEY must be strong
+enc_vault=env.get("VAULT_ENCRYPTION_KEY","")
+enc_oaos=env.get("OAOS_ENCRYPTION_KEY","")
+if is_weak(enc_vault) and is_weak(enc_oaos):
+    weak+=1
+print(weak)
+PY
+)
+    weak_found=$(echo "$weak_found" | tr -d '[:space:]')
+    if [[ "$weak_found" != "0" && "$weak_found" != "" ]]; then
+      if [[ $ROTATE_SECRETS -eq 0 ]]; then
+        log "[ERROR] Weak or missing secrets detected in existing env file: ${canonical} (${weak_found} weak key(s))"
+        log "[ERROR] Refusing to overwrite — existing secrets are preserved."
+        log "[ERROR] If you intend to rotate secrets, re-run with --rotate-secrets (this will invalidate existing JWTs/sessions)."
+        log "[ERROR]   bash $0 --env-file ${canonical} --rotate-secrets --no-enable   # or with --system/--user"
+        return 1
+      else
+        do_rotate=1
+        reason="existing env has ${weak_found} weak key(s) — rotating as requested via --rotate-secrets"
+      fi
+    else
+      # all strong
+      if [[ $ROTATE_SECRETS -eq 1 ]]; then
+        do_rotate=1
+        reason="rotation requested via --rotate-secrets"
+      else
+        # preserve
+        info "Existing env ${canonical} has strong secrets — preserving (no rotation)."
+        # ensure canonical not overwritten by source file later
+        ENV_FILE="${canonical}"
+        ENV_ARG=(--env-file "${canonical}")
+        export OAOS_ENV_FILE="${canonical}"
+        return 0
+      fi
+    fi
+  fi
+
+  # At this point we need to generate or rotate
+  if [[ $do_generate -eq 1 ]]; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log "[DRY-RUN] Would generate 64-hex secrets for ${canonical} (${reason}) — JWT_SIGNING_KEY, AUDIT_SIGNING_KEY, ADMIN_JWT_SECRET, VAULT/OAOS_ENCRYPTION_KEY (aliases, same value)"
+      # For dry-run, also update ENV_FILE to canonical for preflight preview (preflight will still see missing secrets, so we mention)
+      info "DRY-RUN: new install would auto-generate secrets (64-hex) — never printed"
+      # Don't actually create file; but set ENV_FILE to canonical for subsequent steps? Keep original so preflight warns but we indicate generation
+      return 0
+    fi
+    info "New install: generating secure 64-hex secrets for ${canonical} (${reason}) — never printing values"
+    # Build canonical from template or source
+    local base_file=""
+    if [[ -n "${ENV_FILE}" && -f "${ENV_FILE}" && "${ENV_FILE}" != "${canonical}" ]]; then
+      # Use provided source as base (must contain DATABASE_URL etc), then fill secrets
+      base_file="${ENV_FILE}"
+    else
+      # Use example template
+      base_file="${REPO_ROOT}/config/oaos.env.example"
+      if [[ ! -f "${base_file}" ]]; then base_file="${REPO_ROOT}/deploy/systemd/oaos.env.example"; fi
+    fi
+    # Generate 4 secrets (encryption single value)
+    local s_jwt s_audit s_admin s_enc
+    s_jwt=$(generate_hex64); s_audit=$(generate_hex64); s_admin=$(generate_hex64); s_enc=$(generate_hex64)
+    # Create canonical via python to preserve non-secret fields and inject secrets
+    # For NEW install, only replace weak/missing secrets, preserve strong user-provided values
+    python3 - "${base_file}" "${canonical}" "${s_jwt}" "${s_audit}" "${s_admin}" "${s_enc}" <<'PY'
+import sys, pathlib, re
+base=sys.argv[1]; dest=sys.argv[2]
+s_jwt=sys.argv[3]; s_audit=sys.argv[4]; s_admin=sys.argv[5]; s_enc=sys.argv[6]
+text=pathlib.Path(base).read_text(encoding="utf-8", errors="ignore")
+# Parse existing env to detect weak
+env={}
+for raw in text.splitlines():
+    line=raw.strip()
+    if not line or line.startswith("#"): continue
+    tmp=raw.strip()
+    # strip inline comment outside quotes
+    in_s=in_d=False
+    cut=None
+    for i,ch in enumerate(raw):
+        if ch=="'" and not in_d: in_s=not in_s
+        elif ch=='"' and not in_s: in_d=not in_d
+        elif ch=="#" and not in_s and not in_d:
+            cut=i; break
+    if cut is not None: raw=raw[:cut]
+    raw=raw.strip()
+    if raw.startswith("export "): raw=raw[len("export "):].strip()
+    if "=" not in raw: continue
+    k,v=raw.split("=",1)
+    k=k.strip(); v=v.strip()
+    if len(v)>=2 and ((v[0]=='"' and v[-1]=='"') or (v[0]=="'" and v[-1]=="'")): v=v[1:-1]
+    env[k]=v
+def is_weak(v):
+    if v is None: return True
+    s=v.strip()
+    if not s: return True
+    low=s.lower()
+    if "change_me" in low or "changeme" in low: return True
+    if s in ("secret","password","changeme","dev-only-change-me","dev-signing-key-please-change"): return True
+    if low.startswith("dev-") and len(s)<32: return True
+    if len(s)<32: return True
+    return False
+# Determine which secrets need generation
+need={}
+need["JWT_SIGNING_KEY"]= is_weak(env.get("JWT_SIGNING_KEY",""))
+need["AUDIT_SIGNING_KEY"]= is_weak(env.get("AUDIT_SIGNING_KEY",""))
+need["ADMIN_JWT_SECRET"]= is_weak(env.get("ADMIN_JWT_SECRET",""))
+enc_weak = is_weak(env.get("VAULT_ENCRYPTION_KEY","")) and is_weak(env.get("OAOS_ENCRYPTION_KEY",""))
+# If encryption has one strong value, reuse that strong value for both instead of generating new
+enc_reuse=""
+if not enc_weak:
+    # keep existing strong value
+    if not is_weak(env.get("VAULT_ENCRYPTION_KEY","")):
+        enc_reuse=env.get("VAULT_ENCRYPTION_KEY")
+    else:
+        enc_reuse=env.get("OAOS_ENCRYPTION_KEY")
+    need["VAULT_ENCRYPTION_KEY"]= False
+    need["OAOS_ENCRYPTION_KEY"]= False
+else:
+    need["VAULT_ENCRYPTION_KEY"]= True
+    need["OAOS_ENCRYPTION_KEY"]= True
+# Build keys map: only weak ones get generated value; strong ones keep original (or reuse for enc)
+keys={}
+if need["JWT_SIGNING_KEY"]: keys["JWT_SIGNING_KEY"]=s_jwt
+if need["AUDIT_SIGNING_KEY"]: keys["AUDIT_SIGNING_KEY"]=s_audit
+if need["ADMIN_JWT_SECRET"]: keys["ADMIN_JWT_SECRET"]=s_admin
+if enc_weak:
+    keys["VAULT_ENCRYPTION_KEY"]=s_enc
+    keys["OAOS_ENCRYPTION_KEY"]=s_enc
+# Also ensure both encryption aliases are set to same value when enc_reuse or enc_weak
+# If enc_reuse case, we need to ensure both keys exist with same strong value
+if not enc_weak and enc_reuse:
+    keys["VAULT_ENCRYPTION_KEY"]=enc_reuse
+    keys["OAOS_ENCRYPTION_KEY"]=enc_reuse
+    # Only add to output if missing; we will handle found logic below: if key already present strong, keep original, else add reuse
+    # For simplicity, we will ensure both keys are present in file with reuse value if not already present
+    pass
+lines=text.splitlines()
+found={k: False for k in set(list(keys.keys()) + ["JWT_SIGNING_KEY","AUDIT_SIGNING_KEY","ADMIN_JWT_SECRET","VAULT_ENCRYPTION_KEY","OAOS_ENCRYPTION_KEY"])}
+# Actually we track all canonical keys for found detection
+out=[]
+for raw in lines:
+    stripped=raw.strip()
+    if not stripped or stripped.startswith("#"):
+        out.append(raw)
+        continue
+    tmp=raw.strip()
+    export_prefix=""
+    if tmp.startswith("export "):
+        export_prefix="export "
+        tmp=tmp[len("export "):].strip()
+    matched=None
+    for k in ["JWT_SIGNING_KEY","AUDIT_SIGNING_KEY","ADMIN_JWT_SECRET","VAULT_ENCRYPTION_KEY","OAOS_ENCRYPTION_KEY"]:
+        if tmp.startswith(k+"="):
+            matched=k
+            break
+    if matched:
+        found[matched]=True
+        if matched in keys:
+            # This key needs injection (weak or missing encryption alias)
+            # For enc_reuse case where original strong exists, keys contains reuse value; but if current line is the strong one, we keep it (same value)
+            # If current line is weak, replace with generated/reuse
+            # Check if original line's value was weak — then replace
+            orig_v=env.get(matched,"")
+            if is_weak(orig_v):
+                out.append(f"{export_prefix}{matched}={keys[matched]}")
+            else:
+                # preserve strong original (already strong) — but for enc alias, ensure both aliases get reuse if one missing
+                if matched in ("VAULT_ENCRYPTION_KEY","OAOS_ENCRYPTION_KEY") and not enc_weak:
+                    # ensure value is reuse (strong) — if current value differs from reuse, keep reuse to keep aliases same
+                    # Keep original if it is already reuse; else set to reuse
+                    if orig_v != enc_reuse:
+                        out.append(f"{export_prefix}{matched}={enc_reuse}")
+                    else:
+                        out.append(raw)
+                else:
+                    out.append(raw)
+        else:
+            # strong key not in keys (preserved) — keep original
+            out.append(raw)
+    else:
+        out.append(raw)
+# Append missing keys that need injection
+for k,v in keys.items():
+    if not found[k]:
+        out.append(f"{k}={v}")
+# For enc_reuse where both aliases need to be present, ensure missing alias added
+if not enc_weak:
+    for k in ["VAULT_ENCRYPTION_KEY","OAOS_ENCRYPTION_KEY"]:
+        if not found[k]:
+            out.append(f"{k}={enc_reuse}")
+# Ensure OAOS_ENV=production exists (replace if weak)
+has_env=False
+for i, line in enumerate(out):
+    if line.strip().startswith("OAOS_ENV=") or line.strip().startswith("export OAOS_ENV="):
+        has_env=True
+        # extract value
+        val=line.split("=",1)[1].strip().strip('"').strip("'")
+        if val.lower() not in ("production","prod"):
+            # preserve export prefix if present
+            if line.strip().startswith("export "):
+                out[i]="export OAOS_ENV=production"
+            else:
+                out[i]="OAOS_ENV=production"
+        break
+if not has_env:
+    out.append("OAOS_ENV=production")
+pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(dest).write_text("\n".join(out)+"\n", encoding="utf-8")
+PY
+    chmod 600 "${canonical}" || true
+    if [[ "${MODE}" == "system" ]]; then
+      # For system, try to chown root:root if running as root, else keep
+      if [[ $EUID -eq 0 ]]; then chown root:root "${canonical}" 2>/dev/null || true; fi
+    fi
+    info "Generated canonical env file with 64-hex secrets: ${canonical} (0600, never printed)"
+    ENV_FILE="${canonical}"
+    ENV_ARG=(--env-file "${canonical}")
+    export OAOS_ENV_FILE="${canonical}"
+    return 0
+  fi
+
+  if [[ $do_rotate -eq 1 ]]; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log "[DRY-RUN] [WARN] Would rotate all canonical secrets in ${canonical} — ${reason} — this will invalidate existing JWTs/sessions and encrypted vault data if re-encrypted"
+      return 0
+    fi
+    log "[WARN] Rotating all canonical secrets in ${canonical} — ${reason} — this will invalidate existing JWTs/sessions!"
+    log "[WARN] Ensure you restart services after rotation and re-issue tokens. Vault data encrypted with old key will need re-encryption."
+    local s_jwt s_audit s_admin s_enc
+    s_jwt=$(generate_hex64); s_audit=$(generate_hex64); s_admin=$(generate_hex64); s_enc=$(generate_hex64)
+    python3 - "${canonical}" "${s_jwt}" "${s_audit}" "${s_admin}" "${s_enc}" <<'PY'
+import sys, pathlib
+path=sys.argv[1]
+s_jwt=sys.argv[2]; s_audit=sys.argv[3]; s_admin=sys.argv[4]; s_enc=sys.argv[5]
+text=pathlib.Path(path).read_text(encoding="utf-8", errors="ignore")
+keys={"JWT_SIGNING_KEY": s_jwt, "AUDIT_SIGNING_KEY": s_audit, "ADMIN_JWT_SECRET": s_admin, "VAULT_ENCRYPTION_KEY": s_enc, "OAOS_ENCRYPTION_KEY": s_enc}
+lines=text.splitlines()
+found={k: False for k in keys}
+out=[]
+for raw in lines:
+    stripped=raw.strip()
+    if not stripped or stripped.startswith("#"):
+        out.append(raw)
+        continue
+    tmp=raw.strip()
+    prefix=tmp
+    if tmp.startswith("export "):
+        prefix=tmp[len("export "):].strip()
+    matched=None
+    for k in keys:
+        if prefix.startswith(k+"="):
+            matched=k
+            break
+    if matched:
+        found[matched]=True
+        # preserve export prefix if present
+        if raw.strip().startswith("export "):
+            out.append(f"export {matched}={keys[matched]}")
+        else:
+            out.append(f"{matched}={keys[matched]}")
+    else:
+        out.append(raw)
+for k,v in keys.items():
+    if not found[k]:
+        out.append(f"{k}={v}")
+pathlib.Path(path).write_text("\n".join(out)+"\n", encoding="utf-8")
+PY
+    chmod 600 "${canonical}" || true
+    info "Rotated secrets in ${canonical} (0600, never printed) — restart services to apply"
+    ENV_FILE="${canonical}"
+    ENV_ARG=(--env-file "${canonical}")
+    export OAOS_ENV_FILE="${canonical}"
+    return 0
+  fi
+}
+
+# Run secret ensure before preflight
+if ! ensure_canonical_secrets "${CANONICAL_ENV_FILE}"; then
+  exit 1
+fi
+
+# If canonical was newly generated or rotated, ENV_FILE already points there
+# If dry-run new install, ENV_FILE may still be source with missing secrets — skip strict preflight? We still run preflight but note that dry-run generation would satisfy
+# For dry-run new install where canonical missing, we will run preflight on source (which lacks secrets) but we already logged Would generate, so don't fail dry-run
+if [[ $DRY_RUN -eq 1 && ! -f "${CANONICAL_ENV_FILE}" ]]; then
+  info "DRY-RUN: canonical ${CANONICAL_ENV_FILE} would be generated with 64-hex secrets (preflight on source may show weak secrets — this is expected in dry-run)"
+fi
+
+# --- 1. Preflight: friendly config check (no secret output) -
 info "Step 1/5: Preflight — check-production-config.sh (no secret output)"
 if [[ ! -f "${CHECK_SCRIPT}" ]]; then
   die "Check script not found: ${CHECK_SCRIPT}"
 fi
 if ! bash "${CHECK_SCRIPT}" "${ENV_ARG[@]}"; then
-  echo "" >&2
-  die "Preflight failed — fix the [ERROR] lines above before installing.
+  if [[ $DRY_RUN -eq 1 ]]; then
+    # In dry-run, new install or --rotate-secrets would fix weak secrets — don't abort, just report
+    if [[ ! -f "${CANONICAL_ENV_FILE}" ]]; then
+      info "DRY-RUN: preflight on source shows weak secrets but canonical would be generated with 64-hex (see Would generate above) — continuing dry-run"
+      info "DRY-RUN Preflight would be OK after generation — no secrets printed"
+    elif [[ $ROTATE_SECRETS -eq 1 ]]; then
+      info "DRY-RUN: preflight shows weak secrets but --rotate-secrets would rotate them — continuing dry-run"
+      info "DRY-RUN Preflight would be OK after rotation — no secrets printed"
+    else
+      echo "" >&2
+      die "Preflight failed — fix the [ERROR] lines above before installing.
 
   Quick fix:
     cp ${REPO_ROOT}/config/oaos.env.example ${REPO_ROOT}/config/oaos.env
     chmod 600 ${REPO_ROOT}/config/oaos.env
     vi ${REPO_ROOT}/config/oaos.env  # replace every CHANGE_ME_* (see header comments)
     # generate strong secrets:
-    #   openssl rand -base64 32
+    #   openssl rand -hex 32
   Then re-run:
     bash ${CHECK_SCRIPT} --env-file <your-env-file>
   And re-run this installer.
 
-  Never commit the real env file. The installer NEVER invents credentials."
+  Never commit the real env file. For existing installs with weak secrets, use --rotate-secrets to rotate."
+    fi
+  else
+    echo "" >&2
+    die "Preflight failed — fix the [ERROR] lines above before installing.
+
+  Quick fix:
+    cp ${REPO_ROOT}/config/oaos.env.example ${REPO_ROOT}/config/oaos.env
+    chmod 600 ${REPO_ROOT}/config/oaos.env
+    vi ${REPO_ROOT}/config/oaos.env  # replace every CHANGE_ME_* (see header comments)
+    # generate strong secrets:
+    #   openssl rand -hex 32
+  Then re-run:
+    bash ${CHECK_SCRIPT} --env-file <your-env-file>
+  And re-run this installer.
+
+  Never commit the real env file. For existing installs with weak secrets, use --rotate-secrets to rotate."
+  fi
+else
+  info "Preflight OK — no secrets printed, all required keys present and strong."
 fi
-info "Preflight OK — no secrets printed, all required keys present and strong."
 
 # --- 2. Detect python interpreter ----------------------------------------
 detect_python() {
