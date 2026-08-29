@@ -82,6 +82,22 @@ def _db_enabled() -> bool:
     return bool(url and url.strip())
 
 
+def _is_test_isolation() -> bool:
+    if os.environ.get("OAOS_ENV", "").lower() in ("production", "prod"):
+        return False
+    if os.environ.get("OAOS_APPROVAL_FORCE_DB", "").lower() in ("1", "true", "yes"):
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    if os.environ.get("OAOS_ENV", "").lower() in ("test", "testing"):
+        return True
+    return False
+
+
+def _db_should_use() -> bool:
+    return _db_enabled() and not _is_test_isolation()
+
+
 def _normalize_sync_url(url: str) -> str:
     u = url.strip()
     if "+asyncpg" in u:
@@ -195,7 +211,7 @@ def _db_nonce_cleanup(session) -> int:
 
 def _db_nonce_exists(nonce: str) -> bool:
     """Check if nonce exists in DB (with TTL cleanup). Falls back to False on DB error."""
-    if not _db_enabled():
+    if not _db_should_use():
         return False
     session, engine = _db_get_session()
     if session is None:
@@ -224,7 +240,7 @@ def _db_nonce_insert(nonce: str, expires_at: datetime | None = None) -> bool:
     Uses postgresql+psycopg via SQLAlchemy when DATABASE_URL is postgres,
     sqlite for tests. On DB error returns False (caller falls back to in-memory).
     """
-    if not _db_enabled():
+    if not _db_should_use():
         return False
     session, engine = _db_get_session()
     if session is None:
@@ -375,7 +391,7 @@ class ApprovalStore:
         if nonce in self._seen_nonces:
             return True
         # check DB (survives restart)
-        if _db_enabled() and _db_nonce_exists(nonce):
+        if _db_should_use() and _db_nonce_exists(nonce):
             # hydrate in-memory for faster next check
             self._seen_nonces[nonce] = datetime.now(timezone.utc) + timedelta(seconds=NONCE_TTL_SECONDS)
             return True
@@ -394,7 +410,7 @@ class ApprovalStore:
                 exp = ttl_exp
         self._seen_nonces[nonce] = exp
         # persist to DB — primary in prod (fail-closed), fallback in non-prod
-        if _db_enabled():
+        if _db_should_use():
             try:
                 _db_nonce_insert(nonce, exp)
             except Exception as e:
@@ -434,7 +450,7 @@ class ApprovalStore:
             signature=sig,
         )
         self._requests[req.approval_id] = req
-        if _db_enabled():
+        if _db_should_use():
             db_ok = False
             last_err = None
             try:
@@ -465,7 +481,7 @@ class ApprovalStore:
         return req
 
     def get(self, approval_id: str) -> ApprovalRequest | None:
-        if _db_enabled():
+        if _db_should_use():
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -550,7 +566,7 @@ class ApprovalStore:
         # update in-memory
         self._requests[req.approval_id] = req
         # DB update — primary in prod (fail-closed)
-        if _db_enabled():
+        if _db_should_use():
             db_ok = False
             last_err = None
             try:
@@ -613,7 +629,7 @@ class ApprovalStore:
         import fnmatch
 
         # try hydrate from DB if not in memory (scan DB for user grants)
-        if _db_enabled() and not self._user_grants:
+        if _db_should_use() and not self._user_grants:
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -635,7 +651,7 @@ class ApprovalStore:
     def has_group_grant(self, group_id: str, action: str, resource: str) -> bool:
         import fnmatch
 
-        if _db_enabled() and not self._group_grants:
+        if _db_should_use() and not self._group_grants:
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -663,7 +679,7 @@ class ApprovalStore:
         before = len(self._seen_nonces)
         self._purge_expired_nonces()
         removed += before - len(self._seen_nonces)
-        if _db_enabled():
+        if _db_should_use():
             session, engine = _db_get_session()
             if session is not None:
                 try:

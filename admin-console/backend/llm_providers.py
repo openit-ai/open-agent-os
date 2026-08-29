@@ -269,6 +269,7 @@ def _to_public(p: LLMProvider) -> dict:
 # ---------------------------------------------------------------------------
 _db_engine = None
 _db_session_factory = None  # type: ignore
+_db_cached_url: str | None = None
 
 
 def _db_url() -> str | None:
@@ -309,17 +310,25 @@ def _normalize_sync_url(url: str) -> str:
 
 
 def _get_session_factory():
-    global _db_engine, _db_session_factory
-    if _db_session_factory is not None:
-        return _db_session_factory
+    global _db_engine, _db_session_factory, _db_cached_url
     url = _db_url()
     if not url:
         return None
+    sync_url = _normalize_sync_url(url)
+    if _db_session_factory is not None and _db_cached_url == sync_url:
+        return _db_session_factory
+    # URL changed — dispose old engine
+    if _db_engine is not None:
+        try:
+            _db_engine.dispose()
+        except Exception:
+            pass
+        _db_engine = None
+        _db_session_factory = None
     try:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        sync_url = _normalize_sync_url(url)
         kwargs: dict = {"pool_pre_ping": True}
         if sync_url.startswith("sqlite"):
             kwargs = {}
@@ -327,6 +336,7 @@ def _get_session_factory():
                 kwargs["connect_args"] = {"check_same_thread": False}
         _db_engine = create_engine(sync_url, **kwargs)
         _db_session_factory = sessionmaker(bind=_db_engine, autoflush=False, autocommit=False)
+        _db_cached_url = sync_url
         # ensure table exists
         _db_ensure_table(_db_engine)
         return _db_session_factory
