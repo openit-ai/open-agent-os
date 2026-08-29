@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import os
 import sys
-
-# Ensure sibling imports work when run as module or via pytest conftest SYS.PATH injection
-sys.path.insert(0, os.path.dirname(__file__))
+import pathlib
+import importlib.util
+import types
+import importlib.machinery
 
 import logging
 
@@ -25,22 +26,52 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-try:
-    from auth import router as auth_router, get_current_admin, AdminUser  # type: ignore
-    from infra import router as infra_router  # type: ignore
-    from business import router as business_router  # type: ignore
-    from managed import router as managed_router  # type: ignore
-    from user_mappings import router as user_mappings_router  # type: ignore
-    from llm_providers import router as llm_providers_router  # type: ignore
-    from runtime_mode import router as runtime_mode_router  # type: ignore
-except ImportError:
-    from .auth import router as auth_router, get_current_admin, AdminUser  # type: ignore
-    from .infra import router as infra_router  # type: ignore
-    from .business import router as business_router  # type: ignore
-    from .managed import router as managed_router  # type: ignore
-    from .user_mappings import router as user_mappings_router  # type: ignore
-    from .llm_providers import router as llm_providers_router  # type: ignore
-    from .runtime_mode import router as runtime_mode_router  # type: ignore
+def _ensure_admin_package():
+    for pkg in ("admin_console", "admin_console.backend"):
+        if pkg not in sys.modules:
+            m = types.ModuleType(pkg)
+            m.__path__ = []  # type: ignore
+            m.__spec__ = importlib.machinery.ModuleSpec(pkg, None, is_package=True)  # type: ignore
+            sys.modules[pkg] = m
+
+_ensure_admin_package()
+
+def _load_admin_sibling(name: str):
+    qname = f"admin_console.backend.{name}"
+    if qname in sys.modules:
+        return sys.modules[qname]
+    bare = sys.modules.get(name)
+    if bare is not None and hasattr(bare, "router"):
+        sys.modules[qname] = bare
+        return bare
+    p = pathlib.Path(__file__).parent / f"{name}.py"
+    if not p.exists():
+        raise ImportError(f"admin sibling not found: {p}")
+    spec = importlib.util.spec_from_file_location(qname, str(p))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot create spec for {qname}")
+    mod = importlib.util.module_from_spec(spec)
+    mod.__package__ = "admin_console.backend"
+    sys.modules[qname] = mod
+    spec.loader.exec_module(mod)  # type: ignore
+    return mod
+
+_auth_mod = _load_admin_sibling("auth")
+auth_router = _auth_mod.router
+get_current_admin = _auth_mod.get_current_admin
+AdminUser = _auth_mod.AdminUser
+_infra_mod = _load_admin_sibling("infra")
+infra_router = _infra_mod.router
+_business_mod = _load_admin_sibling("business")
+business_router = _business_mod.router
+_managed_mod = _load_admin_sibling("managed")
+managed_router = _managed_mod.router
+_user_mappings_mod = _load_admin_sibling("user_mappings")
+user_mappings_router = _user_mappings_mod.router
+_llm_providers_mod = _load_admin_sibling("llm_providers")
+llm_providers_router = _llm_providers_mod.router
+_runtime_mode_mod = _load_admin_sibling("runtime_mode")
+runtime_mode_router = _runtime_mode_mod.router
 
 app = FastAPI(title="Open Agent OS Admin API", version="0.1.1")
 
@@ -104,13 +135,12 @@ app.add_middleware(
 
 # ── Admin persistence (v1.6 §27.3) — openagentos with in-memory fallback ─
 try:
-    from persistence import ensure_admin_tables, get_database_url  # type: ignore
-except ImportError:
-    try:
-        from .persistence import ensure_admin_tables, get_database_url  # type: ignore
-    except Exception:
-        ensure_admin_tables = None  # type: ignore
-        get_database_url = None  # type: ignore
+    _pers_mod = _load_admin_sibling("persistence")
+    ensure_admin_tables = _pers_mod.ensure_admin_tables
+    get_database_url = _pers_mod.get_database_url
+except Exception:
+    ensure_admin_tables = None  # type: ignore
+    get_database_url = None  # type: ignore
 
 
 @app.on_event("startup")
@@ -148,41 +178,46 @@ app.include_router(runtime_mode_router)
 
 # ── Personal Wiki (skeleton, lazy, fail-graceful) ──────────────────
 try:
-    from personal_wiki import router as personal_wiki_router  # type: ignore
-
+    _pw_mod = _load_admin_sibling("personal_wiki")
+    personal_wiki_router = _pw_mod.router
     app.include_router(personal_wiki_router)
     logger.info("Personal Wiki router mounted at /v1/personal-wiki")
-except ImportError:
-    try:
-        from .personal_wiki import router as personal_wiki_router  # type: ignore
-
-        app.include_router(personal_wiki_router)
-        logger.info("Personal Wiki router mounted at /v1/personal-wiki")
-    except Exception as e:
-        logger.warning(f"Personal Wiki router not mounted: {e}")
 except Exception as e:
-    logger.warning(f"Personal Wiki router mount failed: {e}")
+    logger.warning(f"Personal Wiki router not mounted: {e}")
 
 # ── Personal Wiki consolidation scheduler (02:00 KST daily, fail gracefully) ─
 try:
-    # Try to register APScheduler 02:00 KST job best-effort; missing key/lib -> graceful
-    import sys as _sys_sched
-    from pathlib import Path as _PathSched
-    _pw_path = _PathSched(__file__).resolve().parents[2] / "packages" / "personal-wiki"
-    if str(_pw_path) not in _sys_sched.path:
-        _sys_sched.path.insert(0, str(_pw_path))
-    from personal_wiki.consolidate import register_consolidation_scheduler  # type: ignore
-
-    # Only auto-register if explicitly enabled (OAOS_WIKI_CONSOLIDATION_CRON=1)
-    # Hermes cron is the primary scheduler; APScheduler is fallback.
-    if os.environ.get("OAOS_WIKI_CONSOLIDATION_CRON", "0") in ("1", "true", "True"):
-        try:
-            _sched_res = register_consolidation_scheduler()
-            logger.info(f"Wiki consolidation scheduler: {_sched_res}")
-        except Exception as _se:
-            logger.warning(f"Wiki consolidation scheduler not registered: {_se}")
+    _cons_path = pathlib.Path(__file__).resolve().parents[2] / "packages" / "personal-wiki" / "personal_wiki" / "consolidate.py"
+    _pkg_root = pathlib.Path(__file__).resolve().parents[2] / "packages" / "personal-wiki"
+    if str(_pkg_root) not in sys.path:
+        sys.path.insert(0, str(_pkg_root))
+    if _cons_path.exists():
+        if "personal_wiki" not in sys.modules or not hasattr(sys.modules["personal_wiki"], "__path__"):
+            _pkg = types.ModuleType("personal_wiki")
+            _pkg.__path__ = [str(_cons_path.parent)]  # type: ignore
+            _pkg.__spec__ = importlib.machinery.ModuleSpec("personal_wiki", None, is_package=True)  # type: ignore
+            sys.modules["personal_wiki"] = _pkg
+        spec = importlib.util.spec_from_file_location("personal_wiki.consolidate", str(_cons_path))
+        if spec and spec.loader:
+            if spec.name not in sys.modules:
+                _cons_mod = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = _cons_mod
+                spec.loader.exec_module(_cons_mod)  # type: ignore
+            else:
+                _cons_mod = sys.modules[spec.name]
+            register_consolidation_scheduler = getattr(_cons_mod, "register_consolidation_scheduler", None)
+            if register_consolidation_scheduler and os.environ.get("OAOS_WIKI_CONSOLIDATION_CRON", "0") in ("1", "true", "True"):
+                try:
+                    _sched_res = register_consolidation_scheduler()
+                    logger.info(f"Wiki consolidation scheduler: {_sched_res}")
+                except Exception as _se:
+                    logger.warning(f"Wiki consolidation scheduler not registered: {_se}")
+            else:
+                logger.info("Wiki consolidation scheduler idle (set OAOS_WIKI_CONSOLIDATION_CRON=1 to enable APScheduler 02:00 KST)")
+        else:
+            logger.warning("Wiki consolidation scheduler import skipped: spec failed")
     else:
-        logger.info("Wiki consolidation scheduler idle (set OAOS_WIKI_CONSOLIDATION_CRON=1 to enable APScheduler 02:00 KST)")
+        logger.warning("Wiki consolidation scheduler import skipped: consolidate.py missing")
 except Exception as _e:
     logger.warning(f"Wiki consolidation scheduler import skipped: {_e}")
 
@@ -266,18 +301,19 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
     except Exception:
         pass
 
-    # admin-local counts (always available)
+    # admin-local counts (always available) — isolated, no bare auth collision
     try:
-        from auth import list_users
-
-        users_count = len(list_users())
+        users_count = len(_auth_mod.list_users())
     except Exception:
-        pass
+        try:
+            users_count = len(sys.modules["admin_console.backend.auth"].list_users())  # type: ignore
+        except Exception:
+            pass
 
     infra_count = 0
-    # Prefer DB count (authoritative) over in-memory _services
+    # Prefer DB count (authoritative) over in-memory _services — isolated, no bare infra
     try:
-        from infra import _services as _infra_services
+        _infra_services = _infra_mod._services  # type: ignore
         # Try DB count first (persistent)
         db_count = None
         try:

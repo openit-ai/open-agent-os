@@ -15,28 +15,61 @@ from datetime import datetime, timezone, date as date_type
 from pathlib import Path
 from typing import Any
 
-try:
-    import sys as _sys
-    _pw = _sys.modules.get("personal_wiki")
-    if _pw is not None and not hasattr(_pw, "__path__"):
-        # shadow file module present - clear to allow package import
-        if "admin_personal_wiki_shadow" not in _sys.modules:
-            _sys.modules["admin_personal_wiki_shadow"] = _pw
-        del _sys.modules["personal_wiki"]
-        for _k in list(_sys.modules.keys()):
-            if _k.startswith("personal_wiki."):
-                del _sys.modules[_k]
-    from personal_wiki.auth import verify_wiki_jwt, verify_tenant_agent_binding, assert_vault_path_safe, safe_join_vault, _is_production
-except ImportError:
+# Isolated wiki JWT loader — avoids bare `auth` collision (security/auth.py vs admin-console/backend/auth.py)
+import importlib.util as _ilu
+import sys as _sys2
+import pathlib as _pl
+
+def _load_wiki_auth():
+    """Load packages/personal-wiki/personal_wiki/auth.py via file location without bare `auth`."""
+    # resolve repo root from this file: .../packages/personal-wiki/personal_wiki/vault.py -> parents[2] is repo-ish but robust search
+    cand = _pl.Path(__file__).resolve()
+    # search upward for packages/personal-wiki/personal_wiki/auth.py
+    for p in [cand] + list(cand.parents):
+        q = p / "packages" / "personal-wiki" / "personal_wiki" / "auth.py"
+        if q.exists():
+            ap = q
+            break
+        q2 = p / "personal_wiki" / "auth.py"
+        if q2.exists():
+            ap = q2
+            break
+    else:
+        ap = _pl.Path(__file__).parent / "auth.py"
     try:
-        from auth import verify_wiki_jwt, verify_tenant_agent_binding, assert_vault_path_safe, safe_join_vault, _is_production  # type: ignore
-    except ImportError:
-        verify_wiki_jwt = None  # type: ignore
-        verify_tenant_agent_binding = None  # type: ignore
-        assert_vault_path_safe = None  # type: ignore
-        safe_join_vault = None  # type: ignore
-        def _is_production() -> bool:
-            return os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
+        if "personal_wiki.auth" in _sys2.modules:
+            return _sys2.modules["personal_wiki.auth"]
+        spec = _ilu.spec_from_file_location("personal_wiki.auth", str(ap))
+        if spec and spec.loader:
+            # ensure parent package stub exists without polluting `auth`
+            if "personal_wiki" not in _sys2.modules or not hasattr(_sys2.modules["personal_wiki"], "__path__"):
+                import types as _types, importlib.machinery as _mach
+                pkg = _types.ModuleType("personal_wiki")
+                pkg.__path__ = [str(ap.parent)]  # type: ignore
+                pkg.__spec__ = _mach.ModuleSpec("personal_wiki", None, is_package=True)  # type: ignore
+                _sys2.modules["personal_wiki"] = pkg
+            mod = _ilu.module_from_spec(spec)
+            _sys2.modules[spec.name] = mod
+            spec.loader.exec_module(mod)  # type: ignore
+            return mod
+    except Exception:
+        return None
+    return None
+
+_wiki_auth = _load_wiki_auth()
+if _wiki_auth is not None:
+    verify_wiki_jwt = getattr(_wiki_auth, "verify_wiki_jwt", None)
+    verify_tenant_agent_binding = getattr(_wiki_auth, "verify_tenant_agent_binding", None)
+    assert_vault_path_safe = getattr(_wiki_auth, "assert_vault_path_safe", None)
+    safe_join_vault = getattr(_wiki_auth, "safe_join_vault", None)
+    _is_production = getattr(_wiki_auth, "_is_production", lambda: os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod"))
+else:
+    verify_wiki_jwt = None  # type: ignore
+    verify_tenant_agent_binding = None  # type: ignore
+    assert_vault_path_safe = None  # type: ignore
+    safe_join_vault = None  # type: ignore
+    def _is_production() -> bool:
+        return os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
 
 # ---------------------------------------------------------------------------
 # Vault paths

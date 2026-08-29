@@ -134,26 +134,43 @@ def _allow_test_fixture() -> bool:
     return False
 
 def _verify_wiki_jwt(token: str, required_scope: str | None = None) -> dict:
-    """Verify wiki JWT with issuer/audience/exp/tenant/agent/scope (H3)."""
+    """Verify wiki JWT with issuer/audience/exp/tenant/agent/scope (H3) — isolated loader, no bare `auth`."""
     try:
-        import sys
-        from pathlib import Path
-        pkg_path = Path(__file__).resolve().parents[2] / "packages" / "personal-wiki"
-        if str(pkg_path) not in sys.path:
-            sys.path.insert(0, str(pkg_path))
-        # Handle sys.modules shadow where personal_wiki is file module from admin-console
-        import importlib
-        mod_pw = sys.modules.get("personal_wiki")
-        if mod_pw is not None and not hasattr(mod_pw, "__path__"):
-            # stash and clear shadow
-            if "admin_personal_wiki_shadow" not in sys.modules:
-                sys.modules["admin_personal_wiki_shadow"] = mod_pw
-            del sys.modules["personal_wiki"]
-            for k in list(sys.modules.keys()):
-                if k.startswith("personal_wiki."):
-                    del sys.modules[k]
-        from personal_wiki.auth import verify_wiki_jwt as _v  # type: ignore
-        return _v(token, required_scope=required_scope)
+        import importlib.util as _ilu2, sys as _sys3, pathlib as _pl2
+        # find packages/personal-wiki/personal_wiki/auth.py via file location
+        cand = _pl2.Path(__file__).resolve()
+        ap = None
+        for p in [cand] + list(cand.parents):
+            q = p / "packages" / "personal-wiki" / "personal_wiki" / "auth.py"
+            if q.exists():
+                ap = q
+                break
+        if ap is None:
+            ap = _pl2.Path(__file__).parents[2] / "packages" / "personal-wiki" / "personal_wiki" / "auth.py"
+        if "personal_wiki.auth" in _sys3.modules:
+            _mod = _sys3.modules["personal_wiki.auth"]
+            _v = getattr(_mod, "verify_wiki_jwt", None)
+            if _v:
+                return _v(token, required_scope=required_scope)
+        spec = _ilu2.spec_from_file_location("personal_wiki.auth", str(ap))
+        if spec and spec.loader:
+            if "personal_wiki" not in _sys3.modules or not hasattr(_sys3.modules["personal_wiki"], "__path__"):
+                import types as _types2, importlib.machinery as _mach2
+                pkg = _types2.ModuleType("personal_wiki")
+                pkg.__path__ = [str(ap.parent)]  # type: ignore
+                pkg.__spec__ = _mach2.ModuleSpec("personal_wiki", None, is_package=True)  # type: ignore
+                _sys3.modules["personal_wiki"] = pkg
+            # if already loaded, reuse; else load fresh into separate name to avoid overwrite race
+            if spec.name not in _sys3.modules:
+                _mod2 = _ilu2.module_from_spec(spec)
+                _sys3.modules[spec.name] = _mod2
+                spec.loader.exec_module(_mod2)  # type: ignore
+                _mod = _mod2
+            else:
+                _mod = _sys3.modules[spec.name]
+            _v = getattr(_mod, "verify_wiki_jwt", None)
+            if _v:
+                return _v(token, required_scope=required_scope)
     except HTTPException:
         raise
     except Exception:
