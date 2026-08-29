@@ -1,0 +1,41 @@
+[Unit]
+Description=OAOS Security & Governance :8002 (systemd — optional, verified entrypoint)
+Documentation=https://github.com/openit-ai/open-agent-os
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oaos
+Group=oaos
+WorkingDirectory=/home/openitsvc/open-agent-os/security
+EnvironmentFile=-/etc/oaos/oaos.env
+# Security app manipulates sys.path internally (security/app.py) so PYTHONPATH
+# only needs repo root; adding security dir is harmless.
+Environment=PYTHONPATH=/home/openitsvc/open-agent-os:/home/openitsvc/open-agent-os/security
+ExecStart=/usr/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8002 --workers 1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/openitsvc/open-agent-os
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+PrivateDevices=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oaos-security
+
+[Install]
+WantedBy=multi-user.target

@@ -248,7 +248,84 @@ S3 호환 스토리지(MinIO, Ceph, NCP Object Storage) 사용 시 `AWS_ENDPOINT
 
 ---
 
-## 5. Systemd / Firewall (P0)
+## 5. Systemd Production (non-Docker) — OAOS
+
+> Docker and systemd are **parallel, separate distributions** sharing the same code.
+> Docker keeps its path `deploy/docker-compose.*.yml` + `.env` **unchanged**.
+> Systemd uses a **separate** unified env template `config/oaos.env.example` (also at `deploy/systemd/oaos.env.example`) and units under `deploy/systemd/`.
+
+### 5.1 위치 및 분리 원칙
+
+| 구분 | 설정 파일 | 설치 경로 | 프리플라이트 |
+|---|---|---|---|
+| **Docker** | `.env` (root) + `deploy/docker-compose.*.yml` | `docker compose -f deploy/docker-compose.prod.yml up -d` | `docker compose config` |
+| **systemd (OAOS)** | `config/oaos.env.example` → `config/oaos.env` or `/etc/oaos/oaos.env` | `deploy/systemd/*.service` → `/etc/systemd/system` or `~/.config/systemd/user` | `bash scripts/check-production-config.sh --env-file <path>` |
+| **K8s** | `deploy/k8s/configmap.yaml` + `secret.yaml.template` | `kubectl apply -f deploy/k8s/` | same check script |
+
+- 공통 코드 변경 없이 배포별 설정을 분리합니다. Docker 경로 회귀는 `pytest tests/test_deploy_hardening.py` 등으로 검증합니다.
+
+### 5.2 OAOS systemd 유닛 (Control Plane 8100 + optional)
+
+| Unit | 포트 | 진입점 (검증됨) | WorkingDirectory | 설명 |
+|---|---|---|---|---|
+| `oaos-control-plane.service` (system) | 8100 | `uvicorn control_plane.app:app` | `.../control-plane` | **Primary** — 현재 운영 192.168.6.61 `oaos-control-plane.service:8100` 과 동일. Mattermost Adapter Gateway. |
+| `user/oaos-control-plane.service` (user) | 8100 | 동일 | `%h/open-agent-os/control-plane` | `systemctl --user` 용 — sudo 없이 개발/운영 (production user unit과 1:1 매칭) |
+| `oaos-execution-gateway.service` | 8001 | `uvicorn execution_gateway.app:app` | `.../execution-gateway` | Optional — `--with-optional` 로만 설치, entrypoint 검증 후. |
+| `oaos-security.service` | 8002 | `uvicorn app:app` (security/app.py) | `.../security` | Optional — `--with-optional` 로만 설치, entrypoint 검증 후. |
+
+- Admin API (`:8010`, `oaos-admin-api.service` root) 와 Admin Console (`:3012`) 는 별도 systemd units로 운영 중이며 본 패키지에서 다루지 않습니다.
+- 모든 unit은 `WorkingDirectory`, `PYTHONPATH`, `EnvironmentFile`, `ExecStart` 가 `install-systemd.sh` 에 의해 실제 `REPO_ROOT` 와 `PYTHON_BIN` 로 패치됩니다.
+
+### 5.3 빠른 시작 (systemd — 비-Docker)
+
+```bash
+# 0) 템플릿 → 실제 env (절대 커밋 금지, 0600 필수, CHANGE_ME_* 모두 교체)
+cp config/oaos.env.example config/oaos.env
+chmod 600 config/oaos.env
+vi config/oaos.env  # openssl rand -base64 32 로 생성한 값으로 교체
+
+# 1) 프리플라이트 — 누락/placeholder/취약 값 + 파일 위치를 친절히 안내, secret 미출력
+bash scripts/check-production-config.sh --env-file config/oaos.env
+# 또는 wrapper
+bash deploy/systemd/check-production-config.sh --env-file config/oaos.env
+
+# 실패 시 예시 (secret 미출력):
+#   [ERROR] Missing or placeholder: JWT_SIGNING_KEY — file: config/oaos.env (len=8)
+#     → Fix: set JWT_SIGNING_KEY in config/oaos.env (≥32 chars, not CHANGE_ME)
+#        Generate: openssl rand -base64 32
+
+# 2) 설치 — user (sudo 불필요, 192.168.6.61 운영 user unit과 동일 :8100)
+bash deploy/systemd/install-systemd.sh --user --env-file config/oaos.env --dry-run
+bash deploy/systemd/install-systemd.sh --user --env-file config/oaos.env
+systemctl --user status oaos-control-plane.service
+curl -s http://127.0.0.1:8100/healthz | jq
+journalctl --user -u oaos-control-plane -f
+
+# 3) 시스템 전역 (sudo 필요, /etc/oaos/oaos.env 사용)
+sudo mkdir -p /etc/oaos
+sudo cp config/oaos.env.example /etc/oaos/oaos.env
+sudo chmod 600 /etc/oaos/oaos.env && sudo vi /etc/oaos/oaos.env
+bash scripts/check-production-config.sh --env-file /etc/oaos/oaos.env
+sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env
+# optional 게이트웨이/보안까지
+sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env --with-optional
+systemctl status oaos-control-plane.service
+curl -s http://127.0.0.1:8100/healthz | jq
+
+# 4) 검증 (공통)
+curl -s http://127.0.0.1:8100/healthz   # liveness 200
+curl -s http://127.0.0.1:8100/readyz    # readiness (prod 503 on degraded)
+curl -s http://127.0.0.1:8100/v1/health/detailed | jq
+systemd-analyze verify /etc/systemd/system/oaos-control-plane.service
+```
+
+### 5.4 Docker vs systemd 선택 가이드
+
+- **Docker를 선택** — 컨테이너 격리, nginx TLS sidecar, `pgdata` volume, S3 checkpoint을 그대로 쓰려는 경우. 기존 `deploy/docker-compose.*.yml` 경로는 그대로 유지됩니다.
+- **systemd를 선택** — VM/베어메탈에 네이티브로 올리고, 호스트의 systemd, PostgreSQL, Redis를 직접 쓰려는 경우. `config/oaos.env.example` 과 `scripts/check-production-config.sh` 로 친절한 프리플라이트를 제공합니다.
+- **혼용 금지** — 같은 호스트에서 Docker와 systemd를 동시에 같은 포트(8100/8001/8002)로 띄우면 충돌합니다. 한 가지 배포 방식을 선택하세요.
+
+### 5.5 Systemd / Firewall — Hermes (P0, 별도)
 
 - `deploy/systemd/` — `hermes.service` (§16A.4~16A.6) — 전용 OS 계정, filesystem/network isolation
 - `deploy/firewall/` — `hermes-egress.nft` / `firewalld-alternative.md`

@@ -1,0 +1,40 @@
+[Unit]
+Description=OAOS Execution Gateway :8001 (systemd — optional, verified entrypoint)
+Documentation=https://github.com/openit-ai/open-agent-os
+After=network.target network-online.target oaos-control-plane.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oaos
+Group=oaos
+WorkingDirectory=/home/openitsvc/open-agent-os/execution-gateway
+EnvironmentFile=-/etc/oaos/oaos.env
+# PYTHONPATH must include repo root + execution-gateway dir for `execution_gateway.app`
+Environment=PYTHONPATH=/home/openitsvc/open-agent-os:/home/openitsvc/open-agent-os/execution-gateway
+ExecStart=/usr/bin/python3 -m uvicorn execution_gateway.app:app --host 127.0.0.1 --port 8001 --workers 1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/openitsvc/open-agent-os
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+PrivateDevices=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oaos-execution-gateway
+
+[Install]
+WantedBy=multi-user.target

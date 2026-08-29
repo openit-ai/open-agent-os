@@ -154,13 +154,39 @@ curl -X POST http://localhost:8000/v1/mattermost/events \
   -d '{"text":"summarize","user_id":"employee:kim"}' | jq  # keyword routing
 ```
 
-### Docker (evaluation)
+### Docker (evaluation — unchanged)
 
 ```bash
-cp .env.example .env   # set OAOS_SIGNING_KEY etc.
+cp .env.example .env   # set OAOS_SIGNING_KEY etc. — Docker path preserved
 docker compose -f deploy/docker-compose.dev.yml up -d
 # services: control-plane(:8000) execution-gateway(:8001) admin-api(:8002) admin-console(:3000) postgres redis
 ```
+
+### Systemd (production, non-Docker — new)
+
+```bash
+# 1) Env template (unified, systemd-only — Docker's .env is untouched)
+cp config/oaos.env.example config/oaos.env
+chmod 600 config/oaos.env && vi config/oaos.env  # replace every CHANGE_ME_*
+
+# 2) Friendly preflight (no secret output, shows file:line for missing vars)
+bash scripts/check-production-config.sh --env-file config/oaos.env
+
+# 3) Install (user unit mirrors 192.168.6.61 :8100 without sudo; system unit needs sudo)
+bash deploy/systemd/install-systemd.sh --user --env-file config/oaos.env --dry-run  # preview
+bash deploy/systemd/install-systemd.sh --user --env-file config/oaos.env
+systemctl --user status oaos-control-plane.service
+curl -s http://127.0.0.1:8100/healthz | jq
+
+# System-wide (requires sudo, uses /etc/oaos/oaos.env):
+sudo mkdir -p /etc/oaos && sudo cp config/oaos.env.example /etc/oaos/oaos.env
+sudo chmod 600 /etc/oaos/oaos.env && sudo vi /etc/oaos/oaos.env
+bash scripts/check-production-config.sh --env-file /etc/oaos/oaos.env
+sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env
+# With optional execution-gateway (8001) + security (8002) — only if entrypoints verify:
+sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env --with-optional
+```
+See [`deploy/systemd/README.md`](deploy/systemd/README.md) and [`config/oaos.env.example`](config/oaos.env.example).
 
 ## 7. Deployment
 
@@ -172,13 +198,27 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 
 Self-hosted on customer server / VPS / private cloud / K8s — not multi-tenant SaaS.
 
-**Compose & K8s:**
+**Choose your runtime — Docker vs systemd vs K8s (same code, separate config):**
+
+| Aspect | Docker | systemd (non-Docker) | K8s |
+|---|---|---|---|
+| **Config** | `.env` + `deploy/docker-compose.*.yml` (preserved) | `config/oaos.env.example` → `config/oaos.env` or `/etc/oaos/oaos.env` | `deploy/k8s/configmap.yaml` + `secret.yaml.template` |
+| **Preflight** | `docker compose config` | `bash scripts/check-production-config.sh --env-file <path>` (no secret output, file:line errors) | `kubectl apply --dry-run` + same check script |
+| **Install** | `docker compose -f deploy/docker-compose.prod.yml up -d` | `bash deploy/systemd/install-systemd.sh [--user] --env-file <path>` | `kubectl apply -f deploy/k8s/` |
+| **Units** | containers (postgres, redis, control-plane, execution-gateway, security, nginx) | `oaos-control-plane.service` :8100 (primary) + optional `oaos-execution-gateway.service` :8001, `oaos-security.service` :8002 | Deployments `control-plane`, `execution-gateway`, `security` |
+| **Verify** | `docker compose ps` / `curl https://localhost/healthz` | `systemctl [--user] status oaos-control-plane` / `curl http://127.0.0.1:8100/healthz` / `journalctl -u oaos-control-plane` | `kubectl get pods` / `kubectl exec ... curl /healthz` |
+| **Isolation** | `oaos-net` bridge, `expose` (no host ports in prod) | systemd hardening (`NoNewPrivileges`, `ProtectSystem`, `PrivateTmp`) + `ReadWritePaths` | `NetworkPolicy` + `PodSecurity` |
+| **Secret handling** | `env_file: ../.env` + `:? required` | `EnvironmentFile=/etc/oaos/oaos.env` (0600, never printed) — installer never invents credentials | `Secret` + `ConfigMap` |
+
+**Compose & K8s (unchanged):**
 
 - `deploy/docker-compose.dev.yml` — evaluation; `deploy/docker-compose.prod.yml` — healthcheck (`curl -f /healthz`, interval 30s) + `restart: unless-stopped` + `depends_on: service_healthy` for nginx gating.
 - `deploy/k8s/` — `replicas: 2`, `RollingUpdate(maxUnavailable:1,maxSurge:1)`, `livenessProbe` on `/healthz` (30s), `readinessProbe` on `/readyz` (10s), `podAntiAffinity(hostname)`, `PodDisruptionBudget(minAvailable:1)`, `HPA` (2–10, CPU 70% / mem 80%). See [`docs/ha.md`](docs/ha.md) and [`docs/deployment.md`](docs/deployment.md).
-- **Health endpoints:** `GET /healthz` (liveness), `GET /readyz` (readiness, bounded DB/Redis checks), `GET /v1/health/detailed` (detailed latency). In production, failing dependencies cause `/readyz` to return `503` so the pod is removed from traffic.
+- **systemd:** `deploy/systemd/oaos-control-plane.service` (system) + `deploy/systemd/user/oaos-control-plane.service` (user, mirrors 192.168.6.61 :8100) + optional `oaos-execution-gateway.service`/`oaos-security.service` (verified entrypoints only). Env template `config/oaos.env.example` (also at `deploy/systemd/oaos.env.example`). See [`deploy/systemd/README.md`](deploy/systemd/README.md).
 
-Next on the roadmap: single KVM4 VPS integrating Mattermost + Outline + Hermes + OAOS via `deploy/docker-compose.prod.yml`.
+- **Health endpoints (all runtimes):** `GET /healthz` (liveness), `GET /readyz` (readiness, bounded DB/Redis checks), `GET /v1/health/detailed` (detailed latency). In production, failing dependencies cause `/readyz` to return `503` so the pod/unit is removed from traffic.
+
+Next on the roadmap: single KVM4 VPS integrating Mattermost + Outline + Hermes + OAOS via `deploy/docker-compose.prod.yml` (Docker) or `deploy/systemd/*` (systemd).
 
 ## 8. Security Boundaries
 
@@ -226,7 +266,9 @@ admin-console/             # Next.js 15 + shadcn Financial (#22C55E/#F59E0B/#DC2
 adapters/                  # Mattermost / Slack / Outline / Notion / Hermes / IAM / Google / Microsoft
 packages/personal-wiki/    # Personal Wiki Vault FS (journal/notes/projects/files/attachments), extractor, consolidate, memory_service client
 examples/morning-briefing/ # MVP — orchestrator (per-user kim vs lee) + output.json (13KB) + README
-deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + firewall (hermes-egress.nft)
+config/                    # oaos.env.example — systemd unified env template (Docker's .env preserved)
+deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + systemd (oaos-*.service) + firewall (hermes-egress.nft)
+scripts/                   # check-production-config.sh — friendly preflight (no secret output)
 tests/                     # see Verification Evidence — run pytest -q for the current count
 docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — SHA 2ebeb981)
 ```
