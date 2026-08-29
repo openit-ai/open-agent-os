@@ -4,9 +4,9 @@
 > Product: **Open Agent OS**  
 > 문서 성격: 제품 아키텍처 기준서 + 개발 명세 + 코딩 에이전트 작업지침  
 > 배포 모델: **고객사 서버 또는 고객사 전용 클라우드/VPS에 설치되는 Source-Available Enterprise Agent Platform**  
-> Version: **v1.7.1** — 2026-08-29 (v1.7.0 → v1.7.1 Secret lifecycle + RAG architecture + H4-H6 implementation status)
+> Version: **v1.7.1** — 2026-08-29 (v1.7.0 → v1.7.1 Secret lifecycle + RAG implementation + H4-H7 implementation status)
 > Base: `docs/architecture-v1.7.1-design.md` v1.7.1-design (2026-08-29) — design source; this document is the implementation architecture (verified facts vs residual plan)
-> Status: **H4/H5/H6 implemented (verified by git) · H7/H8 residual · RAG architecture defined, Personal Wiki implemented, enterprise Knowledge Index index-layer defined (connector/indexing jobs residual) · Secrets lifecycle implemented via systemd installer**
+> Status: **H4/H5/H6/H7 implemented (verified by git/tests) · H8 residual · RAG architecture and implementation complete for the v1.7.1 scope, Personal Wiki implemented, enterprise Knowledge Index + Outline/Notion sync implemented · Secrets lifecycle implemented via systemd installer**
 > Deployment: **Docker (`deploy/docker-compose.*.yml` + `.env`) and systemd (`deploy/systemd/` + `/etc/oaos/oaos.env` or `config/oaos.env` 0600) are parallel, separate paths sharing code — neither modifies the other**
 
 ---
@@ -47,7 +47,7 @@ Mattermost / Slack Web·Desktop·Mobile
 
 > Implementation: Personal Wiki Vault FS (`/var/lib/oaos/vault/{tenant}/{agent:assistant:xxx}/{journal,notes,projects,files,attachments}`) + `memory_service` pgvector 1536 + TF-IDF fallback, owner-isolated, daily consolidation via Hermes — is **implemented** (v1.6.1 §27B) and is the personal side of RAG. See §27B in this document for verified details.
 
-### 0.4 전사 위키·기업 문서 Knowledge Index 및 ACL-aware Hybrid RAG (아키텍처 정의 — 인덱스 계층 정의, 커넥터/인덱싱 작업 residual)
+### 0.4 전사 위키·기업 문서 Knowledge Index 및 ACL-aware Hybrid RAG (구현됨 — connector/indexing residual 제거)
 
 전사 위키와 기업 문서 검색은 **ACL-aware Hybrid RAG**를 사용한다. Outline·Notion 등 원 시스템은 문서 원본과 현재 권한을 유지하고, OAOS는 `oaos` PostgreSQL + pgvector에 검색용 **Knowledge Index**를 저장한다.
 
@@ -133,9 +133,9 @@ Mattermost와 Slack의 Web·Desktop·Mobile 클라이언트에서 동일한 Pers
 | ACL 적용 | **owner isolation** — `JWT.tenant/agent == path/query tenant/agent` mandatory | **ACL pre-filter** — `acl_version` + source ACL로 후보 범위 구성 전 필터 |
 | 검색 | `memory_service` pgvector cosine (1536) + TF-IDF/substring LIKE fallback, always tenant+agent scoped | PostgreSQL lexical + pgvector semantic 병행, rerank, source reference/provenance 연결 |
 | Provenance 필드 | `source_ref(trace_id)`, `tenant_id`, `owner_agent_id`, `Vector(1536)` | `source_system`, `source_resource_id`, `source_uri`, `content_hash`, `source_updated_at`, `acl_version`, `provenance` |
-| 구현 상태 (v1.7.1) | **Implemented** (v1.6.1 §27B, verified) | **Architecture defined** — index schema/fields/search order/provenance defined in this document (design source e8f23fb459); connector/MCP 청킹·임베딩·동기화 잡은 **residual** (구현·검증 전이므로 원자성/완료 주장 금지) |
+| 구현 상태 (v1.7.1) | **Implemented** (v1.6.1 §27B, verified) | **Implemented** — Knowledge Index schema/repository/retrieval, chunking/embedding provider boundary, Outline/Notion source adapters, idempotent incremental sync, deletion handling, ACL version invalidation/revalidation (`knowledge_index/`, commits `60ffe4bfba`, `6dab8761c2`) |
 
-> 구현 상태는 `docs/architecture-v1.7.1-design.md`의 "증거 분리" 원칙을 따른다: Personal Wiki는 파일·라인·동작으로 검증된 **구현됨**, enterprise Knowledge Index는 **아키텍처 정의**이며 인덱싱/동기화 파이프라인은 residual로 명시한다.
+> 구현 상태는 `docs/architecture-v1.7.1-design.md`의 "증거 분리" 원칙을 따른다: Personal Wiki와 enterprise Knowledge Index의 schema/retrieval/sync/ACL revalidation은 코드·테스트로 검증된 **구현됨**이며, live Outline/Notion API 연결은 외부 자격증명·네트워크 통합 검증 범위로 별도 관리한다.
 
 ---
 
@@ -1628,7 +1628,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 ### 16.9 Verified RAG Architecture & Implementation Status — v1.7.1
 
-> Design source: `docs/architecture-v1.7.1-design.md` §0.4 (e8f23fb459) + README alignment af447b2a20. Personal Wiki는 v1.6.1 §27B로 **implemented**, enterprise Knowledge Index는 **architecture defined** (index layer) — connector/indexing jobs는 residual.
+> Design source: `docs/architecture-v1.7.1-design.md` §0.4 (e8f23fb459) + README alignment af447b2a20. Personal Wiki와 enterprise Knowledge Index의 schema/retrieval/sync/ACL revalidation은 **implemented**이며, live Outline/Notion API 자격증명·네트워크 통합 검증은 별도 운영 검증 범위다.
 
 #### 16.9.1 Personal Wiki — owner-isolated (Implemented)
 
@@ -1637,7 +1637,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 - 검색: `POST /v1/memories/search` — **항상** `tenant_id` + `agent_id` ACL 필터 (owner isolation), `source_ref(trace_id)`로 `files/*.md`·`attachments/*` 역추적. Execution Gateway가 모든 tool 결과·첨부파일을 journal md로 자동 아카이빙 (Zero-Bypass).
 - Consolidation: Hermes daily scheduler 02:00 KST.
 
-#### 16.9.2 Enterprise ACL-aware Hybrid RAG — Knowledge Index (Architecture Defined)
+#### 16.9.2 Enterprise ACL-aware Hybrid RAG — Knowledge Index (Implemented — local/unit verified)
 
 위 §0.4를 정본으로 한다. 핵심 불변식:
 
@@ -1647,11 +1647,11 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 - **검색**: PostgreSQL lexical + pgvector semantic 병행 → 중복 제거 → metadata/최신성/문서유형 rerank → source reference/provenance 연결 → Personal Agent 응답. 권한/원본 변경 시 해당 Index 갱신·재검증.
 - **결합**: "내가 처리한 업무"→ Personal Wiki, "회사 정책"→ Knowledge Index, "비교"→ 둘 결합. 결과는 제목·시스템·URL·수정시각·source reference와 함께 제공.
 
-*Implementation status*: Index 스키마·검색 순서·provenance/version/hash 필드·pgvector 1536·lexical+semantic 병행은 **문서상 아키텍처로 확정** (e8f23fb459). Connector/MCP 청킹·임베딩·동기화 잡(증분 인덱싱, ACL 변경 감지, 재검증)은 **residual** — 구현·검증 전까지 원자성/완료 주장 금지.
+*Implementation status*: Knowledge Index ORM/schema/repository/retrieval, stable chunking, embedding provider boundary, Outline/Notion source adapters, idempotent incremental sync, deletion handling, ACL version invalidation/revalidation are **implemented and unit-tested** in `knowledge_index/` (`60ffe4bfba`, `6dab8761c2`; ACL tests in current verification). Live external connector credentials/network and production corpus backfill remain **operational integration work**, not claimed as complete here.
 
 ---
 
-### 16.10 H4–H6 Implementation Status (Verified by Git) & H7–H8 Residual
+### 16.10 H4–H7 Implementation Status (Verified by Git) & H8 Residual
 
 > Evidence tier 분리: `unit` vs `distributed` (`kind`+Redis/CNI)로 표기. 아래 상태는 git history로 검증된 것만 기술한다.
 
@@ -1676,18 +1676,20 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 - `tests/test_network_policy.py` 7+건 — 구조·라벨·default-deny, allowed(ACP/MCP)/denied, DNS restrict, no Helm, script behavior — kind 없이도 static 검증, live 차단 증명은 `hubble --verdict DROPPED`/`flow log` 캡처로만 인정.
 - Manifests: `deploy/k8s/networkpolicy.yaml` `default-deny-all` + `allow-*` 7+N, `deny-audit`는 `CiliumNetworkPolicy`로 승격 또는 제거 — YAML 존재만으로 enforcement 주장 금지.
 
-#### H7–H8 — Residual (Not implemented in v1.7.1 — design only)
+#### H7 — Mock/Fallback prod 차단 — immutable startup gate (Implemented — 67e7e5c0bd)
 
-| ID | 제목 | 상태 | 근거 |
-|----|------|------|------|
-| H7 | Mock/Fallback prod 차단 — immutable startup gate | **Residual** | prod 이미지에서 mock/noop 경로 제거, `env_gate.is_mock_allowed()` prod 무조건 False, Helm/manifest에 mock 완화 키 없음 — **설계만** (`docs/architecture-v1.7.1-design.md` §9), 구현·CI 게이트는 v1.7.2+ |
-| H8 | Test evidence 과장 — 등급 분리 | **Residual** | `unit` vs `distributed` vs `external` 등급 분리, `distributed: N passed (Redis/Kind/Cilium)` 별도 표기, `Residual` 배너 유지 — **설계만** (design §10), `make verify-distributed`·`docs/deployment-verification-*.md` 50줄 게이트는 미구현 |
+- Production에서 `is_mock_allowed()`는 `OAOS_MOCK_FALLBACK` 값과 무관하게 `False`를 반환한다.
+- `assert_production_mock_gate()` startup guard와 real transport/no-op rate limiter 차단을 적용한다.
+- Non-production에서만 명시적 test/mock 경로를 허용한다.
+- Tests: `tests/test_mock_fallback_hardening.py`, `tests/test_runtime_hardening.py` — **13 passed**.
 
-> H7/H8은 git에 구현 커밋이 없으므로 본 문서에서 **Residual로만** 기술한다. v1.7.1의 검증 가능한 구현은 H4/H5/H6까지이며, 단일 `648 passed`는 `unit+integration` tier로 한정하고 `distributed`는 구현·검증 후 별도 카운트한다.
+#### H8 — Test evidence 과장 — 등급 분리
+
+> H8은 현재 residual이다. v1.7.1의 검증 가능한 구현은 H4~H7과 RAG unit/integration 범위까지이며, 단일 전체 테스트 수를 `unit`·`distributed`·`external` 등급으로 분리하는 작업은 H8에서 완료한다.
 
 ---
 
-### 16.11 잔여 로드맵 (v1.7.2+) — Vault 외부화 / H7 immutable gate / H8 evidence tiers
+### 16.11 잔여 로드맵 (v1.7.2+) — H8 evidence tiers / live RAG integration
 
 ```
 Quota 분산, Vault 외부화, /readyz strict, env_gate 단일화
