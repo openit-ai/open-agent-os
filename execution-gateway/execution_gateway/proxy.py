@@ -33,23 +33,32 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# fail-closed gate for mock fallback in production
+# fail-closed gate for mock fallback in production — H7 immutable
 def _is_mock_allowed() -> bool:
+    # delegate to canonical gate first
     try:
         from .env_gate import is_mock_allowed as _g
         return _g()
     except Exception:
-        try:
-            from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
-            return _g2()
-        except Exception:
-            import os
-            mf = os.getenv("OAOS_MOCK_FALLBACK", "").lower()
-            if mf in ("1", "true", "yes", "on"):
-                return True
-            if mf in ("0", "false", "no", "off"):
-                return False
-            return os.getenv("OAOS_ENV", "").lower() not in ("production", "prod")
+        pass
+    try:
+        from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
+        return _g2()
+    except Exception:
+        pass
+    try:
+        from agent_runtime.env_gate import is_mock_allowed as _g3  # type: ignore
+        return _g3()
+    except Exception:
+        pass
+    import os as _os
+    for k in ("OAOS_ENV","ENV","OAOS_ENVIRONMENT","APP_ENV","ENVIRONMENT"):
+        if _os.getenv(k,"").strip().lower() in ("production","prod"):
+            return False
+    mf = _os.getenv("OAOS_MOCK_FALLBACK","").strip().lower()
+    if mf in ("0","false","no","off"):
+        return False
+    return True
 
 def _is_prod() -> bool:
     try:

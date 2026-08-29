@@ -35,15 +35,19 @@ def test_env_gate_production_detection():
         from agent_runtime.env_gate import is_production, is_mock_allowed
         assert is_production() is True
         assert is_mock_allowed() is False
-        # explicit mock allowed overrides
+        # H7 immutable: even explicit OAOS_MOCK_FALLBACK=1 must NOT enable mock in production
         os.environ["OAOS_MOCK_FALLBACK"]="1"
-        assert is_mock_allowed() is True
+        assert is_mock_allowed() is False
         os.environ["OAOS_MOCK_FALLBACK"]="0"
         assert is_mock_allowed() is False
-        # non-prod
+        # non-prod: OAOS_MOCK_FALLBACK=1 implicit via default True, 0 disables
         os.environ["OAOS_ENV"]="dev"
         os.environ["OAOS_MOCK_FALLBACK"]=""
         assert is_production() is False
+        assert is_mock_allowed() is True
+        os.environ["OAOS_MOCK_FALLBACK"]="0"
+        assert is_mock_allowed() is False
+        os.environ["OAOS_MOCK_FALLBACK"]="1"
         assert is_mock_allowed() is True
     finally:
         _restore(old)

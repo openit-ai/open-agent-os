@@ -9,11 +9,26 @@ from typing import Any
 
 
 def _is_mock_allowed() -> bool:
+    # H7 immutable: prod always False, delegate to canonical gate when available
+    try:
+        from agent_runtime.env_gate import is_mock_allowed as _g
+        return _g()
+    except Exception:
+        pass
+    try:
+        from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
+        return _g2()
+    except Exception:
+        pass
     import os as _os
-
-    mf = _os.getenv("OAOS_MOCK_FALLBACK", "").lower()
-    if mf in ("1", "true", "yes", "on"):
-        return True
+    # immutable prod gate — no OAOS_MOCK_FALLBACK bypass in production
+    for k in ("OAOS_ENV","ENV","OAOS_ENVIRONMENT","APP_ENV","ENVIRONMENT"):
+        if _os.getenv(k,"").strip().lower() in ("production","prod"):
+            return False
+    mf = _os.getenv("OAOS_MOCK_FALLBACK","").strip().lower()
+    if mf in ("0","false","no","off"):
+        return False
+    return True
     if mf in ("0", "false", "no", "off"):
         return False
     if _os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):

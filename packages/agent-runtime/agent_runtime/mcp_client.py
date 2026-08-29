@@ -45,19 +45,24 @@ def _is_prod_gate() -> bool:
             return os.getenv("OAOS_ENV","").lower() in ("production","prod")
 
 def _is_mock_allowed_gate() -> bool:
+    # H7 immutable: prod always False via canonical gate
     try:
         from .env_gate import is_mock_allowed as _m
         return _m()
     except Exception:
-        try:
-            from agent_runtime.env_gate import is_mock_allowed as _m2  # type: ignore
-            return _m2()
-        except Exception:
-            import os
-            mf=os.getenv("OAOS_MOCK_FALLBACK","").lower()
-            if mf in ("1","true","yes","on"): return True
-            if mf in ("0","false","no","off"): return False
-            return os.getenv("OAOS_ENV","").lower() not in ("production","prod")
+        pass
+    try:
+        from agent_runtime.env_gate import is_mock_allowed as _m2  # type: ignore
+        return _m2()
+    except Exception:
+        pass
+    import os as _os
+    for k in ("OAOS_ENV","ENV","OAOS_ENVIRONMENT","APP_ENV","ENVIRONMENT"):
+        if _os.getenv(k,"").strip().lower() in ("production","prod"):
+            return False
+    mf=_os.getenv("OAOS_MOCK_FALLBACK","").strip().lower()
+    if mf in ("0","false","no","off"): return False
+    return True
 
 class MCPClient:
     """Minimal MCP client that proxies through execution-gateway/mcp_registry."""

@@ -324,8 +324,27 @@ def _get_rate_limiter():
         rate = float(os.getenv("OAOS_TOOL_RATE_PER_SEC", "10"))
         burst = int(os.getenv("OAOS_TOOL_BURST", "20"))
         _rate_limiter = ToolRateLimiter(rate_per_sec=rate, burst=burst)
-    except Exception:
-        # No-op limiter (always allow) if import fails — keeps 541 green
+    except Exception as e:
+        # H7 immutable: in production, import failure must fail-closed, not allow with _Noop
+        try:
+            from .env_gate import is_production as _is_prod  # type: ignore
+            _prod = _is_prod()
+        except Exception:
+            try:
+                from execution_gateway.env_gate import is_production as _is_prod2  # type: ignore
+                _prod = _is_prod2()
+            except Exception:
+                import os as _os
+                _prod = _os.getenv("OAOS_ENV","").strip().lower() in ("production","prod")
+        if _prod:
+            raise RuntimeError(f"rate limiter unavailable in production: {e}") from e
+        # non-prod: fail-open with telemetry but still allow tests
+        try:
+            from .env_gate import fail_open_telemetry  # type: ignore
+            fail_open_telemetry("execution_gateway","rate_limiter_import_fallback_nonprod", error=str(e)[:200])
+        except Exception:
+            import logging as _lg
+            _lg.getLogger(__name__).warning("[fail-open] rate_limiter_import_fallback_nonprod err=%s", str(e)[:200])
         class _Noop:
             def allow(self, key: str, tokens: int = 1) -> bool:
                 return True

@@ -250,15 +250,16 @@ def test_mock_blocked_in_production():
         os.environ.pop("OAOS_ENV", None)
 
 def test_mock_allowed_with_explicit_flag_in_production():
-    """OAOS_MOCK_FALLBACK=1 overrides production block."""
-    import os, asyncio
+    """H7 immutable: OAOS_MOCK_FALLBACK=1 must NOT override production block — fail-closed."""
+    import os, asyncio, pytest
     from agent_runtime.providers.openrouter import OpenRouterProvider
     os.environ["OAOS_ENV"] = "production"
     os.environ["OAOS_MOCK_FALLBACK"] = "1"
     try:
         prov = OpenRouterProvider(api_key="", base_url="https://openrouter.ai/api/v1", model="openrouter/auto")
-        result = asyncio.run(prov.call([{"role": "user", "content": "hi prod override"}]))
-        assert "mock:openrouter" in result["choices"][0]["message"]["content"]
+        # H7: prod mock is immutable, must fail-closed even with flag
+        with pytest.raises(RuntimeError, match="mock fallback disabled"):
+            asyncio.run(prov.call([{"role": "user", "content": "hi prod override"}]))
     finally:
         os.environ.pop("OAOS_ENV", None)
         os.environ.pop("OAOS_MOCK_FALLBACK", None)
