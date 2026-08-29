@@ -279,11 +279,18 @@ def check_required(key, min_len=0, alternatives=None):
         return True
 
 # --- Required checks ---------------------------------------------------
-# DATABASE_URL: must exist, not placeholder, must contain postgresql or postgres
-db = env.get("DATABASE_URL") or env.get("OAOS_DATABASE_URL") or ""
-if not db or is_placeholder(db):
+# DATABASE_URL: accept global/admin/control-plane-prefixed forms used by systemd.
+# The selected URL must not be a placeholder and must contain postgresql/postgres.
+_db_key = ""
+for _candidate in ("DATABASE_URL", "OAOS_DATABASE_URL", "OAOS_CP_DATABASE_URL"):
+    if env.get(_candidate):
+        _db_key = _candidate
+        break
+_db = env.get(_db_key) or ""
+db = _db
+if not _db or is_placeholder(_db):
     print(f"{RED}[ERROR]{RESET} Missing or placeholder: DATABASE_URL — file: {env_file}")
-    print(f"  → Fix: set DATABASE_URL in {env_file}")
+    print(f"  → Fix: set DATABASE_URL (or OAOS_DATABASE_URL / OAOS_CP_DATABASE_URL) in {env_file}")
     print(f"     Example: DATABASE_URL=postgresql+asyncpg://oaos:STRONG_PASSWORD@localhost:5432/oaos")
     failures += 1
 else:
