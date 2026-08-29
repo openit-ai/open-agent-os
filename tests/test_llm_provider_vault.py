@@ -356,24 +356,42 @@ def test_db_backed_sqlite_memory():
     old_url = os.environ.get("OAOS_DATABASE_URL")
     old_db = os.environ.get("DATABASE_URL")
     os.environ["OAOS_DATABASE_URL"] = db_url
-    # reset engine cache so new URL is picked up
-    llm_mod._db_engine = None
-    llm_mod._db_session_factory = None
+    # reset engine cache so new URL is picked up — must reset both the
+    # private test alias (llm_mod) and the canonical app module that
+    # actually serves requests. Use _reset_db_cache() when available so
+    # _db_cached_url is also cleared; fallback to manual clear for compat.
+    for _m in (llm_mod, sys.modules.get("admin_console.backend.llm_providers"), sys.modules.get("llm_providers")):
+        try:
+            if _m is not None:
+                if hasattr(_m, "_reset_db_cache"):
+                    _m._reset_db_cache()
+                else:
+                    if hasattr(_m, "_db_engine"):
+                        _m._db_engine = None
+                    if hasattr(_m, "_db_session_factory"):
+                        _m._db_session_factory = None
+                    if hasattr(_m, "_db_cached_url"):
+                        _m._db_cached_url = None
+                if hasattr(_m, "_fernet_cache"):
+                    try:
+                        _m._fernet_cache.clear()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     llm_mod._fernet_cache.clear()
     os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
-    # need to recreate table
-    try:
-        from sqlalchemy import create_engine
 
-        sync_url = llm_mod._normalize_sync_url(db_url)
-        eng = create_engine(sync_url)
-        llm_mod._db_ensure_table(eng)
-        eng.dispose()
+    # clear providers (also clears DB) — after cache reset, _get_session_factory
+    # will rebuild the engine for the new sqlite URL and _db_ensure_table
+    # will be called on the current engine (idempotent)
+    llm_mod.clear_providers()
+    try:
+        canon = sys.modules.get("admin_console.backend.llm_providers")
+        if canon is not None and hasattr(canon, "clear_providers"):
+            canon.clear_providers()
     except Exception:
         pass
-
-    # clear providers (also clears DB)
-    llm_mod.clear_providers()
 
     token = _login()
     c = _client()
@@ -421,7 +439,7 @@ def test_db_backed_sqlite_memory():
         Path("/tmp/test_llm_provider_vault.db").unlink(missing_ok=True)
     except Exception:
         pass
-    # restore env
+    # restore env and reset caches for next tests (both private and canonical)
     if old_url is not None:
         os.environ["OAOS_DATABASE_URL"] = old_url
     else:
@@ -430,11 +448,34 @@ def test_db_backed_sqlite_memory():
         os.environ["DATABASE_URL"] = old_db
     else:
         os.environ.pop("DATABASE_URL", None)
-    llm_mod._db_engine = None
-    llm_mod._db_session_factory = None
+    for _m in (llm_mod, sys.modules.get("admin_console.backend.llm_providers"), sys.modules.get("llm_providers")):
+        try:
+            if _m is not None:
+                if hasattr(_m, "_reset_db_cache"):
+                    _m._reset_db_cache()
+                else:
+                    if hasattr(_m, "_db_engine"):
+                        _m._db_engine = None
+                    if hasattr(_m, "_db_session_factory"):
+                        _m._db_session_factory = None
+                    if hasattr(_m, "_db_cached_url"):
+                        _m._db_cached_url = None
+                if hasattr(_m, "_fernet_cache"):
+                    try:
+                        _m._fernet_cache.clear()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     llm_mod._fernet_cache.clear()
     os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
     llm_mod.clear_providers()
+    try:
+        canon = sys.modules.get("admin_console.backend.llm_providers")
+        if canon is not None and hasattr(canon, "clear_providers"):
+            canon.clear_providers()
+    except Exception:
+        pass
 
 
 def test_009_migration_columns_exist():

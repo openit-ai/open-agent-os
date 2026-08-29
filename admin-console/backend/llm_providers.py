@@ -309,21 +309,53 @@ def _normalize_sync_url(url: str) -> str:
     return u
 
 
+def _reset_db_cache() -> None:
+    """Reset cached engine/session/URL — for tests and URL-change handling.
+
+    Disposes current engine if any and clears all cached state so the next
+    _get_session_factory() call rebuilds for the current DATABASE_URL.
+    """
+    global _db_engine, _db_session_factory, _db_cached_url
+    if _db_engine is not None:
+        try:
+            _db_engine.dispose()
+        except Exception:
+            pass
+    _db_engine = None
+    _db_session_factory = None
+    _db_cached_url = None
+
+
 def _get_session_factory():
     global _db_engine, _db_session_factory, _db_cached_url
     url = _db_url()
     if not url:
         return None
     sync_url = _normalize_sync_url(url)
-    if _db_session_factory is not None and _db_cached_url == sync_url:
+    if _db_session_factory is not None and _db_cached_url == sync_url and _db_engine is not None:
+        # Cache hit — but ensure table exists on the current engine (sqlite
+        # file may have been deleted/recreated between tests or by restore).
+        # Always call _db_ensure_table on the current engine for correctness;
+        # it is idempotent (CREATE TABLE IF NOT EXISTS) and cheap.
+        try:
+            _db_ensure_table(_db_engine)
+        except Exception:
+            pass
         return _db_session_factory
-    # URL changed — dispose old engine
+    # URL changed or factory missing — dispose old engine and rebuild
     if _db_engine is not None:
         try:
             _db_engine.dispose()
         except Exception:
             pass
         _db_engine = None
+        _db_session_factory = None
+        _db_cached_url = None
+    # If cached_url is stale but engine was already None (e.g. test manually
+    # nulled _db_engine/_db_session_factory without clearing _db_cached_url),
+    # clear it so we don't incorrectly skip rebuild.
+    if _db_cached_url is not None and _db_cached_url != sync_url:
+        _db_cached_url = None
         _db_session_factory = None
     try:
         from sqlalchemy import create_engine
@@ -337,7 +369,7 @@ def _get_session_factory():
         _db_engine = create_engine(sync_url, **kwargs)
         _db_session_factory = sessionmaker(bind=_db_engine, autoflush=False, autocommit=False)
         _db_cached_url = sync_url
-        # ensure table exists
+        # ensure table exists on the freshly created engine
         _db_ensure_table(_db_engine)
         return _db_session_factory
     except Exception as e:
