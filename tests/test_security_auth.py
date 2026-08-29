@@ -221,19 +221,29 @@ def test_token_issue_success_with_matching_sub():
     assert "token" in r.json()
 
 def test_mtls_bypass():
+    """C1 fix: client-controlled mTLS headers must NOT bypass JWT (fail-closed, 401).
+    Valid mTLS is only via verified proxy state (scope/state) with OAOS_MTLS_ENABLED+TRUSTED_PROXY."""
     c = TestClient(app)
     headers = {"X-Client-Cert-CN": "control-plane"}
     r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=headers)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 401, f"header spoof must be 401, got {r.status_code} {r.text}"
     headers2 = {"X-Client-Cert-CN": "execution-gateway"}
     r2 = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=headers2)
-    assert r2.status_code == 200, r2.text
+    assert r2.status_code == 401, f"header spoof must be 401, got {r2.status_code} {r2.text}"
+    # All other spoof variants also rejected
+    for h in [{"X-SSL-Client-CN": "control-plane"}, {"X-Client-CN": "control-plane"}, {"X-MTLS-CN": "control-plane"}, {"X-TLS-Client-CN": "control-plane"}]:
+        rx = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=h)
+        assert rx.status_code == 401, f"spoof {h} must be 401, got {rx.status_code}"
 
 def test_mtls_invalid_cn_rejected():
     c = TestClient(app)
     headers = {"X-Client-Cert-CN": "evil-client"}
     r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=headers)
     assert r.status_code == 401, r.text
+    # unknown CN via any spoof header also 401 (no header is trusted)
+    for h in [{"X-SSL-Client-CN": "evil-client"}, {"X-MTLS-CN": "attacker"}]:
+        rx = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=h)
+        assert rx.status_code == 401, r.text
 
 def test_bearer_without_prefix_rejected():
     c = TestClient(app)
