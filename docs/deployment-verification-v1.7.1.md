@@ -41,7 +41,27 @@
 
 Knowledge Index schema/repository/retrieval, stable chunking, embedding provider boundary, Outline/Notion source adapters, idempotent incremental sync, deletion handling, ACL version invalidation/revalidation are **implemented and unit-tested** (`knowledge_index/` commits `60ffe4bfba`, `6dab8761c2`). Live connector credentials/network and production corpus backfill remain **operational integration work**, not claimed as complete here.
 
-## 4. Static Verification (no live infra required)
+## 4. Systemd Operational Verification (2026-08-29)
+
+> This is a live verification of the non-Docker systemd deployment on `192.168.6.61`. It is recorded separately from `distributed` because this host is a single replica and is not a Kubernetes/CNI cluster.
+
+| Check | Result |
+|------|--------|
+| `oaos-control-plane.service` | active |
+| `oaos-admin-api.service` | active |
+| `oaos-admin-console.service` | active |
+| Control Plane `/healthz` | HTTP 200 |
+| Admin API `/health` | HTTP 200 |
+| PostgreSQL database/user | `oaos|oaos` |
+| PostgreSQL extension | `vector` |
+| Redis `PING` | `PONG` |
+| Redis Lua atomic counter | sequential results `1,2` |
+| Environment file | `config/oaos.env`, `0600`, `openitsvc:openitsvc` |
+| Ports | `8100`, `8010`, `3012` listening on localhost |
+
+The Kubernetes `kind`/CNI/Hubble proof is **not applicable to this systemd deployment** and remains `distributed: 0`. Historical pre-rename authentication errors in journal logs are not current service errors; current health and service checks pass.
+
+## 5. Static Verification (no live infra required)
 
 - `deploy/k8s/networkpolicy.yaml` — raw manifests, no Helm templating, `default-deny-all` + allow-* (verified by `tests/test_network_policy.py`)
 - `deploy/docker-compose.*.yml` — `healthcheck: /healthz`, `livenessProbe: /healthz`, `readinessProbe: /readyz`
