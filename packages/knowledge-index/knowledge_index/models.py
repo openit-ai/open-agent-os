@@ -1,20 +1,46 @@
-"""Data models for knowledge index sync."""
+"""Data models for knowledge index sync + persistent index (v1.7.1 §0.4.1).
 
+Sync models (SourceDocument etc.) from chunking branch preserved; KnowledgeIndexEntry
+added for persistent KnowledgeIndexORM so `from knowledge_index.models import KnowledgeIndexEntry`
+works for persistence tests.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from .chunking import content_hash
+
+
+class KnowledgeIndexEntry(BaseModel):
+    index_id: str = Field(..., min_length=1, max_length=64)
+    source_system: str = Field(..., min_length=1, max_length=64)
+    source_resource_id: str = Field(..., min_length=1)
+    source_uri: str | None = None
+    tenant_id: str = Field(..., min_length=1)
+    group_id: str | None = None
+    agent_id: str | None = None
+    chunk_id: str = Field(..., min_length=1)
+    chunk_text: str = Field(..., min_length=1)
+    embedding: list[float] | None = None
+    content_hash: str | None = None
+    source_updated_at: datetime | None = None
+    indexed_at: datetime | None = None
+    acl_version: str | None = None
+    classification: str | None = None
+    retention_policy: str | None = None
+    provenance: dict[str, Any] | None = None
+
+    def to_orm_kwargs(self) -> dict[str, Any]:
+        return self.model_dump()
 
 
 @dataclass
 class SourceDocument:
-    """Normalized document from a source system (Outline/Notion).
-
-    The source adapter produces these; sync orchestration consumes them.
-    """
+    """Normalized document from a source system (Outline/Notion)."""
 
     resource_id: str  # e.g. "outline/team/doc_001"
     source_system: str  # "outline" | "notion"
@@ -33,7 +59,6 @@ class SourceDocument:
             self.content_hash = content_hash(self.content)
         if not self.source_uri:
             self.source_uri = self.resource_id
-        # normalize updated_at to ISO if needed
         if not self.source_updated_at:
             self.source_updated_at = datetime.now(timezone.utc).isoformat()
 
