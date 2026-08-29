@@ -66,6 +66,8 @@ def _git_tracked_files():
 def test_no_stale_oaos_db_connection_references():
     offenders = []
     for rel in _git_tracked_files():
+        if rel == "tests/test_db_rename_guard.py":
+            continue
         if any(ign in rel for ign in IGNORE_PATH_CONTAINS):
             continue
         if "packages/" in rel and ("egg-info" in rel or ".pyc" in rel):
