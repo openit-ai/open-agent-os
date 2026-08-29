@@ -115,7 +115,7 @@ Enterprise Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/N
 2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user is always DENY, no plaintext token storage, no long-term credential storage in the Hermes process (§10).
 3. **Human-approved high-risk execution** — HIGH-risk actions (`MERGE / DEPLOY / PAY / EXPORT`, §21) require a Capability Token (HS256, 300s, nonce/jti replay protection) + HMAC approval request (§24) + a 4-choice Admin Console decision (Deny / Once / Always for user / Always for group).
 4. **Auditable operations** — Every authorization, delegation, and execution is recorded in the Audit Ledger as a hash-chain with HMAC checkpoint — tampering is immediately detectable (§30–31). `verify_chain` / `checkpoint` APIs.
-5. **Self-Hosted, Source-Available** — BSL 1.1 (converts to Apache 2.0 after 4 years), deploy on customer infrastructure. Evaluate (Developer) → operate (Business / Managed) without SaaS lock-in (§5).
+5. **Self-Hosted, Source-Available** — BSL 1.1 (converts to Apache 2.0 after 4 years), deploy on customer infrastructure with installation, monitoring, backup, and support options (§5).
 
 ## 6. Quick Start
 

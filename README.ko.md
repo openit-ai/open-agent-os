@@ -115,7 +115,7 @@ Personal Wiki (Vault FS + memory_service pgvector) ◄── Execution Gateway a
 2. **진짜 격리** — `agent:assistant:kim`은 `employee:kim` 소유 자원만 본다. Cross-user는 항상 DENY, plaintext token 저장 금지, Hermes 프로세스에 장기 저장 금지(§10).
 3. **사람이 승인하는 고위험 실행** — `MERGE/DEPLOY/PAY/EXPORT` 등 HIGH risk(§21)는 Capability Token(HS256 300s, nonce/jti replay 방지) + HMAC 승인 요청(§24) + Admin Console 4버튼(Deny / Once / Always사용자 / Always그룹)으로만 실행한다.
 4. **감사 가능한 운영** — 모든 권한·위임·실행은 Audit Ledger에 hash-chain+HMAC checkpoint로 기록되며 변조가 즉시 탐지된다(§30-31). `verify_chain` / `checkpoint` API를 제공한다.
-5. **설치형 Source-Available** — BSL 1.1(4년 후 Apache 2.0 전환), 고객 인프라에 그대로 설치한다. SaaS 종속 없이 평가(Developer) → 운영(Business / Managed)으로 확장한다(§5).
+5. **설치형 Source-Available** — BSL 1.1(4년 후 Apache 2.0 전환), 고객 인프라에 설치하며 설치·모니터링·백업·지원 옵션을 제공한다(§5).
 
 ## 6. Quick Start
 
