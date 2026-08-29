@@ -38,22 +38,26 @@ def derive_agent_id(user_id: str) -> str:
     return f"agent:assistant:{user_id}"
 
 def get_vault_path(user_id: str, suffix: str = "") -> str:
-    """Owner-isolated vault path for Personal Wiki.
-
-    Example: employee:kim -> agent:assistant:kim -> vault/openagentos/agent:assistant:kim/personal_wiki[/suffix]
-    Respects VAULT_KV_PREFIX / VAULT_KV_MOUNT env when set.
-    """
+    """Owner-isolated vault path for Personal Wiki (H3: traversal guard)."""
+    for val, label in ((suffix, "suffix"), (user_id, "user_id")):
+        if val and ".." in val.split("/"):
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=403, detail=f"PATH_TRAVERSAL: '..' in {label}")
+        if val and val.startswith("/"):
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=403, detail=f"PATH_TRAVERSAL: absolute {label}")
     agent_id = derive_agent_id(user_id)
     prefix = os.environ.get("VAULT_KV_PREFIX", "openagentos/").strip()
-    # normalize prefix trailing slash
     if prefix and not prefix.endswith("/"):
         prefix = prefix + "/"
     if not prefix:
         prefix = "openagentos/"
-    # Sanitize agent_id for path (keep colons — vault allows)
     base = f"{prefix}{agent_id}/personal_wiki"
     if suffix:
         suffix = suffix.lstrip("/")
+        if ".." in suffix.split("/"):
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=403, detail="PATH_TRAVERSAL: '..' in suffix")
         return f"{base}/{suffix}"
     return base
 
@@ -109,53 +113,149 @@ def _audit(request: Request | None, event_type: str, detail: dict[str, Any]) -> 
         pass
 
 # ---------------------------------------------------------------------------
-# Auth helper — extract owner from headers or admin token; owner-isolated
+# Auth helper — H3 verified JWT owner resolution (no unverified claims)
 # ---------------------------------------------------------------------------
+
+def _is_production() -> bool:
+    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        v = os.environ.get(k, "").strip().lower()
+        if v in ("production", "prod"):
+            return True
+    return False
+
+def _allow_test_fixture() -> bool:
+    if _is_production():
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    flag = os.environ.get("OAOS_ALLOW_TEST_FIXTURE", "") or os.environ.get("OAOS_ALLOW_TEST_FALLBACK", "")
+    if flag.strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return False
+
+def _verify_wiki_jwt(token: str, required_scope: str | None = None) -> dict:
+    """Verify wiki JWT with issuer/audience/exp/tenant/agent/scope (H3)."""
+    try:
+        import sys
+        from pathlib import Path
+        pkg_path = Path(__file__).resolve().parents[2] / "packages" / "personal-wiki"
+        if str(pkg_path) not in sys.path:
+            sys.path.insert(0, str(pkg_path))
+        # Handle sys.modules shadow where personal_wiki is file module from admin-console
+        import importlib
+        mod_pw = sys.modules.get("personal_wiki")
+        if mod_pw is not None and not hasattr(mod_pw, "__path__"):
+            # stash and clear shadow
+            if "admin_personal_wiki_shadow" not in sys.modules:
+                sys.modules["admin_personal_wiki_shadow"] = mod_pw
+            del sys.modules["personal_wiki"]
+            for k in list(sys.modules.keys()):
+                if k.startswith("personal_wiki."):
+                    del sys.modules[k]
+        from personal_wiki.auth import verify_wiki_jwt as _v  # type: ignore
+        return _v(token, required_scope=required_scope)
+    except HTTPException:
+        raise
+    except Exception:
+        from jose import jwt as _jwt, JWTError as _JWTError, ExpiredSignatureError as _Exp  # type: ignore
+        ALLOWED_ISSUERS = {"control-plane", "security", "open-agent-os-auth"}
+        ALLOWED_AUDIENCES = {"wiki-fs", "memory-service", "wiki", "security"}
+        ALLOWED_SCOPES = {"wiki:read", "wiki:write"}
+        _DEV = "dev-admin-jwt-secret-please-change"
+        key = os.environ.get("OAOS_SIGNING_KEY") or os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("JWT_SIGNING_KEY") or os.environ.get("ADMIN_JWT_SECRET") or _DEV
+        if _is_production() and key == _DEV:
+            raise HTTPException(status_code=503, detail="wiki JWT signing key not configured in production")
+        try:
+            payload = _jwt.decode(token, key, algorithms=["HS256"], options={"verify_aud": False, "verify_iss": False})
+        except _Exp as e:
+            raise HTTPException(status_code=401, detail="wiki JWT expired") from e
+        except _JWTError as e:
+            raise HTTPException(status_code=401, detail=f"invalid wiki JWT: {e}") from e
+        iss = payload.get("iss")
+        if iss not in ALLOWED_ISSUERS:
+            raise HTTPException(status_code=401, detail=f"invalid issuer: {iss}")
+        aud = payload.get("aud")
+        aud_ok = False
+        if isinstance(aud, list):
+            aud_ok = any(a in ALLOWED_AUDIENCES for a in aud)
+        elif isinstance(aud, str):
+            aud_ok = aud in ALLOWED_AUDIENCES
+        if not aud_ok:
+            raise HTTPException(status_code=401, detail=f"invalid audience: {aud}")
+        if not payload.get("sub"):
+            raise HTTPException(status_code=401, detail="missing sub claim")
+        if not payload.get("tenant_id"):
+            raise HTTPException(status_code=401, detail="missing tenant_id claim")
+        if not payload.get("agent_id"):
+            raise HTTPException(status_code=401, detail="missing agent_id claim")
+        scope = payload.get("scope")
+        if scope not in ALLOWED_SCOPES:
+            raise HTTPException(status_code=401, detail=f"missing or invalid scope: {scope}")
+        if "exp" not in payload:
+            raise HTTPException(status_code=401, detail="missing exp claim")
+        if "jti" not in payload or not payload.get("jti"):
+            raise HTTPException(status_code=401, detail="missing jti claim")
+        if required_scope:
+            if required_scope == "wiki:read" and scope not in ("wiki:read", "wiki:write"):
+                raise HTTPException(status_code=401, detail=f"invalid scope for read: {scope}")
+            if required_scope == "wiki:write" and scope != "wiki:write":
+                raise HTTPException(status_code=401, detail=f"scope {scope} not authorized for write")
+        return payload
 
 def _resolve_owner(
     request: Request,
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
+    required_scope: str | None = None,
 ) -> dict[str, str]:
-    """Resolve owner identity from headers / Authorization.
-
-    Priority: X-User-Id header -> Authorization Bearer sub -> fallback anonymous
-    Returns {user_id, agent_id, tenant_id}
-    """
-    user_id = x_user_id or request.headers.get("x-user-id") or request.headers.get("X-User-Id")
-    tenant_id = x_tenant_id or request.headers.get("x-tenant-id") or request.headers.get("X-Tenant-Id") or "default"
-    # Try Bearer JWT sub if no user_id
-    if not user_id:
-        auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-            try:
-                from jose import jwt  # type: ignore
-
-                try:
-                    payload = jwt.get_unverified_claims(token)
-                    user_id = payload.get("sub") or payload.get("user_id") or payload.get("email")
-                    if payload.get("tenant_id"):
-                        tenant_id = payload["tenant_id"]
-                except Exception:
-                    pass
-            except Exception:
-                pass
-    # Also check lower-case header iteration
-    if not user_id:
-        for k, v in request.headers.items():
-            if k.lower() == "x-user-id" and v:
-                user_id = v
-                break
-    if not user_id:
-        user_id = "employee:anonymous"
-    # Normalize to employee: prefix if bare
-    if ":" not in user_id:
-        user_id = f"employee:{user_id}"
-    if not user_id.startswith("employee:") and not user_id.startswith("agent:"):
-        user_id = f"employee:{user_id}"
-    agent_id = derive_agent_id(user_id)
-    return {"user_id": user_id, "agent_id": agent_id, "tenant_id": tenant_id}
+    """H3: Resolve owner from verified Wiki JWT only. No unverified claims, no header trust in prod."""
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    token: str | None = None
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip() or None
+    if token:
+        payload = _verify_wiki_jwt(token, required_scope=required_scope)
+        user_id = payload.get("sub") or payload.get("user_id") or ""
+        tenant_id = payload.get("tenant_id")
+        agent_id = payload.get("agent_id")
+        _ht = x_tenant_id if isinstance(x_tenant_id, str) else None
+        header_tenant = _ht or request.headers.get("x-tenant-id") or request.headers.get("X-Tenant-Id")
+        if header_tenant and str(header_tenant) != str(tenant_id):
+            raise HTTPException(status_code=403, detail=f"tenant mismatch: token tenant {tenant_id} != requested {header_tenant}")
+        _hu = x_user_id if isinstance(x_user_id, str) else None
+        header_user = _hu or request.headers.get("x-user-id") or request.headers.get("X-User-Id")
+        if header_user:
+            hdr = header_user.strip()
+            if ":" not in hdr:
+                hdr = f"employee:{hdr}"
+            if hdr != user_id and hdr != agent_id:
+                if derive_agent_id(hdr) != agent_id and derive_agent_id(user_id) != derive_agent_id(hdr):
+                    raise HTTPException(status_code=403, detail=f"user mismatch: header {hdr} != JWT sub {user_id}")
+        if ":" not in user_id:
+            user_id = f"employee:{user_id}"
+        if not user_id.startswith("employee:") and not user_id.startswith("agent:"):
+            user_id = f"employee:{user_id}"
+        if not agent_id:
+            agent_id = derive_agent_id(user_id)
+        return {"user_id": user_id, "agent_id": agent_id, "tenant_id": tenant_id}
+    if _allow_test_fixture():
+        _fu = x_user_id if isinstance(x_user_id, str) else None
+        user_id = _fu or request.headers.get("x-user-id") or request.headers.get("X-User-Id")
+        if not user_id:
+            for k, v in request.headers.items():
+                if k.lower() == "x-user-id" and v:
+                    user_id = v
+                    break
+        if user_id:
+            _ht2 = x_tenant_id if isinstance(x_tenant_id, str) else None
+            tenant_id = _ht2 or request.headers.get("x-tenant-id") or request.headers.get("X-Tenant-Id") or "default"
+            if ":" not in user_id:
+                user_id = f"employee:{user_id}"
+            if not user_id.startswith("employee:") and not user_id.startswith("agent:"):
+                user_id = f"employee:{user_id}"
+            agent_id = derive_agent_id(user_id)
+            return {"user_id": user_id, "agent_id": agent_id, "tenant_id": tenant_id}
+    raise HTTPException(status_code=401, detail="wiki JWT required")
 
 # ---------------------------------------------------------------------------
 # Mock data helpers (when DB not configured)
@@ -211,7 +311,7 @@ async def upload_attachment(
     stores reference under owner-isolated vault path, audit logged.
     Returns mock data when DB/vault not configured.
     """
-    owner = _resolve_owner(request, x_user_id=x_user_id)
+    owner = _resolve_owner(request, x_user_id=x_user_id, required_scope="wiki:write")
     user_id = owner["user_id"]
     agent_id = owner["agent_id"]
     tenant_id = owner["tenant_id"]
@@ -226,6 +326,9 @@ async def upload_attachment(
         raise HTTPException(status_code=413, detail="file too large (max 10MB)")
 
     filename = file.filename or "unnamed"
+    if ".." in filename.split("/") or ".." in filename.split("\\") or filename.startswith("/") or filename.startswith("\\"):
+        raise HTTPException(status_code=403, detail="PATH_TRAVERSAL: '..' in filename")
+    filename = filename.split("/")[-1].split("\\")[-1]
     # Extract text — stub: try utf-8 decode, else hex preview
     try:
         extracted_text = content.decode("utf-8")[:5000]

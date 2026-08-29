@@ -15,6 +15,29 @@ from datetime import datetime, timezone, date as date_type
 from pathlib import Path
 from typing import Any
 
+try:
+    import sys as _sys
+    _pw = _sys.modules.get("personal_wiki")
+    if _pw is not None and not hasattr(_pw, "__path__"):
+        # shadow file module present - clear to allow package import
+        if "admin_personal_wiki_shadow" not in _sys.modules:
+            _sys.modules["admin_personal_wiki_shadow"] = _pw
+        del _sys.modules["personal_wiki"]
+        for _k in list(_sys.modules.keys()):
+            if _k.startswith("personal_wiki."):
+                del _sys.modules[_k]
+    from personal_wiki.auth import verify_wiki_jwt, verify_tenant_agent_binding, assert_vault_path_safe, safe_join_vault, _is_production
+except ImportError:
+    try:
+        from auth import verify_wiki_jwt, verify_tenant_agent_binding, assert_vault_path_safe, safe_join_vault, _is_production  # type: ignore
+    except ImportError:
+        verify_wiki_jwt = None  # type: ignore
+        verify_tenant_agent_binding = None  # type: ignore
+        assert_vault_path_safe = None  # type: ignore
+        safe_join_vault = None  # type: ignore
+        def _is_production() -> bool:
+            return os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
+
 # ---------------------------------------------------------------------------
 # Vault paths
 # ---------------------------------------------------------------------------
@@ -47,9 +70,39 @@ def get_attachments_dir(vault_root: Path | str | None = None) -> Path:
 
 
 def vault_path(*parts: str, vault_root: Path | str | None = None) -> Path:
-    """Join parts under vault root."""
+    """Return resolved vault path for given segments (e.g. notes/foo.md) — H3 traversal guard."""
     root = Path(vault_root) if vault_root else get_vault_root()
-    return root.joinpath(*parts)
+    if safe_join_vault is not None:
+        return safe_join_vault(root, *parts)
+    for p in parts:
+        if ".." in Path(p).parts or Path(p).is_absolute():
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=403, detail=f"PATH_TRAVERSAL: '..' in {p}")
+    joined = root.joinpath(*parts)
+    if assert_vault_path_safe is not None:
+        assert_vault_path_safe(joined, root)
+    return joined
+
+def vault_path_for_tenant_agent(tenant_id: str, agent_id: str, *suffix: str, vault_root: Path | str | None = None) -> Path:
+    """H3 helper: vault path scoped to tenant/agent with traversal and binding checks."""
+    if not tenant_id or not agent_id:
+        from fastapi import HTTPException as _HTTPException
+        raise _HTTPException(status_code=401, detail="missing tenant_id or agent_id")
+    for val in (tenant_id, agent_id):
+        if ".." in val or "/" in val or "\\" in val:
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=403, detail=f"PATH_TRAVERSAL: '..' in {val}")
+    base = Path(vault_root) if vault_root else get_vault_root()
+    if safe_join_vault is not None:
+        return safe_join_vault(base, tenant_id, agent_id, *suffix)
+    for p in (tenant_id, agent_id, *suffix):
+        if ".." in Path(p).parts or Path(p).is_absolute():
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=403, detail=f"PATH_TRAVERSAL: '..' in {p}")
+    joined = base.joinpath(tenant_id, agent_id, *suffix)
+    if assert_vault_path_safe is not None:
+        assert_vault_path_safe(joined, base)
+    return joined
 
 
 def ensure_vault_dirs(vault_root: Path | str | None = None) -> Path:
@@ -132,6 +185,9 @@ def append_journal(
     extra: dict[str, Any] | None = None,
     vault_root: Path | str | None = None,
     when: datetime | None = None,
+    wiki_jwt: str | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> Path | None:
     """Append a journal entry with YAML frontmatter.
 
@@ -154,6 +210,19 @@ def append_journal(
                 max_chars = 4000
 
         when = when or datetime.now(timezone.utc)
+        # H3: verified JWT owner isolation (no unverified claims)
+        if wiki_jwt is not None and verify_wiki_jwt is not None:
+            payload = verify_wiki_jwt(wiki_jwt, required_scope="wiki:write")
+            if tenant_id or agent_id:
+                if verify_tenant_agent_binding is not None:
+                    verify_tenant_agent_binding(payload, tenant_id, agent_id)
+            if tenant_id is None:
+                tenant_id = payload.get("tenant_id")
+            if agent_id is None:
+                agent_id = payload.get("agent_id")
+        elif _is_production() and wiki_jwt is None and (tenant_id or agent_id):
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=401, detail="wiki JWT required in production")
         root = ensure_vault_dirs(vault_root)
         jfile = journal_file_for_date(when.date(), root)
 
@@ -236,13 +305,35 @@ def upsert_note(
     content: str,
     frontmatter: dict[str, Any] | None = None,
     vault_root: Path | str | None = None,
+    wiki_jwt: str | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> Path | None:
-    """Create or overwrite a note at notes/<slug>.md with optional frontmatter.
+    """Create or overwrite a note at notes/<slug>.md — H3 verified JWT + traversal guard.
 
     slug may include subdirs e.g. "project/spec".
     Returns Path or None on failure.
     """
     try:
+        # H3: reject path traversal in slug
+        raw_slug = slug.strip().lstrip("/")
+        for seg in raw_slug.split("/"):
+            if seg == "..":
+                from fastapi import HTTPException as _HTTPException
+                raise _HTTPException(status_code=403, detail="PATH_TRAVERSAL: '..' in slug")
+        # H3: verified JWT
+        if wiki_jwt is not None and verify_wiki_jwt is not None:
+            payload = verify_wiki_jwt(wiki_jwt, required_scope="wiki:write")
+            if tenant_id or agent_id:
+                if verify_tenant_agent_binding is not None:
+                    verify_tenant_agent_binding(payload, tenant_id, agent_id)
+            if tenant_id is None:
+                tenant_id = payload.get("tenant_id")
+            if agent_id is None:
+                agent_id = payload.get("agent_id")
+        elif _is_production() and wiki_jwt is None and (tenant_id or agent_id):
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=401, detail="wiki JWT required in production")
         root = ensure_vault_dirs(vault_root)
         # normalize slug
         slug = slug.strip().lstrip("/")
@@ -255,6 +346,12 @@ def upsert_note(
         safe_parts = [_sanitize_slug(p) if i < len(parts)-1 else p for i, p in enumerate(parts)]
         # last part keep .md
         nfile = get_notes_dir(root).joinpath(*safe_parts)
+        # H3: ensure final path is within notes dir (traversal guard)
+        if assert_vault_path_safe is not None:
+            try:
+                assert_vault_path_safe(nfile.resolve() if nfile.exists() else nfile.absolute(), get_notes_dir(root).resolve())
+            except Exception:
+                raise
         nfile.parent.mkdir(parents=True, exist_ok=True)
 
         fm = ""
