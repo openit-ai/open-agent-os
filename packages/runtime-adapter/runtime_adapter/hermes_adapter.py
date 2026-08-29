@@ -260,6 +260,28 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         return w.usage()
 
     async def set_model(self, session: Any, model: str, provider: str | None = None) -> dict[str, Any]:
+        # Guard: stale persisted overrides (custom / gpt-5.6-luna / 127.0.0.1:10100) must be rejected, not stored
+        try:
+            # reuse OAOS model_guard when available — otherwise inline minimal check
+            try:
+                from agent_runtime.model_guard import is_blocked_entry, sanitize_entry  # type: ignore
+            except Exception:
+                try:
+                    from packages.agent_runtime.agent_runtime.model_guard import is_blocked_entry, sanitize_entry  # type: ignore
+                except Exception:
+                    is_blocked_entry = None  # type: ignore
+                    sanitize_entry = None  # type: ignore
+            if is_blocked_entry is not None:
+                blocked, reason = is_blocked_entry({"provider": provider or "hermes", "model": model})
+                if blocked:
+                    return {"status": "rejected", "reason": f"model_guard: {reason}", "model": model, "provider": provider}
+            else:
+                low_m = str(model).lower()
+                low_p = str(provider or "").lower()
+                if low_p == "custom" or "gpt-5.6-luna" in low_m or "gpt-5.6-sol" in low_m:
+                    return {"status": "rejected", "reason": "blocked custom/gpt-5.6-luna override", "model": model, "provider": provider}
+        except Exception:
+            pass
         self._current_model = {"model": model, "provider": provider or "hermes"}
         sid = _session_id_of(session)
         if sid:

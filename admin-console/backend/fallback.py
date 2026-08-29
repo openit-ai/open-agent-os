@@ -3,9 +3,22 @@
 GET  /v1/llm/fallback — read fallback config (any authenticated admin)
 PUT  /v1/llm/fallback — update fallback config (L5 only)
 
+Ownership gate (runtime ownership separation):
+  OAOS owns LLM Runtime fallback. Hermes Runtime fallback is authoritative on
+  the commercial Hermes server and must NOT be managed by OAOS.
+  When runtime_mode==hermes, all /v1/llm/fallback routes return 409
+  HERMES_MODE_NOOP (same contract as /v1/llm/providers in hermes mode).
+  The legacy Hermes config file writer (_write_hermes_config) is disabled
+  and retained only as a no-op behind explicit opt-in env OAOS_ALLOW_HERMES_FALLBACK_WRITE=1
+  (default OFF). OAOS never writes Hermes config by default.
+
 Persists in DB admin_settings.llm_fallback (JSON) > env OAOS_LLM_FALLBACK_JSON > in-memory.
 No secrets — only provider/model/order/enabled. Admin auth required on all routes.
-Writes mirrored to env + DB so Hermes/OAOS config consumers can read.
+Writes mirrored to env (OAOS_LLM_FALLBACK_JSON + legacy OAOS_FALLBACK_PROVIDERS/MODEL)
+for OAOS Runtime consumers only — never to Hermes.
+
+OAOS LLM Runtime deployments are preserved:
+  When runtime_mode==llm, fallback CRUD + env mirroring remain fully functional.
 """
 from __future__ import annotations
 
@@ -13,7 +26,6 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -46,7 +58,6 @@ class FallbackEntry(BaseModel):
     def check_provider(cls, v: str) -> str:
         nv = _normalize_provider(v)
         if nv not in ALLOWED_PROVIDERS and nv != "opencode-go":
-            # allowed set includes normalized
             allowed = {"claude", "codex", "gemini", "opencode-go", "openrouter", "ollama"}
             if nv not in allowed:
                 raise ValueError(f"provider must be one of {sorted(allowed)}")
@@ -102,6 +113,31 @@ class FallbackUpdateRequest(BaseModel):
         if len(v) > 128:
             raise ValueError("fallback_model too long (max 128)")
         return v
+
+# ---- ownership gate ----
+def _is_hermes_mode() -> bool:
+    """Return True when OAOS is in hermes mode — fallback is Hermes-owned."""
+    try:
+        try:
+            from .runtime_mode import get_mode, RuntimeMode  # type: ignore
+        except ImportError:
+            from runtime_mode import get_mode, RuntimeMode  # type: ignore
+        return get_mode() == RuntimeMode.hermes
+    except Exception:
+        # fail-open to allow tests without runtime_mode module? But log.
+        # If runtime_mode unavailable, assume not hermes (preserve OAOS).
+        return False
+
+def _check_fallback_ownership_guard() -> None:
+    """Enforce runtime ownership gate. Raises 409 when Hermes owns fallback."""
+    if _is_hermes_mode():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HERMES_MODE_NOOP",
+                "message": "Fallback management is disabled in hermes mode — Hermes Runtime owns LLM routing. Switch to llm mode to configure OAOS fallback chain.",
+            },
+        )
 
 # ---- persistence helpers ----
 _db_engine = None
@@ -215,7 +251,7 @@ def _load_config() -> FallbackConfig:
             data = json.loads(raw)
             cfg = FallbackConfig(**data)
             _inmem = cfg
-            # mirror to env for Hermes/OAOS consumers
+            # mirror to env for OAOS consumers (LLM Runtime only)
             os.environ["OAOS_LLM_FALLBACK_JSON"] = raw
             return cfg
         except Exception as e:
@@ -246,30 +282,61 @@ def _save_config(cfg: FallbackConfig, updated_by: str | None = None) -> Fallback
     raw = cfg.model_dump_json()
     _inmem = cfg
     os.environ["OAOS_LLM_FALLBACK_JSON"] = raw
-    # also set legacy env for Hermes compat
+    # also set legacy env for OAOS consumers only (not Hermes)
     try:
         chain_env = ",".join([e.provider for e in cfg.chain if e.enabled])
         if chain_env:
             os.environ["OAOS_FALLBACK_PROVIDERS"] = chain_env
+        else:
+            os.environ.pop("OAOS_FALLBACK_PROVIDERS", None)
         if cfg.fallback_model:
             os.environ["OAOS_FALLBACK_MODEL"] = cfg.fallback_model
+        else:
+            os.environ.pop("OAOS_FALLBACK_MODEL", None)
     except Exception:
         pass
     _db_set_raw(raw, updated_by=updated_by)
-    # write to hermes config file if OAOS_HERMES_CONFIG_PATH set (best-effort)
+    # Hermes config write is disabled by default (ownership gate).
+    # Retained only behind explicit opt-in env for legacy migration.
     _write_hermes_config(cfg)
     return cfg
 
+def _is_hermes_owned() -> bool:
+    """Alias for _is_hermes_mode — kept for test/compat."""
+    return _is_hermes_mode()
+
+def _is_hermes_config_mirror_allowed() -> bool:
+    """Mirror allowed only when LLM owns fallback AND explicit opt-in is set."""
+    if _is_hermes_mode():
+        return False
+    allow = (
+        os.environ.get("OAOS_ALLOW_HERMES_FALLBACK_WRITE", "").strip().lower()
+        or os.environ.get("OAOS_ALLOW_HERMES_CONFIG_WRITE", "").strip().lower()
+    )
+    return allow in ("1", "true", "yes", "on")
+
 def _write_hermes_config(cfg: FallbackConfig) -> None:
+    """Hermes-owned fallback management is disabled in OAOS.
+
+    This function is a deliberate NO-OP unless explicitly enabled via
+    OAOS_ALLOW_HERMES_FALLBACK_WRITE=1 (or legacy OAOS_ALLOW_HERMES_CONFIG_WRITE=1).
+    Hermes Runtime is authoritative on the commercial server; OAOS must never
+    overwrite its config silently.  Keeping this stub preserves import
+    compatibility while enforcing ownership separation.
+    """
+    if not _is_hermes_config_mirror_allowed():
+        logger.debug("Hermes fallback write skipped (ownership gate: allow flag not set or hermes mode)")
+        return
     path = os.environ.get("OAOS_HERMES_CONFIG_PATH") or os.environ.get("HERMES_CONFIG_PATH")
     if not path:
+        logger.debug("Hermes fallback write skipped: no config path set")
         return
     try:
         import pathlib
         p = pathlib.Path(path)
         if not p.exists():
+            logger.debug(f"Hermes fallback write skipped: path does not exist: {path}")
             return
-        # patch json file if exists
         content = p.read_text(encoding="utf-8")
         data = json.loads(content) if content.strip() else {}
         data["fallback"] = {
@@ -278,6 +345,7 @@ def _write_hermes_config(cfg: FallbackConfig) -> None:
             "fallback_model": cfg.fallback_model,
         }
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.warning(f"Hermes fallback config overwritten via OAOS (explicit opt-in): {path}")
     except Exception as e:
         logger.debug(f"hermes config write skipped: {e}")
 
@@ -285,28 +353,24 @@ def _validate_update(req: FallbackUpdateRequest, current: FallbackConfig) -> Fal
     enabled = req.enabled if req.enabled is not None else current.enabled
     chain = req.chain if req.chain is not None else current.chain
     fallback_model = req.fallback_model if req.fallback_model is not None else current.fallback_model
-    # fallback_model "" means clear
     if req.fallback_model is not None and req.fallback_model == "":
         fallback_model = None
     if req.fallback_model is not None and req.fallback_model.strip() == "":
         fallback_model = None
 
-    # validation
     if len(chain) > 20:
         raise HTTPException(status_code=400, detail="chain too long (max 20)")
-    # enabled=true should have at least one enabled entry? allow empty but warn — we enforce non-empty if enabled and chain provided explicitly
-    # No duplicate provider+model combo? allow but deduplicate check
-    # Ensure each entry normalized already via Pydantic
-    # If chain has disabled entries only and enabled=true, it's effectively no fallback — allow but client will see warning
     return FallbackConfig(enabled=enabled, chain=chain, fallback_model=fallback_model, updated_at=current.updated_at, updated_by=current.updated_by)
 
 @router.get("/fallback")
 def get_fallback(admin: AdminUser = Depends(get_current_admin)):
+    _check_fallback_ownership_guard()
     cfg = _load_config()
     return cfg.model_dump(mode="json")
 
 @router.put("/fallback")
 def put_fallback(body: FallbackUpdateRequest, admin: AdminUser = Depends(require_l5)):
+    _check_fallback_ownership_guard()
     current = _load_config()
     new_cfg = _validate_update(body, current)
     saved = _save_config(new_cfg, updated_by=admin.email)
@@ -315,6 +379,7 @@ def put_fallback(body: FallbackUpdateRequest, admin: AdminUser = Depends(require
 # Compat: POST also allowed
 @router.post("/fallback")
 def post_fallback(body: FallbackUpdateRequest, admin: AdminUser = Depends(require_l5)):
+    _check_fallback_ownership_guard()
     current = _load_config()
     new_cfg = _validate_update(body, current)
     saved = _save_config(new_cfg, updated_by=admin.email)

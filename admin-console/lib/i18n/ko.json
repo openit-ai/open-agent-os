@@ -545,7 +545,7 @@
     "helpDesc": "기본 LLM 호출이 실패(타임아웃/쿼터/5xx)하면 체인 순서대로 재시도합니다. 활성화된 항목만 시도됩니다.",
     "helpChain": "체인 순서 = 우선순위. 위쪽이 먼저 시도됩니다. ↑/↓로 순서 변경.",
     "helpModel": "Fallback Model: 원 호출에 model이 없을 때 사용할 기본 모델명(예: qwen2.5). 비우면 provider 기본 모델 사용.",
-    "helpNote": "설정은 admin_settings(DB)에 저장되고 OAOS_LLM_FALLBACK_JSON / OAOS_FALLBACK_PROVIDERS 및 Hermes config로 미러링됩니다. API 키는 포함되지 않습니다.",
+    "helpNote": "설정은 admin_settings(DB)와 OAOS_LLM_FALLBACK_JSON / OAOS_FALLBACK_PROVIDERS(OAOS LLM Runtime 전용)에 저장됩니다. API 키는 포함되지 않으며 Hermes Runtime이 소유한 경우 Hermes config로 기록되지 않습니다 — Hermes 설정이 정본입니다.",
     "enabledLabel": "Fallback 활성화",
     "enabledDesc": "끄면 fallback 없이 실패를 즉시 반환합니다.",
     "chainTitle": "Fallback 체인 (순서 있음)",
@@ -572,6 +572,10 @@
     "updatedAt": "수정 시각",
     "moveUp": "위로",
     "moveDown": "아래로",
-    "viewProviders": "Providers 보기"
+    "viewProviders": "Providers 보기",
+    "hermesBannerTitle": "Hermes Runtime이 LLM 라우팅 소유 — OAOS Fallback 비활성",
+    "hermesBannerDesc": "이 서버는 Hermes Runtime(정본)에서 동작합니다. OAOS LLM Fallback 체인은 OAOS LLM Runtime 전용이며 Hermes Runtime 설정으로 표시·기록되지 않습니다. Fallback을 설정하려면 LLM Runtime으로 전환하세요.",
+    "hermesBannerDetail": "소유권 게이트: runtime_mode=hermes → /v1/llm/fallback 409 HERMES_MODE_NOOP. HERMES_CONFIG_PATH 미러링은 deprecated이며 runtime_mode=llm + OAOS_ALLOW_HERMES_CONFIG_WRITE=1 일 때만 허용됩니다.",
+    "hermesBannerAction": "Providers → Runtime Mode에서 변경 (L5 전용)"
   }
 }

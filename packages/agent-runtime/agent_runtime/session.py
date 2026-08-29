@@ -322,6 +322,21 @@ class SessionManager:
     ) -> dict[str, Any]:
         sid = session_id or _new_id("sess", 16)
         tid = trace_id or _new_id("trace", 16)
+        # Guard persisted overrides (e.g. stale custom/gpt-5.6-luna from persisted session) — filter at entry
+        try:
+            from .model_guard import sanitize_metadata  # type: ignore
+
+            metadata = sanitize_metadata(dict(metadata or {})) if metadata else {}
+            # also sanitize kwargs carried into metadata
+            if kwargs.get("model") or kwargs.get("provider") or kwargs.get("base_url"):
+                tmp = sanitize_metadata({k: v for k, v in kwargs.items() if k in ("model", "provider", "base_url", "model_override")})
+                # if model/provider was blocked, drop from kwargs so it doesn't re-enter metadata below
+                for kb in ("model", "provider", "base_url", "model_override"):
+                    if kb in kwargs and kb not in tmp and kb in kwargs:
+                        # blocked — remove
+                        kwargs.pop(kb, None)
+        except Exception:
+            metadata = dict(metadata or {})
         rec = SessionRecord(
             session_id=sid,
             tenant_id=tenant_id,
@@ -345,6 +360,13 @@ class SessionManager:
         self._assert_owner(rec, tenant_id, agent_id)
         if rec.status == "cancelled":
             raise ValueError(f"session cancelled: {session_id}")
+        # Sanitize persisted metadata before reuse — stale custom/gpt-5.6-luna must not override primary
+        try:
+            from .model_guard import guard_session_record  # type: ignore
+
+            guard_session_record(rec)
+        except Exception:
+            pass
         rec.updated_at = _now()
         self._store.save(rec)
         return rec.to_dict()
@@ -364,6 +386,14 @@ class SessionManager:
         if rec is None:
             raise KeyError(f"session not found: {session_id}")
         self._assert_owner(rec, tenant_id, agent_id)
+        # Sanitize on read as well — callers must never receive blocked overrides
+        try:
+            from .model_guard import guard_session_record  # type: ignore
+
+            guard_session_record(rec)
+            self._store.save(rec)
+        except Exception:
+            pass
         return rec.to_dict()
 
     # alias for compat
@@ -376,6 +406,12 @@ class SessionManager:
         if rec is None:
             raise KeyError(f"session not found: {session_id}")
         self._assert_owner(rec, tenant_id, agent_id)
+        try:
+            from .model_guard import guard_session_record  # type: ignore
+
+            guard_session_record(rec)
+        except Exception:
+            pass
         return rec.to_oaos_context(policy=policy)
 
     # ── async wrappers ──

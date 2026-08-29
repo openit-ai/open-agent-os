@@ -545,7 +545,7 @@
     "helpDesc": "When primary LLM call fails (timeout, quota, 5xx), the runtime tries the chain in order. Only enabled entries are tried. Provider must be one of 6 types; model is optional override.",
     "helpChain": "Chain order = priority. Top is tried first. Use ↑/↓ to reorder.",
     "helpModel": "Fallback Model: optional default model name used when the failed call has no model (e.g. qwen2.5, gpt-4o-mini). Leave empty to keep provider's default model.",
-    "helpNote": "Config is stored in admin_settings (DB) + mirrored to OAOS_LLM_FALLBACK_JSON / OAOS_FALLBACK_PROVIDERS and Hermes config if configured. Never contains API keys.",
+    "helpNote": "Config is stored in admin_settings (DB) and OAOS_LLM_FALLBACK_JSON / OAOS_FALLBACK_PROVIDERS (OAOS LLM Runtime only). Never contains API keys. Not written as Hermes Runtime config when Hermes owns routing — Hermes config is authoritative.",
     "enabledLabel": "Fallback enabled",
     "enabledDesc": "When off, no fallback is attempted — failures return immediately.",
     "chainTitle": "Fallback Chain (ordered)",
@@ -572,6 +572,10 @@
     "updatedAt": "Updated at",
     "moveUp": "Move up",
     "moveDown": "Move down",
-    "viewProviders": "View Providers"
+    "viewProviders": "View Providers",
+    "hermesBannerTitle": "Hermes Runtime owns LLM routing — OAOS Fallback disabled",
+    "hermesBannerDesc": "This server runs Hermes Runtime (authoritative). OAOS LLM Fallback chain is OAOS LLM Runtime only and is not presented or written as Hermes Runtime config. Switch to LLM Runtime to configure fallback.",
+    "hermesBannerDetail": "Ownership gate: runtime_mode=hermes → 409 HERMES_MODE_NOOP on /v1/llm/fallback. Mirroring to HERMES_CONFIG_PATH is deprecated and requires runtime_mode=llm + OAOS_ALLOW_HERMES_CONFIG_WRITE=1.",
+    "hermesBannerAction": "Change mode in Providers → Runtime Mode (L5 only)"
   }
 }

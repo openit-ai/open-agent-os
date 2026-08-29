@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getToken, getFallbackConfig, updateFallbackConfig, type FallbackConfig, type FallbackEntry } from "@/lib/api";
+import { getToken, getFallbackConfig, updateFallbackConfig, getRuntimeMode, type FallbackConfig, type FallbackEntry } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, Save, Info, Layers, Cpu, ShieldAlert } from "lucide-react";
 
@@ -33,6 +33,7 @@ export default function FallbackPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [runtimeMode, setRuntimeMode] = useState<string | null>(null);
 
   // add form
   const [addProvider, setAddProvider] = useState<string>("claude");
@@ -44,12 +45,29 @@ export default function FallbackPage() {
   const fetchCfg = useCallback(async () => {
     setError(null);
     try {
+      // Gate: check runtime ownership first — hermes owns routing
+      try {
+        const rm = await getRuntimeMode();
+        setRuntimeMode(rm.mode);
+        if (rm.mode === "hermes") {
+          // Do not fetch fallback as Hermes config; show banner instead
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // fail-open: if runtime mode unavailable, still try fallback
+      }
       const res = await getFallbackConfig();
       setCfg(res);
       setEnabled(res.enabled);
       setFallbackModel(res.fallback_model ?? "");
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("fallback.loadFailed"));
+      const msg = e instanceof Error ? e.message : t("fallback.loadFailed");
+      // Detect 409 hermes gate from API
+      if (msg.includes("HERMES_MODE_NOOP") || msg.includes("Hermes Runtime")) {
+        setRuntimeMode("hermes");
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -119,6 +137,33 @@ export default function FallbackPage() {
   }
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>;
+
+  // Hermes-owned: show ownership banner, do not present fallback as Hermes config
+  if (runtimeMode === "hermes") {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-semibold"><Layers className="h-6 w-6" /> {t("fallback.title")}</h1>
+            <p className="text-sm text-muted-foreground">{t("fallback.subtitle")}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline" size="sm"><Link href="/providers"><Cpu className="mr-1 h-4 w-4" />{t("fallback.viewProviders")}</Link></Button>
+            <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchCfg(); }}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
+          </div>
+        </div>
+        <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20">
+          <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm text-amber-800 dark:text-amber-200"><ShieldAlert className="h-4 w-4" /> {t("fallback.hermesBannerTitle")}</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-amber-800 dark:text-amber-200">
+            <p>{t("fallback.hermesBannerDesc")}</p>
+            <p className="text-xs text-muted-foreground">{t("fallback.hermesBannerDetail")}</p>
+            <p className="text-xs"><Link href="/providers" className="underline">{t("fallback.viewProviders")}</Link> · {t("fallback.hermesBannerAction")}</p>
+          </CardContent>
+        </Card>
+        {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
