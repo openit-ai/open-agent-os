@@ -25,8 +25,26 @@ from datetime import datetime, timezone
 from typing import Optional
 import time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
+
+# C1: verified bearer JWT or mTLS — health remains public
+try:
+    from auth import verify_security_auth, verify_tenant_binding  # type: ignore
+except ImportError:
+    try:
+        from security.auth import verify_security_auth, verify_tenant_binding  # type: ignore
+    except ImportError:
+        import importlib.util as _ilu_auth
+        import pathlib as _pl_auth
+        import sys as _sys_auth
+        _auth_path = _pl_auth.Path(__file__).parent / "auth.py"
+        _spec_auth = _ilu_auth.spec_from_file_location("_security_auth_impl", str(_auth_path))
+        _mod_auth = _ilu_auth.module_from_spec(_spec_auth)  # type: ignore
+        _sys_auth.modules["_security_auth_impl"] = _mod_auth
+        _spec_auth.loader.exec_module(_mod_auth)  # type: ignore
+        verify_security_auth = _mod_auth.verify_security_auth  # type: ignore
+        verify_tenant_binding = _mod_auth.verify_tenant_binding  # type: ignore
 
 # 모델 import
 from policy_model import PolicyBundle, PolicyDecision, PolicyEvaluationRequest, PolicyEvaluationResult
@@ -202,8 +220,9 @@ def health_detailed():
 
 # ── Policy evaluate ────────────────────────────────────────────
 @app.post("/v1/policy/evaluate", response_model=PolicyEvaluationResult)
-def policy_evaluate(req: PolicyEvaluationRequest):
-    """Section 25 — deterministic policy evaluation."""
+def policy_evaluate(req: PolicyEvaluationRequest, payload: dict = Depends(verify_security_auth)):
+    """Section 25 — deterministic policy evaluation. Auth: verified JWT/mTLS + tenant binding."""
+    verify_tenant_binding(payload, req.tenant_id)
     result = policy_engine.evaluate(req)
     # audit 기록
     try:
@@ -227,7 +246,7 @@ def policy_evaluate(req: PolicyEvaluationRequest):
 
 # ── Delegation ─────────────────────────────────────────────────
 @app.post("/v1/delegation/grant", response_model=Delegation)
-def delegation_grant(req: DelegationGrantRequest):
+def delegation_grant(req: DelegationGrantRequest, payload: dict = Depends(verify_security_auth)):
     d = delegation_service.grant(
         user_id=req.user_id, agent_id=req.agent_id, provider=req.provider, scope=req.scope
     )
@@ -248,7 +267,7 @@ def delegation_grant(req: DelegationGrantRequest):
 
 
 @app.post("/v1/delegation/revoke")
-def delegation_revoke(req: DelegationRevokeRequest):
+def delegation_revoke(req: DelegationRevokeRequest, payload: dict = Depends(verify_security_auth)):
     d = delegation_service.revoke(req.delegation_id)
     if d is None:
         raise HTTPException(status_code=404, detail="delegation not found")
@@ -269,7 +288,7 @@ def delegation_revoke(req: DelegationRevokeRequest):
 
 
 @app.get("/v1/delegation/{delegation_id}")
-def delegation_get(delegation_id: str):
+def delegation_get(delegation_id: str, payload: dict = Depends(verify_security_auth)):
     d = delegation_service.get(delegation_id)
     if d is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -278,7 +297,10 @@ def delegation_get(delegation_id: str):
 
 # ── Token ──────────────────────────────────────────────────────
 @app.post("/v1/token/issue")
-def token_issue(req: TokenIssueRequest):
+def token_issue(req: TokenIssueRequest, payload: dict = Depends(verify_security_auth)):
+    # C1 tenant binding: JWT tenant must match requested capability? Enforce sub mismatch 403
+    if payload.get("sub") and payload.get("sub") != req.sub:
+        raise HTTPException(status_code=403, detail="token sub mismatch: JWT sub != body sub")
     # revoke 된 delegation 으로는 발급 불가
     if req.delegation_id and not delegation_service.is_active(req.delegation_id):
         raise HTTPException(status_code=403, detail="delegation not active or revoked")
@@ -311,23 +333,23 @@ def token_issue(req: TokenIssueRequest):
 
 
 @app.post("/v1/token/verify")
-def token_verify(req: TokenVerifyRequest):
+def token_verify(req: TokenVerifyRequest, payload: dict = Depends(verify_security_auth)):
     try:
-        payload = token_service.verify(req.token)
-        return {"valid": True, "payload": payload}
+        inner = token_service.verify(req.token)
+        return {"valid": True, "payload": inner}
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
 
 @app.post("/v1/token/revoke")
-def token_revoke(req: TokenVerifyRequest):
+def token_revoke(req: TokenVerifyRequest, payload: dict = Depends(verify_security_auth)):
     token_service.revoke(req.token)
     return {"status": "revoked"}
 
 
 # ── Approval ───────────────────────────────────────────────────
 @app.post("/v1/approval/request")
-def approval_request(req: ApprovalRequestBody):
+def approval_request(req: ApprovalRequestBody, payload: dict = Depends(verify_security_auth)):
     ar = approval_store.create(
         user_id=req.user_id,
         agent_id=req.agent_id,
@@ -354,7 +376,7 @@ def approval_request(req: ApprovalRequestBody):
 
 
 @app.post("/v1/approval/decide")
-def approval_decide(req: ApprovalDecideBody):
+def approval_decide(req: ApprovalDecideBody, payload: dict = Depends(verify_security_auth)):
     try:
         ar = approval_store.decide(
             approval_id=req.approval_id,
@@ -383,7 +405,7 @@ def approval_decide(req: ApprovalDecideBody):
 
 
 @app.get("/v1/approval/{approval_id}")
-def approval_get(approval_id: str):
+def approval_get(approval_id: str, payload: dict = Depends(verify_security_auth)):
     ar = approval_store.get(approval_id)
     if ar is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -392,7 +414,7 @@ def approval_get(approval_id: str):
 
 # ── Audit ──────────────────────────────────────────────────────
 @app.post("/v1/audit/verify")
-def audit_verify(req: AuditVerifyRequest | None = None):
+def audit_verify(req: AuditVerifyRequest | None = None, payload: dict = Depends(verify_security_auth)):
     """Hash-chain 검증 + optional checkpoint 검증."""
     chain_valid = audit_ledger.verify_chain()
     result: dict = {
@@ -415,7 +437,7 @@ def audit_verify(req: AuditVerifyRequest | None = None):
 
 
 @app.get("/v1/audit/checkpoint")
-def audit_checkpoint(verify_external: bool = True):
+def audit_checkpoint(verify_external: bool = True, payload: dict = Depends(verify_security_auth)):
     """GET /v1/audit/checkpoint — current checkpoint + external anchor verification.
     Includes external_verified flag by reading OAOS_AUDIT_CHECKPOINT_S3 or local file /var/lib/oaos/audit-checkpoint.json.
     """
@@ -456,5 +478,5 @@ def audit_checkpoint(verify_external: bool = True):
 
 
 @app.get("/v1/audit/events")
-def audit_events():
+def audit_events(payload: dict = Depends(verify_security_auth)):
     return {"events": [e.model_dump(mode="json") for e in audit_ledger.events]}

@@ -63,6 +63,9 @@ import sys as _sys
 import pathlib as _pl
 import importlib.util as _ilu
 _root = _pl.Path(__file__).resolve().parents[1]
+import os as _os
+_os.environ.setdefault("OAOS_SIGNING_KEY", "test-security-auth-signing-key-32bytes-long!!")
+_os.environ.pop("OAOS_ENV", None)
 _backend = _root / "admin-console" / "backend"
 if str(_backend) in _sys.path:
     _sys.path.remove(str(_backend))
@@ -492,9 +495,42 @@ def test_approval_stateless_helpers():
 # ──────────────────────────────────────────────────────────────
 # 7. FastAPI integration — 5 endpoints
 # ──────────────────────────────────────────────────────────────
+_TEST_SECURITY_KEY = "test-security-auth-signing-key-32bytes-long!!"
+
+def _make_security_jwt_for_tests(sub: str = "agent:assistant:kim", tenant_id: str = "default") -> str:
+    try:
+        from jose import jwt as _jwt
+    except Exception:
+        return ""
+    from datetime import datetime, timedelta, timezone
+    import uuid as _uuid, os as _os2
+    key = _os2.environ.get("OAOS_SIGNING_KEY", _TEST_SECURITY_KEY)
+    now = datetime.now(timezone.utc)
+    payload = {
+        "iss": "control-plane",
+        "aud": "security",
+        "sub": sub,
+        "tenant_id": tenant_id,
+        "session_id": "sess_test_c",
+        "request_id": f"req_{_uuid.uuid4().hex[:8]}",
+        "exp": int((now + timedelta(seconds=300)).timestamp()),
+        "iat": int(now.timestamp()),
+        "jti": _uuid.uuid4().hex,
+    }
+    return _jwt.encode(payload, key, algorithm="HS256")
+
 @pytest.fixture
 def client():
-    return TestClient(security_app)
+    import os as _osC
+    _osC.environ["OAOS_SIGNING_KEY"] = _TEST_SECURITY_KEY
+    _osC.environ.pop("OAOS_ENV", None)
+    c = TestClient(security_app)
+    try:
+        tok = _make_security_jwt_for_tests()
+        c.headers.update({"Authorization": f"Bearer {tok}"})
+    except Exception:
+        pass
+    return c
 
 
 def test_app_health(client):
