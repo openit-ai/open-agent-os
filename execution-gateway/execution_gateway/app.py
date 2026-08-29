@@ -100,8 +100,14 @@ try:
 except Exception:
     pass
 
-# -- HA health helpers — liveness vs readiness --
-# /health & /healthz = liveness (always ok). /readyz = readiness with bounded real checks.
+# -- HA health helpers — liveness vs readiness (H4 strict) --
+# /health & /healthz = liveness (always 200). /readyz = readiness with bounded real checks: prod 503 on degraded/draining.
+def _is_production() -> bool:
+    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        if os.getenv(k, "").strip().lower() in ("production", "prod"):
+            return True
+    return False
+
 def _check_latency(fn):
     start = time.monotonic()
     try:
@@ -113,16 +119,11 @@ def _check_latency(fn):
         return {"status": "degraded", "latency_ms": latency, "error": str(e)[:200]}
 
 def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
-    """Bounded real DB connectivity check when configured.
-    - Does a real connect with short timeout for postgres; for sqlite does file existence + pragma quick.
-    - Preserves test compatibility: raises only on invalid url or unreachable (degraded), not hard failure.
-    """
+    """Bounded real DB connectivity check when configured."""
     if "://" not in db_url:
         raise RuntimeError("invalid db url")
-    # cheap fast-path for test sqlite memory urls
     if db_url.startswith("sqlite") and (":memory:" in db_url or "mode=memory" in db_url):
         return
-    # if no DB driver available, just validate format (keeps CI fast)
     try:
         from sqlalchemy import create_engine, text  # type: ignore
         sync_url = db_url
@@ -132,21 +133,25 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
             sync_url = sync_url.replace("postgresql://", "postgresql+psycopg://", 1)
         if "+aiosqlite" in sync_url:
             sync_url = sync_url.replace("+aiosqlite", "")
-        # short connect timeout; avoid pool
         kwargs: dict = {}
         if sync_url.startswith("postgresql"):
             kwargs = {"pool_pre_ping": False, "poolclass": None, "connect_args": {"connect_timeout": timeout_s}}  # type: ignore
         elif sync_url.startswith("sqlite"):
             kwargs = {"connect_args": {"timeout": timeout_s}}
         eng = create_engine(sync_url, **kwargs, pool_pre_ping=False)  # type: ignore
-        # bounded execute
         import concurrent.futures
         def _ping():
             with eng.connect() as conn:
                 conn.execute(text("SELECT 1"))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             fut = ex.submit(_ping)
             fut.result(timeout=timeout_s + 0.5)
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
         try:
             eng.dispose()
         except Exception:
@@ -154,7 +159,6 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
     except RuntimeError:
         raise
     except Exception as e:
-        # Fallback to format-only in test env if driver missing (e.g., no psycopg)
         msg = str(e).lower()
         if "no such module" in msg or "could not parse" in msg or "not found" in msg:
             return
@@ -163,16 +167,21 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
 def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
     if "://" not in redis_url:
         raise RuntimeError("invalid redis url")
-    # if redis lib missing, just validate format (test compat)
     try:
         import redis as _redis  # type: ignore
         client = _redis.Redis.from_url(redis_url, socket_connect_timeout=timeout_s, socket_timeout=timeout_s)
         import concurrent.futures
         def _ping():
             client.ping()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             fut = ex.submit(_ping)
             fut.result(timeout=timeout_s + 0.5)
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
         try:
             client.close()
         except Exception:
@@ -183,12 +192,91 @@ def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
         msg = str(e).lower()
         if "no module" in msg:
             return
-        # redis unreachable -> degraded, not fatal
         raise RuntimeError(f"redis ping failed: {e}") from e
+
+def _bounded_vault_ping(timeout_s: float = 0.8) -> None:
+    vault_addr = (os.getenv("VAULT_ADDR", "") or "").strip()
+    vault_backend = (os.getenv("VAULT_BACKEND", "") or "").strip().lower()
+    legacy = {"", "encrypted_postgres", "encrypted-postgres", "legacy", "postgres", "none"}
+    configured = bool(vault_addr) or (vault_backend and vault_backend not in legacy)
+    if not configured:
+        raise RuntimeError("vault not configured")
+    try:
+        if vault_addr:
+            import concurrent.futures as _cf
+            def _http_check():
+                try:
+                    try:
+                        import httpx  # type: ignore
+                        import asyncio as _asyncio
+                        async def _do():
+                            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                                resp = await client.get(vault_addr.rstrip("/") + "/v1/sys/health", headers={})
+                                if resp.status_code not in (200, 204, 429, 472, 473):
+                                    raise RuntimeError(f"vault health {resp.status_code}")
+                        _asyncio.run(_do())
+                        return
+                    except ImportError:
+                        pass
+                    except Exception as e:
+                        raise e
+                    import urllib.request
+                    import ssl
+                    ctx = ssl._create_unverified_context() if vault_addr.startswith("https") else None
+                    req = urllib.request.Request(vault_addr.rstrip("/") + "/v1/sys/health")
+                    if os.getenv("VAULT_TOKEN"):
+                        req.add_header("X-Vault-Token", os.getenv("VAULT_TOKEN", ""))
+                    with urllib.request.urlopen(req, timeout=timeout_s, context=ctx) as resp:  # type: ignore
+                        code = getattr(resp, "status", 200) or 200
+                        if code not in (200, 204, 429, 472, 473):
+                            raise RuntimeError(f"vault health {code}")
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    raise RuntimeError(f"vault ping failed: {e}") from e
+            ex = _cf.ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = ex.submit(_http_check)
+                fut.result(timeout=timeout_s + 0.5)
+            finally:
+                try:
+                    ex.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    ex.shutdown(wait=False)
+            return
+        try:
+            from vault.external import get_vault_backend  # type: ignore
+            be = get_vault_backend()
+            if be is None:
+                return
+            import concurrent.futures as _cf2
+            import asyncio as _asyncio2
+            def _be_check():
+                try:
+                    ok = _asyncio2.run(be.health_check())  # type: ignore
+                    if not ok:
+                        raise RuntimeError("vault backend health_check false")
+                except Exception as e:
+                    raise RuntimeError(f"vault backend health failed: {e}") from e
+            ex2 = _cf2.ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = ex2.submit(_be_check)
+                fut.result(timeout=timeout_s + 0.5)
+            finally:
+                try:
+                    ex2.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    ex2.shutdown(wait=False)
+        except Exception as e:
+            raise RuntimeError(f"vault ping failed: {e}") from e
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"vault ping failed: {e}") from e
 
 def _ha_checks():
     checks: dict = {}
-    db_url = os.getenv("DATABASE_URL", "")
+    db_url = os.getenv("DATABASE_URL", "") or os.getenv("OAOS_DATABASE_URL", "")
     if db_url:
         def _db():
             _bounded_db_ping(db_url)
@@ -202,6 +290,16 @@ def _ha_checks():
         checks["redis"] = _check_latency(_redis)
     else:
         checks["redis"] = {"status": "skipped", "latency_ms": 0, "reason": "no REDIS_URL"}
+    vault_addr = (os.getenv("VAULT_ADDR", "") or "").strip()
+    vault_backend = (os.getenv("VAULT_BACKEND", "") or "").strip().lower()
+    legacy = {"", "encrypted_postgres", "encrypted-postgres", "legacy", "postgres", "none"}
+    vault_configured = bool(vault_addr) or (vault_backend and vault_backend not in legacy)
+    if vault_configured:
+        def _vault():
+            _bounded_vault_ping()
+        checks["vault"] = _check_latency(_vault)
+    else:
+        checks["vault"] = {"status": "skipped", "latency_ms": 0, "reason": "no VAULT_ADDR/VAULT_BACKEND"}
     checks["self"] = {"status": "draining" if _shutting_down else "ok", "latency_ms": 0, "active_requests": _active_requests}
     return checks
 
@@ -332,16 +430,23 @@ def healthz():
 @app.get("/readyz")
 def readyz():
     checks = _ha_checks()
-    degraded = any(v.get("status") == "degraded" for v in checks.values())
-    return {"status": "degraded" if degraded else "ok", "service": "execution-gateway", "checks": checks}
+    degraded = any(v.get("status") in ("degraded", "draining") for v in checks.values())
+    draining = checks.get("self", {}).get("status") == "draining"
+    status = "draining" if draining else ("degraded" if degraded else "ok")
+    body = {"status": status, "service": "execution-gateway", "checks": checks}
+    if (degraded or draining) and _is_production():
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 @app.get("/v1/health/detailed")
 def health_detailed():
     start = time.monotonic()
     checks = _ha_checks()
     total = round((time.monotonic() - start) * 1000, 2)
-    degraded = any(v.get("status") == "degraded" for v in checks.values())
-    return {"status": "degraded" if degraded else "ok", "service": "execution-gateway", "checks": checks, "latency_ms": total, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    degraded = any(v.get("status") in ("degraded", "draining") for v in checks.values())
+    draining = checks.get("self", {}).get("status") == "draining"
+    status = "draining" if draining else ("degraded" if degraded else "ok")
+    return {"status": status, "service": "execution-gateway", "checks": checks, "latency_ms": total, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 
 @app.get("/v1/tools")

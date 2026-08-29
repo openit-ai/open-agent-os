@@ -10,7 +10,7 @@ Endpoints implement Internal Agent Interface (Section 17):
 from __future__ import annotations
 import asyncio
 from fastapi import FastAPI, HTTPException, Header, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import json
 
 from .config import settings
@@ -22,13 +22,46 @@ from .auth import resolve_caller_user  # H1: verified JWT identity
 from .internal_api import CreateSessionRequest, CreateSessionResponse, SendPromptRequest
 from .mattermost_adapter.webhook import router as mattermost_router
 from .demo import router as demo_router
+import logging
 import os
+import signal
 import time
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.1")
 
-# -- HA health helpers — liveness vs readiness --
-# /health & /healthz = liveness (always ok). /readyz = readiness with bounded real checks.
+# -- HA health helpers — liveness vs readiness (H4 strict) --
+# /health & /healthz = liveness (always 200). /readyz = readiness with bounded real checks: prod 503 on degraded/draining.
+def _is_production() -> bool:
+    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        if os.getenv(k, "").strip().lower() in ("production", "prod"):
+            return True
+    return False
+
+# graceful draining (H4: prod /readyz 503 when draining, liveness stays 200)
+_shutting_down: bool = False
+_active_requests: int = 0
+
+@app.middleware("http")
+async def _track_active_cp(request: Request, call_next):
+    global _active_requests
+    _active_requests += 1
+    try:
+        return await call_next(request)
+    finally:
+        _active_requests -= 1
+
+def _handle_sigterm_cp(signum, frame):
+    global _shutting_down
+    _shutting_down = True
+    logger.warning("SIGTERM received, draining %s active requests (30s)", _active_requests)
+
+try:
+    signal.signal(signal.SIGTERM, _handle_sigterm_cp)
+except Exception:
+    pass
+
 def _check_latency(fn):
     start = time.monotonic()
     try:
@@ -63,9 +96,15 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
         def _ping():
             with eng.connect() as conn:
                 conn.execute(text("SELECT 1"))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             fut = ex.submit(_ping)
             fut.result(timeout=timeout_s + 0.5)
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
         try:
             eng.dispose()
         except Exception:
@@ -87,9 +126,15 @@ def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
         import concurrent.futures
         def _ping():
             client.ping()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             fut = ex.submit(_ping)
             fut.result(timeout=timeout_s + 0.5)
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
         try:
             client.close()
         except Exception:
@@ -102,19 +147,95 @@ def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
             return
         raise RuntimeError(f"redis ping failed: {e}") from e
 
+def _bounded_vault_ping(timeout_s: float = 0.8) -> None:
+    vault_addr = (os.getenv("VAULT_ADDR", "") or "").strip()
+    vault_backend = (os.getenv("VAULT_BACKEND", "") or "").strip().lower()
+    legacy = {"", "encrypted_postgres", "encrypted-postgres", "legacy", "postgres", "none"}
+    configured = bool(vault_addr) or (vault_backend and vault_backend not in legacy)
+    if not configured:
+        raise RuntimeError("vault not configured")
+    try:
+        if vault_addr:
+            import concurrent.futures as _cf
+            def _http_check():
+                try:
+                    try:
+                        import httpx  # type: ignore
+                        import asyncio as _asyncio
+                        async def _do():
+                            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                                resp = await client.get(vault_addr.rstrip("/") + "/v1/sys/health", headers={})
+                                if resp.status_code not in (200, 204, 429, 472, 473):
+                                    raise RuntimeError(f"vault health {resp.status_code}")
+                        _asyncio.run(_do())
+                        return
+                    except ImportError:
+                        pass
+                    except Exception as e:
+                        raise e
+                    import urllib.request
+                    import ssl
+                    ctx = ssl._create_unverified_context() if vault_addr.startswith("https") else None
+                    req = urllib.request.Request(vault_addr.rstrip("/") + "/v1/sys/health")
+                    if os.getenv("VAULT_TOKEN"):
+                        req.add_header("X-Vault-Token", os.getenv("VAULT_TOKEN", ""))
+                    with urllib.request.urlopen(req, timeout=timeout_s, context=ctx) as resp:  # type: ignore
+                        code = getattr(resp, "status", 200) or 200
+                        if code not in (200, 204, 429, 472, 473):
+                            raise RuntimeError(f"vault health {code}")
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    raise RuntimeError(f"vault ping failed: {e}") from e
+            ex = _cf.ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = ex.submit(_http_check)
+                fut.result(timeout=timeout_s + 0.5)
+            finally:
+                try:
+                    ex.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    ex.shutdown(wait=False)
+            return
+        try:
+            from vault.external import get_vault_backend  # type: ignore
+            be = get_vault_backend()
+            if be is None:
+                return
+            import concurrent.futures as _cf2
+            import asyncio as _asyncio2
+            def _be_check():
+                try:
+                    ok = _asyncio2.run(be.health_check())  # type: ignore
+                    if not ok:
+                        raise RuntimeError("vault backend health_check false")
+                except Exception as e:
+                    raise RuntimeError(f"vault backend health failed: {e}") from e
+            ex2 = _cf2.ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = ex2.submit(_be_check)
+                fut.result(timeout=timeout_s + 0.5)
+            finally:
+                try:
+                    ex2.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    ex2.shutdown(wait=False)
+        except Exception as e:
+            raise RuntimeError(f"vault ping failed: {e}") from e
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"vault ping failed: {e}") from e
+
 def _ha_checks():
     checks: dict = {}
-    # DB check (bounded real ping when configured; degraded not exception, preserves test compat)
-    db_url = getattr(settings, "database_url", "") or os.getenv("DATABASE_URL", "")
+    db_url = getattr(settings, "database_url", "") or os.getenv("DATABASE_URL", "") or os.getenv("OAOS_DATABASE_URL", "")
     if db_url:
         def _db():
             _bounded_db_ping(db_url)
         checks["db"] = _check_latency(_db)
-        # attempt real ping if DATABASE_URL points to reachable host with short timeout
-        # fallback to format check above keeps fail-open & fast in tests
     else:
         checks["db"] = {"status": "skipped", "latency_ms": 0, "reason": "no DATABASE_URL"}
-    # Redis check
     redis_url = getattr(settings, "redis_url", "") or os.getenv("REDIS_URL", "")
     if redis_url:
         def _redis():
@@ -122,9 +243,22 @@ def _ha_checks():
         checks["redis"] = _check_latency(_redis)
     else:
         checks["redis"] = {"status": "skipped", "latency_ms": 0, "reason": "no REDIS_URL"}
-    # self check
-    checks["self"] = {"status": "ok", "latency_ms": 0}
+    vault_addr = (os.getenv("VAULT_ADDR", "") or "").strip()
+    vault_backend = (os.getenv("VAULT_BACKEND", "") or "").strip().lower()
+    legacy = {"", "encrypted_postgres", "encrypted-postgres", "legacy", "postgres", "none"}
+    vault_configured = bool(vault_addr) or (vault_backend and vault_backend not in legacy)
+    if vault_configured:
+        def _vault():
+            _bounded_vault_ping()
+        checks["vault"] = _check_latency(_vault)
+    else:
+        checks["vault"] = {"status": "skipped", "latency_ms": 0, "reason": "no VAULT_ADDR/VAULT_BACKEND"}
+    if _shutting_down:
+        checks["self"] = {"status": "draining", "latency_ms": 0, "active_requests": _active_requests}
+    else:
+        checks["self"] = {"status": "ok", "latency_ms": 0, "active_requests": _active_requests}
     return checks
+
 acp = ACPAdapter(settings.hermes_base_url)
 app.include_router(mattermost_router, prefix="/v1", tags=["mattermost"])
 app.include_router(demo_router, prefix="/v1", tags=["demo"])
@@ -192,22 +326,32 @@ def health():
 
 @app.get("/healthz")
 def healthz():
+    # H4 liveness: always 200 regardless of readiness/draining
     return {"status": "ok", "service": "control-plane"}
 
 @app.get("/readyz")
 def readyz():
     checks = _ha_checks()
-    # fail-open: always 200 even if degraded
-    degraded = any(v.get("status") == "degraded" for v in checks.values())
-    return {"status": "degraded" if degraded else "ok", "service": "control-plane", "checks": checks}
+    # H4 strict: degraded or draining -> prod 503, non-prod 200 compat
+    degraded = any(v.get("status") in ("degraded", "draining") for v in checks.values())
+    draining = checks.get("self", {}).get("status") == "draining"
+    status = "draining" if draining else ("degraded" if degraded else "ok")
+    body = {"status": status, "service": "control-plane", "checks": checks}
+    if (degraded or draining) and _is_production():
+        return JSONResponse(status_code=503, content=body)
+    # explicit non-prod compatibility: 200 even when degraded
+    return body
 
 @app.get("/v1/health/detailed")
 def health_detailed():
     start = time.monotonic()
     checks = _ha_checks()
     total = round((time.monotonic() - start) * 1000, 2)
-    degraded = any(v.get("status") == "degraded" for v in checks.values())
-    return {"status": "degraded" if degraded else "ok", "service": "control-plane", "checks": checks, "latency_ms": total, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    degraded = any(v.get("status") in ("degraded", "draining") for v in checks.values())
+    draining = checks.get("self", {}).get("status") == "draining"
+    status = "draining" if draining else ("degraded" if degraded else "ok")
+    # detailed stays 200 but reports degraded/draining status explicitly
+    return {"status": status, "service": "control-plane", "checks": checks, "latency_ms": total, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
 async def create_session(req: CreateSessionRequest, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
