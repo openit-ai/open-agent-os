@@ -1,4 +1,8 @@
-"""Outline source adapter fixture (no live API)."""
+"""Outline source adapters.
+
+- OutlineSourceAdapter: in-memory fixture (no live API) for tests — preserved.
+- HttpOutlineSourceAdapter: real read-only Outline HTTP adapter (see http_outline.py).
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,13 @@ from typing import Any
 from ..chunking import content_hash
 from ..models import SourceDocument
 from .base import FetchResult, InMemorySourceAdapter
+
+# Re-export real HTTP adapter
+from .http_outline import (
+    HttpOutlineSourceAdapter,
+    OutlineAPIError,
+    OutlineSourceConfig,
+)
 
 
 def _iso_now() -> str:
@@ -38,7 +49,16 @@ def make_outline_doc(
 
 
 class OutlineSourceAdapter(InMemorySourceAdapter):
-    """Outline in-memory adapter with ACL metadata."""
+    """Outline in-memory adapter with ACL metadata (fixture / tests)."""
 
     def __init__(self, documents: list[SourceDocument] | None = None, fail_times: int = 0) -> None:
         super().__init__(source_system="outline", documents=documents, fail_times=fail_times)
+
+
+__all__ = [
+    "make_outline_doc",
+    "OutlineSourceAdapter",
+    "HttpOutlineSourceAdapter",
+    "OutlineSourceConfig",
+    "OutlineAPIError",
+]
