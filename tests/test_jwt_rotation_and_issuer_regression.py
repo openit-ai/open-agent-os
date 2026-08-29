@@ -311,42 +311,55 @@ def test_admin_auth_rotation_and_fail_closed():
         sys.path.insert(0, str(p.parent))
     spec = importlib.util.spec_from_file_location(mod_name, str(p))
     m = importlib.util.module_from_spec(spec)  # type: ignore
+    _prev_auth = sys.modules.get("auth")
+    _prev_mod = sys.modules.get(mod_name)
     sys.modules[mod_name] = m
     sys.modules["auth"] = m  # backend/auth.py does `from auth import` fallback; provide bare alias
-    spec.loader.exec_module(m)  # type: ignore
-    # Pydantic v2 needs model_rebuild when same file is loaded twice in one process
     try:
-        m.AdminUser.model_rebuild()  # type: ignore
-        m.AdminUserPublic.model_rebuild()  # type: ignore
-    except Exception:
-        pass
-    os.environ["ADMIN_JWT_SECRET"] = KEY_A
-    os.environ.pop("OAOS_ENV", None)
-    tok_a, _ = m._create_jwt("admin@openit.co.kr", "L5")
-    # verify via get_current_admin path (dynamic getter)
-    # decode manually to ensure it was signed with KEY_A
-    payload_a = jwt.decode(tok_a, KEY_A, algorithms=["HS256"])
-    assert payload_a["sub"] == "admin@openit.co.kr"
-    # rotate
-    os.environ["ADMIN_JWT_SECRET"] = KEY_B
-    # old token must fail with new secret
-    with pytest.raises(Exception):
-        jwt.decode(tok_a, KEY_B, algorithms=["HS256"])
-    # new token with new secret must succeed
-    tok_b, _ = m._create_jwt("admin@openit.co.kr", "L5")
-    payload_b = jwt.decode(tok_b, KEY_B, algorithms=["HS256"])
-    assert payload_b["sub"] == "admin@openit.co.kr"
-    # __getattr__ dynamic
-    assert m.JWT_SECRET == KEY_B
-    os.environ["ADMIN_JWT_SECRET"] = KEY_A
-    assert m.JWT_SECRET == KEY_A
-    # production fail-closed: setting OAOS_ENV=production with dev key must raise on get_jwt_secret
-    os.environ["OAOS_ENV"] = "production"
-    os.environ["ADMIN_JWT_SECRET"] = "dev-admin-jwt-secret-please-change"
-    with pytest.raises(RuntimeError):
-        m.get_jwt_secret()
-    os.environ.pop("OAOS_ENV", None)
-    os.environ["ADMIN_JWT_SECRET"] = UNIFIED
+        spec.loader.exec_module(m)  # type: ignore
+        # Pydantic v2 needs model_rebuild when same file is loaded twice in one process
+        try:
+            m.AdminUser.model_rebuild()  # type: ignore
+            m.AdminUserPublic.model_rebuild()  # type: ignore
+        except Exception:
+            pass
+        os.environ["ADMIN_JWT_SECRET"] = KEY_A
+        os.environ.pop("OAOS_ENV", None)
+        tok_a, _ = m._create_jwt("admin@openit.co.kr", "L5")
+        # verify via get_current_admin path (dynamic getter)
+        # decode manually to ensure it was signed with KEY_A
+        payload_a = jwt.decode(tok_a, KEY_A, algorithms=["HS256"])
+        assert payload_a["sub"] == "admin@openit.co.kr"
+        # rotate
+        os.environ["ADMIN_JWT_SECRET"] = KEY_B
+        # old token must fail with new secret
+        with pytest.raises(Exception):
+            jwt.decode(tok_a, KEY_B, algorithms=["HS256"])
+        # new token with new secret must succeed
+        tok_b, _ = m._create_jwt("admin@openit.co.kr", "L5")
+        payload_b = jwt.decode(tok_b, KEY_B, algorithms=["HS256"])
+        assert payload_b["sub"] == "admin@openit.co.kr"
+        # __getattr__ dynamic
+        assert m.JWT_SECRET == KEY_B
+        os.environ["ADMIN_JWT_SECRET"] = KEY_A
+        assert m.JWT_SECRET == KEY_A
+        # production fail-closed: setting OAOS_ENV=production with dev key must raise on get_jwt_secret
+        os.environ["OAOS_ENV"] = "production"
+        os.environ["ADMIN_JWT_SECRET"] = "dev-admin-jwt-secret-please-change"
+        with pytest.raises(RuntimeError):
+            m.get_jwt_secret()
+    finally:
+        # restore previous modules to avoid bare-alias pollution for later tests (L4 fixture regression)
+        if _prev_mod is None:
+            sys.modules.pop(mod_name, None)
+        else:
+            sys.modules[mod_name] = _prev_mod
+        if _prev_auth is None:
+            sys.modules.pop("auth", None)
+        else:
+            sys.modules["auth"] = _prev_auth
+        os.environ.pop("OAOS_ENV", None)
+        os.environ["ADMIN_JWT_SECRET"] = UNIFIED
 
 def test_security_app_signing_key_rotation_via_middleware():
     import importlib.util

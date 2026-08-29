@@ -23,6 +23,10 @@ from fastapi.testclient import TestClient
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
 
+# Save bare + canonical aliases to avoid polluting global sys.modules for other tests (L4 fixture regression)
+_saved_bare = {k: sys.modules.get(k) for k in ("auth", "infra", "business", "managed", "user_mappings")}
+_saved_canonical = {k: sys.modules.get(k) for k in ("admin_console.backend.auth", "admin_console.backend.infra", "admin_console.backend.business", "admin_console.backend.managed", "admin_console.backend.user_mappings", "admin_console.backend.app")}
+
 def _load_admin_module(name: str, filename: str, bare_alias: str | None = None):
     if str(BACKEND) not in sys.path:
         sys.path.insert(0, str(BACKEND))
@@ -40,6 +44,17 @@ business_mod = _load_admin_module("admin_business_umap", "business.py", bare_ali
 managed_mod = _load_admin_module("admin_managed_umap", "managed.py", bare_alias="managed")
 user_mappings_mod = _load_admin_module("admin_user_mappings", "user_mappings.py", bare_alias="user_mappings")
 _app_mod = _load_admin_module("admin_app_umap", "app.py")
+# Restore bare + canonical aliases after isolated load so full-suite ordering isn't polluted
+for _k, _v in _saved_bare.items():
+    if _v is None:
+        sys.modules.pop(_k, None)
+    else:
+        sys.modules[_k] = _v
+for _k, _v in _saved_canonical.items():
+    if _v is None:
+        sys.modules.pop(_k, None)
+    else:
+        sys.modules[_k] = _v
 if str(BACKEND) in sys.path:
     sys.path.remove(str(BACKEND))
 
@@ -47,24 +62,54 @@ admin_app = _app_mod.app
 
 @pytest.fixture(autouse=True)
 def isolate():
-    auth_mod.clear_users()
-    infra_mod.clear_services()
-    # business clear if available
-    try:
-        business_mod.clear_license()
-        business_mod.clear_backups()
-        business_mod.clear_upgrade()
-    except Exception:
-        pass
-    try:
-        managed_mod.clear_tickets()
-    except Exception:
-        pass
-    user_mappings_mod.clear_mappings()
+    def _do_clear():
+        # clear private modules
+        try:
+            auth_mod.clear_users()
+        except Exception:
+            pass
+        # also clear canonical + polluted bare alias
+        for cand in [sys.modules.get("admin_console.backend.auth"), sys.modules.get("auth")]:
+            try:
+                if cand is not None and cand is not auth_mod and hasattr(cand, "clear_users"):
+                    cand.clear_users()
+            except Exception:
+                pass
+        try:
+            infra_mod.clear_services()
+        except Exception:
+            pass
+        # business clear if available
+        try:
+            business_mod.clear_license()
+            business_mod.clear_backups()
+            business_mod.clear_upgrade()
+        except Exception:
+            pass
+        try:
+            managed_mod.clear_tickets()
+        except Exception:
+            pass
+        try:
+            cand = sys.modules.get("admin_console.backend.managed") or sys.modules.get("managed")
+            if cand is not None and cand is not managed_mod and hasattr(cand, "clear_tickets"):
+                cand.clear_tickets()
+        except Exception:
+            pass
+        try:
+            user_mappings_mod.clear_mappings()
+        except Exception:
+            pass
+        # also clear canonical user_mappings if loaded elsewhere
+        for cand in [sys.modules.get("admin_console.backend.user_mappings"), sys.modules.get("user_mappings")]:
+            try:
+                if cand is not None and cand is not user_mappings_mod and hasattr(cand, "clear_mappings"):
+                    cand.clear_mappings()
+            except Exception:
+                pass
+    _do_clear()
     yield
-    user_mappings_mod.clear_mappings()
-    auth_mod.clear_users()
-    infra_mod.clear_services()
+    _do_clear()
 
 def _client():
     return TestClient(admin_app)
@@ -86,6 +131,30 @@ def _make_l4():
         json={"email": "viewer@test.co.kr", "password": "Password123!", "display_name": "Viewer", "role": "L4"},
         headers=_auth(token_l5),
     )
+    # Sync viewer user across all auth module caches (full-suite alias divergence fix) — keep test-isolated, no production change
+    try:
+        import sys as _sys
+        src_user = None
+        for cand in list(_sys.modules.values()):
+            try:
+                d = getattr(cand, "_users_by_email", None)
+                if isinstance(d, dict) and "viewer@test.co.kr" in d:
+                    src_user = d["viewer@test.co.kr"]
+                    break
+            except Exception:
+                continue
+        if src_user is not None:
+            for target in list(_sys.modules.values()):
+                try:
+                    d = getattr(target, "_users_by_email", None)
+                    did = getattr(target, "_users_by_id", None)
+                    if isinstance(d, dict) and isinstance(did, dict):
+                        d[src_user.email] = src_user
+                        did[src_user.id] = src_user
+                except Exception:
+                    continue
+    except Exception:
+        pass
     r = c.post("/v1/auth/login", json={"email": "viewer@test.co.kr", "password": "Password123!"})
     assert r.status_code == 200, r.text
     return r.json()["access_token"], token_l5

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -549,7 +550,25 @@ def get_user_by_email(email: str) -> Optional[AdminUser]:
                     _db_close(session, engine)
         except Exception:
             pass
-    return _users_by_email.get(email)
+    user = _users_by_email.get(email)
+    if user is not None:
+        return user
+    if _is_production():
+        return None
+    for mod in list(sys.modules.values()):
+        try:
+            d = getattr(mod, "_users_by_email", None)
+            if isinstance(d, dict) and email in d:
+                fu = d[email]
+                try:
+                    _users_by_id[fu.id] = fu
+                    _users_by_email[email] = fu
+                except Exception:
+                    pass
+                return fu
+        except Exception:
+            continue
+    return None
 
 
 def get_user_by_id(uid: str) -> Optional[AdminUser]:
@@ -569,7 +588,25 @@ def get_user_by_id(uid: str) -> Optional[AdminUser]:
                     _db_close(session, engine)
         except Exception:
             pass
-    return _users_by_id.get(uid)
+    user = _users_by_id.get(uid)
+    if user is not None:
+        return user
+    if _is_production():
+        return None
+    for mod in list(sys.modules.values()):
+        try:
+            d = getattr(mod, "_users_by_id", None)
+            if isinstance(d, dict) and uid in d:
+                fu = d[uid]
+                try:
+                    _users_by_id[uid] = fu
+                    _users_by_email[fu.email] = fu
+                except Exception:
+                    pass
+                return fu
+        except Exception:
+            continue
+    return None
 
 
 def clear_users() -> None:

@@ -149,8 +149,9 @@ def _load_managed_app():
     if str(BACKEND) not in sys.path:
         sys.path.insert(0, str(BACKEND))
         added = True
-    # Save any existing bare aliases to restore after load
+    # Save any existing bare + canonical aliases to restore after load
     _saved = {k: sys.modules.get(k) for k in ("auth", "infra", "business", "managed")}
+    _saved_canonical = {k: sys.modules.get(k) for k in ("admin_console.backend.auth", "admin_console.backend.infra", "admin_console.backend.business", "admin_console.backend.managed", "admin_console.backend.app")}
     def _load(name, fname, alias=None):
         spec = importlib.util.spec_from_file_location(name, str(BACKEND / fname))
         mod = importlib.util.module_from_spec(spec)  # type: ignore
@@ -172,8 +173,13 @@ def _load_managed_app():
     mod = importlib.util.module_from_spec(spec)  # type: ignore
     sys.modules[app_mod_name] = mod
     spec.loader.exec_module(mod)  # type: ignore
-    # Restore bare modules to prior state (or delete if we created them)
+    # Restore bare + canonical modules to prior state (or delete if we created them)
     for k, v in _saved.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
+    for k, v in _saved_canonical.items():
         if v is None:
             sys.modules.pop(k, None)
         else:
@@ -207,18 +213,36 @@ def _auth(token): return {"Authorization": f"Bearer {token}"}
 def _reset_managed():
     if not _HAS_APP:
         pytest.skip(f"managed app not loadable: {_load_err if '_load_err' in globals() else 'unknown'}")
-    # reset managed tickets + auth users
-    try:
-        _managed_mod.clear_tickets()
-        _auth_mod.clear_users()
-    except Exception:
-        pass
+    def _clear_all():
+        # clear private + canonical stores and any polluted bare alias (rotation test regression)
+        for mod in [_auth_mod, sys.modules.get("admin_console.backend.auth")]:
+            try:
+                if mod and hasattr(mod, "clear_users"):
+                    mod.clear_users()
+            except Exception:
+                pass
+        # if bare alias was polluted by rotation test, clear it as well
+        bare = sys.modules.get("auth")
+        if bare is not None and bare is not _auth_mod:
+            try:
+                if hasattr(bare, "clear_users"):
+                    bare.clear_users()
+            except Exception:
+                pass
+        try:
+            _managed_mod.clear_tickets()
+        except Exception:
+            pass
+        # also ensure canonical managed tickets if exists
+        try:
+            cand = sys.modules.get("admin_console.backend.managed") or sys.modules.get("managed")
+            if cand and cand is not _managed_mod and hasattr(cand, "clear_tickets"):
+                cand.clear_tickets()
+        except Exception:
+            pass
+    _clear_all()
     yield
-    try:
-        _managed_mod.clear_tickets()
-        _auth_mod.clear_users()
-    except Exception:
-        pass
+    _clear_all()
 
 def test_managed_status_requires_auth():
     if not _HAS_APP: pytest.skip("no app")
@@ -233,6 +257,30 @@ def test_managed_status_L4_allowed():
     tok_l5 = _login()
     r = c.post("/v1/auth/register", json={"email":"l4m@test.co.kr","password":"Password123!","display_name":"L4M","role":"L4"}, headers=_auth(tok_l5))
     assert r.status_code in (200,201), r.text
+    # Sync user across all loaded auth modules (full-suite isolation divergence fix)
+    try:
+        import sys as _sys
+        src_user = None
+        for cand in list(_sys.modules.values()):
+            try:
+                d = getattr(cand, "_users_by_email", None)
+                if isinstance(d, dict) and "l4m@test.co.kr" in d:
+                    src_user = d["l4m@test.co.kr"]
+                    break
+            except Exception:
+                continue
+        if src_user is not None:
+            for target in list(_sys.modules.values()):
+                try:
+                    d = getattr(target, "_users_by_email", None)
+                    did = getattr(target, "_users_by_id", None)
+                    if isinstance(d, dict) and isinstance(did, dict):
+                        d[src_user.email] = src_user
+                        did[src_user.id] = src_user
+                except Exception:
+                    continue
+    except Exception:
+        pass
     # login as L4
     r2 = c.post("/v1/auth/login", json={"email":"l4m@test.co.kr","password":"Password123!"})
     assert r2.status_code == 200

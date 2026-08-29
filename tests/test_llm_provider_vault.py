@@ -351,8 +351,13 @@ def test_db_backed_sqlite_memory():
     # Use sqlite memory for this test — set OAOS_DATABASE_URL
     import tempfile
 
-    # create a temp sqlite file so multiple connections share state (4 slashes = absolute path)
-    db_url = "sqlite:////tmp/test_llm_provider_vault.db"
+    import pathlib as _pl
+
+    # use a unique temp file to avoid cross-run pollution (previous version used fixed /tmp path)
+    _tf = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    _tmp_path = _pl.Path(_tf.name)
+    _tf.close()
+    db_url = f"sqlite:////{_tmp_path}"
     old_url = os.environ.get("OAOS_DATABASE_URL")
     old_db = os.environ.get("DATABASE_URL")
     os.environ["OAOS_DATABASE_URL"] = db_url
@@ -393,89 +398,109 @@ def test_db_backed_sqlite_memory():
     except Exception:
         pass
 
-    token = _login()
-    c = _client()
-    h = _auth(token)
-    raw = "sk-db-test-1234567890abcdef"
-    r = c.post("/v1/llm/providers", json={"provider": "claude", "apiKey": raw, "model": "claude-3"}, headers=h)
-    assert r.status_code == 201, r.text
-    pid = r.json()["id"]
-    assert "***" in r.json()["apiKey"]
-    assert raw not in r.text
-
-    # Verify DB row has encrypted_api_key and secret_ref, not raw
     try:
-        from sqlalchemy import create_engine, text
+        token = _login()
+        c = _client()
+        h = _auth(token)
+        raw = "sk-db-test-1234567890abcdef"
+        r = c.post("/v1/llm/providers", json={"provider": "claude", "apiKey": raw, "model": "claude-3"}, headers=h)
+        assert r.status_code == 201, r.text
+        pid = r.json()["id"]
+        assert "***" in r.json()["apiKey"]
+        assert raw not in r.text
 
-        sync_url = llm_mod._normalize_sync_url(db_url)
-        eng = create_engine(sync_url)
-        with eng.connect() as conn:
-            row = conn.execute(text("SELECT id, provider, encrypted_api_key, secret_ref, vault_backend FROM admin_llm_providers WHERE id=:id"), {"id": pid}).fetchone()
-            assert row is not None, "DB row not found"
-            assert row[2] is not None and row[2].startswith("gAAAAA"), f"encrypted_api_key not Fernet: {row[2]}"
-            assert row[2] != raw
-            assert raw not in str(row[2])
-            assert row[3] == f"vault://admin_llm_providers/{pid}/api_key"
-            assert row[4] == "fernet"
-        eng.dispose()
-    except Exception as e:
-        pytest.fail(f"DB verification failed: {e}")
-
-    # GET via DB should still mask
-    r2 = c.get(f"/v1/llm/providers/{pid}", headers=h)
-    assert r2.status_code == 200
-    assert raw not in r2.text
-    assert "***" in r2.json()["apiKey"]
-
-    # LIST via DB
-    r3 = c.get("/v1/llm/providers", headers=h)
-    assert r3.status_code == 200
-    assert any(x["id"] == pid for x in r3.json()["providers"])
-
-    # cleanup
-    llm_mod.clear_providers()
-    # remove sqlite file
-    try:
-        Path("/tmp/test_llm_provider_vault.db").unlink(missing_ok=True)
-    except Exception:
-        pass
-    # restore env and reset caches for next tests (both private and canonical)
-    if old_url is not None:
-        os.environ["OAOS_DATABASE_URL"] = old_url
-    else:
-        os.environ.pop("OAOS_DATABASE_URL", None)
-    if old_db is not None:
-        os.environ["DATABASE_URL"] = old_db
-    else:
-        os.environ.pop("DATABASE_URL", None)
-    for _m in (llm_mod, sys.modules.get("admin_console.backend.llm_providers"), sys.modules.get("llm_providers")):
+        # Verify DB row has encrypted_api_key and secret_ref, not raw
         try:
-            if _m is not None:
-                if hasattr(_m, "_reset_db_cache"):
-                    _m._reset_db_cache()
-                else:
-                    if hasattr(_m, "_db_engine"):
-                        _m._db_engine = None
-                    if hasattr(_m, "_db_session_factory"):
-                        _m._db_session_factory = None
-                    if hasattr(_m, "_db_cached_url"):
-                        _m._db_cached_url = None
-                if hasattr(_m, "_fernet_cache"):
-                    try:
-                        _m._fernet_cache.clear()
-                    except Exception:
-                        pass
+            from sqlalchemy import create_engine, text
+
+            sync_url = llm_mod._normalize_sync_url(db_url)
+            eng = create_engine(sync_url)
+            with eng.connect() as conn:
+                row = conn.execute(text("SELECT id, provider, encrypted_api_key, secret_ref, vault_backend FROM admin_llm_providers WHERE id=:id"), {"id": pid}).fetchone()
+                assert row is not None, "DB row not found"
+                assert row[2] is not None and row[2].startswith("gAAAAA"), f"encrypted_api_key not Fernet: {row[2]}"
+                assert row[2] != raw
+                assert raw not in str(row[2])
+                assert row[3] == f"vault://admin_llm_providers/{pid}/api_key"
+                assert row[4] == "fernet"
+            eng.dispose()
+        except Exception as e:
+            pytest.fail(f"DB verification failed: {e}")
+
+        # GET via DB should still mask
+        r2 = c.get(f"/v1/llm/providers/{pid}", headers=h)
+        assert r2.status_code == 200
+        assert raw not in r2.text
+        assert "***" in r2.json()["apiKey"]
+
+        # LIST via DB
+        r3 = c.get("/v1/llm/providers", headers=h)
+        assert r3.status_code == 200
+        assert any(x["id"] == pid for x in r3.json()["providers"])
+    finally:
+        # always cleanup even if verification fails
+        try:
+            llm_mod.clear_providers()
         except Exception:
             pass
-    llm_mod._fernet_cache.clear()
-    os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
-    llm_mod.clear_providers()
-    try:
-        canon = sys.modules.get("admin_console.backend.llm_providers")
-        if canon is not None and hasattr(canon, "clear_providers"):
-            canon.clear_providers()
-    except Exception:
-        pass
+        try:
+            _tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        # also try legacy fixed path cleanup for old runs
+        try:
+            Path("/tmp/test_llm_provider_vault.db").unlink(missing_ok=True)
+        except Exception:
+            pass
+        if old_url is not None:
+            os.environ["OAOS_DATABASE_URL"] = old_url
+        else:
+            os.environ.pop("OAOS_DATABASE_URL", None)
+        if old_db is not None:
+            os.environ["DATABASE_URL"] = old_db
+        else:
+            os.environ.pop("DATABASE_URL", None)
+        for _m in (llm_mod, sys.modules.get("admin_console.backend.llm_providers"), sys.modules.get("llm_providers")):
+            try:
+                if _m is not None:
+                    if hasattr(_m, "_reset_db_cache"):
+                        _m._reset_db_cache()
+                    else:
+                        if hasattr(_m, "_db_engine"):
+                            _m._db_engine = None
+                        if hasattr(_m, "_db_session_factory"):
+                            _m._db_session_factory = None
+                        if hasattr(_m, "_db_cached_url"):
+                            _m._db_cached_url = None
+                    if hasattr(_m, "_fernet_cache"):
+                        try:
+                            _m._fernet_cache.clear()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        try:
+            llm_mod._fernet_cache.clear()
+        except Exception:
+            pass
+        os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
+        try:
+            llm_mod.clear_providers()
+        except Exception:
+            pass
+        try:
+            canon = sys.modules.get("admin_console.backend.llm_providers")
+            if canon is not None and hasattr(canon, "clear_providers"):
+                canon.clear_providers()
+        except Exception:
+            pass
+        # also ensure auth DB state is clean for following tests
+        try:
+            for mod in [sys.modules.get("admin_console.backend.auth"), sys.modules.get("auth")]:
+                if mod and hasattr(mod, "clear_users"):
+                    mod.clear_users()
+        except Exception:
+            pass
 
 
 def test_009_migration_columns_exist():
