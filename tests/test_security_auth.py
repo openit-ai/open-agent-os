@@ -35,8 +35,12 @@ if str(ROOT / "security") not in sys.path:
     sys.path.insert(0, str(ROOT / "security"))
 
 TEST_SIGNING_KEY = "test-security-auth-signing-key-32bytes-long!!"
-os.environ["OAOS_SIGNING_KEY"] = TEST_SIGNING_KEY
+# One explicit env-configured signing key contract: security/auth.py reads
+# OAOS_SECURITY_SERVICE_SIGNING_KEY primary, OAOS_SIGNING_KEY fallback.
+# Test fixtures MUST set OAOS_SECURITY_SERVICE_SIGNING_KEY to the same value
+# used for signing, keeping verification and fixture keys in sync (TDD).
 os.environ["OAOS_SECURITY_SERVICE_SIGNING_KEY"] = TEST_SIGNING_KEY
+os.environ["OAOS_SIGNING_KEY"] = TEST_SIGNING_KEY
 os.environ.pop("OAOS_ENV", None)
 
 from fastapi.testclient import TestClient
@@ -257,3 +261,78 @@ def test_delegation_grant_requires_auth():
     r = c.post("/v1/delegation/grant", json={"user_id": "employee:kim", "agent_id": "agent:assistant:kim", "provider": "google", "scope": "gmail.read"}, headers=_auth_header(token))
     assert r.status_code == 200, r.text
     assert "id" in r.json()
+
+def test_missing_iat_401():
+    c = TestClient(app)
+    token = _make_cp_jwt(extra={"iat": None})
+    r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=_auth_header(token))
+    assert r.status_code == 401, r.text
+
+def test_missing_jti_401():
+    c = TestClient(app)
+    token = _make_cp_jwt(extra={"jti": None})
+    r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=_auth_header(token))
+    assert r.status_code == 401, r.text
+
+def test_missing_exp_401():
+    c = TestClient(app)
+    token = _make_cp_jwt(extra={"exp": None})
+    r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=_auth_header(token))
+    assert r.status_code == 401, r.text
+
+def test_missing_tenant_id_401():
+    c = TestClient(app)
+    token = _make_cp_jwt(extra={"tenant_id": None})
+    r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=_auth_header(token))
+    assert r.status_code == 401, r.text
+
+def test_missing_aud_401():
+    c = TestClient(app)
+    token = _make_cp_jwt(extra={"aud": None})
+    r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=_auth_header(token))
+    assert r.status_code == 401, r.text
+
+def test_spoof_headers_never_authenticate_even_with_valid_jwt_present():
+    """mTLS spoof headers must never authenticate; valid JWT path still governs."""
+    c = TestClient(app)
+    token = _make_cp_jwt(tenant_id="acme")
+    # spoof header alone (no JWT) already 401, but also ensure that when JWT is valid,
+    # adding spoof headers does not change auth outcome (still 200 for matching tenant,
+    # still 403 for mismatch). This proves spoof headers are ignored.
+    headers_ok = {**_auth_header(token), "X-Client-Cert-CN": "control-plane"}
+    r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=headers_ok)
+    assert r.status_code == 200, r.text
+    # mismatch tenant with spoof header must still be 403/401, not bypassed to 200
+    headers_bad = {**_auth_header(token), "X-SSL-Client-CN": "control-plane"}
+    r2 = c.post("/v1/policy/evaluate", json={"tenant_id": "evil-tenant", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=headers_bad)
+    assert r2.status_code in (401, 403), r2.text
+
+def test_all_mtls_spoof_variants_rejected():
+    """Exhaustive spoof header variants must never authenticate (fail-closed)."""
+    c = TestClient(app)
+    spoof_variants = [
+        {"X-Client-Cert-CN": "control-plane"},
+        {"X-SSL-Client-CN": "control-plane"},
+        {"X-Client-CN": "control-plane"},
+        {"X-MTLS-CN": "control-plane"},
+        {"X-TLS-Client-CN": "control-plane"},
+        {"X-Client-Cert-CN": "execution-gateway"},
+        {"X-SSL-Client-CN": "execution-gateway"},
+        {"X-Forwarded-Client-Cert": "control-plane"},
+        {"X-Client-Cert-DN": "CN=control-plane"},
+    ]
+    for h in spoof_variants:
+        r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=h)
+        assert r.status_code == 401, f"spoof {h} must be 401, got {r.status_code} {r.text}"
+
+def test_valid_jwt_signing_key_contract():
+    """One explicit env-configured signing key is used consistently by test fixtures and security/auth.py."""
+    # fixture key must equal service verification key; valid token reaches endpoint 200,
+    # wrong key remains 401 (signature-invalid).
+    c = TestClient(app)
+    valid = _make_cp_jwt(signing_key=TEST_SIGNING_KEY)
+    r = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=_auth_header(valid))
+    assert r.status_code == 200, r.text
+    invalid = _make_cp_jwt(signing_key="mismatched-key-32bytes-long-not-same!!")
+    r2 = c.post("/v1/policy/evaluate", json={"tenant_id": "acme", "user_id": "employee:kim", "agent_id": "agent:assistant:kim", "resource": "x", "action": "READ"}, headers=_auth_header(invalid))
+    assert r2.status_code == 401, r2.text

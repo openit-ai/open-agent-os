@@ -64,7 +64,9 @@ app = FastAPI(title="Open Agent OS — Security & Governance", version="0.1.1")
 
 # ── 전역 싱글톤 (프로세스 내 공유) ──────────────────────────────
 _DEV_SIGNING_KEY = "dev-signing-key-please-change"
-SIGNING_KEY = os.environ.get("OAOS_SIGNING_KEY", _DEV_SIGNING_KEY)
+# One explicit env-configured signing key contract: OAOS_SECURITY_SERVICE_SIGNING_KEY primary, OAOS_SIGNING_KEY fallback
+# Test fixtures must set OAOS_SECURITY_SERVICE_SIGNING_KEY to the same value used for signing (see tests/test_security_auth.py).
+SIGNING_KEY = os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY", _DEV_SIGNING_KEY)
 # Fail-closed in production: dev default OAOS_SIGNING_KEY must be overridden (like persistence.py)
 if os.environ.get("OAOS_ENV", "").lower() == "production" and SIGNING_KEY == _DEV_SIGNING_KEY:
     raise RuntimeError("OAOS_SIGNING_KEY must be set to a strong value when OAOS_ENV=production (fail-closed)")

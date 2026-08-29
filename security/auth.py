@@ -37,7 +37,13 @@ ALG = "HS256"
 
 
 def _signing_key() -> str:
-    return os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY", _DEV_SIGNING_KEY)
+    """One explicit env-configured signing key — OAOS_SECURITY_SERVICE_SIGNING_KEY primary, OAOS_SIGNING_KEY fallback.
+    Both map to the same value in test fixtures; production fail-closed if dev default would be used."""
+    key = os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY") or _DEV_SIGNING_KEY
+    # fail-closed in production: do not silently accept dev key (app.py also guards)
+    if os.environ.get("OAOS_ENV", "").lower() == "production" and key == _DEV_SIGNING_KEY:
+        raise RuntimeError("OAOS_SECURITY_SERVICE_SIGNING_KEY / OAOS_SIGNING_KEY must be set in production (fail-closed)")
+    return key
 
 
 def _is_mtls_enabled() -> bool:
@@ -119,7 +125,10 @@ def _verify_jwt(token: str) -> dict:
         raise HTTPException(status_code=401, detail="missing tenant_id claim")
     if "exp" not in payload:
         raise HTTPException(status_code=401, detail="missing exp claim")
-    if "jti" not in payload or not payload.get("jti"):
+    if "iat" not in payload:
+        raise HTTPException(status_code=401, detail="missing iat claim")
+    jti = payload.get("jti")
+    if not jti or not isinstance(jti, str) or not jti.strip():
         raise HTTPException(status_code=401, detail="missing jti claim")
     return payload
 
