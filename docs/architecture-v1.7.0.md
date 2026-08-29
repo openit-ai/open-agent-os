@@ -1430,7 +1430,6 @@ Quota 분산, Vault 외부화, /readyz strict, env_gate 단일화
 ```
 
 ## 16.2 Hermes Runtime
-## 16.2 Hermes Runtime
 
 Hermes Runtime은 고복잡·고자율 작업을 위한 Advanced Runtime이다.
 
