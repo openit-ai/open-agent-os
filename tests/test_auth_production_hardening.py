@@ -128,6 +128,7 @@ def test_no_hardcoded_secret_literals_in_tracked_configs():
         assert "Admin123!" not in txt, f"{readme.name} must not contain hardcoded Admin123!"
     env_example = (ROOT / ".env.example").read_text()
     assert "openagentos:secret@" not in env_example
+    assert "oaos:secret@" not in env_example
     auth_txt = (BACKEND / "auth.py").read_text()
     assert "fail-closed" in auth_txt.lower()
     assert "OAOS_ADMIN_BOOTSTRAP_PASSWORD" in auth_txt

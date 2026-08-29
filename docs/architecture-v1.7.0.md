@@ -340,7 +340,7 @@ Customer Infrastructure
 ├─ PostgreSQL Instance                    ← Mattermost / Outline과 인스턴스 공유 가능
 │  ├─ DB: mattermost  / User: mattermost
 │  ├─ DB: outline     / User: outline
-│  └─ DB: openagentos / User: openagentos
+│  └─ DB: oaos / User: oaos
 │       └─ Extension: pgvector
 ├─ Redis                                  ← Cache / Queue / Lock / Hot State 전용
 └─ Optional Object Storage
@@ -357,14 +357,14 @@ Same Database / Same User
 Open Agent OS 권장값:
 
 ```text
-Database : openagentos
-User     : openagentos
-Owner    : openagentos
+Database : oaos
+User     : oaos
+Owner    : oaos
 ```
 
-`openagentos` DB는 Open Agent OS의 영속 상태와 Persistent Memory의 Source of Truth이며 Redis는 영속 Memory 저장소로 사용하지 않는다.
+`oaos` DB는 Open Agent OS의 영속 상태와 Persistent Memory의 Source of Truth이며 Redis는 영속 Memory 저장소로 사용하지 않는다.
 
-또한 **Admin Web UI에서 조회·설정·변경하는 모든 영속 운영 상태는 `openagentos`에 저장한다.**
+또한 **Admin Web UI에서 조회·설정·변경하는 모든 영속 운영 상태는 `oaos`에 저장한다.**
 단, OAuth refresh token, API key, private key, client secret, signing secret 등 Secret 원문은 일반 DB 컬럼에 저장하지 않고 Credential Vault에 보관한다.
 
 `Agent Runtime`은 필수 논리 계층이지만 특정 구현체는 고정하지 않는다.
@@ -1027,7 +1027,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
 ```text
 Admin UI (Next.js)
   ↓  Admin API (FastAPI /admin/*, RBAC)
-  ↓  openagentos DB: llm_provider_config  (secret 미포함)
+  ↓  oaos DB: llm_provider_config  (secret 미포함)
   ↓  Credential Vault: secret_ref  (실제 키)
 ```
 
@@ -1097,7 +1097,7 @@ class FallbackPolicy:
 
 #### (6) 보안 — Vault 기반 Secret 관리
 
-- 모든 외부 API 키(Anthropic, OpenAI, Google, OpenRouter, OpenCode-Go)는 **Credential Vault**에만 저장. DB에는 `secret_ref`만 보관. `openagentos` DB 덤프에 평문 키가 남지 않는다.
+- 모든 외부 API 키(Anthropic, OpenAI, Google, OpenRouter, OpenCode-Go)는 **Credential Vault**에만 저장. DB에는 `secret_ref`만 보관. `oaos` DB 덤프에 평문 키가 남지 않는다.
 - 조회 경로: `LLMProviderAdapter` → `Vault(secret_ref)` → 단기 메모리 캐시(TTL 5분) → `Authorization: Bearer` 헤더로만 사용. 디스크·로그에 키 기록 금지.
 - 테넌트 격리: `secret_ref`는 `{tenant_id}/{provider_id}` 네임스페이스에 바인딩 — 타 테넌트 키 교차 접근 불가.
 - Ollama/opencode 로컬 프로바이더는 키 없이 동작 가능(`auth_kind="none"`), 필요 시에도 Vault 경로를 동일하게 적용.
@@ -3406,7 +3406,7 @@ Hermes Runtime ──┼─→ Memory Service
                  │       ↓
 Future Runtime ──┘   Security / ACL
                          ↓
-                  PostgreSQL / openagentos
+                  PostgreSQL / oaos
                          +
                       pgvector
 ```
@@ -3430,8 +3430,8 @@ PostgreSQL Instance
 ├─ Database: outline
 │  └─ User / Owner: outline
 │
-└─ Database: openagentos
-   └─ User / Owner: openagentos
+└─ Database: oaos
+   └─ User / Owner: oaos
 ```
 
 원칙:
@@ -3439,16 +3439,16 @@ PostgreSQL Instance
 ```text
 Mattermost credential     → mattermost DB only
 Outline credential        → outline DB only
-Open Agent OS credential  → openagentos DB only
+Open Agent OS credential  → oaos DB only
 ```
 
 Open Agent OS 계정이 Mattermost 또는 Outline DB를 직접 읽는 구조를 만들지 않는다. 해당 데이터는 서비스 API / Connector / MCP 경로를 통해 접근한다.
 
 ---
 
-## 27.2 openagentos Database 역할
+## 27.2 oaos Database 역할
 
-`openagentos`는 Open Agent OS 영속 상태의 Source of Truth다.
+`oaos`는 Open Agent OS 영속 상태의 Source of Truth다.
 
 ```text
 Core
@@ -3506,7 +3506,7 @@ Authentication / Authorization
       ↓
 Application Service / Security Core
       ↓
-PostgreSQL / openagentos
+PostgreSQL / oaos
 ```
 
 금지:
@@ -3522,12 +3522,12 @@ LLM Runtime → PostgreSQL direct
 
 ```text
 Open Agent OS Backend / Admin API
-→ openagentos
+→ oaos
 ```
 
 ### Admin UI 영속 저장 대상
 
-Admin Console에서 조회·변경하는 영속 운영정보는 `openagentos`에 저장한다.
+Admin Console에서 조회·변경하는 영속 운영정보는 `oaos`에 저장한다.
 
 예:
 
@@ -3574,7 +3574,7 @@ signing secret
 session signing key
 ```
 
-Secret 원문은 Credential Vault에 저장하고 `openagentos`에는 참조값과 상태 metadata만 저장한다.
+Secret 원문은 Credential Vault에 저장하고 `oaos`에는 참조값과 상태 metadata만 저장한다.
 
 ### 최소 관리자 권한 모델
 
@@ -3631,8 +3631,8 @@ Initial Admin Password Change = REQUIRED
 ### PostgreSQL 접근 보안
 
 ```text
-DB: openagentos
-User: openagentos
+DB: oaos
+User: oaos
 ```
 
 초기 배포에서는 별도 애플리케이션 DB 계정을 추가로 쪼개지 않되 다음을 적용한다.
@@ -3640,7 +3640,7 @@ User: openagentos
 ```text
 PostgreSQL 외부 Internet 공개 금지
 고객 내부망 또는 localhost/private network만 허용
-openagentos 계정은 openagentos DB만 접근
+oaos 계정은 oaos DB만 접근
 Mattermost / Outline DB 접근 금지
 TLS 사용 가능 환경에서는 PostgreSQL TLS 사용
 DB password는 config 파일 평문 하드코딩 금지
@@ -3705,7 +3705,7 @@ Admin UI 화면 상태
 ≠ Browser Local State
 
 Admin UI 영속 상태
-= openagentos PostgreSQL
+= oaos PostgreSQL
 ```
 
 브라우저 localStorage/sessionStorage는 UI 편의용 임시상태에만 사용하고 정책, 권한, 승인, 보안설정의 Source of Truth로 사용하지 않는다.
@@ -3787,7 +3787,7 @@ Provenance Binding
      ↓
 ACL / Policy / Retention Check
      ↓
-PostgreSQL openagentos
+PostgreSQL oaos
 ```
 
 Memory Service는 최소한 owner/namespace/source/classification/retention을 확정한 뒤 저장한다.
@@ -3916,7 +3916,7 @@ Redis flush/restart가 발생해도 Open Agent OS의 영속 Memory, Policy, Dele
 
 ## 27.11 Backup / Restore
 
-`openagentos` Database는 필수 백업 대상이다.
+`oaos` Database는 필수 백업 대상이다.
 
 ```text
 Database backup
@@ -3934,7 +3934,7 @@ Memory / Provenance consistency check
 postgres instance
 ├─ mattermost backup
 ├─ outline backup
-└─ openagentos backup
+└─ oaos backup
 ```
 
 WAL/PITR은 지원 가능한 환경에서 추가하되 MVP 필수요건으로 강제하지 않는다.
@@ -4365,7 +4365,7 @@ Outline
 +
 Agent Runtime (LLM Runtime 또는 Hermes Runtime)
 +
-PostgreSQL / openagentos + pgvector
+PostgreSQL / oaos + pgvector
 +
 Google Workspace IAM
 +
@@ -4390,7 +4390,7 @@ Open Agent OS Core
 6. Drive 개인 위임
 7. Tasks 개인 위임
 8. Outline 권한 기반 retrieval
-9. Persistent Personal Memory (`openagentos` + pgvector)
+9. Persistent Personal Memory (`oaos` + pgvector)
 10. Default Policy Bundle
 11. JIT Approval
 12. Mattermost 관리자 승인
@@ -4626,7 +4626,7 @@ DENY
 
 ## Secret Plaintext Persistence
 
-Connector client secret / refresh token / API key가 `openagentos` 일반 컬럼에 평문 저장되는지 검사.
+Connector client secret / refresh token / API key가 `oaos` 일반 컬럼에 평문 저장되는지 검사.
 
 Expected:
 
@@ -4751,14 +4751,14 @@ Hermes Workspace = Per-session Isolation
 Hermes Egress = Controlled Proxy / Allowlist
 PostgreSQL Instance = Mattermost / Outline / Open Agent OS 공유 가능
 Service Database / User = 반드시 분리
-Open Agent OS DB = openagentos
-Open Agent OS DB User = openagentos
+Open Agent OS DB = oaos
+Open Agent OS DB User = oaos
 Persistent Memory = PostgreSQL + pgvector
 Memory Access = Memory Service only
 Agent Runtime Direct DB Access = DENY
 Redis = Cache / Queue / Lock / Hot State only
 Memory = Runtime-independent Source of Truth
-Admin UI Persistent State = openagentos PostgreSQL
+Admin UI Persistent State = oaos PostgreSQL
 Admin UI Direct DB Access = DENY
 Admin Access = Admin API + Authorization
 Admin Roles = Super Admin / Security Admin / Operator-Viewer
@@ -4856,17 +4856,17 @@ No direct Internal Resource Network Access
 20. 승인: 거절 / 일회 / 사용자 항상 / 그룹 항상.
 21. 최종 승인자는 사람.
 22. 최소 Admin Console.
-23. Persistent Memory는 `openagentos` PostgreSQL + pgvector를 Source of Truth로 사용.
+23. Persistent Memory는 `oaos` PostgreSQL + pgvector를 Source of Truth로 사용.
 24. credential owner isolation.
 25. retrieval 전 ACL.
 26. hash-chain audit + signed checkpoint.
 27. external export 별도 고위험 통제.
 28. Hermes core 수정 최소화.
 29. PostgreSQL 인스턴스는 Mattermost/Outline과 공유 가능하나 Database/User는 서비스별 분리.
-30. Open Agent OS Database/User 기본명은 `openagentos`.
+30. Open Agent OS Database/User 기본명은 `oaos`.
 31. Runtime은 DB에 직접 접근하지 않고 Memory Service를 사용.
 32. Redis는 영속 Memory Source of Truth로 사용하지 않음.
-33. Admin Web UI의 영속 운영 상태는 `openagentos`를 Source of Truth로 사용.
+33. Admin Web UI의 영속 운영 상태는 `oaos`를 Source of Truth로 사용.
 34. Admin Web UI는 PostgreSQL에 직접 연결하지 않고 Admin API를 통해 접근.
 35. Admin 최소 권한은 Super Admin / Security Admin / Operator-Viewer로 구분.
 36. Secret 원문은 DB가 아니라 Credential Vault에 저장하고 DB에는 `secret_ref`만 저장.
@@ -5001,7 +5001,7 @@ Audit
 
 | Version | Date | Changes |
 |---------|------|---------|
-| v1.6 | 2026-08-28 이전 | Runtime/Security/Persistence 확정 (LLM/Hermes dual, openagentos + pgvector, Admin UI 등) |
+| v1.6 | 2026-08-28 이전 | Runtime/Security/Persistence 확정 (LLM/Hermes dual, oaos + pgvector, Admin UI 등) |
 | **v1.6.1** | **2026-08-28** | **§27B Personal Wiki (Vault) 추가** — Vault 레이아웃(`/var/lib/oaos/vault/{tenant}/{agent:assistant:xxx}/{journal,notes,projects,files,attachments}`), 첨부 추출(pdf/docx/xlsx/pptx/image OCR → journal md + pgvector 1536), Tool 결과 자동 아카이빙(Execution Gateway every tool call → journal append with trace_id, Zero-Bypass), Obsidian/.md bulk import, 검색(memory_service pgvector + TF-IDF fallback), Owner isolation + Capability+Approval cross-agent, Consolidation daily scheduler via Hermes (02:00 KST) |
 | **v1.6.2** | **2026-08-28** | **§16.1.1 LLM Runtime Enhancements (pydantic-ai inspired)** — OAOSContext deps injection, output_type Pydantic BaseModel 검증, ToolOutputLimits 4000자 절삭, model string swap (`openai:gpt-4o` ↔ `ollama:llama3` 등), clean-room 재구현(MIT 코드 미복사) |
 | **v1.6.3** | **2026-08-28** | **§16.1.2 LLM Multi-Provider (6 Providers + Registry + Fallback + Hotfixes)** — 6 Providers(claude/codex/gemini/opencode-go/openrouter/ollama) Registry(Argo runners.mjs 패턴 ProviderSpec), Admin UI(llm_provider_config + Vault secret_ref, fallback_order), Runtime Dispatch(task/session/tenant 우선순위), Fallback(chain+circuit breaker+audit), Vault-only secrets(평문 DB 저장 금지, tenant 격리), **Hotfixes (2026-08-29)**: llm_runtime 7-key Registry + opencode alias(re-export), Provider fail-fast(503/mock 차단), runtime_mode DB 영속화(8010/3012 일치), hermes 409 guard(HERMES_MODE_NOOP), openrouter openai-SDK+httpx 이중 경로+tool_choice |

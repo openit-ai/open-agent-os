@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # backup.sh — Business edition backup (pg_dump + redis RDB + encrypt, retention, S3)
-# v1.6 §27.11: 3-DB individual backups (mattermost, outline, openagentos) even on shared instance,
+# v1.6 §27.11: 3-DB individual backups (mattermost, outline, oaos) even on shared instance,
 # plus pgvector dump verification and migration consistency check.
 # Usage: ./deploy/scripts/backup.sh [--dry-run] [--backup-dir DIR] [--verify|--check] [--db DB]
 # Env: POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, DATABASE_URL, REDIS_URL,
 #      REDIS_PASSWORD, BACKUP_DIR, BACKUP_RETENTION_DAYS (7), BACKUP_RETENTION_WEEKLY (30),
-#      BACKUP_PG_DBS (space-separated, default: openagentos mattermost outline),
+#      BACKUP_PG_DBS (space-separated, default: oaos mattermost outline),
 #      AGE_PUBLIC_KEY / AGE_RECIPIENT, GPG_RECIPIENT, AWS_S3_BUCKET, AWS_S3_REGION, AWS_S3_PREFIX
 # Cron: 0 2 * * * /opt/open-agent-os/deploy/scripts/backup.sh >> /var/log/oaos-backup.log 2>&1
 set -euo pipefail
@@ -21,7 +21,12 @@ RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 RETENTION_WEEKLY="${BACKUP_RETENTION_WEEKLY:-30}"
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 # §27.11 DB isolation: even on shared instance, DBs/users are separate
-BACKUP_PG_DBS="${BACKUP_PG_DBS:-openagentos mattermost outline}"
+_normalize_db() { case "$1" in openagentos|open_agent_os) echo "oaos" ;; *) echo "$1" ;; esac; }
+BACKUP_PG_DBS="${BACKUP_PG_DBS:-oaos mattermost outline}"
+# Transition: map legacy openagentos -> oaos in BACKUP_PG_DBS
+_normalized_dbs=""
+for _d in ${BACKUP_PG_DBS}; do _nd=$(_normalize_db "${_d}"); _normalized_dbs="${_normalized_dbs} ${_nd}"; done
+BACKUP_PG_DBS=$(echo "${_normalized_dbs}" | xargs 2>/dev/null || echo "${_normalized_dbs}")
 # allow filtering via --db (repeatable)
 _REQUESTED_DBS=""
 
@@ -31,12 +36,18 @@ while [[ $# -gt 0 ]]; do
     --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
     --verify|--check) DO_VERIFY=1; shift ;;
     --db) _REQUESTED_DBS="${_REQUESTED_DBS} $2"; shift 2 ;;
-    --help|-h) echo "Usage: $0 [--dry-run] [--backup-dir DIR] [--verify] [--db DB]"; echo "  --db may be repeated to filter (openagentos|mattermost|outline)"; exit 0 ;;
+    --help|-h) echo "Usage: $0 [--dry-run] [--backup-dir DIR] [--verify] [--db DB]"; echo "  --db may be repeated to filter (oaos|mattermost|outline)"; exit 0 ;;
     *) echo "[WARN] Unknown arg: $1" >&2; shift ;;
   esac
 done
 
 _REQUESTED_DBS=$(echo "${_REQUESTED_DBS}" | xargs 2>/dev/null || echo "${_REQUESTED_DBS}")
+# Legacy alias: openagentos/open_agent_os -> oaos
+if [[ -n "${_REQUESTED_DBS}" ]]; then
+  _norm=""
+  for _d in ${_REQUESTED_DBS}; do _nd=$(_normalize_db "${_d}"); _norm="${_norm} ${_nd}"; done
+  _REQUESTED_DBS=$(echo "${_norm}" | xargs 2>/dev/null || echo "${_norm}")
+fi
 
 # Support env var override
 if [[ "${OAOS_BACKUP_DRY_RUN:-}" == "1" ]]; then DRY_RUN=1; fi
@@ -112,7 +123,7 @@ db_exists() {
   local db="$1"
   # Try docker psql \l
   if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "oaos-postgres"; then
-    local pg_user="${POSTGRES_USER:-openagentos}"
+    local pg_user="${POSTGRES_USER:-oaos}"
     if docker exec oaos-postgres psql -U "${pg_user}" -d postgres -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw "${db}"; then
       return 0
     fi
@@ -125,7 +136,7 @@ db_exists() {
     fi
   fi
   if command -v psql >/dev/null 2>&1; then
-    local pg_user="${POSTGRES_USER:-openagentos}"
+    local pg_user="${POSTGRES_USER:-oaos}"
     local pg_host="${POSTGRES_HOST:-localhost}"
     local pg_port="${POSTGRES_PORT:-5432}"
     local pg_pw="${POSTGRES_PASSWORD:-secret}"
@@ -158,7 +169,7 @@ do_pg_dump_single() {
   local dumped=0 err_msg=""
   # Try docker exec first
   if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "oaos-postgres"; then
-    local pg_user="${POSTGRES_USER:-openagentos}"
+    local pg_user="${POSTGRES_USER:-oaos}"
     log "[INFO] Using docker exec pg_dump (container oaos-postgres, db=${db})"
     local tmp_err
     tmp_err=$(mktemp)
@@ -183,7 +194,7 @@ do_pg_dump_single() {
       if [[ -n "${pg_url}" ]]; then
         pg_url="${pg_url/postgresql+asyncpg:/postgresql:}"
         # replace trailing /dbname with /target db
-        # e.g. postgresql://user:pass@host:5432/openagentos -> .../${db}
+        # e.g. postgresql://user:pass@host:5432/oaos -> .../${db}
         local base_url
         base_url=$(echo "${pg_url}" | sed -E 's|/[^/]*$|/|')
         pg_url="${base_url}${db}"
@@ -202,7 +213,7 @@ do_pg_dump_single() {
         fi
         rm -f "${tmp_err2}" || true
       else
-        local pg_user="${POSTGRES_USER:-openagentos}"
+        local pg_user="${POSTGRES_USER:-oaos}"
         local pg_host="${POSTGRES_HOST:-localhost}"
         local pg_port="${POSTGRES_PORT:-5432}"
         log "[INFO] Using pg_dump via PGPASSWORD/host for db=${db}"
@@ -235,7 +246,7 @@ do_pg_dump_single() {
   return 0
 }
 
-# Verify dump contains pgvector artefacts where expected (openagentos should have vector)
+# Verify dump contains pgvector artefacts where expected (oaos should have vector)
 verify_pgvector_dump() {
   local db="$1" dumpfile="$2"
   if [[ ! -f "${dumpfile}" ]]; then
@@ -247,12 +258,12 @@ verify_pgvector_dump() {
   if gzip -dc "${dumpfile}" 2>/dev/null | grep -qi "vector\|CREATE EXTENSION.*vector\|pgvector"; then
     found=1
   fi
-  if [[ "${db}" == "openagentos" ]]; then
+  if [[ "${db}" == "oaos" ]]; then
     if [[ $found -eq 1 ]]; then
       log "[OK] pgvector artefacts found in dump for ${db}"
       echo "true"
     else
-      log "[WARN] pgvector artefacts NOT found in dump for ${db} — expected for openagentos (§27.11). Dump may be incomplete or extension not installed."
+      log "[WARN] pgvector artefacts NOT found in dump for ${db} — expected for oaos (§27.11). Dump may be incomplete or extension not installed."
       echo "false"
     fi
   else
@@ -268,7 +279,7 @@ verify_pgvector_dump() {
 
 # ── §27.11 consistency check helper: pgvector extension + alembic version ──
 # Usage: oaos_consistency_check [--json]
-# Checks: 1) pgvector extension exists in openagentos DB, 2) alembic version matches head
+# Checks: 1) pgvector extension exists in oaos DB, 2) alembic version matches head
 oaos_consistency_check() {
   local json_out=0
   if [[ "${1:-}" == "--json" ]]; then json_out=1; fi
@@ -279,33 +290,33 @@ oaos_consistency_check() {
 
   # 1) pgvector extension check (live DB)
   if [[ $DRY_RUN -eq 1 ]]; then
-    log "[DRY-RUN] Would check: SELECT * FROM pg_extension WHERE extname='vector' on openagentos"
+    log "[DRY-RUN] Would check: SELECT * FROM pg_extension WHERE extname='vector' on oaos"
     pgvector_ok="dry-run"
   else
     local vec_found=0
     if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "oaos-postgres"; then
-      local pg_user="${POSTGRES_USER:-openagentos}"
-      if docker exec oaos-postgres psql -U "${pg_user}" -d openagentos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then
+      local pg_user="${POSTGRES_USER:-oaos}"
+      if docker exec oaos-postgres psql -U "${pg_user}" -d oaos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then
         vec_found=1
       else
         # also try listing extensions
-        if docker exec oaos-postgres psql -U "${pg_user}" -d openagentos -c "\dx" 2>/dev/null | grep -q "vector"; then
+        if docker exec oaos-postgres psql -U "${pg_user}" -d oaos -c "\dx" 2>/dev/null | grep -q "vector"; then
           vec_found=1
         fi
       fi
     elif command -v psql >/dev/null 2>&1; then
-      local pg_user="${POSTGRES_USER:-openagentos}"
+      local pg_user="${POSTGRES_USER:-oaos}"
       local pg_host="${POSTGRES_HOST:-localhost}"
       local pg_port="${POSTGRES_PORT:-5432}"
       local pg_url="${DATABASE_URL:-}"
       if [[ -n "${pg_url}" ]]; then
         pg_url="${pg_url/postgresql+asyncpg:/postgresql:}"
-        pg_url=$(echo "${pg_url}" | sed -E 's|/[^/]*$|/openagentos|')
+        pg_url=$(echo "${pg_url}" | sed -E 's|/[^/]*$|/oaos|')
         if psql "${pg_url}" -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then
           vec_found=1
         fi
       else
-        if PGPASSWORD="${POSTGRES_PASSWORD:-secret}" psql -h "${pg_host}" -p "${pg_port}" -U "${pg_user}" -d openagentos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then
+        if PGPASSWORD="${POSTGRES_PASSWORD:-secret}" psql -h "${pg_host}" -p "${pg_port}" -U "${pg_user}" -d oaos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then
           vec_found=1
         fi
       fi
@@ -316,11 +327,11 @@ oaos_consistency_check() {
     fi
     if [[ $vec_found -eq 1 ]]; then
       pgvector_ok="true"
-      log "[OK] pgvector extension present in openagentos"
+      log "[OK] pgvector extension present in oaos"
     elif [[ $vec_found -eq 0 ]]; then
       pgvector_ok="false"
-      log "[WARN] pgvector extension NOT found in openagentos — expected pgvector/pgvector:pg16 (§27)"
-      errors+=("pgvector extension missing in openagentos")
+      log "[WARN] pgvector extension NOT found in oaos — expected pgvector/pgvector:pg16 (§27)"
+      errors+=("pgvector extension missing in oaos")
     fi
   fi
 
@@ -412,16 +423,16 @@ do_pg_dumps() {
     dbs=("${all_dbs[@]}")
   fi
 
-  # Ensure openagentos is always first for backward compat (legacy postgres_file)
-  # Reorder: openagentos first, then others
+  # Ensure oaos is always first for backward compat (legacy postgres_file)
+  # Reorder: oaos first, then others
   local ordered=()
   for db in "${dbs[@]}"; do
-    if [[ "${db}" == "openagentos" ]]; then ordered+=("${db}"); fi
+    if [[ "${db}" == "oaos" ]]; then ordered+=("${db}"); fi
   done
   for db in "${dbs[@]}"; do
-    if [[ "${db}" != "openagentos" ]]; then ordered+=("${db}"); fi
+    if [[ "${db}" != "oaos" ]]; then ordered+=("${db}"); fi
   done
-  # If openagentos not in list but legacy expects it, ensure at least one entry
+  # If oaos not in list but legacy expects it, ensure at least one entry
   if [[ ${#ordered[@]} -eq 0 ]]; then ordered=("${dbs[@]}"); fi
 
   for db in "${ordered[@]}"; do
@@ -461,8 +472,8 @@ do_pg_dumps() {
     local sz
     sz=$(stat -c%s "${outfile}" 2>/dev/null || stat -f%z "${outfile}" 2>/dev/null || echo 0)
     PG_DUMP_SIZE["${db}"]="${sz}"
-    # Create legacy symlink/compat file for first DB (openagentos) so old restore --pg-file still works
-    if [[ "${db}" == "openagentos" ]]; then
+    # Create legacy symlink/compat file for first DB (oaos) so old restore --pg-file still works
+    if [[ "${db}" == "oaos" ]]; then
       # Ensure legacy path exists as copy for backward compat
       if [[ -f "${outfile}" ]] && [[ "${outfile}" != "${PG_DUMP_GZ}" ]]; then
         cp "${outfile}" "${PG_DUMP_GZ}" 2>/dev/null || true
@@ -472,14 +483,14 @@ do_pg_dumps() {
 
   # Backward compat: if no DB succeeded and legacy file missing, ensure placeholder
   if [[ ${#PG_DB_LIST[@]} -eq 0 ]]; then
-    log "[WARN] No DBs in list — falling back to single openagentos dump"
-    local outfile="${BACKUP_FILE_PREFIX}-openagentos.sql.gz"
-    PG_DB_LIST=("openagentos")
+    log "[WARN] No DBs in list — falling back to single oaos dump"
+    local outfile="${BACKUP_FILE_PREFIX}-oaos.sql.gz"
+    PG_DB_LIST=("oaos")
     PG_DUMP_RAW_FILES=("${outfile}")
-    do_pg_dump_single "openagentos" "${outfile}" || true
-    PG_DUMP_STATUS["openagentos"]="ok"
-    PG_DUMP_SIZE["openagentos"]=$(stat -c%s "${outfile}" 2>/dev/null || stat -f%z "${outfile}" 2>/dev/null || echo 0)
-    PG_DUMP_PGVECTOR["openagentos"]=$(verify_pgvector_dump "openagentos" "${outfile}" 2>/dev/null | tail -n1 || echo "null")
+    do_pg_dump_single "oaos" "${outfile}" || true
+    PG_DUMP_STATUS["oaos"]="ok"
+    PG_DUMP_SIZE["oaos"]=$(stat -c%s "${outfile}" 2>/dev/null || stat -f%z "${outfile}" 2>/dev/null || echo 0)
+    PG_DUMP_PGVECTOR["oaos"]=$(verify_pgvector_dump "oaos" "${outfile}" 2>/dev/null | tail -n1 || echo "null")
     cp "${outfile}" "${PG_DUMP_GZ}" 2>/dev/null || true
   fi
 
@@ -707,10 +718,10 @@ main() {
   fi
 
   # Backward compat: legacy PG_DUMP_GZ may have been encrypted above already
-  # Ensure legacy var points to openagentos final file if exists
+  # Ensure legacy var points to oaos final file if exists
   local legacy_final_pg="${PG_DUMP_GZ}"
   for f in "${final_pg_files[@]}"; do
-    if [[ "${f}" == *"-openagentos.sql"* ]]; then legacy_final_pg="${f}"; break; fi
+    if [[ "${f}" == *"-oaos.sql"* ]]; then legacy_final_pg="${f}"; break; fi
   done
   if [[ ${#final_pg_files[@]} -gt 0 ]] && [[ ! -f "${legacy_final_pg}" ]]; then
     legacy_final_pg="${final_pg_files[0]}"
@@ -728,7 +739,7 @@ main() {
         if [[ -f "${f}" ]]; then
           local base
           base=$(basename "${f}")
-          # oaos-20260101-...-openagentos.sql.gz -> oaos-weekly-20260101-...-openagentos.sql.gz
+          # oaos-20260101-...-oaos.sql.gz -> oaos-weekly-20260101-...-oaos.sql.gz
           local weekly="${BACKUP_DIR}/oaos-weekly-${TIMESTAMP}-${base#oaos-${TIMESTAMP}-}"
           if [[ "${base}" == oaos-weekly-* ]]; then weekly="${BACKUP_DIR}/${base}"; fi
           # if prefix mismatch, fallback
@@ -772,11 +783,11 @@ main() {
     printf -v entry '{"db":"%s","file":"%s","size":%s,"status":"%s","pgvector":%s}' "${db}" "${fname}" "${sz}" "${status}" "${vec_json}"
     if [[ $first -eq 1 ]]; then dbs_json="${entry}"; first=0; else dbs_json="${dbs_json},${entry}"; fi
   done
-  # pgvector overall: check openagentos dump
+  # pgvector overall: check oaos dump
   local pgvector_overall="null"
-  if [[ -n "${PG_DUMP_PGVECTOR[openagentos]:-}" ]]; then
-    if [[ "${PG_DUMP_PGVECTOR[openagentos]}" == "true" ]]; then pgvector_overall="true"
-    elif [[ "${PG_DUMP_PGVECTOR[openagentos]}" == "false" ]]; then pgvector_overall="false"
+  if [[ -n "${PG_DUMP_PGVECTOR[oaos]:-}" ]]; then
+    if [[ "${PG_DUMP_PGVECTOR[oaos]}" == "true" ]]; then pgvector_overall="true"
+    elif [[ "${PG_DUMP_PGVECTOR[oaos]}" == "false" ]]; then pgvector_overall="false"
     fi
   fi
   if [[ "${pgvector_overall}" == "null" ]]; then pgvector_overall="null"; fi

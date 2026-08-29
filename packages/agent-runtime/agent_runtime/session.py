@@ -1,6 +1,6 @@
 """Session manager — §16C.1
 
-Tenant+agent isolated, in-memory default with optional Redis / openagentos DB.
+Tenant+agent isolated, in-memory default with optional Redis / oaos DB.
 No hard dependencies: redis / sqlalchemy are optional and imported lazily.
 
 API:
@@ -260,8 +260,8 @@ class _RedisStore:
 
 def _choose_store() -> Any:
     backend = (os.getenv("OAOS_SESSION_BACKEND") or os.getenv("OAOS_AGENT_RUNTIME_SESSION_BACKEND") or "memory").lower()
-    if backend in ("redis", "openagentos", "postgres"):
-        # openagentos → try redis first (hot cache), else memory; DB persistence is out of scope for minimal impl
+    if backend in ("redis", "oaos", "postgres"):
+        # oaos → try redis first (hot cache), else memory; DB persistence is out of scope for minimal impl
         try:
             # H5: in prod fallback=False mandatory
             return _RedisStore(fallback=None)

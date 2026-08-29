@@ -2,7 +2,7 @@
 
 Persistent Memory service for Open Agent OS.
 
-- **Source of Truth**: PostgreSQL `openagentos` database + `pgvector` extension
+- **Source of Truth**: PostgreSQL `oaos` database + `pgvector` extension
 - **Runtime Independence**: LLM/Hermes runtimes access memory only via this service (no direct DB)
 - **Isolation**: tenant + ACL-filtered retrieval (allowed namespaces before search)
 

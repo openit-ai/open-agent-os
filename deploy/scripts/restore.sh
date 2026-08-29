@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # restore.sh — Business edition restore (decrypt + pg_restore + redis)
-# v1.6 §27.11: 3-DB individual logical restore (mattermost/outline/openagentos) from per-DB dumps,
+# v1.6 §27.11: 3-DB individual logical restore (mattermost/outline/oaos) from per-DB dumps,
 # plus pgvector + alembic consistency verification.
 # Usage: ./deploy/scripts/restore.sh --manifest <manifest.json> [--db DB] [--postgres-only|--redis-only] [--dry-run] [--verify]
 #    or: ./deploy/scripts/restore.sh --pg-file <file> [--db DB] --redis-file <file> [--dry-run]
-#    or: ./deploy/scripts/restore.sh --pg-file <file> --db openagentos --dry-run  (single DB)
+#    or: ./deploy/scripts/restore.sh --pg-file <file> --db oaos --dry-run  (single DB)
 # Env: POSTGRES_*, DATABASE_URL, REDIS_*, AGE_PRIVATE_KEY / AGE_IDENTITY, GPG_*, BACKUP_DIR
 set -euo pipefail
 
@@ -33,8 +33,8 @@ while [[ $# -gt 0 ]]; do
     --verify|--check) DO_VERIFY=1; shift ;;
     --help|-h)
       echo "Usage: $0 --manifest <manifest.json> [--db DB] [--postgres-only|--redis-only] [--dry-run] [--verify]"
-      echo "   or: $0 --pg-file <file> [--db openagentos] --redis-file <file> [--dry-run]"
-      echo "  --db may be repeated to filter (openagentos|mattermost|outline)"
+      echo "   or: $0 --pg-file <file> [--db oaos] --redis-file <file> [--dry-run]"
+      echo "  --db may be repeated to filter (oaos|mattermost|outline)"
       echo "  --verify runs §27.11 pgvector + alembic consistency check after restore"
       exit 0
       ;;
@@ -44,6 +44,14 @@ done
 
 # Normalize requested DBs (trim)
 REQUESTED_DBS=$(echo "${REQUESTED_DBS}" | xargs 2>/dev/null || echo "${REQUESTED_DBS}")
+# Legacy DB name alias: openagentos/open_agent_os -> oaos for transition
+_normalize_db() { case "$1" in openagentos|open_agent_os) echo "oaos" ;; *) echo "$1" ;; esac; }
+# Normalize requested DBs to oaos alias
+if [[ -n "${REQUESTED_DBS}" ]]; then
+  _norm=""
+  for _d in ${REQUESTED_DBS}; do _nd=$(_normalize_db "${_d}"); _norm="${_norm} ${_nd}"; done
+  REQUESTED_DBS=$(echo "${_norm}" | xargs 2>/dev/null || echo "${_norm}")
+fi
 if [[ "${OAOS_RESTORE_DRY_RUN:-}" == "1" ]]; then DRY_RUN=1; fi
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2; }
@@ -102,29 +110,29 @@ oaos_consistency_check() {
   fi
   local vec_found=0
   if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "oaos-postgres"; then
-    local pg_user="${POSTGRES_USER:-openagentos}"
-    if docker exec oaos-postgres psql -U "${pg_user}" -d openagentos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then
+    local pg_user="${POSTGRES_USER:-oaos}"
+    if docker exec oaos-postgres psql -U "${pg_user}" -d oaos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then
       vec_found=1
     fi
   elif command -v psql >/dev/null 2>&1; then
-    local pg_user="${POSTGRES_USER:-openagentos}"
+    local pg_user="${POSTGRES_USER:-oaos}"
     local pg_host="${POSTGRES_HOST:-localhost}"
     local pg_port="${POSTGRES_PORT:-5432}"
     local pg_url="${DATABASE_URL:-}"
     if [[ -n "${pg_url}" ]]; then
       pg_url="${pg_url/postgresql+asyncpg:/postgresql:}"
-      pg_url=$(echo "${pg_url}" | sed -E 's|/[^/]*$|/openagentos|')
+      pg_url=$(echo "${pg_url}" | sed -E 's|/[^/]*$|/oaos|')
       if psql "${pg_url}" -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then vec_found=1; fi
     else
-      if PGPASSWORD="${POSTGRES_PASSWORD:-secret}" psql -h "${pg_host}" -p "${pg_port}" -U "${pg_user}" -d openagentos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then vec_found=1; fi
+      if PGPASSWORD="${POSTGRES_PASSWORD:-secret}" psql -h "${pg_host}" -p "${pg_port}" -U "${pg_user}" -d oaos -c "SELECT extname FROM pg_extension WHERE extname='vector';" 2>/dev/null | grep -q "vector"; then vec_found=1; fi
     fi
   fi
   if [[ $vec_found -eq 1 ]]; then
     pgvector_ok="true"
-    log "[OK] pgvector extension present in openagentos"
+    log "[OK] pgvector extension present in oaos"
   else
     pgvector_ok="false"
-    log "[WARN] pgvector extension NOT found in openagentos — expected pgvector/pgvector:pg16"
+    log "[WARN] pgvector extension NOT found in oaos — expected pgvector/pgvector:pg16"
     errors+=("pgvector extension missing")
   fi
   if [[ -f "${REPO_ROOT}/alembic.ini" ]]; then
@@ -179,6 +187,12 @@ for e in d.get('postgres_dbs',[]):
 " "${MANIFEST}" 2>/dev/null || true)
       while IFS=$'\t' read -r db file status; do
         [[ -z "${db}" ]] && continue
+        db=$(_normalize_db "${db}")
+        # Legacy file alias: if file contains openagentos, try oaos variant if not found
+        if [[ -n "${file}" ]] && [[ "${file}" == *openagentos* ]] && [[ ! -f "${dir}/${file}" ]] && [[ ! -f "${file}" ]]; then
+          _alt=$(echo "${file}" | sed "s/openagentos/oaos/g; s/open_agent_os/oaos/g")
+          if [[ -f "${dir}/${_alt}" ]] || [[ -f "${_alt}" ]]; then file="${_alt}"; fi
+        fi
         if [[ "${status}" == "skipped" ]] || [[ -z "${file}" ]]; then
           log "[INFO] Manifest entry db=${db} status=${status} — skipping"
           continue
@@ -217,11 +231,11 @@ for e in d.get('postgres_dbs',[]):
       base_redis=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('redis_file',''))" "${MANIFEST}" 2>/dev/null || echo "")
       if [[ -z "${PG_FILE}" ]] && [[ -n "${base_pg}" ]]; then PG_FILE="${dir}/${base_pg}"; fi
       if [[ -z "${REDIS_FILE}" ]] && [[ -n "${base_redis}" ]]; then REDIS_FILE="${dir}/${base_redis}"; fi
-      # Legacy: determine db name from REQUESTED_DBS or default openagentos
-      local legacy_db="openagentos"
+      # Legacy: determine db name from REQUESTED_DBS or default oaos
+      local legacy_db="oaos"
       if [[ -n "${REQUESTED_DBS}" ]]; then
-        # if --db specified with legacy manifest, honor first requested
-        legacy_db=$(echo "${REQUESTED_DBS}" | awk '{print $1}')
+        # if --db specified with legacy manifest, honor first requested (normalized)
+        legacy_db=$(_normalize_db "$(echo "${REQUESTED_DBS}" | awk '{print $1}')")
       fi
       if [[ -n "${PG_FILE}" ]]; then
         PG_RESTORE_LIST=("${legacy_db}:${PG_FILE}")
@@ -231,17 +245,34 @@ for e in d.get('postgres_dbs',[]):
   else
     # No manifest, but --pg-file given
     if [[ -n "${PG_FILE}" ]]; then
-      local db="openagentos"
-      if [[ -n "${REQUESTED_DBS}" ]]; then db=$(echo "${REQUESTED_DBS}" | awk '{print $1}'); fi
+      local db="oaos"
+      if [[ -n "${REQUESTED_DBS}" ]]; then db=$(_normalize_db "$(echo "${REQUESTED_DBS}" | awk '{print $1}')"); fi
       PG_RESTORE_LIST=("${db}:${PG_FILE}")
     fi
   fi
 }
 
 restore_postgres_single() {
-  local db="$1" src="$2"
+  local db="$(_normalize_db "$1")" src="$2"
+  # Legacy file alias: openagentos dump name -> oaos
+  if [[ ! -f "${src}" ]] && [[ "${src}" == *openagentos* ]]; then
+    _alt_src=$(echo "${src}" | sed "s/openagentos/oaos/g; s/open_agent_os/oaos/g")
+    if [[ -f "${_alt_src}" ]]; then src="${_alt_src}"; log "[INFO] Mapped legacy dump ${1} -> ${src} (db=${db})"; fi
+  elif [[ ! -f "${src}" ]] && [[ "${src}" == *oaos* ]]; then
+    _alt_src=$(echo "${src}" | sed "s/oaos/openagentos/g")
+    if [[ -f "${_alt_src}" ]]; then src="${_alt_src}"; log "[INFO] Accepting legacy dump ${src} for db=${db} (legacy name)"; src="${_alt_src}"; fi
+  fi
   if [[ -z "${src}" ]] || [[ ! -f "${src}" ]]; then
-    log "[WARN] Postgres file not found for db=${db}: ${src} — skipping"; return 0; fi
+    # Also try reverse alias for src that contains openagentos/open_agent_os mapped to oaos
+    _try=""
+    if [[ "${src}" == *openagentos* ]] || [[ "${src}" == *open_agent_os* ]]; then
+      _try=$(echo "${src}" | sed "s/openagentos/oaos/g; s/open_agent_os/oaos/g")
+      if [[ -f "${_try}" ]]; then src="${_try}"; fi
+    fi
+    if [[ ! -f "${src}" ]]; then
+      log "[WARN] Postgres file not found for db=${db}: ${src} — skipping"; return 0
+    fi
+  fi
   log "$(dry_prefix)Restoring Postgres db=${db} from ${src}"
   local plain
   plain=$(decrypt_file "${src}") || { log "[ERROR] Decrypt failed for ${src}"; return 1; }
@@ -256,8 +287,8 @@ restore_postgres_single() {
     gunzip -c "${plain}" > "${decompressed}" || { log "[ERROR] gunzip failed for ${src}"; return 1; }
     sql_file="${decompressed}"
   fi
-  # Verify pgvector artefacts in dump for openagentos (warn if missing)
-  if [[ "${db}" == "openagentos" ]]; then
+  # Verify pgvector artefacts in dump for oaos (warn if missing)
+  if [[ "${db}" == "oaos" ]]; then
     if ! grep -qi "vector" "${sql_file}" 2>/dev/null; then
       log "[WARN] Dump for ${db} lacks pgvector artefacts — restore may miss VECTOR extension"
     else
@@ -266,7 +297,7 @@ restore_postgres_single() {
   fi
   # Try docker exec first
   if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "oaos-postgres"; then
-    local pg_user="${POSTGRES_USER:-openagentos}"
+    local pg_user="${POSTGRES_USER:-oaos}"
     log "[INFO] Restoring via docker exec oaos-postgres psql -d ${db}"
     # Ensure target DB exists; try to create if missing
     if ! docker exec oaos-postgres psql -U "${pg_user}" -d "${db}" -c "SELECT 1" >/dev/null 2>&1; then
@@ -282,7 +313,7 @@ restore_postgres_single() {
       pg_url=$(echo "${pg_url}" | sed -E "s|/[^/]*$|/${db}|")
       psql "${pg_url}" < "${sql_file}" || { log "[ERROR] psql restore failed for db=${db}"; return 1; }
     else
-      local pg_user="${POSTGRES_USER:-openagentos}"
+      local pg_user="${POSTGRES_USER:-oaos}"
       local pg_host="${POSTGRES_HOST:-localhost}"
       local pg_port="${POSTGRES_PORT:-5432}"
       # Ensure DB exists
@@ -310,11 +341,11 @@ restore_postgres_single() {
 
 restore_postgres() {
   local src="$1"
-  # Legacy single-arg path: delegate to per-DB with openagentos
+  # Legacy single-arg path: delegate to per-DB with oaos
   if [[ ${#PG_RESTORE_LIST[@]} -eq 0 ]]; then
     if [[ -z "${src}" ]]; then
       log "[WARN] No postgres restore source"; return 0; fi
-    local db="openagentos"
+    local db="oaos"
     if [[ -n "${REQUESTED_DBS}" ]]; then db=$(echo "${REQUESTED_DBS}" | awk '{print $1}'); fi
     restore_postgres_single "${db}" "${src}"
     return $?
@@ -379,8 +410,8 @@ main() {
   else
     # No manifest: build list from --pg-file
     if [[ -n "${PG_FILE}" ]]; then
-      local db="openagentos"
-      if [[ -n "${REQUESTED_DBS}" ]]; then db=$(echo "${REQUESTED_DBS}" | awk '{print $1}'); fi
+      local db="oaos"
+      if [[ -n "${REQUESTED_DBS}" ]]; then db=$(_normalize_db "$(echo "${REQUESTED_DBS}" | awk '{print $1}')"); fi
       PG_RESTORE_LIST=("${db}:${PG_FILE}")
     fi
   fi

@@ -62,14 +62,14 @@ spec:
               mountPath: /var/lib/postgresql/data
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "openagentos", "-d", "openagentos"]
+              command: ["pg_isready", "-U", "oaos", "-d", "oaos"]
             initialDelaySeconds: 20
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "openagentos", "-d", "openagentos"]
+              command: ["pg_isready", "-U", "oaos", "-d", "oaos"]
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3

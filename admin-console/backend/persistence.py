@@ -1,6 +1,6 @@
-"""Admin persistence helper — openagentos (v1.6 §27.3).
+"""Admin persistence helper — oaos (v1.6 §27.3).
 
-Admin Web UI persistence is documented as openagentos PostgreSQL being the
+Admin Web UI persistence is documented as oaos PostgreSQL being the
 Source of Truth, but runtime uses safe in-memory fallback so all 534 tests
 pass without a real DB.
 
@@ -54,7 +54,7 @@ def _normalize_url(url: str) -> str:
     return u
 
 
-# Minimal DDL for admin persistence (openagentos).
+# Minimal DDL for admin persistence (oaos).
 # Kept as plain SQL so we don't need ORM imports at runtime.
 _ADMIN_DDL = [
     """
@@ -137,7 +137,7 @@ _ADMIN_DDL_SQLITE = [
 
 
 async def ensure_admin_tables() -> None:
-    """Ensure admin persistence tables exist (openagentos), or fallback.
+    """Ensure admin persistence tables exist (oaos), or fallback.
 
     - No-op with log if no DATABASE_URL is configured (in-memory fallback —
       preserves sqlite compat and keeps tests passing).
@@ -159,7 +159,7 @@ async def ensure_admin_tables() -> None:
             raise RuntimeError(
                 "DATABASE_URL/OAOS_DATABASE_URL required when OAOS_ENV=production (fail-closed)"
             )
-        logger.info("Admin persistence: openagentos ready (or in-memory fallback) — no DATABASE_URL, using in-memory")
+        logger.info("Admin persistence: oaos ready (or in-memory fallback) — no DATABASE_URL, using in-memory")
         return
 
     normalized = _normalize_url(url)
@@ -188,7 +188,7 @@ async def ensure_admin_tables() -> None:
         async with engine.begin() as conn:
             for ddl in ddl_list:
                 await conn.execute(text(ddl))
-        logger.info("Admin persistence: openagentos ready")
+        logger.info("Admin persistence: oaos ready")
     except Exception as e:
         if is_prod:
             raise

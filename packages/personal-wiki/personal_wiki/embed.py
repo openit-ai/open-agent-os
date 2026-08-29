@@ -1,6 +1,6 @@
 """Personal Wiki pgvector embedding integration — lazy, no hard deps.
 
-- Takes vault file path, reads text, chunks, embeds, writes to openagentos memories table via asyncpg/SQLAlchemy or mock.
+- Takes vault file path, reads text, chunks, embeds, writes to oaos memories table via asyncpg/SQLAlchemy or mock.
 - Embedding chain: remote memory_service/openai API (if OAOS_EMBED_API_URL+key) -> sentence-transformers local (if installed) -> deterministic hash embedding (always works)
 - Chunking: char-based with overlap (default 800/100), configurable via env.
 - DB write: tries SQLAlchemy async (postgres/sqlite) then asyncpg raw, else returns mock result. Never raises at import time.

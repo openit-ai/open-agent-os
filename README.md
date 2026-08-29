@@ -55,12 +55,12 @@ Implementation: `§27B Vault` — layout `/var/lib/oaos/vault/{tenant}/{agent:as
 
 ## 3. Enterprise Knowledge Index & ACL-aware Hybrid RAG
 
-Enterprise wikis and corporate documents are searched with **ACL-aware Hybrid RAG**. Outline, Notion, and other source systems keep the original documents and authoritative ACLs. OAOS stores a derived **Knowledge Index** in `openagentos` PostgreSQL + pgvector for retrieval.
+Enterprise wikis and corporate documents are searched with **ACL-aware Hybrid RAG**. Outline, Notion, and other source systems keep the original documents and authoritative ACLs. OAOS stores a derived **Knowledge Index** in `oaos` PostgreSQL + pgvector for retrieval.
 
 ```text
 Outline / Notion (originals + current ACLs)
         ↓ Connector / MCP — chunking, embedding, source reference, content hash, ACL version
- openagentos PostgreSQL + pgvector
+ oaos PostgreSQL + pgvector
         ├─ lexical index
         ├─ semantic vector index
         ├─ tenant / group / agent metadata

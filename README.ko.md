@@ -55,12 +55,12 @@ Mattermost / Slack Web·Desktop·Mobile
 
 ## 3. 전사 지식 인덱스 & ACL-aware Hybrid RAG
 
-전사 위키와 기업 문서는 **ACL-aware Hybrid RAG**로 검색한다. Outline·Notion 등 원 시스템은 문서 원본과 현재 권한을 유지하고, OAOS는 `openagentos` PostgreSQL + pgvector에 검색용 **Knowledge Index(전사 지식 인덱스)** 를 저장한다.
+전사 위키와 기업 문서는 **ACL-aware Hybrid RAG**로 검색한다. Outline·Notion 등 원 시스템은 문서 원본과 현재 권한을 유지하고, OAOS는 `oaos` PostgreSQL + pgvector에 검색용 **Knowledge Index(전사 지식 인덱스)** 를 저장한다.
 
 ```text
 Outline / Notion (원본 + 현재 ACL)
         ↓ Connector / MCP — 청킹·임베딩·source reference·content hash·ACL version
- openagentos PostgreSQL + pgvector
+ oaos PostgreSQL + pgvector
         ├─ lexical index
         ├─ semantic vector index
         ├─ tenant / group / agent 메타데이터

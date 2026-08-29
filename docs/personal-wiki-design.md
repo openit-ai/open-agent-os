@@ -220,7 +220,7 @@ Gateway가 tool 실행 직후 수행 (tool 응답 반환 전):
 ### 6.3 감사(Audit)
 
 - 모든 vault 쓰기(첨부 저장, 추출, tool 아카이빙, embed)는 `audit_log`에 `trace_id`, `tenant_id`, `agent_id`, `action`, `result` 기록 (`docs/architecture-v1.6.md` §40).
-- 감사 로그는 `openagentos` DB에 저장되며, vault 파일 자체와 분리.
+- 감사 로그는 `oaos` DB에 저장되며, vault 파일 자체와 분리.
 
 ### 6.4 라이선스
 

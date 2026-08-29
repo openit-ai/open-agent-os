@@ -9,7 +9,7 @@ and created via alembic migration 002_persistent_memory.
 For pytest/sqlite compatibility, embedding is pgvector Vector(1536) on Postgres
 and Text fallback on SQLite (see security/models/orm.py).
 
-Write path = Identity/Agent Context → Classification → Provenance Binding → ACL/Policy/Retention Check → openagentos PG.
+Write path = Identity/Agent Context → Classification → Provenance Binding → ACL/Policy/Retention Check → oaos PG.
 Search path = ACL filter before retrieval (Allowed Scope → Filtered Semantic Search).
 
 When DATABASE_URL unset, fallback to in-memory MemoryStore so 534 tests still pass.

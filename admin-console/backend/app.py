@@ -137,7 +137,7 @@ app.add_middleware(
     allow_headers=_CORS_ALLOW_HEADERS,
 )
 
-# ── Admin persistence (v1.6 §27.3) — openagentos with in-memory fallback ─
+# ── Admin persistence (v1.6 §27.3) — oaos with in-memory fallback ─
 try:
     _pers_mod = _load_admin_sibling("persistence")
     ensure_admin_tables = _pers_mod.ensure_admin_tables
@@ -168,7 +168,7 @@ async def _admin_persistence_startup() -> None:
             except Exception as exc:  # pragma: no cover - safety net
                 logger.warning(f"Admin persistence startup fallback: {exc}")
     # Required log line per spec (exact substring match)
-    logger.info("Admin persistence: openagentos ready (or in-memory fallback)")
+    logger.info("Admin persistence: oaos ready (or in-memory fallback)")
 
 
 # ── Routers ──────────────────────────────────────────────────────
@@ -323,7 +323,7 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
         try:
             import os
             url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL") or ""
-            if url and "openagentos" in url:
+            if url and "oaos" in url:
                 from sqlalchemy import create_engine, text
                 sync_url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace("postgresql://", "postgresql+psycopg://") if url.startswith("postgresql") else url
                 # strip +asyncpg fallback already handled

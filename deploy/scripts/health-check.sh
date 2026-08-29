@@ -132,13 +132,13 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
 fi
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "oaos-postgres"; then
   # Determine postgres user/db from env or defaults
-  PGUSER="${POSTGRES_USER:-open_agent_os}"
-  PGDB="${POSTGRES_DB:-open_agent_os}"
+  PGUSER="${POSTGRES_USER:-oaos}"
+  PGDB="${POSTGRES_DB:-oaos}"
   if [[ -f "${REPO_ROOT}/.env" ]]; then
     PGUSER=$(grep -E "^POSTGRES_USER=" "${REPO_ROOT}/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "$PGUSER")
     PGDB=$(grep -E "^POSTGRES_DB=" "${REPO_ROOT}/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "$PGDB")
-    [[ -z "$PGUSER" ]] && PGUSER="open_agent_os"
-    [[ -z "$PGDB" ]] && PGDB="open_agent_os"
+    [[ -z "$PGUSER" ]] && PGUSER="oaos"
+    [[ -z "$PGDB" ]] && PGDB="oaos"
   fi
   if docker exec oaos-postgres pg_isready -U "$PGUSER" -d "$PGDB" >/dev/null 2>&1; then
     record "postgres pg_isready" "PASS" "pg_isready -U $PGUSER -d $PGDB"

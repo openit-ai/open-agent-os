@@ -1,7 +1,7 @@
 # Vault Externalization Design — Phase A
 
 > Status: **Design Only (no code changes)**  
-> Scope: Phase A — eliminate `encrypted_token` ciphertext from `openagentos` DB per `docs/architecture-v1.6.md` §10 / §27.3  
+> Scope: Phase A — eliminate `encrypted_token` ciphertext from `oaos` DB per `docs/architecture-v1.6.md` §10 / §27.3  
 > Depends on: `security/credential-vault/vault/vault.py` (`EncryptedPostgresVault`), `security/models/orm.py` (`VaultCredentialORM`), `alembic/versions/001_initial_persistence.py`, `docs/architecture-v1.6.md` §10.2 + §27.3 + §44  
 > Last updated: 2026-08-28
 
@@ -11,9 +11,9 @@
 
 Move the Personal Credential Vault from **"encrypted column in Postgres"** to **"external secret backend; Postgres stores `secret_ref` + metadata only"** so that:
 
-- `openagentos.vault_credentials` contains no recoverable secret material (not even ciphertext whose key lives on the same host).
+- `oaos.vault_credentials` contains no recoverable secret material (not even ciphertext whose key lives on the same host).
 - §27.3 "Secret 원문은 Credential Vault에 저장하고 DB에는 `secret_ref`만 저장" / §10.2 "encrypted secret store, plaintext DB 저장 금지" is satisfied literally, not just "encrypted so it's okay".
-- Dump / replica / backup of `openagentos` alone cannot yield credentials.
+- Dump / replica / backup of `oaos` alone cannot yield credentials.
 
 Phase A is the design and the migration contract. Code changes land in Phase B.
 
@@ -40,7 +40,7 @@ Strict reading of §27.3 / §44 decision 36:
 > `credential_bindings`에는 실제 secret이 아니라 metadata와 `secret_ref`만 저장한다.  
 > DB에 저장 가능한 정보: `provider, client_id, scope, status, enabled, secret_ref, last_rotated_at, expires_at`  
 > DB 평문 저장 금지: `client_secret, refresh_token, API key, private key, signing secret, session signing key`  
-> Secret 원문은 Credential Vault에 저장하고 `openagentos`에는 참조값과 상태 metadata만 저장.
+> Secret 원문은 Credential Vault에 저장하고 `oaos`에는 참조값과 상태 metadata만 저장.
 
 `VaultCredentialORM.encrypted_token` is ciphertext, not plaintext — so it passes a narrow "no plaintext column" check. But it still violates the **intent**:
 
@@ -58,9 +58,9 @@ Strict reading of §27.3 / §44 decision 36:
 ### 3.1 Invariant
 
 ```
-openagentos DB  →  secret_ref + user_id + owner_agent_id + provider + scope + timestamps + status
+oaos DB  →  secret_ref + user_id + owner_agent_id + provider + scope + timestamps + status
 External Vault  →  secret bytes (token / refresh_token / client_secret / private key / API key)
-Never          →  secret bytes (plaintext or ciphertext with DB-co-located key) in openagentos
+Never          →  secret bytes (plaintext or ciphertext with DB-co-located key) in oaos
 ```
 
 `credential_bindings.secret_ref` already satisfies this. `vault_credentials` must be reduced to the same shape (or replaced by the external vault's own storage).
@@ -92,7 +92,7 @@ The `CredentialVault` interface is unchanged for callers (`security/credential-v
 
 | `VAULT_BACKEND` value | Backend | Secret-at-rest | Key management | When to use |
 |------------------------|---------|----------------|----------------|-------------|
-| `encrypted_postgres` (legacy, deprecated after migration) | `openagentos.vault_credentials.encrypted_token` via Fernet | Fernet key in `VAULT_ENCRYPTION_KEY` | App-managed | Compatibility / CI without external vault |
+| `encrypted_postgres` (legacy, deprecated after migration) | `oaos.vault_credentials.encrypted_token` via Fernet | Fernet key in `VAULT_ENCRYPTION_KEY` | App-managed | Compatibility / CI without external vault |
 | `hashicorp_vault` | HashiCorp Vault KV v2 at `VAULT_ADDR` | Vault transit + storage backend | Vault-managed (auto-rotation, HSM optional) | Enterprise default — aligns with §10 "encrypted secret store" |
 | `aws_secrets` (alias: `aws_secrets_manager`) | AWS Secrets Manager (or `aws_kms` + `VAULT_KMS_KEY_ID`) | KMS envelope encryption | AWS KMS / CloudHSM | Customer AWS footprint |
 
@@ -189,7 +189,7 @@ Factory lives in `security/credential-vault/vault/__init__.py` (currently empty 
 | `VAULT_DUAL_WRITE` | migration only | `false` | `true` during Phase B migration |
 | `VAULT_READ_FALLBACK` | migration only | `false` | `true` during migration |
 
-All `VAULT_*` values are **never** returned by any API and never written to `openagentos` DB. They are sourced from env / mounted secret file / K8s Secret, consistent with §27.3 "DB password는 config 파일 평문 하드코딩 금지".
+All `VAULT_*` values are **never** returned by any API and never written to `oaos` DB. They are sourced from env / mounted secret file / K8s Secret, consistent with §27.3 "DB password는 config 파일 평문 하드코딩 금지".
 
 ### 4.2 `.env.example` delta
 
@@ -236,7 +236,7 @@ All `VAULT_*` values are **never** returned by any API and never written to `ope
 #### Phase 0 — Pre-flight (1-2 days)
 
 1. Inventory: `SELECT count(*), provider FROM vault_credentials GROUP BY provider` + `SELECT count(*) FROM credential_bindings WHERE secret_ref NOT IN (SELECT secret_ref FROM vault_credentials)` (orphan check).
-2. Backup: `pg_dump openagentos` + snapshot external vault (if already in use elsewhere).
+2. Backup: `pg_dump oaos` + snapshot external vault (if already in use elsewhere).
 3. Add feature flag columns (no data move yet):
    - Alembic `003_vault_externalization_prep.py`: add `vault_backend`, `vault_path`, `version` to `vault_credentials` (nullable, default `encrypted_postgres`), add `CHECK (vault_backend IN (...))`.
 4. Deploy code with **dual-read support only** (no dual-write) behind flag — no behavior change.
@@ -306,7 +306,7 @@ Requirements:
    For each `ref`, `retrieve(ref, owner)` via new backend == `fernet.decrypt(legacy_backup.encrypted_token)` (compare on migration host, never log plaintext).
 3. **No secret in DB dump:**
    ```bash
-   pg_dump --table=vault_credentials openagentos | strings | grep -v secret_ref | wc -l  # no LargeBinary column
+   pg_dump --table=vault_credentials oaos | strings | grep -v secret_ref | wc -l  # no LargeBinary column
    # and:
    psql -c "\d vault_credentials" | grep -qi "encrypted_token" && echo FAIL || echo PASS
    ```
@@ -322,7 +322,7 @@ Requirements:
    # keep vault_backend / vault_path / version NOT NULL from now on
    ```
 3. Remove `VAULT_ENCRYPTION_KEY` from deployed env (keep in sealed backup for disaster recovery of old dumps only).
-4. Update runbook: `pg_dump openagentos` is now safe to handle without secret-handling caveats; external vault backup becomes the secret backup.
+4. Update runbook: `pg_dump oaos` is now safe to handle without secret-handling caveats; external vault backup becomes the secret backup.
 
 #### Rollback at any point
 

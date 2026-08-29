@@ -18,7 +18,7 @@ Field mapping:
 
 Production-grade: Fernet encryption (OAOS_VAULT_KEY / VAULT_ENCRYPTION_KEY),
 encrypted_api_key + secret_ref (vault://admin_llm_providers/{id}/api_key),
-DB-backed (openagentos, SQLAlchemy, AdminLLMProviderORM) with in-memory fallback.
+DB-backed (oaos, SQLAlchemy, AdminLLMProviderORM) with in-memory fallback.
 GET always returns masked apiKey (****), raw never leaked.
 """
 from __future__ import annotations

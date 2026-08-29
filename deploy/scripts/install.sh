@@ -219,7 +219,7 @@ else
     else
       cat > "$ENV_FILE" <<'ENVEOF'
 TENANT_ID=default
-DATABASE_URL=postgresql+asyncpg://open_agent_os:secret@localhost:5432/open_agent_os
+DATABASE_URL=postgresql+asyncpg://oaos:secret@localhost:5432/oaos
 REDIS_URL=redis://localhost:6379/0
 JWT_SIGNING_KEY=change-me
 AUDIT_SIGNING_KEY=change-me

@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 class ControlPlaneSettings(BaseSettings):
     tenant_id: str = "default"
-    database_url: str = "postgresql+asyncpg://openagentos:secret@localhost:5432/openagentos"
+    database_url: str = "postgresql+asyncpg://oaos:secret@localhost:5432/oaos"
     redis_url: str = "redis://localhost:6379/0"
     hermes_base_url: str = "http://localhost:8001"
     hermes_api_key: str = ""

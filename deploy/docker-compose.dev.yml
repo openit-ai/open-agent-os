@@ -1,13 +1,13 @@
 # deploy/docker-compose.dev.yml — local development (NOT for production)
 # - All ports are bound to 127.0.0.1 only — never expose to 0.0.0.0. Change requires explicit override.
-# - Dev defaults are intentionally literal (openagentos/secret) for local bring-up only.
+# - Dev defaults are intentionally literal (oaos/secret) for local bring-up only.
 # - Production MUST use deploy/docker-compose.prod.yml with external secrets and OAOS_ENV=production.
 services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: openagentos
-      POSTGRES_USER: openagentos
+      POSTGRES_DB: oaos
+      POSTGRES_USER: oaos
       POSTGRES_PASSWORD: secret
     ports: ["127.0.0.1:5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]

@@ -4,7 +4,7 @@
 - Argon2id primary + bcrypt fallback, JWT HS256 8h expiry, get_current_admin.
 - Dev/test seed admin@openit.co.kr / Admin123! when OAOS_ENV != production.
 - Production (OAOS_ENV=production|prod) is fail-closed: no default seed; requires existing admin in DB/cache OR OAOS_ADMIN_BOOTSTRAP_PASSWORD (and optional OAOS_ADMIN_BOOTSTRAP_EMAIL) to create the initial L5 admin. Bootstrap secret is never logged. If neither exists at startup, the process raises RuntimeError.
-- DB persistence (AdminUserORM) with in-memory fallback — uses openagentos DB when
+- DB persistence (AdminUserORM) with in-memory fallback — uses oaos DB when
   DATABASE_URL/OAOS_DATABASE_URL is set, otherwise falls back to _users_by_id dict.
   All DB imports are lazy inside functions so tests pass without DB / drivers.
 """

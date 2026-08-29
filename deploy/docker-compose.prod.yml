@@ -48,15 +48,15 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Postgres (§16A.5 persistence / §27 openagentos + pgvector) ──
-  # DB isolation: same PostgreSQL instance may be shared with Mattermost/Outline but databases/users are separate (mattermost / outline / openagentos)
+  # ── Postgres (§16A.5 persistence / §27 oaos + pgvector) ──
+  # DB isolation: same PostgreSQL instance may be shared with Mattermost/Outline but databases/users are separate (mattermost / outline / oaos)
   postgres:
     image: pgvector/pgvector:pg16
     container_name: oaos-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-openagentos}
-      POSTGRES_USER: ${POSTGRES_USER:-openagentos}
+      POSTGRES_DB: ${POSTGRES_DB:-oaos}
+      POSTGRES_USER: ${POSTGRES_USER:-oaos}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
@@ -66,7 +66,7 @@ services:
     expose: ["5432"]
     # ports: ["127.0.0.1:5432:5432"]  # uncomment for host debug only
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openagentos} -d ${POSTGRES_DB:-openagentos}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oaos} -d ${POSTGRES_DB:-oaos}"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -126,7 +126,7 @@ services:
     restart: unless-stopped
     env_file: [../.env]
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-openagentos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-openagentos}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-oaos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-oaos}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # Audit checkpoint → S3 (§31)
       AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
@@ -181,7 +181,7 @@ services:
     restart: unless-stopped
     env_file: [../.env]
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-openagentos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-openagentos}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-oaos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-oaos}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
       AWS_S3_REGION: ${AWS_S3_REGION:-ap-northeast-2}
@@ -234,7 +234,7 @@ services:
     restart: unless-stopped
     env_file: [../.env]
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-openagentos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-openagentos}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-oaos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-oaos}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
       AWS_S3_REGION: ${AWS_S3_REGION:-ap-northeast-2}
