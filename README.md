@@ -4,6 +4,14 @@
 
 [한국어](README.ko.md) | **English**
 
+<p align="center">
+  <img src="assets/oaos-logo.jpg" alt="OAOS logo" width="220" />
+</p>
+
+<h1 align="center">OAOS</h1>
+<p align="center"><strong>Where people, knowledge, and agents meet.</strong></p>
+
+- **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
 - **Architecture:** `docs/architecture-v1.7.0.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27 Personal Wiki Vault + §§16.7–16.8 Production Hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets) — `2ebeb981`, 5026 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` · [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes incl. LLM Providers), `648 tests pass` (Production Hardening — fail-closed runtime/deploy/audit/approval/token/rate + secrets), `npm run build ✓` — Previous milestone: `v1.6.4` `612 tests` (historical; `590`/`180` earlier milestones)
