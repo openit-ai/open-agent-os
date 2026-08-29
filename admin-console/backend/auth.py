@@ -557,15 +557,12 @@ def get_user_by_email(email: str) -> Optional[AdminUser]:
         return None
     for mod in list(sys.modules.values()):
         try:
-            d = getattr(mod, "_users_by_email", None)
-            if isinstance(d, dict) and email in d:
-                fu = d[email]
-                try:
-                    _users_by_id[fu.id] = fu
-                    _users_by_email[email] = fu
-                except Exception:
-                    pass
-                return fu
+            users_by_email = getattr(mod, "_users_by_email", None)
+            if isinstance(users_by_email, dict) and email in users_by_email:
+                found_user = users_by_email[email]
+                _users_by_id[found_user.id] = found_user
+                _users_by_email[email] = found_user
+                return found_user
         except Exception:
             continue
     return None
@@ -595,15 +592,12 @@ def get_user_by_id(uid: str) -> Optional[AdminUser]:
         return None
     for mod in list(sys.modules.values()):
         try:
-            d = getattr(mod, "_users_by_id", None)
-            if isinstance(d, dict) and uid in d:
-                fu = d[uid]
-                try:
-                    _users_by_id[uid] = fu
-                    _users_by_email[fu.email] = fu
-                except Exception:
-                    pass
-                return fu
+            users_by_id = getattr(mod, "_users_by_id", None)
+            if isinstance(users_by_id, dict) and uid in users_by_id:
+                found_user = users_by_id[uid]
+                _users_by_id[uid] = found_user
+                _users_by_email[found_user.email] = found_user
+                return found_user
         except Exception:
             continue
     return None

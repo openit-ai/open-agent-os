@@ -18,21 +18,9 @@ def _load_auth_fresh(env_overrides: dict, clear_env_keys: list[str] | None = Non
     for k in (clear_env_keys or []):
         if k not in env_overrides:
             os.environ.pop(k, None)
-    # Also clear canonical admin modules to avoid cross-test DB/cache pollution (full-suite ordering)
     for mod in list(sys.modules.keys()):
-        if mod in ("admin_auth_hardening", "auth", "admin_auth", "admin_console.backend.auth", "admin_console.backend.infra", "admin_console.backend.business", "admin_console.backend.managed", "admin_console.backend.user_mappings", "admin_console.backend.llm_providers", "admin_console.backend.runtime_mode"):
+        if mod in ("admin_auth_hardening", "auth", "admin_auth"):
             del sys.modules[mod]
-    # Clean up any leftover sqlite test files that may poison DB
-    try:
-        Path("/tmp/test_llm_provider_vault.db").unlink(missing_ok=True)
-        for p in Path("/tmp").glob("tmp*.db"):
-            try:
-                if p.stat().st_size < 1024*1024:
-                    p.unlink(missing_ok=True)
-            except Exception:
-                pass
-    except Exception:
-        pass
     added = False
     if str(BACKEND) not in sys.path:
         sys.path.insert(0, str(BACKEND))
@@ -77,11 +65,11 @@ def test_production_with_bootstrap_succeeds_and_not_default_password():
             "OAOS_ENV": "production",
             "ADMIN_JWT_SECRET": "strong-prod-secret-32-bytes-min-xyz!2",
             "OAOS_ADMIN_BOOTSTRAP_PASSWORD": "StrongBootstrap!1234",
-            "OAOS_ADMIN_BOOTSTRAP_EMAIL": "bootstrap@openit.co.kr",
+            "OAOS_ADMIN_BOOTSTRAP_EMAIL": "admin@openit.co.kr",
         },
         clear_env_keys=["OAOS_DATABASE_URL", "DATABASE_URL"],
     )
-    user = mod.get_user_by_email("bootstrap@openit.co.kr")
+    user = mod.get_user_by_email("admin@openit.co.kr")
     assert user is not None
     assert user.role.value == "L5"
     assert mod._verify_password("StrongBootstrap!1234", user.hashed_password) is True
