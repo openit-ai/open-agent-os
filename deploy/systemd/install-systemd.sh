@@ -201,6 +201,19 @@ if [[ "${MODE}" == "system" ]]; then
       info "Installed canonical systemd env file: ${SYSTEM_ENV_FILE}"
     fi
   fi
+else
+  # User units cannot read /etc/oaos by default. Keep the selected env file in
+  # the ignored repo-local config path with restrictive permissions.
+  USER_ENV_FILE="${REPO_ROOT}/config/oaos.env"
+  if [[ "${ENV_FILE}" != "${USER_ENV_FILE}" ]]; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log "[DRY-RUN] Would install env file ${ENV_FILE} -> ${USER_ENV_FILE} (0600, user-owned)"
+    else
+      install -d -m 0700 "${REPO_ROOT}/config"
+      install -m 0600 "${ENV_FILE}" "${USER_ENV_FILE}"
+      info "Installed canonical user-systemd env file: ${USER_ENV_FILE}"
+    fi
+  fi
 fi
 
 # --- 4. Install units ----------------------------------------------------
