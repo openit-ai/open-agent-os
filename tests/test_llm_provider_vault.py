@@ -51,41 +51,47 @@ def isolate():
     os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-provider-32bytes!!"
     # Force llm mode — vault tests require provider CRUD, which is blocked in hermes mode (409)
     os.environ["OAOS_RUNTIME_MODE"] = "llm"
+    _orig_guards = {}
     try:
         import sys
-        # Ensure runtime_mode module is loaded and set to llm
-        # Try both import paths used by llm_providers guard
-        for mod_name in ("runtime_mode", "admin_llm_providers_vault"):
+        # Ensure runtime_mode module is loaded and set to llm (both bare and canonical)
+        for mod_name in ("runtime_mode", "admin_console.backend.runtime_mode", "admin_llm_providers_vault"):
             try:
-                # runtime_mode may not be loaded yet — load it
-                if "runtime_mode" not in sys.modules:
+                if mod_name not in sys.modules:
+                    if mod_name.startswith("admin_console"):
+                        # canonical will be created when app loads llm_providers; ensure via import
+                        continue
                     import importlib.util
                     from pathlib import Path
                     be = Path(__file__).resolve().parents[1] / "admin-console" / "backend"
-                    spec = importlib.util.spec_from_file_location("runtime_mode", str(be / "runtime_mode.py"))
+                    spec = importlib.util.spec_from_file_location(mod_name, str(be / "runtime_mode.py"))
                     rm = importlib.util.module_from_spec(spec)
-                    sys.modules["runtime_mode"] = rm
+                    sys.modules[mod_name] = rm
                     spec.loader.exec_module(rm)
-                rm = sys.modules.get("runtime_mode")
+                rm = sys.modules.get(mod_name)
                 if rm and hasattr(rm, "set_mode") and hasattr(rm, "RuntimeMode"):
                     rm.set_mode(rm.RuntimeMode.llm)
             except Exception:
                 pass
-        # Also patch the guard directly as fallback — ensures even if DB says hermes, tests bypass
-        try:
-            # llm_providers guard checks runtime_mode.get_mode() == hermes -> patch to never be hermes
-            if hasattr(llm_mod, "_check_hermes_mode_guard"):
-                orig = llm_mod._check_hermes_mode_guard
-                def _noop():
-                    return None
-                llm_mod._check_hermes_mode_guard = _noop
-                # store for restore
-                isolate._orig_guard = orig
-        except Exception:
-            pass
+        # Directly set canonical runtime_mode if app has already created it
+        for canon in ("admin_console.backend.runtime_mode", "runtime_mode"):
+            try:
+                rm = sys.modules.get(canon)
+                if rm and hasattr(rm, "set_mode"):
+                    rm.set_mode(rm.RuntimeMode.llm)  # type: ignore
+            except Exception:
+                pass
+        # Patch guards on all llm_providers variants (private + canonical + bare)
+        for target in (llm_mod, sys.modules.get("llm_providers"), sys.modules.get("admin_console.backend.llm_providers")):
+            try:
+                if target is not None and hasattr(target, "_check_hermes_mode_guard"):
+                    _orig_guards[id(target)] = target._check_hermes_mode_guard
+                    target._check_hermes_mode_guard = lambda: None  # type: ignore
+            except Exception:
+                pass
     except Exception:
         pass
-    # clear state
+    # clear state (both private and canonical)
     try:
         auth_mod.clear_users()
     except Exception:
@@ -94,13 +100,47 @@ def isolate():
         llm_mod.clear_providers()
     except Exception:
         pass
-    yield
-    # restore guard
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_providers"):
+                m.clear_providers()
+        except Exception:
+            pass
+    for canon in ("admin_console.backend.auth", "auth"):
+        try:
+            m = sys.modules.get(canon)
+            if m and m is not auth_mod and hasattr(m, "clear_users"):
+                m.clear_users()
+        except Exception:
+            pass
+    # Alias private module dicts to canonical so writes via app are visible to assertions
     try:
-        if hasattr(isolate, '_orig_guard'):
-            llm_mod._check_hermes_mode_guard = isolate._orig_guard
+        import sys as _sys
+        canon = _sys.modules.get("admin_console.backend.llm_providers")
+        if canon is not None:
+            for attr in ("_providers", "_encrypted_store", "_secret_refs", "_quota_store", "_quota_window_counts"):
+                try:
+                    setattr(llm_mod, attr, getattr(canon, attr))
+                except Exception:
+                    pass
+            # also alias helpers so get_encrypted_api_key reads canonical store
+            for fn in ("get_encrypted_api_key", "get_provider", "list_providers"):
+                try:
+                    if hasattr(canon, fn):
+                        setattr(llm_mod, fn, getattr(canon, fn))
+                except Exception:
+                    pass
     except Exception:
         pass
+    yield
+    # restore guards
+    for target in (llm_mod, sys.modules.get("llm_providers"), sys.modules.get("admin_console.backend.llm_providers")):
+        try:
+            if target is not None and id(target) in _orig_guards:
+                target._check_hermes_mode_guard = _orig_guards[id(target)]
+        except Exception:
+            pass
     try:
         llm_mod.clear_providers()
     except Exception:

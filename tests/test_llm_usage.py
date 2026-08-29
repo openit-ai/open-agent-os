@@ -35,32 +35,91 @@ from agent_runtime.llm_runtime import (
 def isolate():
     os.environ["OAOS_RUNTIME_MODE"] = "llm"
     os.environ["OAOS_VAULT_KEY"] = "test-vault-key-32b-test-vault-key!!"
-    orig = llm_mod._check_hermes_mode_guard
-    llm_mod._check_hermes_mode_guard = lambda: None
-    for k in list(sys.modules.keys()):
-        if "llm_providers" in k:
-            try:
-                sys.modules[k]._check_hermes_mode_guard = lambda: None
-            except: pass
+    _orig = {}
+    for k in ("admin_llm_usage", "llm_providers", "admin_console.backend.llm_providers"):
+        try:
+            m = sys.modules.get(k)
+            if m is not None and hasattr(m, "_check_hermes_mode_guard"):
+                _orig[k] = m._check_hermes_mode_guard  # type: ignore
+                m._check_hermes_mode_guard = lambda: None  # type: ignore
+        except: pass
+    try:
+        if hasattr(llm_mod, "_check_hermes_mode_guard") and "admin_llm_usage" not in _orig:
+            _orig["admin_llm_usage"] = llm_mod._check_hermes_mode_guard  # type: ignore
+            llm_mod._check_hermes_mode_guard = lambda: None  # type: ignore
+    except: pass
+    for rm_name in ("runtime_mode", "admin_console.backend.runtime_mode"):
+        try:
+            rm = sys.modules.get(rm_name)
+            if rm and hasattr(rm, "set_mode"):
+                rm.set_mode(rm.RuntimeMode.llm)  # type: ignore
+        except: pass
     try: auth_mod.clear_users()
     except: pass
     try: llm_mod.clear_providers()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_providers"):
+                m.clear_providers()
+        except: pass
     try: llm_mod.clear_quotas()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_quotas"):
+                m.clear_quotas()
+        except: pass
     try: llm_mod.clear_usage()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_usage"):
+                m.clear_usage()
+        except: pass
     try: llm_mod._admin_usage_records.clear()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "_admin_usage_records"):
+                m._admin_usage_records.clear()  # type: ignore
+        except: pass
     clear_llm_usage()
     yield
-    llm_mod._check_hermes_mode_guard = orig
+    for k, orig in _orig.items():
+        try:
+            m = sys.modules.get(k) if k != "admin_llm_usage" else llm_mod
+            if m:
+                m._check_hermes_mode_guard = orig  # type: ignore
+        except: pass
     try: llm_mod.clear_providers()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_providers"):
+                m.clear_providers()
+        except: pass
     try: llm_mod.clear_quotas()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_quotas"):
+                m.clear_quotas()
+        except: pass
     try: llm_mod.clear_usage()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_usage"):
+                m.clear_usage()
+        except: pass
     try: llm_mod._admin_usage_records.clear()
     except: pass
     clear_llm_usage()
@@ -104,9 +163,9 @@ def test_usage_recorded_on_fail_and_quota_linked():
     token=_login()
     c=_client()
     h={"Authorization": f"Bearer {token}"}
-    r=c.post("/v1/llm/providers", json={"provider":"claude","apiKey":"sk-test-1234567890"}, headers=h)
+    r=c.post("/v1/llm/providers", json={"provider":"claude","apiKey":"«redacted:sk-…»"}, headers=h)
     pid=r.json()["id"]
-    for mod in [llm_mod, sys.modules.get("llm_providers")]:
+    for mod in [llm_mod, sys.modules.get("llm_providers"), sys.modules.get("admin_console.backend.llm_providers")]:
         if mod is not None:
             mod._quota_store["tenant-fail"]={"daily_limit":1,"per_minute_limit":10,"used_today":1,"window_start": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
             mod._quota_window_counts["tenant-fail"]=0

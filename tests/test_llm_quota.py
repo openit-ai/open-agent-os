@@ -25,39 +25,98 @@ def isolate():
     import os
     os.environ["OAOS_RUNTIME_MODE"] = "llm"
     os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-quota-32bytes!!"
-    # noop guard
-    orig = llm_mod._check_hermes_mode_guard
-    llm_mod._check_hermes_mode_guard = lambda: None
+    _orig = {}
+    for k in ("admin_llm_quota", "llm_providers", "admin_console.backend.llm_providers"):
+        try:
+            m = sys.modules.get(k)
+            if m is not None and hasattr(m, "_check_hermes_mode_guard"):
+                _orig[k] = m._check_hermes_mode_guard
+                m._check_hermes_mode_guard = lambda: None
+        except:
+            pass
+    # also patch llm_mod directly (covers private module)
     try:
-        import sys
-        if "llm_providers" in sys.modules:
-            sys.modules["llm_providers"]._check_hermes_mode_guard = lambda: None
-    except: pass
-    try:
-        import sys
-        if "admin_llm_providers" in sys.modules:
-            sys.modules["admin_llm_providers"]._check_hermes_mode_guard = lambda: None
-    except: pass
+        if hasattr(llm_mod, "_check_hermes_mode_guard") and "admin_llm_quota" not in _orig:
+            _orig["admin_llm_quota"] = llm_mod._check_hermes_mode_guard
+            llm_mod._check_hermes_mode_guard = lambda: None
+    except:
+        pass
+    # ensure runtime_mode is llm for canonical
+    for rm_name in ("runtime_mode", "admin_console.backend.runtime_mode"):
+        try:
+            rm = sys.modules.get(rm_name)
+            if rm and hasattr(rm, "set_mode"):
+                rm.set_mode(rm.RuntimeMode.llm)  # type: ignore
+        except:
+            pass
     try:
         auth_mod.clear_users()
     except: pass
     try:
         llm_mod.clear_providers()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_providers"):
+                m.clear_providers()
+        except:
+            pass
     try:
         llm_mod.clear_quotas()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_quotas"):
+                m.clear_quotas()
+        except:
+            pass
+    try:
+        for canon in ("admin_console.backend.llm_providers", "llm_providers", "admin_llm_quota"):
+            m = sys.modules.get(canon) if canon != "admin_llm_quota" else llm_mod
+            if m and hasattr(m, "_quota_store"):
+                m._quota_store.clear()
+                m._quota_window_counts.clear()
+    except:
+        pass
     # also clear runtime quota
     try:
         from agent_runtime.llm_runtime import _llm_quota_clear
         _llm_quota_clear()
     except: pass
     yield
-    llm_mod._check_hermes_mode_guard = orig
+    for k, orig in _orig.items():
+        try:
+            m = sys.modules.get(k) if k != "admin_llm_quota" else llm_mod
+            if m:
+                m._check_hermes_mode_guard = orig
+        except:
+            pass
+    # also restore llm_mod if not in orig
+    try:
+        if hasattr(llm_mod, "_check_hermes_mode_guard") and "admin_llm_quota" not in _orig:
+            pass
+    except:
+        pass
     try: llm_mod.clear_providers()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_providers"):
+                m.clear_providers()
+        except:
+            pass
     try: llm_mod.clear_quotas()
     except: pass
+    for canon in ("admin_console.backend.llm_providers", "llm_providers"):
+        try:
+            m = sys.modules.get(canon)
+            if m and hasattr(m, "clear_quotas"):
+                m.clear_quotas()
+        except:
+            pass
     try:
         from agent_runtime.llm_runtime import _llm_quota_clear
         _llm_quota_clear()
@@ -93,7 +152,7 @@ def test_daily_exceeded_429():
     r=c.post("/v1/llm/providers", json={"provider":"claude","apiKey":"sk-test-1234567890"}, headers=h)
     pid=r.json()["id"]
     # set quota daily_limit=1, used_today=1 => next call exceeds
-    for mod in [llm_mod, __import__("sys").modules.get("llm_providers")]:
+    for mod in [llm_mod, __import__("sys").modules.get("llm_providers"), __import__("sys").modules.get("admin_console.backend.llm_providers")]:
         if mod is not None:
             mod._quota_store["tenant-daily"]={"daily_limit":1,"per_minute_limit":10,"used_today":1,"window_start": __import__("datetime").datetime.now(__import__("datetime").timezone.utc), "updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)}
             mod._quota_window_counts["tenant-daily"]=0
@@ -105,14 +164,14 @@ def test_per_minute_exceeded_429():
     token=_login()
     c=_client()
     h={"Authorization":f"Bearer {token}"}
-    r=c.post("/v1/llm/providers", json={"provider":"claude","apiKey":"sk-test-1234567890"}, headers=h)
+    r=c.post("/v1/llm/providers", json={"provider":"claude","apiKey":"«redacted:sk-…»"}, headers=h)
     pid=r.json()["id"]
     # per_minute_limit=1, first call ok, second within minute should 429
-    for mod in [llm_mod, __import__("sys").modules.get("llm_providers")]:
+    for mod in [llm_mod, __import__("sys").modules.get("llm_providers"), __import__("sys").modules.get("admin_console.backend.llm_providers")]:
         if mod is not None:
             mod._quota_store.pop("tenant-permin",None)
             mod._quota_window_counts.pop("tenant-permin",None)
-    for mod in [llm_mod, __import__("sys").modules.get("llm_providers")]:
+    for mod in [llm_mod, __import__("sys").modules.get("llm_providers"), __import__("sys").modules.get("admin_console.backend.llm_providers")]:
         if mod is not None:
             mod._quota_store["tenant-permin"]={"daily_limit":100,"per_minute_limit":1,"used_today":0,"window_start": __import__("datetime").datetime.now(__import__("datetime").timezone.utc), "updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)}
             mod._quota_window_counts["tenant-permin"]=0
