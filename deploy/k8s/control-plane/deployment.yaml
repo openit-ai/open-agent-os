@@ -75,6 +75,23 @@ spec:
                 secretKeyRef:
                   name: oaos-secrets
                   key: OAOS_ENCRYPTION_KEY
+            - name: ADMIN_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: ADMIN_JWT_SECRET
+            - name: OAOS_ADMIN_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: OAOS_ADMIN_BOOTSTRAP_PASSWORD
+                  optional: true
+            - name: OAOS_ADMIN_BOOTSTRAP_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: OAOS_ADMIN_BOOTSTRAP_EMAIL
+                  optional: true
             - name: DATABASE_URL
               value: "postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)"
             - name: REDIS_URL
@@ -104,6 +121,11 @@ spec:
                 configMapKeyRef:
                   name: oaos-config
                   key: LOG_LEVEL
+            - name: OAOS_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: OAOS_ENV
             - name: POSTGRES_DB
               valueFrom:
                 configMapKeyRef:

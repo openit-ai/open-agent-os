@@ -54,7 +54,28 @@ class ApprovalRequest(BaseModel):
     decided_by: str | None = None
 
 
-# ── DB helpers (lazy, sync) ──────────────────────────────────────
+# ── DB helpers (lazy, sync) + production fail-closed ───────────────
+# Distributed state: DB (approval_requests + approval_nonces) is primary in production.
+# In-memory fallback is allowed ONLY in non-prod (explicit test fallback).
+# Limitations: in-memory nonce grants are process-local, not distributed — prod MUST use DB.
+
+def _is_prod() -> bool:
+    return os.environ.get("OAOS_ENV", "").lower() in ("production", "prod")
+
+
+def _allow_in_memory_fallback() -> bool:
+    if _is_prod():
+        return False
+    return True
+
+
+def _require_db_if_prod() -> None:
+    if _is_prod() and not _db_enabled():
+        raise RuntimeError(
+            "ApprovalStore: DATABASE_URL/OAOS_DATABASE_URL required when OAOS_ENV=production "
+            "(fail-closed — distributed approval/nonce state must be DB-backed)"
+        )
+
 
 def _db_enabled() -> bool:
     url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
@@ -319,6 +340,12 @@ class ApprovalStore:
     Nonce replay protection persists to approval_nonces (DB) with TTL 300s.
     Falls back to in-memory dict when DB unavailable (e.g. tests / no DATABASE_URL).
     verify replay survives restart via DB query.
+
+    Distributed/operational boundary:
+    - Production (OAOS_ENV=production): DB/Redis is primary, in-memory fallback is
+      NOT allowed — fail-closed (raise) if DB unavailable. Limitations documented
+      in file header: in-memory is process-local, not distributed.
+    - Non-prod: explicit test fallback via in-memory is retained.
     """
 
     def __init__(self, signing_key: str) -> None:
@@ -329,6 +356,11 @@ class ApprovalStore:
         # backwards compat: expose set-like view for older callers that do `in` checks
         self._user_grants: set[tuple[str, str, str]] = set()  # (user_id, action, resource_pattern)
         self._group_grants: set[tuple[str, str, str]] = set()  # (group_id, action, resource_pattern)
+        if _is_prod():
+            try:
+                _require_db_if_prod()
+            except RuntimeError:
+                raise
 
     # ── internal nonce helpers ────────────────────────────────
     def _purge_expired_nonces(self) -> None:
@@ -361,11 +393,16 @@ class ApprovalStore:
             if exp > ttl_exp:
                 exp = ttl_exp
         self._seen_nonces[nonce] = exp
-        # persist to DB (ignore failure -> in-memory fallback keeps protection for this process)
-        try:
-            _db_nonce_insert(nonce, exp)
-        except Exception:
-            pass
+        # persist to DB — primary in prod (fail-closed), fallback in non-prod
+        if _db_enabled():
+            try:
+                _db_nonce_insert(nonce, exp)
+            except Exception as e:
+                if _is_prod():
+                    raise RuntimeError(f"ApprovalStore nonce persist failed in production: {e}") from e
+        else:
+            if _is_prod():
+                raise RuntimeError("ApprovalStore nonce persist failed — no DB in production (fail-closed)")
 
     # ── 생성 ───────────────────────────────────────────────────
     def create(
@@ -377,6 +414,8 @@ class ApprovalStore:
         risk: str = "HIGH",
         ttl_minutes: int = 60,
     ) -> ApprovalRequest:
+        if _is_prod():
+            _require_db_if_prod()
         nonce = uuid.uuid4().hex
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
         raw = f"{user_id}|{agent_id}|{action}|{resource}|{nonce}|{expires_at.isoformat()}"
@@ -396,6 +435,8 @@ class ApprovalStore:
         )
         self._requests[req.approval_id] = req
         if _db_enabled():
+            db_ok = False
+            last_err = None
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -403,7 +444,9 @@ class ApprovalStore:
                         orm = _to_orm(req)
                         session.add(orm)
                         session.commit()
+                        db_ok = True
                     except Exception as e:
+                        last_err = e
                         try:
                             session.rollback()
                         except Exception:
@@ -411,8 +454,14 @@ class ApprovalStore:
                         logger.debug("ApprovalStore create DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                last_err = e
+            if _is_prod() and not db_ok:
+                self._requests.pop(req.approval_id, None)
+                raise RuntimeError(f"ApprovalStore create failed — DB persist required in production: {last_err}")
+        elif _is_prod():
+            self._requests.pop(req.approval_id, None)
+            raise RuntimeError("ApprovalStore create failed — no DB in production (fail-closed)")
         return req
 
     def get(self, approval_id: str) -> ApprovalRequest | None:
@@ -500,8 +549,10 @@ class ApprovalStore:
 
         # update in-memory
         self._requests[req.approval_id] = req
-        # DB update
+        # DB update — primary in prod (fail-closed)
         if _db_enabled():
+            db_ok = False
+            last_err = None
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -519,6 +570,7 @@ class ApprovalStore:
                                 except Exception:
                                     pass
                             session.commit()
+                            db_ok = True
                         else:
                             # row not found (race) — insert
                             orm = _to_orm(req)
@@ -529,7 +581,9 @@ class ApprovalStore:
                                     pass
                             session.add(orm)
                             session.commit()
+                            db_ok = True
                     except Exception as e:
+                        last_err = e
                         try:
                             session.rollback()
                         except Exception:
@@ -537,8 +591,12 @@ class ApprovalStore:
                         logger.debug("ApprovalStore decide DB update failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                last_err = e
+            if _is_prod() and not db_ok:
+                raise RuntimeError(f"ApprovalStore decide failed — DB persist required in production: {last_err}")
+        elif _is_prod():
+            raise RuntimeError("ApprovalStore decide failed — no DB in production (fail-closed)")
         return req
 
     def is_approved(self, approval_id: str) -> bool:

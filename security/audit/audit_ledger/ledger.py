@@ -22,11 +22,39 @@ from audit_model import AuditCheckpoint, AuditEvent
 
 logger = logging.getLogger(__name__)
 
-# ── DB helpers (lazy, sync) ──────────────────────────────────────
+# ── DB helpers (lazy, sync) + production fail-closed ──────────────
+# Distributed state: DB is primary in production; in-memory fallback is allowed
+# ONLY in non-prod (explicit test fallback). See §27/§31.
+# Limitations (documented):
+# - In-memory fallback is process-local — not distributed, does not survive restart, and
+#   is unsuitable for HA (2+ replicas will diverge). Prod MUST set DATABASE_URL and
+#   run with OAOS_ENV=production to get fail-closed guarantees. Tests rely on fallback
+#   via non-prod (OAOS_ENV != production) or OAOS_ALLOW_TEST_FALLBACK=1.
+
+def _is_prod() -> bool:
+    return os.environ.get("OAOS_ENV", "").lower() in ("production", "prod")
+
+
+def _allow_in_memory_fallback() -> bool:
+    if _is_prod():
+        return False
+    fallback_flag = os.environ.get("OAOS_ALLOW_TEST_FALLBACK", "")
+    if fallback_flag.lower() in ("1", "true", "yes"):
+        return True
+    return True if not _is_prod() else False
+
 
 def _db_enabled() -> bool:
     url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
     return bool(url and url.strip())
+
+
+def _require_db_if_prod() -> None:
+    if _is_prod() and not _db_enabled():
+        raise RuntimeError(
+            "AuditLedger: DATABASE_URL/OAOS_DATABASE_URL required when OAOS_ENV=production "
+            "(fail-closed — distributed audit state must be DB-backed)"
+        )
 
 
 def _normalize_sync_url(url: str) -> str:
@@ -187,6 +215,8 @@ class AuditLedger:
         self._head: str | None = None
         self._events: list[AuditEvent] = []
         self._signing_key = signing_key or "default-audit-signing-key"
+        if _is_prod():
+            _require_db_if_prod()
         # hydrate from DB if available (lazy)
         if _db_enabled():
             try:
@@ -209,6 +239,8 @@ class AuditLedger:
                 pass
 
     def append(self, event: AuditEvent) -> AuditEvent:
+        if _is_prod():
+            _require_db_if_prod()
         # ensure chaining is consistent with current head (DB or memory)
         # if DB enabled, recompute head from DB if our in-memory head may be stale due to other process?
         # For simplicity, use in-memory head (already hydrated at init)
@@ -216,8 +248,10 @@ class AuditLedger:
         event.event_hash = event.compute_hash()
         self._head = event.event_hash
         self._events.append(event)
-        # DB persist
+        # DB persist — primary store in prod, in-memory only in non-prod fallback
         if _db_enabled():
+            db_ok = False
+            last_err: Exception | None = None
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -225,7 +259,9 @@ class AuditLedger:
                         orm = _event_to_orm(event)
                         session.add(orm)
                         session.commit()
+                        db_ok = True
                     except Exception as e:
+                        last_err = e
                         try:
                             session.rollback()
                         except Exception:
@@ -233,8 +269,18 @@ class AuditLedger:
                         logger.debug("AuditLedger append DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                last_err = e
+            if _is_prod() and not db_ok:
+                try:
+                    self._events.pop()
+                    self._head = self._events[-1].event_hash if self._events else None
+                except Exception:
+                    pass
+                raise RuntimeError(f"AuditLedger append failed — DB persist required in production but failed: {last_err}")
+        else:
+            if _is_prod():
+                raise RuntimeError("AuditLedger append failed — no DB in production (fail-closed)")
         return event
 
     @property

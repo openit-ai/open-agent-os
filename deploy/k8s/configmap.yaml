@@ -18,6 +18,7 @@ data:
   AWS_S3_PREFIX: "audit-checkpoints/"
   AWS_S3_BUCKET: ""  # set via: kubectl patch configmap oaos-config -p '{"data":{"AWS_S3_BUCKET":"my-bucket"}}'
   LOG_LEVEL: "info"
+  OAOS_ENV: "production"  # prod fail-closed — must be production; dev override via kustomize/env
   # CORS whitelist (comma-separated origins); default allows localhost:3012,3000,8010,8100
   # OAOS_CORS_ORIGINS: "http://localhost:3012,http://localhost:3000,http://localhost:8010,http://localhost:8100"
   # Service URLs (intra-cluster)

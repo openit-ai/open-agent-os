@@ -75,6 +75,23 @@ spec:
                 secretKeyRef:
                   name: oaos-secrets
                   key: OAOS_ENCRYPTION_KEY
+            - name: ADMIN_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: ADMIN_JWT_SECRET
+            - name: OAOS_ADMIN_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: OAOS_ADMIN_BOOTSTRAP_PASSWORD
+                  optional: true
+            - name: OAOS_ADMIN_BOOTSTRAP_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: oaos-secrets
+                  key: OAOS_ADMIN_BOOTSTRAP_EMAIL
+                  optional: true
             - name: AWS_S3_BUCKET
               valueFrom:
                 configMapKeyRef:
@@ -109,6 +126,11 @@ spec:
                 configMapKeyRef:
                   name: oaos-config
                   key: LOG_LEVEL
+            - name: OAOS_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: oaos-config
+                  key: OAOS_ENV
           livenessProbe:
             httpGet:
               path: /healthz

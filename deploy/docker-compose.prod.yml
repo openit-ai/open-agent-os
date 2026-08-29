@@ -1,4 +1,4 @@
-# deploy/docker-compose.prod.yml — production stack (§5 On-Prem / VPS + §16D Performance/HPA + §31 signed checkpoint → S3)
+# deploy/docker-compose.prod.yml — production stack (fail-closed: OAOS_ENV MUST be production, external secrets REQUIRED) (§5 On-Prem / VPS + §16D Performance/HPA + §31 signed checkpoint → S3)
 # Extends docker-compose.dev.yml: same 5 services + TLS nginx sidecar, hardening, backups.
 # Resource limits (§16D.1): every service declares deploy.resources.limits/reservations.
 # For Swarm / Compose autoscaling see: docker compose --compatibility + external autoscaler,
@@ -136,6 +136,10 @@ services:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY required}
       OAOS_SIGNING_KEY: ${OAOS_SIGNING_KEY:-${AUDIT_SIGNING_KEY}}
       OAOS_ENCRYPTION_KEY: ${OAOS_ENCRYPTION_KEY:?OAOS_ENCRYPTION_KEY required}
+      OAOS_ENV: ${OAOS_ENV:?OAOS_ENV=production required — set OAOS_ENV=production for prod compose}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET required — external secret, must not be dev default}
+      OAOS_ADMIN_BOOTSTRAP_PASSWORD: ${OAOS_ADMIN_BOOTSTRAP_PASSWORD:-}
+      OAOS_ADMIN_BOOTSTRAP_EMAIL: ${OAOS_ADMIN_BOOTSTRAP_EMAIL:-admin@openit.co.kr}
       TENANT_ID: ${TENANT_ID:-default}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
@@ -184,6 +188,12 @@ services:
       AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:?AUDIT_SIGNING_KEY required}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY required}
       OAOS_SIGNING_KEY: ${OAOS_SIGNING_KEY:-${AUDIT_SIGNING_KEY}}
+      OAOS_ENV: ${OAOS_ENV:?OAOS_ENV=production required}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET required — external secret, must not be dev default}
+      OAOS_ADMIN_BOOTSTRAP_PASSWORD: ${OAOS_ADMIN_BOOTSTRAP_PASSWORD:-}
+      OAOS_ADMIN_BOOTSTRAP_EMAIL: ${OAOS_ADMIN_BOOTSTRAP_EMAIL:-admin@openit.co.kr}
+      OAOS_ENCRYPTION_KEY: ${OAOS_ENCRYPTION_KEY:?OAOS_ENCRYPTION_KEY required}
+      AWS_S3_PREFIX: ${AWS_S3_PREFIX:-audit-checkpoints/}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:
@@ -233,6 +243,10 @@ services:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY required}
       OAOS_SIGNING_KEY: ${OAOS_SIGNING_KEY:-${AUDIT_SIGNING_KEY}}
       OAOS_ENCRYPTION_KEY: ${OAOS_ENCRYPTION_KEY:?OAOS_ENCRYPTION_KEY required}
+      OAOS_ENV: ${OAOS_ENV:?OAOS_ENV=production required}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET required — external secret, must not be dev default}
+      OAOS_ADMIN_BOOTSTRAP_PASSWORD: ${OAOS_ADMIN_BOOTSTRAP_PASSWORD:-}
+      OAOS_ADMIN_BOOTSTRAP_EMAIL: ${OAOS_ADMIN_BOOTSTRAP_EMAIL:-admin@openit.co.kr}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:

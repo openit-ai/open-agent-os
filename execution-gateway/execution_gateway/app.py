@@ -395,6 +395,7 @@ async def execute(
         raise HTTPException(status_code=400, detail=str(e))
 
     # 3. ToolRateLimiter (§16H.2) — lazy, per (tenant,user,tool,resource)
+    # Production: Redis-primary fail-closed; non-prod: fail-open to preserve tests
     try:
         limiter = _get_rate_limiter()
         rate_key = f"{ctx.get('tenant_id')}:{ctx.get('user_id')}:{req.tool}:{canon_resource}"
@@ -411,8 +412,22 @@ async def execute(
                 },
                 headers={"Retry-After": str(round(retry, 2))},
             )
+    except RuntimeError as e:
+        # Production fail-closed: Redis unavailable → 503
+        is_prod = os.getenv("OAOS_ENV", "").lower() in ("production", "prod")
+        if is_prod:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "RATE_LIMIT_UNAVAILABLE",
+                    "reason": str(e),
+                    "tool": req.tool,
+                    "trace_id": ctx.get("trace_id", "unknown"),
+                },
+            )
+        pass
     except Exception:
-        pass  # fail-open for limiter errors — keeps 541 green
+        pass  # fail-open for non-RuntimeError limiter errors in non-prod — keeps 541 green
 
     # 4. tool 존재 검증
     if _registry.find_tool(req.tool) is None and req.tool not in _registry.list_tools():
