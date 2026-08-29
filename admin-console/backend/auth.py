@@ -1,7 +1,9 @@
 """Admin Console — Auth (infra admin accounts).
 
 - AdminUser: id, email, display_name, role[L5 infra-admin, L4 read-only], hashed_password, created_at
-- bcrypt hash, JWT HS256 8h expiry, get_current_admin, seed admin@openit.co.kr / Admin123!
+- Argon2id primary + bcrypt fallback, JWT HS256 8h expiry, get_current_admin.
+- Dev/test seed admin@openit.co.kr / Admin123! when OAOS_ENV != production.
+- Production (OAOS_ENV=production|prod) is fail-closed: no default seed; requires existing admin in DB/cache OR OAOS_ADMIN_BOOTSTRAP_PASSWORD (and optional OAOS_ADMIN_BOOTSTRAP_EMAIL) to create the initial L5 admin. Bootstrap secret is never logged. If neither exists at startup, the process raises RuntimeError.
 - DB persistence (AdminUserORM) with in-memory fallback — uses openagentos DB when
   DATABASE_URL/OAOS_DATABASE_URL is set, otherwise falls back to _users_by_id dict.
   All DB imports are lazy inside functions so tests pass without DB / drivers.
@@ -55,8 +57,11 @@ JWT_SECRET = os.environ.get("ADMIN_JWT_SECRET", _DEV_JWT_SECRET)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 8
 
+def _is_production() -> bool:
+    return os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
+
 # Fail-closed in production: dev default ADMIN_JWT_SECRET must be overridden (like persistence.py)
-if os.environ.get("OAOS_ENV", "").lower() == "production" and JWT_SECRET == _DEV_JWT_SECRET:
+if _is_production() and JWT_SECRET == _DEV_JWT_SECRET:
     raise RuntimeError("ADMIN_JWT_SECRET must be set to a strong value when OAOS_ENV=production (fail-closed)")
 
 # ---------------------------------------------------------------------------
@@ -392,8 +397,74 @@ def _db_close(session, engine) -> None:
 # ---------------------------------------------------------------------------
 # Seed
 # ---------------------------------------------------------------------------
+def _has_existing_admin() -> bool:
+    """True if any admin exists in cache or DB (DB best-effort)."""
+    if _users_by_email:
+        return True
+    if _db_enabled():
+        try:
+            session, engine = _db_get_session()
+            if session is not None:
+                try:
+                    from security.models.orm import AdminUserORM  # type: ignore
+                    cnt = session.query(AdminUserORM).count()  # type: ignore
+                    return cnt > 0
+                finally:
+                    _db_close(session, engine)
+        except Exception:
+            pass
+    return False
+
 def _seed_admin() -> None:
-    """Create dev seed account if not exists — persists to DB when enabled."""
+    """Create seed/bootstrap admin — production fail-closed, dev/test seed."""
+    if _is_production():
+        if _has_existing_admin():
+            return
+        _bootstrap_pw = (os.environ.get("OAOS_ADMIN_BOOTSTRAP_PASSWORD") or os.environ.get("OAOS_ADMIN_BOOTSTRAP_TOKEN") or "").strip()
+        if not _bootstrap_pw:
+            raise RuntimeError("OAOS_ENV=production requires existing admin or OAOS_ADMIN_BOOTSTRAP_PASSWORD (fail-closed: no default Admin123! seed in production)")
+        _bootstrap_email = os.environ.get("OAOS_ADMIN_BOOTSTRAP_EMAIL", "").strip() or "admin@openit.co.kr"
+        logger.info("Admin bootstrap: creating initial L5 admin in production (email=%s)", _bootstrap_email)
+        uid = f"admin_{uuid.uuid4().hex[:8]}"
+        user = AdminUser(
+            id=uid,
+            email=_bootstrap_email,
+            display_name="Infra Admin",
+            role=AdminRole.L5,
+            hashed_password=_hash_password(_bootstrap_pw),
+            created_at=datetime.now(timezone.utc),
+        )
+        _users_by_id[uid] = user
+        _users_by_email[_bootstrap_email] = user
+        # persist bootstrap admin to DB if enabled (best-effort, never log secret)
+        if _db_enabled():
+            try:
+                session, engine = _db_get_session()
+                if session is not None:
+                    try:
+                        from security.models.orm import AdminUserORM  # type: ignore
+                        existing = session.query(AdminUserORM).filter(AdminUserORM.email == _bootstrap_email).first()  # type: ignore
+                        if existing is None:
+                            orm = _to_orm(user)
+                            session.add(orm)
+                            session.commit()
+                        else:
+                            db_user = _from_orm(existing)
+                            _users_by_id[db_user.id] = db_user
+                            _users_by_email[db_user.email] = db_user
+                            if db_user.id != uid and uid in _users_by_id:
+                                del _users_by_id[uid]
+                    except Exception:
+                        try:
+                            session.rollback()
+                        except Exception:
+                            pass
+                    finally:
+                        _db_close(session, engine)
+            except Exception:
+                pass
+        return
+    # Non-production: dev/test seed (preserves existing tests)
     email = "admin@openit.co.kr"
     if email in _users_by_email:
         return
