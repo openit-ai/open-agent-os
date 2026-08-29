@@ -42,6 +42,83 @@ Mattermost / Slack Web·Desktop·Mobile
 - 축적된 지식을 브리핑·문서 탐색·업무 조율·후속 실행에 재활용
 - Personal Wiki는 OAOS의 Identity·Memory·Policy·ACP 구조가 만나는 핵심 업무 지식공간
 
+## 0.4 전사 위키·기업 문서 Knowledge Index 및 ACL-aware Hybrid RAG
+
+전사 위키와 기업 문서 검색은 **ACL-aware Hybrid RAG**를 사용한다. Outline·Notion 등 원 시스템은 문서 원본과 현재 권한을 유지하고, OAOS는 `openagentos` PostgreSQL + pgvector에 검색용 **Knowledge Index**를 저장한다.
+
+```text
+Outline / Notion 원본
+  ├─ 문서 내용·구조·현재 ACL
+  └─ Connector / MCP
+          ↓
+  청킹·임베딩·source reference·content hash·ACL version
+          ↓
+  openagentos PostgreSQL + pgvector
+  ├─ lexical index
+  ├─ semantic vector index
+  ├─ tenant/group/agent metadata
+  ├─ source reference
+  └─ ACL provenance
+          ↓
+  검증된 Agent Context
+  → ACL pre-filter
+  → lexical + semantic retrieval
+  → 결과 재정렬
+  → source reference 연결
+  → Personal Agent 응답
+```
+
+### 0.4.1 Knowledge Index 저장 필드
+
+```text
+index_id
+source_system              # outline / notion / drive / mattermost / slack 등
+source_resource_id
+source_uri
+tenant_id
+group_id / agent_id
+chunk_id
+chunk_text
+embedding                  # pgvector 1536
+content_hash
+source_updated_at
+indexed_at
+acl_version
+classification
+retention_policy
+provenance
+```
+
+Knowledge Index는 검색 후보를 빠르게 구성하기 위한 파생 인덱스이며, 문서의 출처·버전·권한 정보를 함께 보존한다. 원본 시스템과 Index의 연결은 `source_resource_id`, `source_uri`, `content_hash`, `source_updated_at`, `acl_version`으로 추적한다.
+
+### 0.4.2 검색 순서
+
+1. 검증된 사용자·Agent Context에서 `tenant_id`, 사용자, 그룹, Agent 범위를 확정한다.
+2. source ACL과 `acl_version`을 기준으로 검색 후보 범위를 만든다.
+3. PostgreSQL lexical 검색과 pgvector semantic 검색을 병행한다.
+4. 후보를 중복 제거하고 metadata·최신성·문서 유형을 반영해 재정렬한다.
+5. 답변에 사용할 결과의 source reference와 provenance를 연결한다.
+6. 권한 변경 또는 원본 변경이 감지되면 해당 Index를 갱신하거나 재검증한다.
+
+ACL은 결과를 만든 뒤 제거하는 방식이 아니라 **검색 후보를 만들기 전에 적용**한다. Personal Wiki 검색은 `agent_id` 중심으로, 전사 위키·기업 문서 검색은 source의 사용자·그룹·collection ACL과 `tenant_id`를 중심으로 적용한다.
+
+### 0.4.3 OAOS 업무 연속성
+
+Mattermost와 Slack의 Web·Desktop·Mobile 클라이언트에서 동일한 Personal Agent를 사용하며, 사용자의 업무 질문에 따라 Personal Wiki와 기업 Knowledge Index를 선택하거나 결합한다.
+
+```text
+“내가 지난주 처리한 업무”
+→ Personal Wiki + 업무 도구
+
+“회사 정책과 관련 문서”
+→ 기업 Knowledge Index
+
+“내 업무와 회사 정책을 함께 비교”
+→ Personal Wiki + 기업 Knowledge Index
+```
+
+기업 문서 검색 결과는 원본 문서의 제목·시스템·URL·수정 시각·source reference를 함께 제공하여, 검색 결과에서 원문 확인과 업무 실행으로 자연스럽게 연결한다.
+
 ---
 
 ## 1. 항목 매핑
