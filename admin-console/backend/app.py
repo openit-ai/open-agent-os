@@ -40,10 +40,14 @@ def _load_admin_sibling(name: str):
     qname = f"admin_console.backend.{name}"
     if qname in sys.modules:
         return sys.modules[qname]
+    # Robust aliasing: never trust bare 'auth'/'infra' collision from sys.path.
+    # Only reuse bare if its __file__ points to admin-console/backend and has admin router.
     bare = sys.modules.get(name)
-    if bare is not None and hasattr(bare, "router"):
-        sys.modules[qname] = bare
-        return bare
+    if bare is not None and hasattr(bare, "router") and getattr(bare, "__file__", "") and "admin-console/backend" in getattr(bare, "__file__", ""):
+        # also verify admin-specific attribute to avoid security.auth collision
+        if hasattr(bare, "get_current_admin") or name != "auth":
+            sys.modules[qname] = bare
+            return bare
     p = pathlib.Path(__file__).parent / f"{name}.py"
     if not p.exists():
         raise ImportError(f"admin sibling not found: {p}")

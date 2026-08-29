@@ -27,16 +27,18 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
 PKG_WIKI = ROOT / "packages" / "personal-wiki"
 
-# Ensure package wiki is importable
+# Ensure package wiki is importable (qualified imports only; do not pollute bare 'auth')
 if str(PKG_WIKI) not in sys.path:
     sys.path.insert(0, str(PKG_WIKI))
-if str(BACKEND) not in sys.path:
-    sys.path.insert(0, str(BACKEND))
+# NOTE: BACKEND is not added to sys.path to avoid bare 'auth' collision (admin vs security).
+# Admin app is loaded via package-qualified spec (admin_console.backend.app).
 
-TEST_SIGNING_KEY = "test-wiki-jwt-signing-key-32bytes-long-enough!!"
+TEST_SIGNING_KEY = os.environ.get("OAOS_SIGNING_KEY") or os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
 os.environ["OAOS_SIGNING_KEY"] = TEST_SIGNING_KEY
 os.environ["OAOS_SECURITY_SERVICE_SIGNING_KEY"] = TEST_SIGNING_KEY
-# Ensure dev default not used
+# Ensure all verifiers (CP/EGW/wiki/admin) see same unified key
+for _k in ("OAOS_USER_JWT_SIGNING_KEY","OAOS_JWT_SIGNING_KEY","OAOS_AGENT_CONTEXT_SIGNING_KEY","JWT_SIGNING_KEY","ADMIN_JWT_SECRET"):
+    os.environ[_k] = TEST_SIGNING_KEY
 os.environ["JWT_SIGNING_KEY"] = TEST_SIGNING_KEY
 
 # ---------------------------------------------------------------------------
@@ -86,27 +88,26 @@ def _auth_header(token: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _load_admin_app():
-    import importlib.util
-    # ensure backend on path temporarily
-    added = False
-    if str(BACKEND) not in sys.path:
-        sys.path.insert(0, str(BACKEND))
-        added = True
+    import importlib.util, importlib.machinery, types
+    # Ensure admin_console package exists (mirrors admin app's _ensure_admin_package)
+    for pkg in ("admin_console", "admin_console.backend"):
+        if pkg not in sys.modules:
+            m = types.ModuleType(pkg)
+            m.__path__ = []  # type: ignore
+            m.__spec__ = importlib.machinery.ModuleSpec(pkg, None, is_package=True)  # type: ignore
+            sys.modules[pkg] = m
     try:
-        # Use fresh load but reuse if already loaded
         import admin_console.backend.app as app_mod  # type: ignore
         return app_mod.app
     except Exception:
         import importlib.util as _ilu
-        spec = _ilu.spec_from_file_location("admin_app_wiki_auth", str(BACKEND / "app.py"))
+        # Load with qualified name so internal _load_admin_sibling works
+        spec = _ilu.spec_from_file_location("admin_console.backend.app", str(BACKEND / "app.py"))
         mod = _ilu.module_from_spec(spec)
-        sys.modules["admin_app_wiki_auth"] = mod
+        mod.__package__ = "admin_console.backend"
+        sys.modules["admin_console.backend.app"] = mod
         spec.loader.exec_module(mod)  # type: ignore
         return mod.app
-    finally:
-        if added and str(BACKEND) in sys.path:
-            # keep it for other imports
-            pass
 
 # ---------------------------------------------------------------------------
 # Admin API tests (verified JWT)

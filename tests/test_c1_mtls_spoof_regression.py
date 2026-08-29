@@ -37,9 +37,11 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "security") not in sys.path:
     sys.path.insert(0, str(ROOT / "security"))
 
-TEST_SIGNING_KEY = "test-security-auth-signing-key-32bytes-long!!"
+TEST_SIGNING_KEY = os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
 os.environ["OAOS_SIGNING_KEY"] = TEST_SIGNING_KEY
 os.environ["OAOS_SECURITY_SERVICE_SIGNING_KEY"] = TEST_SIGNING_KEY
+for _k in ("OAOS_USER_JWT_SIGNING_KEY","OAOS_JWT_SIGNING_KEY","OAOS_AGENT_CONTEXT_SIGNING_KEY","JWT_SIGNING_KEY","ADMIN_JWT_SECRET"):
+    os.environ[_k] = TEST_SIGNING_KEY
 os.environ.pop("OAOS_ENV", None)
 # ensure mTLS disabled by default for this regression suite
 os.environ.pop("OAOS_MTLS_ENABLED", None)

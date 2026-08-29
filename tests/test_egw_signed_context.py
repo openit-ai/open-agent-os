@@ -7,8 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "execution-gateway"))
 sys.path.insert(0, str(ROOT / "control-plane"))
 
-TEST_KEY = "test-signing-key-32bytes-long-enough!"
+TEST_KEY = os.environ.get("OAOS_SIGNING_KEY") or os.environ.get("OAOS_AGENT_CONTEXT_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
 os.environ["OAOS_SIGNING_KEY"] = TEST_KEY
+for _k in ("OAOS_AGENT_CONTEXT_SIGNING_KEY","OAOS_SECURITY_SERVICE_SIGNING_KEY","OAOS_USER_JWT_SIGNING_KEY","OAOS_JWT_SIGNING_KEY"):
+    os.environ[_k] = TEST_KEY
 
 from fastapi.testclient import TestClient
 from execution_gateway.app import app

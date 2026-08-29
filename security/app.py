@@ -29,11 +29,15 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 # C1: verified bearer JWT or mTLS — health remains public
+# Robust import: use package-qualified or file location, never bare 'auth' which collides with admin-console/backend/auth.py
 try:
-    from auth import verify_security_auth, verify_tenant_binding  # type: ignore
+    from security.auth import verify_security_auth, verify_tenant_binding  # type: ignore
 except ImportError:
     try:
-        from security.auth import verify_security_auth, verify_tenant_binding  # type: ignore
+        from auth import verify_security_auth, verify_tenant_binding  # type: ignore  # fallback for direct execution without package
+        # validate it is security auth (has verify_tenant_binding and ALLOWED_AUDIENCE)
+        if getattr(sys.modules.get("auth"), "ALLOWED_AUDIENCE", None) != "security":
+            raise ImportError("bare auth collision, not security.auth")
     except ImportError:
         import importlib.util as _ilu_auth
         import pathlib as _pl_auth

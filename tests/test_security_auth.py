@@ -34,13 +34,16 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "security") not in sys.path:
     sys.path.insert(0, str(ROOT / "security"))
 
-TEST_SIGNING_KEY = "test-security-auth-signing-key-32bytes-long!!"
+TEST_SIGNING_KEY = os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
 # One explicit env-configured signing key contract: security/auth.py reads
 # OAOS_SECURITY_SERVICE_SIGNING_KEY primary, OAOS_SIGNING_KEY fallback.
-# Test fixtures MUST set OAOS_SECURITY_SERVICE_SIGNING_KEY to the same value
-# used for signing, keeping verification and fixture keys in sync (TDD).
+# Test fixtures MUST use the exact env-configured verification key (conftest UNIFIED_TEST_KEY)
+# so signing and verification are in sync; do not hardcode divergent keys.
 os.environ["OAOS_SECURITY_SERVICE_SIGNING_KEY"] = TEST_SIGNING_KEY
 os.environ["OAOS_SIGNING_KEY"] = TEST_SIGNING_KEY
+# Also set other priority keys so CP/EGW/wiki verifiers see same unified key
+for _k in ("OAOS_USER_JWT_SIGNING_KEY","OAOS_JWT_SIGNING_KEY","OAOS_AGENT_CONTEXT_SIGNING_KEY","JWT_SIGNING_KEY","ADMIN_JWT_SECRET"):
+    os.environ[_k] = TEST_SIGNING_KEY
 os.environ.pop("OAOS_ENV", None)
 
 from fastapi.testclient import TestClient

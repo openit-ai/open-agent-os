@@ -7,8 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "control-plane"))
 
-TEST_KEY = "test-signing-key-32bytes-long-enough!"
+TEST_KEY = os.environ.get("OAOS_SIGNING_KEY") or os.environ.get("OAOS_USER_JWT_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
 os.environ["OAOS_SIGNING_KEY"] = TEST_KEY
+for _k in ("OAOS_USER_JWT_SIGNING_KEY","OAOS_JWT_SIGNING_KEY","OAOS_SECURITY_SERVICE_SIGNING_KEY","OAOS_AGENT_CONTEXT_SIGNING_KEY"):
+    os.environ[_k] = TEST_KEY
 
 from fastapi.testclient import TestClient
 from control_plane.app import app
@@ -16,7 +18,8 @@ from control_plane.auth import issue_user_jwt
 from control_plane.session import session_store
 
 def _jwt(sub="employee:kim", tenant="acme", ttl=3600, extra=None):
-    return issue_user_jwt(sub, tenant_id=tenant, ttl_seconds=ttl, signing_key=TEST_KEY, extra=extra)
+    # Use exact env-configured verification key/issuer/audience via helper (no hard-coded divergent key)
+    return issue_user_jwt(sub, tenant_id=tenant, ttl_seconds=ttl, extra=extra)
 
 def _auth(jwt):
     return {"Authorization": f"Bearer {jwt}"}

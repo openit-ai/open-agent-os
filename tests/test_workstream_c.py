@@ -64,8 +64,11 @@ import pathlib as _pl
 import importlib.util as _ilu
 _root = _pl.Path(__file__).resolve().parents[1]
 import os as _os
-_os.environ.setdefault("OAOS_SIGNING_KEY", "test-security-auth-signing-key-32bytes-long!!")
+_os.environ.setdefault("OAOS_SIGNING_KEY", "test-unified-oaos-signing-key-32bytes-long-enough!!")
 _os.environ.pop("OAOS_ENV", None)
+# Ensure all signing-key env vars point to unified for verifier
+for _k in ("OAOS_SECURITY_SERVICE_SIGNING_KEY","OAOS_USER_JWT_SIGNING_KEY","OAOS_JWT_SIGNING_KEY","OAOS_AGENT_CONTEXT_SIGNING_KEY"):
+    _os.environ.setdefault(_k, _os.environ.get("OAOS_SIGNING_KEY", "test-unified-oaos-signing-key-32bytes-long-enough!!"))
 _backend = _root / "admin-console" / "backend"
 if str(_backend) in _sys.path:
     _sys.path.remove(str(_backend))
@@ -495,7 +498,7 @@ def test_approval_stateless_helpers():
 # ──────────────────────────────────────────────────────────────
 # 7. FastAPI integration — 5 endpoints
 # ──────────────────────────────────────────────────────────────
-_TEST_SECURITY_KEY = "test-security-auth-signing-key-32bytes-long!!"
+_TEST_SECURITY_KEY = _os.environ.get("OAOS_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
 
 def _make_security_jwt_for_tests(sub: str = "agent:assistant:kim", tenant_id: str = "default") -> str:
     try:
