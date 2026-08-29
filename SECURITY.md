@@ -4,7 +4,8 @@
 
 | Version | Supported | Notes |
 |---|---|---|
-| `v1.6.4` | ✅ | Current canonical — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.4.md` (§§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault, 4945 lines, SHA `e10c1af8`) |
+| `v1.7.1` | ✅ | Current canonical — H4–H8 evidence tiers, ACL-aware Knowledge Index RAG, H7 production mock immutable gate, Docker/systemd parallel deployment |
+| `v1.6.4` | ✅ | Historical supported baseline — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), quota/usage/HA |
 | `v1.6.3` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.3.md` (§§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault, 4732 lines, SHA `2868226b`) |
 | `v1.6.2` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.2.md` (4526 lines, SHA `4456bd4c`) |
 | `v1.5.1` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.1.md` (3615 lines, SHA `4c2c1b85`) |
@@ -45,8 +46,9 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 ## Canonical Architecture
 
-- `docs/architecture-v1.6.4.md` — 47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault — §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy / 16C Core·Advanced split / 16F Dual Runtime / §16.1.1 OAOSContext·output_type·ToolOutputLimits / §16.1.2 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, runtime_mode conditional) / §17 ACP=Hermes-specific / §27B Vault / §40 security tests (SHA `e10c1af8`, 4945 lines) — conformance: `docs/architecture-conformance.md` v1.6.4; Previous `v1.6.3` `2868226b` / `v1.6.2` `4456bd4c` / `v1.5.1` `4c2c1b85` preserved; code: `packages/agent-runtime` (LLM) + `admin-console/backend/llm_providers` (Fernet Vault) + `execution-gateway/tool_policy` + `data_access` (612 tests)
-- `docs/security-model.md` — §§16F/16G/16H/16I reference
+- `docs/architecture-v1.7.1.md` — current implementation architecture: ACL-aware Enterprise Knowledge Index RAG, Personal Wiki owner isolation, H4–H8 evidence tiers, H7 immutable production mock gate, Secret lifecycle, Docker/systemd parallel deployment
+- `docs/architecture-v1.7.1-design.md` — v1.7.1 design source and residual/live-integration boundaries
+- `docs/security-model.md` — security boundary reference
 
 ## Scope
 
@@ -77,6 +79,30 @@ Open Agent OS is a **Self-Hosted Enterprise Personal Agent Platform** — `Perso
 - Threat review — Execution Gateway bypass: [`docs/security-review-gateway-bypass.md`](docs/security-review-gateway-bypass.md) — why "cannot bypass" matters more than "gateway exists", and the 3 remaining production hardenings (NetworkPolicy / Runtime hardening / DB re-verification)
 
 A bypass of the Gateway via direct Hermes → DB / Internal API / credential access is considered a **security boundary failure**, not a feature.
+
+## v1.7.1 Security Contracts
+
+### Secret lifecycle
+
+- Canonical independent secrets: `JWT_SIGNING_KEY`, `AUDIT_SIGNING_KEY`, `ADMIN_JWT_SECRET`, `OAOS_ENCRYPTION_KEY`.
+- `VAULT_ENCRYPTION_KEY` is a compatibility alias, not a separate user-entered secret.
+- New systemd installs generate missing 64-hex secrets automatically; existing installs preserve strong values.
+- Secret rotation occurs only with explicit `--rotate-secrets` and may invalidate JWT sessions and encrypted data access.
+- Secrets remain in `EnvironmentFile` with mode `0600`; values must never appear in logs, CI artifacts, or GitHub.
+
+### RAG security boundary
+
+- Enterprise Knowledge Index is derived data; Outline/Notion/Drive remain source of truth for document ACLs.
+- Tenant and source ACL filtering occurs before retrieval, not as a post-retrieval cleanup.
+- ACL version changes and source deletion invalidate indexed chunks before they can be returned.
+- Personal Wiki uses owner-isolated `tenant_id` + `agent_id` scope.
+- Live external connector credentials, network access, and production corpus backfill require separate operational verification.
+
+### Evidence boundary
+
+- Unit tests do not count as distributed or external evidence.
+- `scripts/verify-evidence-tiers.py` records the command, commit, timestamp, counts, and unavailable prerequisites.
+- Current evidence must distinguish `unit`, `distributed`, and `external` tiers.
 
 ## Hardening Guidance for Operators
 

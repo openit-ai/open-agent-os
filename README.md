@@ -167,7 +167,9 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 ```bash
 # 1) Env template (unified, systemd-only — Docker's .env is untouched)
 cp config/oaos.env.example config/oaos.env
-chmod 600 config/oaos.env && vi config/oaos.env  # replace every CHANGE_ME_*
+chmod 600 config/oaos.env
+# 신규 설치: 누락 Secret은 installer가 64-hex로 자동 생성
+# 기존 설치: 기존 Secret 보존, 교체는 명시적으로 --rotate-secrets 사용
 
 # 2) Friendly preflight (no secret output, shows file:line for missing vars)
 bash scripts/check-production-config.sh --env-file config/oaos.env
@@ -208,7 +210,7 @@ Self-hosted on customer server / VPS / private cloud / K8s — not multi-tenant 
 | **Units** | containers (postgres, redis, control-plane, execution-gateway, security, nginx) | `oaos-control-plane.service` :8100 (primary) + optional `oaos-execution-gateway.service` :8001, `oaos-security.service` :8002 | Deployments `control-plane`, `execution-gateway`, `security` |
 | **Verify** | `docker compose ps` / `curl https://localhost/healthz` | `systemctl [--user] status oaos-control-plane` / `curl http://127.0.0.1:8100/healthz` / `journalctl -u oaos-control-plane` | `kubectl get pods` / `kubectl exec ... curl /healthz` |
 | **Isolation** | `oaos-net` bridge, `expose` (no host ports in prod) | systemd hardening (`NoNewPrivileges`, `ProtectSystem`, `PrivateTmp`) + `ReadWritePaths` | `NetworkPolicy` + `PodSecurity` |
-| **Secret handling** | `env_file: ../.env` + `:? required` | `EnvironmentFile=/etc/oaos/oaos.env` (0600, never printed) — installer never invents credentials | `Secret` + `ConfigMap` |
+| **Secret handling** | `env_file: ../.env` + `:? required` | `EnvironmentFile=/etc/oaos/oaos.env` (0600, never printed) — 신규 설치 누락 Secret 자동 생성, 기존 설치 보존, `--rotate-secrets` 명시 시에만 교체 | `Secret` + `ConfigMap` |
 
 **Compose & K8s (unchanged):**
 
