@@ -5,8 +5,8 @@
 [한국어](README.ko.md) | **English**
 
 - **Repository:** `openit-ai/open-agent-os`
-- **Architecture:** `docs/architecture-v1.7.0.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27 Personal Wiki Vault + §§16.7–16.8 Production Hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets) — `2ebeb981`, 5026 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
-- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes incl. LLM Providers), `648 tests pass`, `npm run build ✓`
+- **Architecture:** `docs/architecture-v1.7.0.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27 Personal Wiki Vault + §§16.7–16.8 Production Hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets) — `2ebeb981`, 5026 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` · [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
+- **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes incl. LLM Providers), `648 tests pass` (Production Hardening — fail-closed runtime/deploy/audit/approval/token/rate + secrets), `npm run build ✓` — Previous milestone: `v1.6.4` `612 tests` (historical; `590`/`180` earlier milestones)
 
 ## Why Open Agent OS — Two Contradictions the Market Hasn't Solved
 
@@ -49,7 +49,7 @@ Beyond Q&A, the agent becomes a **daily work executor** — `discover → organi
 ## 5 Core Values
 
 1. **Personal-First, Enterprise-Safe** — Calendar / Gmail delegated by me (§9); Production / ERP / customer DB governed by company policy + approval (§11). Natural UX and security at once. (§13)
-2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user always DENY, no plaintext token storage, no long-term storage in Hermes process (§10). Verified by 648 tests.
+2. **True isolation** — `agent:assistant:kim` sees only `employee:kim`-owned resources. Cross-user always DENY, no plaintext token storage, no long-term storage in Hermes process (§10). Verified by 648 tests (Previous: 612 at v1.6.4).
 3. **Human-approved high-risk execution** — HIGH-risk (§21) actions such as `MERGE / DEPLOY / PAY / EXPORT` run only via Capability Token (HS256, 300s, nonce/jti replay protection) + HMAC approval request (§24) + 4-button Admin Console decision.
 4. **Auditable operations** — Every authorization, delegation, and execution is recorded in the Audit Ledger as a hash-chain with HMAC checkpoint — tampering is immediately detectable (§30–31). `verify_chain` / `checkpoint` APIs.
 5. **Self-Hosted, Source-Available** — BSL 1.1 (converts to Apache 2.0 after 4 years), deploy on customer infrastructure. Evaluate (Developer) → operate (Business / Managed) without SaaS lock-in. (§5, Editions)
@@ -78,7 +78,7 @@ admin-console/             # Admin — Next.js 15 + shadcn Financial (#22C55E/#F
 adapters/                  # Mattermost / Slack / Outline / Notion / Hermes / IAM / Google / Microsoft
 examples/morning-briefing/ # MVP — orchestrator (per-user kim vs lee) + output.json (13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32)
-tests/                     # 648 tests (incl. LLM 6-Provider + Fernet Vault + opencode binary + wiki/pgvector + production hardening)
+tests/                     # 648 tests (incl. LLM 6-Provider + Fernet Vault + opencode binary + wiki/pgvector + production hardening) — Previous: 612 at v1.6.4
 docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — 5026 lines, SHA 2ebeb981, Previous v1.6.4 `e10c1af8` preserved as historical, v1.1 preserved)
 ```
 
@@ -139,8 +139,8 @@ All screens: shadcn + WCAG AA, `overflow-auto` for 375px, `npm run build` 11 sta
 - **Token:** HS256 300s short-lived + nonce/jti replay store
 - **Approval:** HMAC-SHA256, 4 decisions (`DENIED / APPROVED_ONCE / APPROVED_USER_ALWAYS / APPROVED_GROUP_ALWAYS`), nonce/signature/expiry
 - **Audit:** hash-chain + HMAC checkpoint (`verify_chain`, `checkpoint`)
-- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options (LLM Only/Hermes Only/Both), Router 5-step, Capability `EXECUTE runtime/*`, §16G untrusted worker / §16H tool policy / §16I data access + §16.1.1 OAOSContext/output_type/ToolOutputLimits + §16.1.2 LLM 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, `runtime_mode` conditional, `opencode` alias) + opencode-go binary chain (`OPENCODE_BIN`→`opencode serve --model`) + §27B Personal Wiki Vault + Production Hardening — 648 tests
-- **Isolation verified:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` — 648 tests
+- **Dual runtime (§16F):** LLM Runtime canonical (`llm`, `safe` deprecated alias) + Hermes Runtime advanced — Registry YAML 3 options (LLM Only/Hermes Only/Both), Router 5-step, Capability `EXECUTE runtime/*`, §16G untrusted worker / §16H tool policy / §16I data access + §16.1.1 OAOSContext/output_type/ToolOutputLimits + §16.1.2 LLM 6-Provider Registry (claude/codex/gemini/opencode-go/openrouter/ollama, `runtime_mode` conditional, `opencode` alias) + opencode-go binary chain (`OPENCODE_BIN`→`opencode serve --model`) + §27B Personal Wiki Vault + Production Hardening — 648 tests (Previous: 612 at v1.6.4)
+- **Isolation verified:** `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper` — 648 tests (Previous: 612 at v1.6.4)
 
 ## Tests
 
