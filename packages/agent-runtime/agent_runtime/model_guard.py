@@ -24,7 +24,6 @@ warning telemetry call, never propagated.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -99,10 +98,10 @@ def is_blocked_entry(entry: dict[str, Any] | Any) -> tuple[bool, str]:
         return True, f"blocked provider 'custom' (model={model!r})"
     if provider and nprov is not None and nprov not in ALLOWED_PROVIDERS and str(provider).strip():
         # unknown provider is blocked (fail-closed); allow only allowlist
-        # but don't block empty provider
+        # but don't block empty provider or internal bookkeeping providers
         if str(provider).strip().lower() not in ALLOWED_PROVIDERS:
             # Check if it's an empty/missing provider — don't block if no provider specified
-            if str(provider).strip().lower() not in ("", "unknown", "hermes", "default"):
+            if str(provider).strip().lower() not in ("", "unknown", "hermes", "safe", "default"):
                 return True, f"provider not in allowlist: {provider!r}"
     if is_blocked_model(str(model) if model else None):
         return True, f"blocked model '{model}'"

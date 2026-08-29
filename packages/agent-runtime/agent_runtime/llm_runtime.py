@@ -1541,6 +1541,27 @@ class LLMProviderAdapter:
         # But per spec: if mode == hermes, NO provider config should be used — bypass dispatch
         # So we respect hermes mode strictly
         self.hermes_api_url = hermes_api_url or os.getenv("HERMES_API_URL") or os.getenv("OAOS_HERMES_API_URL") or os.getenv("OAOS_HERMES_BASE_URL") or "http://localhost:8001"
+        # Guard: persisted/stale custom provider (gpt-5.6-luna @ 127.0.0.1:10100) must never be honored — sanitize at init
+        try:
+            from .model_guard import is_blocked_entry  # type: ignore
+
+            _blocked, _reason = is_blocked_entry({"provider": str(self.provider_type.value) if self.provider_type else (str(provider) if provider else ""), "model": model, "base_url": base_url or ""})
+            if _blocked:
+                logger.warning("[model_guard] LLMProviderAdapter blocked init provider=%s model=%s base_url=%s reason=%s — falling back to default (not custom)", self.provider_type, model, base_url, _reason)
+                try:
+                    from .env_gate import fail_open_telemetry  # type: ignore
+
+                    fail_open_telemetry("model_guard", "llm_init_blocked", reason=_reason, provider=str(self.provider_type), model=str(model))  # type: ignore[call-arg]
+                except Exception:
+                    pass
+                self.provider_type = None
+                # clear blocked model so routing defaults
+                if any(sub in str(model).lower() for sub in ("gpt-5.6-luna", "gpt-5.6-sol")):
+                    model = "gpt-4o-mini"
+                    routing = {}
+                base_url = None
+        except Exception:
+            pass
         # Provider config resolution: admin-console API merged over env, unless hermes mode (skip)
         if self.runtime_mode == RuntimeMode.HERMES:
             self.provider_config: dict[str, Any] = {}
@@ -1555,6 +1576,26 @@ class LLMProviderAdapter:
                     self.provider_config["api_key"] = api_key
                 if base_url:
                     self.provider_config["base_url"] = base_url
+        # second pass: sanitize any blocked base_url/model that slipped via env/admin_api config
+        try:
+            from .model_guard import is_blocked_base_url, is_blocked_model  # type: ignore
+
+            for _k in list(self.provider_config.keys()):
+                _v = self.provider_config.get(_k)
+                if isinstance(_v, str):
+                    if "base_url" in _k.lower() and is_blocked_base_url(_v):
+                        logger.warning("[model_guard] stripping blocked provider_config %s=%r", _k, _v)
+                        self.provider_config.pop(_k, None)
+                    if "model" in _k.lower() and is_blocked_model(_v):
+                        logger.warning("[model_guard] stripping blocked provider_config %s=%r", _k, _v)
+                        self.provider_config.pop(_k, None)
+            # also generic base_url/model keys
+            if is_blocked_base_url(str(self.provider_config.get("base_url") or "")):
+                self.provider_config.pop("base_url", None)
+            if is_blocked_model(str(self.provider_config.get("model") or "")):
+                self.provider_config.pop("model", None)
+        except Exception:
+            pass
         self.routing = ModelRouting(default_model=model, routes=routing or {})
         self.timeout_s = timeout_s
         self.max_retries = max_retries

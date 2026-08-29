@@ -73,6 +73,12 @@ class FallbackEntry(BaseModel):
             return None
         if len(v) > 128:
             raise ValueError("model too long (max 128)")
+        # Guard: block persisted custom gpt-5.6-luna / loopback fallbacks that must not override primary
+        low = v.lower()
+        if "gpt-5.6-luna" in low or "gpt-5.6-sol" in low or "gpt-5.6" in low:
+            raise ValueError("model 'gpt-5.6-luna/sol' fallback is not allowed — misconfigured custom provider (blocked)")
+        if "127.0.0.1:10100" in low or "localhost:10100" in low:
+            raise ValueError("fallback model/base_url contains blocked loopback 127.0.0.1:10100")
         return v
 
 class FallbackConfig(BaseModel):
@@ -92,6 +98,11 @@ class FallbackConfig(BaseModel):
             return None
         if len(v) > 128:
             raise ValueError("fallback_model too long (max 128)")
+        low = v.lower()
+        if "gpt-5.6-luna" in low or "gpt-5.6-sol" in low or "gpt-5.6" in low:
+            raise ValueError("fallback_model 'gpt-5.6-luna/sol' is not allowed — blocked custom provider")
+        if "127.0.0.1:10100" in low or "localhost:10100" in low:
+            raise ValueError("fallback_model contains blocked loopback 127.0.0.1:10100")
         return v
 
 # rebuild for forward refs (Pydantic v2)
@@ -112,6 +123,11 @@ class FallbackUpdateRequest(BaseModel):
             return None
         if len(v) > 128:
             raise ValueError("fallback_model too long (max 128)")
+        low = v.lower()
+        if "gpt-5.6-luna" in low or "gpt-5.6-sol" in low or "gpt-5.6" in low:
+            raise ValueError("fallback_model 'gpt-5.6-luna/sol' is not allowed — blocked")
+        if "127.0.0.1:10100" in low or "localhost:10100" in low:
+            raise ValueError("fallback_model contains blocked loopback 127.0.0.1:10100")
         return v
 
 # ---- ownership gate ----
@@ -244,11 +260,52 @@ _inmem: FallbackConfig | None = None
 
 def _load_config() -> FallbackConfig:
     global _inmem
+    # Helper to strip blocked entries (custom/gpt-5.6-luna/127.0.0.1:10100) that may have been persisted before guard
+    def _strip_blocked(data: dict) -> dict:
+        try:
+            chain = data.get("chain")
+            if isinstance(chain, list):
+                kept = []
+                for item in chain:
+                    if not isinstance(item, dict):
+                        continue
+                    prov = str(item.get("provider", "")).lower()
+                    model = str(item.get("model", "")).lower()
+                    # check provider allowlist + blocked model substrings
+                    if prov == "custom":
+                        logger.warning("[model_guard] _load_config stripping blocked chain entry provider=custom model=%r", item.get("model"))
+                        continue
+                    if prov not in ALLOWED_PROVIDERS and prov not in ("opencode",):
+                        # also blocked if provider not allowlisted (fail-closed)
+                        if prov not in ("", "hermes", "safe"):
+                            logger.warning("[model_guard] _load_config stripping disallowed provider chain entry %r", item)
+                            continue
+                    if "gpt-5.6-luna" in model or "gpt-5.6-sol" in model or "gpt-5.6" in model or "127.0.0.1:10100" in model or "localhost:10100" in model:
+                        logger.warning("[model_guard] _load_config stripping blocked model in chain %r", item)
+                        continue
+                    # also check base_url if present
+                    burl = str(item.get("base_url", item.get("baseUrl", ""))).lower()
+                    if "127.0.0.1:10100" in burl or "localhost:10100" in burl:
+                        logger.warning("[model_guard] _load_config stripping blocked base_url in chain %r", item)
+                        continue
+                    kept.append(item)
+                data = dict(data)
+                data["chain"] = kept
+            fm = str(data.get("fallback_model", "") or "")
+            low = fm.lower()
+            if "gpt-5.6-luna" in low or "gpt-5.6-sol" in low or "gpt-5.6" in low or "127.0.0.1:10100" in low or "localhost:10100" in low:
+                logger.warning("[model_guard] _load_config stripping blocked fallback_model=%r", fm)
+                data = dict(data)
+                data["fallback_model"] = None
+        except Exception:
+            pass
+        return data
     # DB first
     raw = _db_get_raw()
     if raw:
         try:
             data = json.loads(raw)
+            data = _strip_blocked(data)
             cfg = FallbackConfig(**data)
             _inmem = cfg
             # mirror to env for OAOS consumers (LLM Runtime only)
@@ -261,6 +318,7 @@ def _load_config() -> FallbackConfig:
     if env_raw:
         try:
             data = json.loads(env_raw)
+            data = _strip_blocked(data)
             cfg = FallbackConfig(**data)
             _inmem = cfg
             return cfg
