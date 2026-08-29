@@ -33,6 +33,32 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# fail-closed gate for mock fallback in production
+def _is_mock_allowed() -> bool:
+    try:
+        from .env_gate import is_mock_allowed as _g
+        return _g()
+    except Exception:
+        try:
+            from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
+            return _g2()
+        except Exception:
+            import os
+            mf = os.getenv("OAOS_MOCK_FALLBACK", "").lower()
+            if mf in ("1", "true", "yes", "on"):
+                return True
+            if mf in ("0", "false", "no", "off"):
+                return False
+            return os.getenv("OAOS_ENV", "").lower() not in ("production", "prod")
+
+def _is_prod() -> bool:
+    try:
+        from .env_gate import is_production as _p
+        return _p()
+    except Exception:
+        import os
+        return os.getenv("OAOS_ENV", "").lower() in ("production", "prod")
+
 
 def _get_registry():
     """Lazy import to avoid circular dependency at module load."""
@@ -327,8 +353,27 @@ async def proxy_tool_call(
 
     mock_result: dict | None = None
     if transport_result is None:
-        # 6. mock fallback (MCP 서버 없을 때)
+        # 6. mock fallback (MCP 서버 없을 때) — fail-closed in production
+        if _is_prod() and not _is_mock_allowed():
+            return {
+                "error": "MOCK_FALLBACK_DISABLED",
+                "reason": f"mock fallback disabled in production for tool={tool_name} (OAOS_ENV=production, OAOS_MOCK_FALLBACK not enabled)",
+                "risk": risk_value,
+                "trace_id": trace_id,
+                "request_id": request_id,
+                "code": "MOCK_FALLBACK_DISABLED",
+            }
         mock_result = _mock_fallback(tool_name, args, context)
+        # If mock fallback was unavailable and we're in production, fail-closed
+        if mock_result is None and _is_prod() and not _is_mock_allowed():
+            return {
+                "error": "MOCK_FALLBACK_DISABLED",
+                "reason": f"no real transport for tool={tool_name} and mock disabled in production",
+                "risk": risk_value,
+                "trace_id": trace_id,
+                "request_id": request_id,
+                "code": "MOCK_FALLBACK_DISABLED",
+            }
         # If mock also returned None, we still succeed with stub (backward compat for unknown tools)
         # But if tool was found via registry as mock, mock_result should have data for known tools
 

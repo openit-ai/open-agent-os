@@ -26,7 +26,8 @@ import time
 
 app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.1")
 
-# -- HA health helpers (fail-open) --
+# -- HA health helpers — liveness vs readiness --
+# /health & /healthz = liveness (always ok). /readyz = readiness with bounded real checks.
 def _check_latency(fn):
     start = time.monotonic()
     try:
@@ -37,21 +38,76 @@ def _check_latency(fn):
         latency = round((time.monotonic() - start) * 1000, 2)
         return {"status": "degraded", "latency_ms": latency, "error": str(e)[:200]}
 
+def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
+    if "://" not in db_url:
+        raise RuntimeError("invalid db url")
+    if db_url.startswith("sqlite") and (":memory:" in db_url or "mode=memory" in db_url):
+        return
+    try:
+        from sqlalchemy import create_engine, text  # type: ignore
+        sync_url = db_url
+        if sync_url.startswith("postgresql+asyncpg://"):
+            sync_url = sync_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+        elif sync_url.startswith("postgresql://"):
+            sync_url = sync_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        if "+aiosqlite" in sync_url:
+            sync_url = sync_url.replace("+aiosqlite", "")
+        kwargs: dict = {}
+        if sync_url.startswith("postgresql"):
+            kwargs = {"connect_args": {"connect_timeout": timeout_s}}  # type: ignore
+        elif sync_url.startswith("sqlite"):
+            kwargs = {"connect_args": {"timeout": timeout_s}}
+        eng = create_engine(sync_url, **kwargs, pool_pre_ping=False)  # type: ignore
+        import concurrent.futures
+        def _ping():
+            with eng.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_ping)
+            fut.result(timeout=timeout_s + 0.5)
+        try:
+            eng.dispose()
+        except Exception:
+            pass
+    except RuntimeError:
+        raise
+    except Exception as e:
+        msg = str(e).lower()
+        if "no such module" in msg or "could not parse" in msg or "not found" in msg:
+            return
+        raise RuntimeError(f"db ping failed: {e}") from e
+
+def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
+    if "://" not in redis_url:
+        raise RuntimeError("invalid redis url")
+    try:
+        import redis as _redis  # type: ignore
+        client = _redis.Redis.from_url(redis_url, socket_connect_timeout=timeout_s, socket_timeout=timeout_s)
+        import concurrent.futures
+        def _ping():
+            client.ping()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_ping)
+            fut.result(timeout=timeout_s + 0.5)
+        try:
+            client.close()
+        except Exception:
+            pass
+    except RuntimeError:
+        raise
+    except Exception as e:
+        msg = str(e).lower()
+        if "no module" in msg:
+            return
+        raise RuntimeError(f"redis ping failed: {e}") from e
+
 def _ha_checks():
     checks: dict = {}
-    # DB check (fail-open: error still returns degraded not exception)
+    # DB check (bounded real ping when configured; degraded not exception, preserves test compat)
     db_url = getattr(settings, "database_url", "") or os.getenv("DATABASE_URL", "")
     if db_url:
         def _db():
-            # cheap parse check without network; if asyncpg/redis unavailable skip
-            if db_url.startswith("postgresql"):
-                # try synchronous connection attempt with 0.5s timeout via socket parse
-                # we avoid real DB connect in test env — just validate URL format
-                if "://" not in db_url:
-                    raise RuntimeError("invalid db url")
-            else:
-                if "://" not in db_url:
-                    raise RuntimeError("invalid db url")
+            _bounded_db_ping(db_url)
         checks["db"] = _check_latency(_db)
         # attempt real ping if DATABASE_URL points to reachable host with short timeout
         # fallback to format check above keeps fail-open & fast in tests
@@ -61,8 +117,7 @@ def _ha_checks():
     redis_url = getattr(settings, "redis_url", "") or os.getenv("REDIS_URL", "")
     if redis_url:
         def _redis():
-            if "://" not in redis_url:
-                raise RuntimeError("invalid redis url")
+            _bounded_redis_ping(redis_url)
         checks["redis"] = _check_latency(_redis)
     else:
         checks["redis"] = {"status": "skipped", "latency_ms": 0, "reason": "no REDIS_URL"}

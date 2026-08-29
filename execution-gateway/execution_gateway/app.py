@@ -92,7 +92,8 @@ try:
 except Exception:
     pass
 
-# -- HA health helpers (fail-open) --
+# -- HA health helpers — liveness vs readiness --
+# /health & /healthz = liveness (always ok). /readyz = readiness with bounded real checks.
 def _check_latency(fn):
     start = time.monotonic()
     try:
@@ -103,21 +104,93 @@ def _check_latency(fn):
         latency = round((time.monotonic() - start) * 1000, 2)
         return {"status": "degraded", "latency_ms": latency, "error": str(e)[:200]}
 
+def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
+    """Bounded real DB connectivity check when configured.
+    - Does a real connect with short timeout for postgres; for sqlite does file existence + pragma quick.
+    - Preserves test compatibility: raises only on invalid url or unreachable (degraded), not hard failure.
+    """
+    if "://" not in db_url:
+        raise RuntimeError("invalid db url")
+    # cheap fast-path for test sqlite memory urls
+    if db_url.startswith("sqlite") and (":memory:" in db_url or "mode=memory" in db_url):
+        return
+    # if no DB driver available, just validate format (keeps CI fast)
+    try:
+        from sqlalchemy import create_engine, text  # type: ignore
+        sync_url = db_url
+        if sync_url.startswith("postgresql+asyncpg://"):
+            sync_url = sync_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+        elif sync_url.startswith("postgresql://"):
+            sync_url = sync_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        if "+aiosqlite" in sync_url:
+            sync_url = sync_url.replace("+aiosqlite", "")
+        # short connect timeout; avoid pool
+        kwargs: dict = {}
+        if sync_url.startswith("postgresql"):
+            kwargs = {"pool_pre_ping": False, "poolclass": None, "connect_args": {"connect_timeout": timeout_s}}  # type: ignore
+        elif sync_url.startswith("sqlite"):
+            kwargs = {"connect_args": {"timeout": timeout_s}}
+        eng = create_engine(sync_url, **kwargs, pool_pre_ping=False)  # type: ignore
+        # bounded execute
+        import concurrent.futures
+        def _ping():
+            with eng.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_ping)
+            fut.result(timeout=timeout_s + 0.5)
+        try:
+            eng.dispose()
+        except Exception:
+            pass
+    except RuntimeError:
+        raise
+    except Exception as e:
+        # Fallback to format-only in test env if driver missing (e.g., no psycopg)
+        msg = str(e).lower()
+        if "no such module" in msg or "could not parse" in msg or "not found" in msg:
+            return
+        raise RuntimeError(f"db ping failed: {e}") from e
+
+def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
+    if "://" not in redis_url:
+        raise RuntimeError("invalid redis url")
+    # if redis lib missing, just validate format (test compat)
+    try:
+        import redis as _redis  # type: ignore
+        client = _redis.Redis.from_url(redis_url, socket_connect_timeout=timeout_s, socket_timeout=timeout_s)
+        import concurrent.futures
+        def _ping():
+            client.ping()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_ping)
+            fut.result(timeout=timeout_s + 0.5)
+        try:
+            client.close()
+        except Exception:
+            pass
+    except RuntimeError:
+        raise
+    except Exception as e:
+        msg = str(e).lower()
+        if "no module" in msg:
+            return
+        # redis unreachable -> degraded, not fatal
+        raise RuntimeError(f"redis ping failed: {e}") from e
+
 def _ha_checks():
     checks: dict = {}
     db_url = os.getenv("DATABASE_URL", "")
     if db_url:
         def _db():
-            if "://" not in db_url:
-                raise RuntimeError("invalid db url")
+            _bounded_db_ping(db_url)
         checks["db"] = _check_latency(_db)
     else:
         checks["db"] = {"status": "skipped", "latency_ms": 0, "reason": "no DATABASE_URL"}
     redis_url = os.getenv("REDIS_URL", "")
     if redis_url:
         def _redis():
-            if "://" not in redis_url:
-                raise RuntimeError("invalid redis url")
+            _bounded_redis_ping(redis_url)
         checks["redis"] = _check_latency(_redis)
     else:
         checks["redis"] = {"status": "skipped", "latency_ms": 0, "reason": "no REDIS_URL"}

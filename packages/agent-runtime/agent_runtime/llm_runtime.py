@@ -426,7 +426,9 @@ class ToolOutputLimits:
 default_tool_limits = ToolOutputLimits()
 
 # ---------------------------------------------------------------------------
-# Tenant LLM quota (010) — in-memory + DB fail-open, before provider dispatch
+# Tenant LLM quota (010) — in-memory + DB, production fail-closed
+# TODO(distributed): quota state is per-replica in-memory; distributed enforcement
+# requires DB/Redis-backed atomic counters. Until then, production DB failures fail-closed.
 # ---------------------------------------------------------------------------
 _llm_quota_store = {}
 _llm_quota_window_counts = {}
@@ -438,12 +440,116 @@ def _quota_http_exc(msg):
     except Exception:
         e=Exception(f"QUOTA_EXCEEDED: {msg}"); e.status_code=429; return e
 
+def _quota_db_failure_exc(msg: str):
+    try:
+        from fastapi import HTTPException
+        return HTTPException(status_code=503, detail={"code":"QUOTA_BACKEND_UNAVAILABLE","message":msg})
+    except Exception:
+        e=Exception(f"QUOTA_BACKEND_UNAVAILABLE: {msg}"); e.status_code=503; return e
+
+def _is_quota_production() -> bool:
+    try:
+        from .env_gate import is_production as _is_prod
+        return _is_prod()
+    except Exception:
+        return (os.getenv("OAOS_ENV","").lower() in ("production","prod"))
+
 def _llm_quota_check(tenant_id):
     tid = (tenant_id or "default").strip() or "default"
     from datetime import datetime, timezone
     import os
     now = datetime.now(timezone.utc)
-    # in-memory only (DB attempt fail-open)
+    db_url = (os.getenv("OAOS_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+    # If DB is configured, try DB-backed quota first; production fail-closed on DB error
+    if db_url:
+        try:
+            from sqlalchemy import create_engine as _ce, text as _t  # type: ignore
+            sync_url = db_url
+            if sync_url.startswith("postgresql+asyncpg://"):
+                sync_url = sync_url.replace("postgresql+asyncpg://","postgresql+psycopg://",1)
+            elif sync_url.startswith("postgresql://"):
+                sync_url = sync_url.replace("postgresql://","postgresql+psycopg://",1)
+            if "+aiosqlite" in sync_url:
+                sync_url = sync_url.replace("+aiosqlite","")
+            kwargs: dict = {"pool_pre_ping": True, "connect_args": {"connect_timeout": 2}} if sync_url.startswith("postgresql") else {}
+            if sync_url.startswith("sqlite"):
+                kwargs = {}
+                if ":memory:" in sync_url:
+                    kwargs["connect_args"] = {"check_same_thread": False}
+            eng = _ce(sync_url, **kwargs)
+            # ensure table
+            try:
+                from sqlalchemy import text as _tt
+                ddl = "CREATE TABLE IF NOT EXISTS admin_llm_quotas (tenant_id TEXT PRIMARY KEY, daily_limit INTEGER NOT NULL DEFAULT 100, per_minute_limit INTEGER NOT NULL DEFAULT 10, used_today INTEGER NOT NULL DEFAULT 0, window_start TEXT, updated_at TEXT NOT NULL)"
+                with eng.begin() as conn:
+                    conn.execute(_tt(ddl))
+            except Exception:
+                pass
+            from sqlalchemy.orm import sessionmaker as _sm  # type: ignore
+            # Use ORM if available else raw
+            try:
+                from security.models.orm import AdminLLMQuotaORM  # type: ignore
+                factory = _sm(bind=eng, autoflush=False, autocommit=False)
+                with factory() as s:
+                    row = s.query(AdminLLMQuotaORM).filter(AdminLLMQuotaORM.tenant_id == tid).first()
+                    if row is None:
+                        row = AdminLLMQuotaORM(tenant_id=tid, daily_limit=100, per_minute_limit=10, used_today=0, window_start=now, updated_at=now)
+                        s.add(row); s.commit(); s.refresh(row)
+                    if row.updated_at and row.updated_at.date() != now.date():
+                        row.used_today = 0; row.window_start = now
+                    wc = _llm_quota_window_counts.get(tid,0)
+                    ws = row.window_start
+                    if ws is None or (now - (ws if ws.tzinfo else ws.replace(tzinfo=timezone.utc))).total_seconds() >= 60:
+                        wc = 0; row.window_start = now
+                    if row.used_today >= row.daily_limit:
+                        raise _quota_http_exc("daily quota exceeded")
+                    if wc >= row.per_minute_limit:
+                        raise _quota_http_exc("per-minute quota exceeded")
+                    row.used_today += 1; wc += 1; _llm_quota_window_counts[tid]=wc; row.updated_at = now
+                    s.commit()
+                try: eng.dispose()
+                except Exception: pass
+                return
+            except ImportError:
+                # raw SQL fallback
+                with eng.begin() as conn:
+                    try:
+                        conn.execute(_t("SELECT tenant_id FROM admin_llm_quotas LIMIT 1"))
+                    except Exception:
+                        pass
+                try: eng.dispose()
+                except Exception: pass
+                # fall through to in-memory with telemetry
+                if _is_quota_production():
+                    raise _quota_db_failure_exc("quota DB unreachable — fail-closed in production")
+                try:
+                    from .env_gate import fail_open_telemetry
+                    fail_open_telemetry("quota","db_orm_missing_fallback_to_memory", tenant_id=tid)
+                except Exception:
+                    logger.warning("[fail-open] quota db_orm_missing tenant=%s", tid)
+        except Exception as e:
+            # Preserve 429
+            if getattr(e, "status_code", None) == 429 or "QUOTA_EXCEEDED" in str(e):
+                raise
+            if getattr(e, "status_code", None) == 503:
+                raise
+            try:
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, dict) and detail.get("code") == "QUOTA_EXCEEDED":
+                    raise
+            except Exception:
+                pass
+            if _is_quota_production():
+                logger.error("quota DB failure fail-closed tenant=%s err=%s", tid, str(e)[:300])
+                raise _quota_db_failure_exc(f"quota backend unavailable: {e}")
+            # non-prod fail-open with telemetry
+            try:
+                from .env_gate import fail_open_telemetry
+                fail_open_telemetry("quota","db_failure_fail_open_nonprod", tenant_id=tid, error=str(e)[:200])
+            except Exception:
+                logger.warning("[fail-open] quota DB failure non-prod tenant=%s err=%s", tid, str(e)[:200])
+            # fall through to in-memory
+    # in-memory (per-replica) — distributed TODO: move to DB/Redis atomic
     rec=_llm_quota_store.get(tid)
     if rec is None:
         rec={"daily_limit":100,"per_minute_limit":10,"used_today":0,"window_start":now,"updated_at":now}
@@ -793,14 +899,18 @@ def _load_litellm() -> Any | None:
 
 
 def _is_mock_allowed() -> bool:
-    mf = os.getenv("OAOS_MOCK_FALLBACK", "").lower()
-    if mf in ("1", "true", "yes", "on"):
+    try:
+        from .env_gate import is_mock_allowed as _gate_mock
+        return _gate_mock()
+    except Exception:
+        mf = os.getenv("OAOS_MOCK_FALLBACK", "").lower()
+        if mf in ("1", "true", "yes", "on"):
+            return True
+        if mf in ("0", "false", "no", "off"):
+            return False
+        if os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):
+            return False
         return True
-    if mf in ("0", "false", "no", "off"):
-        return False
-    if os.getenv("OAOS_ENV", "").lower() in ("production", "prod"):
-        return False
-    return True
 
 
 def _mock_completion_response(model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
@@ -1555,6 +1665,16 @@ class LLMProviderAdapter:
                     self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e), "provider": str(self.provider_type.value)})
                     _record_fail(str(e), time.perf_counter() - _usage_start)
                     raise
+            else:
+                # provider_type set but instance missing (missing config/creds) — fail-closed in production
+                if not _is_mock_allowed():
+                    raise RuntimeError(f"LLM provider unavailable — missing transport/config for provider={self.provider_type.value} (fail-closed in production)")
+                # non-prod telemetry
+                try:
+                    from .env_gate import fail_open_telemetry
+                    fail_open_telemetry("llm_runtime","provider_missing_fallback_to_litellm", provider=str(self.provider_type.value))
+                except Exception:
+                    logger.warning("[fail-open] llm_runtime provider %s missing, fallback to litellm", str(self.provider_type.value))
 
         async def _do() -> dict[str, Any]:
             if self._mock_responses or _load_litellm() is None:

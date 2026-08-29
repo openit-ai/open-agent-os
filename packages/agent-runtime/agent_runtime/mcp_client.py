@@ -32,6 +32,33 @@ def _headers_from_context(ctx: dict[str, Any] | None) -> dict[str, str]:
     return h
 
 
+def _is_prod_gate() -> bool:
+    try:
+        from .env_gate import is_production as _p
+        return _p()
+    except Exception:
+        try:
+            from agent_runtime.env_gate import is_production as _p2  # type: ignore
+            return _p2()
+        except Exception:
+            import os
+            return os.getenv("OAOS_ENV","").lower() in ("production","prod")
+
+def _is_mock_allowed_gate() -> bool:
+    try:
+        from .env_gate import is_mock_allowed as _m
+        return _m()
+    except Exception:
+        try:
+            from agent_runtime.env_gate import is_mock_allowed as _m2  # type: ignore
+            return _m2()
+        except Exception:
+            import os
+            mf=os.getenv("OAOS_MOCK_FALLBACK","").lower()
+            if mf in ("1","true","yes","on"): return True
+            if mf in ("0","false","no","off"): return False
+            return os.getenv("OAOS_ENV","").lower() not in ("production","prod")
+
 class MCPClient:
     """Minimal MCP client that proxies through execution-gateway/mcp_registry."""
 
@@ -166,7 +193,16 @@ class MCPClient:
                 return result
             return {"result": result}
         except Exception as e:
-            # offline/dev fallback — do not fail callers
+            # production fail-closed: no mock fallback
+            if _is_prod_gate() and not _is_mock_allowed_gate():
+                raise RuntimeError(f"gateway_unreachable in production — mock fallback disabled: {e}") from e
+            # offline/dev fallback with telemetry
+            try:
+                from .env_gate import fail_open_telemetry
+                fail_open_telemetry("mcp_client","gateway_unreachable_fallback_nonprod", tool=tool, error=str(e)[:200])
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning("[fail-open] mcp_client gateway_unreachable tool=%s err=%s", tool, str(e)[:200])
             return {"tool": tool, "arguments": arguments or {}, "result": "gateway_unreachable_fallback", "reason": str(e)[:300], "fallback": True}
 
     # sync wrappers for convenience
