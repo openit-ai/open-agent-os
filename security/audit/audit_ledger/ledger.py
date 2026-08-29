@@ -49,6 +49,28 @@ def _db_enabled() -> bool:
     return bool(url and url.strip())
 
 
+def _is_test_isolation() -> bool:
+    """When running under pytest (PYTEST_CURRENT_TEST set) in non-prod, isolate DB
+    to avoid preexisting DB events leaking into a fresh AuditLedger (test pollution).
+    Production (OAOS_ENV=production) never isolates — fail-closed hydrate stays enabled.
+    Opt-in to DB even in tests via OAOS_AUDIT_FORCE_DB=1."""
+    if _is_prod():
+        return False
+    if os.environ.get("OAOS_AUDIT_FORCE_DB", "").lower() in ("1", "true", "yes"):
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    # also treat OAOS_ENV=test as isolation (some runners set it)
+    if os.environ.get("OAOS_ENV", "").lower() in ("test", "testing"):
+        return True
+    return False
+
+
+def _db_should_use() -> bool:
+    """DB should be used only when enabled and not in test isolation."""
+    return _db_enabled() and not _is_test_isolation()
+
+
 def _require_db_if_prod() -> None:
     if _is_prod() and not _db_enabled():
         raise RuntimeError(
@@ -217,8 +239,8 @@ class AuditLedger:
         self._signing_key = signing_key or "default-audit-signing-key"
         if _is_prod():
             _require_db_if_prod()
-        # hydrate from DB if available (lazy)
-        if _db_enabled():
+        # hydrate from DB if available (lazy) — isolated in pytest to avoid leakage
+        if _db_should_use():
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -249,7 +271,7 @@ class AuditLedger:
         self._head = event.event_hash
         self._events.append(event)
         # DB persist — primary store in prod, in-memory only in non-prod fallback
-        if _db_enabled():
+        if _db_should_use():
             db_ok = False
             last_err: Exception | None = None
             try:
@@ -285,7 +307,7 @@ class AuditLedger:
 
     @property
     def head(self) -> str | None:
-        if _db_enabled():
+        if _db_should_use():
             # prefer in-memory head (already synced), but fallback to DB query if empty
             if self._head is not None:
                 return self._head
@@ -306,7 +328,7 @@ class AuditLedger:
 
     @property
     def events(self) -> list[AuditEvent]:
-        if _db_enabled():
+        if _db_should_use():
             # return DB events if we have none in memory (or always prefer DB for consistency)
             # To avoid missing events appended in same process, return in-memory if non-empty
             # but also try to ensure DB hydrate on first call
@@ -337,7 +359,7 @@ class AuditLedger:
 
     @property
     def count(self) -> int:
-        if _db_enabled():
+        if _db_should_use():
             try:
                 session, engine = _db_get_session()
                 if session is not None:
@@ -589,7 +611,7 @@ class AuditLedger:
             for k, v in kwargs.items():
                 setattr(self._events[index], k, v)
             # also tamper DB if enabled (so verify_chain reflects tamper)
-            if _db_enabled():
+            if _db_should_use():
                 try:
                     session, engine = _db_get_session()
                     if session is not None:

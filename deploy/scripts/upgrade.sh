@@ -34,7 +34,16 @@ done
 if [[ "${OAOS_UPGRADE_DRY_RUN:-}" == "1" ]]; then DRY_RUN=1; fi
 if [[ -n "${TARGET_TAG}" ]]; then export IMAGE_TAG="${TARGET_TAG}"; fi
 
-log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2; }
+log() {
+  if [[ $# -gt 0 ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2
+  else
+    # no args: consume stdin line-by-line (for `... 2>&1 | log` pipelines without SIGPIPE)
+    while IFS= read -r line; do
+      echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $line" >&2
+    done
+  fi
+}
 dry_prefix() { if [[ $DRY_RUN -eq 1 ]]; then echo "[DRY-RUN] "; fi; }
 
 # Track for rollback

@@ -63,6 +63,8 @@ def _is_production() -> bool:
 # Fail-closed in production: dev default ADMIN_JWT_SECRET must be overridden (like persistence.py)
 if _is_production() and JWT_SECRET == _DEV_JWT_SECRET:
     raise RuntimeError("ADMIN_JWT_SECRET must be set to a strong value when OAOS_ENV=production (fail-closed)")
+if _is_production() and len(JWT_SECRET.strip()) < 32:
+    raise RuntimeError("ADMIN_JWT_SECRET must be at least 32 characters when OAOS_ENV=production (fail-closed)")
 
 # ---------------------------------------------------------------------------
 # Role
@@ -423,6 +425,8 @@ def _seed_admin() -> None:
         _bootstrap_pw = (os.environ.get("OAOS_ADMIN_BOOTSTRAP_PASSWORD") or os.environ.get("OAOS_ADMIN_BOOTSTRAP_TOKEN") or "").strip()
         if not _bootstrap_pw:
             raise RuntimeError("OAOS_ENV=production requires existing admin or OAOS_ADMIN_BOOTSTRAP_PASSWORD (fail-closed: no default Admin123! seed in production)")
+        if len(_bootstrap_pw) < 12:
+            raise RuntimeError("OAOS_ADMIN_BOOTSTRAP_PASSWORD must be at least 12 characters when OAOS_ENV=production (fail-closed)")
         _bootstrap_email = os.environ.get("OAOS_ADMIN_BOOTSTRAP_EMAIL", "").strip() or "admin@openit.co.kr"
         logger.info("Admin bootstrap: creating initial L5 admin in production (email=%s)", _bootstrap_email)
         uid = f"admin_{uuid.uuid4().hex[:8]}"

@@ -179,23 +179,6 @@ class ToolRateLimiter:
         if r is None:
             return None
         rk = f"oaos:ratelimit:{key}"
-        # Use simple fixed-window-ish token bucket via Redis INCR + TTL
-        # To keep deterministic semantics, we emulate token bucket with 2 keys: tokens + timestamp
-        # Simplified: use Redis sorted set or INCR with window = burst/rate
-        # For MVP hardening, use INCR with window = 1s and allow burst as max per window
-        try:
-            # Lua: token bucket via Redis
-            # We store tokens and last_refill as hash fields
-            now = time.time()
-            # Try to use hash; fallback to simple incr if not supported
-            pipe = r.pipeline()
-            pipe.hgetall(rk)
-            vals = pipe.execute()[0] if False else None
-        except Exception:
-            pass
-        # Fallback implementation: use Redis with atomic Lua for true token bucket
-        # To avoid complexity, use INCR over 1-second window as approximation for prod hardening
-        # But to preserve burst semantics, implement via Lua script
         try:
             lua = """
             local rk = KEYS[1]
@@ -216,7 +199,7 @@ class ToolRateLimiter:
                 tokens = tokens - need
                 allowed = 1
             end
-            redis.call('HMSET', rk, 'tokens', tokens, 'last_refill', last)
+            redis.call('HSET', rk, 'tokens', tokens, 'last_refill', last)
             redis.call('EXPIRE', rk, 60)
             return allowed
             """
