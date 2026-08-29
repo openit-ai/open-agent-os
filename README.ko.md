@@ -13,6 +13,25 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
+
+## Personal Wiki
+
+**Personal Wiki**는 직원별 Personal Agent에 연결된 개인 지식공간입니다. Mattermost와 Slack의 Web·Desktop·Mobile 클라이언트에서 동일한 업무 맥락을 이어가며, 대화·문서·회의·일정·업무 결과를 개인 Agent 중심으로 축적하고 활용합니다.
+
+```text
+Mattermost / Slack Web·Desktop·Mobile
+                ↓ ACP
+       Employee Personal Agent
+                ↓
+ Personal Wiki = Vault + Memory + Search
+```
+
+- 대화와 업무 결과를 시간의 흐름에 따라 축적
+- 개인별 Agent·tenant 기반으로 업무 맥락을 구조화
+- OAOS 서버 Vault와 Memory Service가 원본·검색·출처를 연결
+- 휴대폰에서 시작한 업무를 태블릿·PC에서 자연스럽게 이어서 수행
+- 축적된 지식을 아침 브리핑·문서 탐색·업무 조율·후속 실행에 재활용
+
 - **Architecture:** `docs/architecture-v1.7.0.md` (Sections 1–47 + §§16A–16K + §16.1.1–16.1.2 LLM Runtime & 6-Provider Multi-Runner + §§16.4–16.6 Quota/Usage/HA + §27 Personal Wiki Vault + §§16.7–16.8 Production Hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets) — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern; §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy — `2ebeb981`, 5026 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` · [`docs/architecture-v1.5.1.md`](docs/architecture-v1.5.1.md) `4c2c1b85` · [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (12 routes, LLM Providers 포함), `648 tests pass` (Production Hardening — fail-closed runtime/deploy/audit/approval/token/rate + secrets), `npm run build ✓` — Previous milestone: `v1.6.4` `612 tests` (historical; `590`/`180` earlier milestones)
 

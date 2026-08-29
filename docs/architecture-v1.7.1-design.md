@@ -23,6 +23,25 @@
 - **현재 증거**: `packages/agent-runtime/agent_runtime/env_gate.py:20-38` 이 정본 후보. CP(`control-plane/control_plane/app.py`)·EGW(`execution-gateway/execution_gateway/app.py:45` 주변)·`llm_runtime.py:452`·`mcp_client.py:37`가 각자 `OAOS_ENV` 문자열 비교를 복사·변형하여 mirror drift.
 - **목표**: 단일 패키지 `packages/env-gate` (또는 `packages/agent-runtime/env_gate.py` 정본 유지) 하나만 정본으로 승격하고 타 서비스는 `import`로만 참조. drift는 CI `grep -r "OAOS_ENV.*production" --exclude=env_gate.py` 로 차단. prod에서 완화 env는 존재하지 않으므로 게이트는 단일 함수 `is_production() -> bool` 만 제공.
 
+## 0.3 Personal Wiki 제품 정의
+
+**Personal Wiki**는 직원별 Personal Agent에 연결된 개인 지식공간이다. Mattermost와 Slack의 Web·Desktop·Mobile 클라이언트에서 ACP를 통해 접근하며, 사용자가 어느 기기에서 시작하더라도 동일한 업무 맥락과 지식을 자연스럽게 이어간다.
+
+```text
+Mattermost / Slack Web·Desktop·Mobile
+                ↓ ACP
+       Employee Personal Agent
+                ↓
+ Personal Wiki = Vault + Memory + Search
+```
+
+- 대화·문서·회의·일정·업무 결과를 시간의 흐름에 따라 축적
+- `tenant_id`·`agent_id` 기반으로 직원별 업무 맥락을 구조화
+- OAOS 서버 Vault와 Memory Service를 연결해 원본·검색·출처를 통합
+- 스마트폰·태블릿·PC에서 같은 Personal Agent와 업무기억을 연속 사용
+- 축적된 지식을 브리핑·문서 탐색·업무 조율·후속 실행에 재활용
+- Personal Wiki는 OAOS의 Identity·Memory·Policy·ACP 구조가 만나는 핵심 업무 지식공간
+
 ---
 
 ## 1. 항목 매핑
