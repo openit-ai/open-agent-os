@@ -1,4 +1,4 @@
-"""Execution Gateway Signed Context — H2 (Phase 1).
+"""Execution Gateway Signed Context — H2 (Phase 1). Canonical implementation.
 
 Invariants:
 - I-H2-1: prod only trusts X-Agent-Context-JWT signed by CP (HS256 OAOS_SIGNING_KEY).
@@ -7,6 +7,9 @@ Invariants:
           OAOS_ENFORCE_SIGNED_CONTEXT=1, even non-prod rejects plaintext.
 - I-H2-3: JWT contains tenant_id, user_id, agent_id, session_id, trace_id, request_id,
           verified with iss=control-plane, aud=execution-gateway, exp.
+
+Env-configured: signing key OAOS_AGENT_CONTEXT_SIGNING_KEY / OAOS_SIGNING_KEY,
+issuer OAOS_AGENT_CONTEXT_ISSUER, audience OAOS_AGENT_CONTEXT_AUDIENCE.
 """
 from __future__ import annotations
 import os
@@ -27,8 +30,8 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 _DEV_SIGNING_KEY = "dev-signing-key-please-change"
-ISSUER = "control-plane"
-AUDIENCE = "execution-gateway"
+_DEFAULT_ISSUER = "control-plane"
+_DEFAULT_AUDIENCE = "execution-gateway"
 
 def _is_production() -> bool:
     for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
@@ -37,10 +40,30 @@ def _is_production() -> bool:
     return False
 
 def get_signing_key() -> str:
-    key = os.getenv("OAOS_SIGNING_KEY", _DEV_SIGNING_KEY)
-    if _is_production() and key == _DEV_SIGNING_KEY:
+    for ek in ("OAOS_AGENT_CONTEXT_SIGNING_KEY", "OAOS_SIGNING_KEY", "OAOS_JWT_SIGNING_KEY"):
+        v = os.getenv(ek)
+        if v and v.strip():
+            return v.strip()
+    if _is_production():
         raise RuntimeError("OAOS_SIGNING_KEY must be set to a strong value when OAOS_ENV=production (fail-closed)")
-    return key
+    return _DEV_SIGNING_KEY
+
+def get_issuer() -> str:
+    for ek in ("OAOS_AGENT_CONTEXT_ISSUER", "OAOS_SIGNED_CONTEXT_ISSUER", "OAOS_AGENT_JWT_ISSUER"):
+        v = os.getenv(ek)
+        if v and v.strip():
+            return v.strip()
+    return _DEFAULT_ISSUER
+
+def get_audience() -> str:
+    for ek in ("OAOS_AGENT_CONTEXT_AUDIENCE", "OAOS_SIGNED_CONTEXT_AUDIENCE", "OAOS_AGENT_JWT_AUDIENCE"):
+        v = os.getenv(ek)
+        if v and v.strip():
+            return v.strip()
+    return _DEFAULT_AUDIENCE
+
+ISSUER = os.getenv("OAOS_AGENT_CONTEXT_ISSUER") or os.getenv("OAOS_SIGNED_CONTEXT_ISSUER") or _DEFAULT_ISSUER
+AUDIENCE = os.getenv("OAOS_AGENT_CONTEXT_AUDIENCE") or os.getenv("OAOS_SIGNED_CONTEXT_AUDIENCE") or _DEFAULT_AUDIENCE
 
 def _allow_plaintext() -> bool:
     if _is_production():
@@ -73,12 +96,18 @@ def issue_agent_context_jwt(
     credential_binding_id: Optional[str] = None,
     ttl_seconds: int = 600,
     signing_key: Optional[str] = None,
+    issuer: Optional[str] = None,
+    audience: Optional[str] = None,
 ) -> str:
+    if jwt is None:
+        raise RuntimeError("jwt library unavailable")
     key = signing_key or get_signing_key()
+    iss = issuer or get_issuer()
+    aud = audience or get_audience()
     now = datetime.now(timezone.utc)
     payload = {
-        "iss": ISSUER,
-        "aud": AUDIENCE,
+        "iss": iss,
+        "aud": aud,
         "tenant_id": tenant_id,
         "user_id": user_id,
         "agent_id": agent_id,
@@ -102,8 +131,10 @@ def verify_agent_context_jwt(token: str) -> dict:
     if jwt is None:
         raise HTTPException(status_code=500, detail="jwt library unavailable")
     key = get_signing_key()
+    iss = get_issuer()
+    aud = get_audience()
     try:
-        claims = jwt.decode(token, key, algorithms=["HS256"], audience=AUDIENCE, issuer=ISSUER)
+        claims = jwt.decode(token, key, algorithms=["HS256"], audience=aud, issuer=iss)
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="CONTEXT_EXPIRED")
     except JWTError as e:
