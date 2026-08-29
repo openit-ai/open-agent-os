@@ -94,7 +94,8 @@ pytest -q                # 590 passed
 
 # 2) Admin Console
 cd admin-console && npm install && npm run build   # 11 routes, 114–115kB
-NEXT_PUBLIC_API_URL=http://localhost:8002 npm run dev  # :3000 — login admin@openit.co.kr / Admin123!
+OAOS_ENV=development ADMIN_JWT_SECRET=dev-only-change-me npm run dev  # :3000 — bootstrap login via ADMIN console
+  # Dev/test only (OAOS_ENV != production): seeded L5 admin via bootstrap — set OAOS_ENV=development explicitly / prod: OAOS_ADMIN_BOOTSTRAP_PASSWORD must be set (never commit, never log) — app fails closed if missing
 
 # 3) Backend (separate terminals, from repo root)
 uvicorn security.app:app --port 8001 --reload
@@ -120,7 +121,7 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 
 | Screen | Description |
 |---|---|
-| Login | `admin@openit.co.kr / Admin123!` → JWT (HS256, 8h) in localStorage |
+| Login | `Bootstrap L5 admin (OAOS_ADMIN_BOOTSTRAP_PASSWORD, never logged) → JWT (HS256, 8h) in localStorage; dev/test seeds via non-prod OAOS_ENV` |
 | Infra | Service registry (host/port/health_path) + `healthy/unhealthy/unknown` badge + `GET /v1/infra/health` parallel probe (3s) + 15s polling, write L5 / read L4 |
 | Users | Email / display_name / role / created_at, L5-only create/delete, self-delete blocked (400) |
 | Policy | Bundle (tenant/version/rules) + Rule table (source/action·resource glob, decision ALLOW/DENY/APPROVAL_REQUIRED, priority §25), Explicit Deny in red |

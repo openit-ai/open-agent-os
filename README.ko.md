@@ -94,7 +94,8 @@ pytest -q                # 590 passed
 
 # 2) Admin Console
 cd admin-console && npm install && npm run build   # 11 routes, 114–115kB
-NEXT_PUBLIC_API_URL=http://localhost:8002 npm run dev  # :3000 — login admin@openit.co.kr / Admin123!
+OAOS_ENV=development ADMIN_JWT_SECRET=dev-only-change-me npm run dev  # :3000 — bootstrap login via ADMIN console
+  # Dev/test only (OAOS_ENV != production): seeded L5 admin via bootstrap — set OAOS_ENV=development explicitly / prod: OAOS_ADMIN_BOOTSTRAP_PASSWORD must be set (never commit, never log) — app fails closed if missing
 
 # 3) Backend (별도 터미널, repo root에서)
 uvicorn security.app:app --port 8001 --reload
@@ -120,7 +121,7 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 
 | 화면 | 설명 |
 |---|---|
-| Login | `admin@openit.co.kr / Admin123!` → JWT(HS256 8h) localStorage |
+| Login | `Bootstrap L5 admin (OAOS_ADMIN_BOOTSTRAP_PASSWORD, never logged) → JWT(HS256 8h) localStorage; dev/test seeds via non-prod OAOS_ENV` |
 | Infra | 서비스 등록(host/port/health_path) + `healthy/unhealthy/unknown` 배지 + `GET /v1/infra/health` 병렬 probe(3s) + 15s 폴링, 쓰기 L5/읽기 L4 |
 | Users | 이메일/display_name/role/생성일, L5 전용 등록·삭제, 자기삭제 400 차단 |
 | Policy | Bundle(tenant/version/rules) + Rule 테이블(source/action·resource glob, decision ALLOW/DENY/APPROVAL_REQUIRED, priority §25), Explicit Deny 빨강 |
