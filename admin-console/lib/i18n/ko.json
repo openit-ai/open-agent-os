@@ -47,7 +47,8 @@
     "credentials": "Credentials",
     "license": "License",
     "securityUpdates": "Security Updates",
-    "backup": "Backup / Upgrade"
+    "backup": "Backup / Upgrade",
+    "fallback": "Fallback"
   },
   "header": {
     "adminMenu": "관리자 메뉴",
@@ -438,7 +439,9 @@
     "saveFailed": "저장 실패",
     "deleteFailed": "삭제 실패",
     "testConnectionNote": "Test는 필수 필드와 짧은 지연으로 연결을 확인합니다.",
-    "usageTab": "비용·지연 대시보드"
+    "usageTab": "비용·지연 대시보드",
+    "fallbackTab": "Fallback",
+    "fallbackLink": "Fallback 설정 →"
   },
   "llmUsage": {
     "title": "LLM 비용·지연 대시보드",
@@ -534,5 +537,41 @@
     "registeredAdmins": "등록된 관리자 ({count})",
     "loadingUsers": "로딩 중...",
     "currentBadge": "현재"
+  },
+  "fallback": {
+    "title": "Fallback 설정",
+    "subtitle": "순서대로 시도되는 fallback 체인 · Provider / Model · 활성화/비활성화 · 순서 변경 — 비밀키 노출 없음",
+    "helpTitle": "Fallback 동작",
+    "helpDesc": "기본 LLM 호출이 실패(타임아웃/쿼터/5xx)하면 체인 순서대로 재시도합니다. 활성화된 항목만 시도됩니다.",
+    "helpChain": "체인 순서 = 우선순위. 위쪽이 먼저 시도됩니다. ↑/↓로 순서 변경.",
+    "helpModel": "Fallback Model: 원 호출에 model이 없을 때 사용할 기본 모델명(예: qwen2.5). 비우면 provider 기본 모델 사용.",
+    "helpNote": "설정은 admin_settings(DB)에 저장되고 OAOS_LLM_FALLBACK_JSON / OAOS_FALLBACK_PROVIDERS 및 Hermes config로 미러링됩니다. API 키는 포함되지 않습니다.",
+    "enabledLabel": "Fallback 활성화",
+    "enabledDesc": "끄면 fallback 없이 실패를 즉시 반환합니다.",
+    "chainTitle": "Fallback 체인 (순서 있음)",
+    "chainDesc": "아래에서 provider를 추가하세요. 화살표로 순서 변경, 토글로 활성화 제어.",
+    "addTitle": "Fallback 항목 추가",
+    "providerLabel": "Provider",
+    "modelLabel": "Model (선택)",
+    "modelPlaceholder": "예: claude-3-5-sonnet, gpt-4o-mini",
+    "fallbackModelLabel": "기본 Fallback Model (선택)",
+    "fallbackModelPlaceholder": "예: qwen2.5",
+    "fallbackModelHelp": "항목의 model이 비었을 때 사용할 기본 모델.",
+    "addBtn": "체인에 추가",
+    "saveBtn": "Fallback 설정 저장",
+    "saving": "저장 중...",
+    "saved": "저장되었습니다.",
+    "saveFailed": "저장 실패",
+    "loadFailed": "Fallback 설정 로드 실패",
+    "emptyChain": "Fallback 항목이 없습니다 — 위에서 추가하세요. Fallback이 동작하지 않습니다.",
+    "removeConfirm": "이 항목을 제거하시겠습니까?",
+    "validationProvider": "Provider는 필수입니다",
+    "validationDuplicate": "동일한 provider+model이 이미 체인에 있습니다",
+    "l5Only": "L5만 fallback 설정을 수정할 수 있습니다.",
+    "updatedBy": "수정자",
+    "updatedAt": "수정 시각",
+    "moveUp": "위로",
+    "moveDown": "아래로",
+    "viewProviders": "Providers 보기"
   }
 }

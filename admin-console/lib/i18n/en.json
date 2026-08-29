@@ -47,7 +47,8 @@
     "credentials": "Credentials",
     "license": "License",
     "securityUpdates": "Security Updates",
-    "backup": "Backup / Upgrade"
+    "backup": "Backup / Upgrade",
+    "fallback": "Fallback"
   },
   "header": {
     "adminMenu": "Admin menu",
@@ -438,7 +439,9 @@
     "saveFailed": "Save failed",
     "deleteFailed": "Delete failed",
     "testConnectionNote": "Test checks required fields and simulates latency. Real gateway probe if configured.",
-    "usageTab": "Usage Dashboard"
+    "usageTab": "Usage Dashboard",
+    "fallbackTab": "Fallback",
+    "fallbackLink": "Fallback Settings →"
   },
   "llmUsage": {
     "title": "LLM Usage Dashboard",
@@ -534,5 +537,41 @@
     "registeredAdmins": "Registered admins ({count})",
     "loadingUsers": "Loading...",
     "currentBadge": "Current"
+  },
+  "fallback": {
+    "title": "Fallback Settings",
+    "subtitle": "Ordered fallback chain · Provider / Model · Enable/Disable · Reorder — no secrets exposed",
+    "helpTitle": "How fallback works",
+    "helpDesc": "When primary LLM call fails (timeout, quota, 5xx), the runtime tries the chain in order. Only enabled entries are tried. Provider must be one of 6 types; model is optional override.",
+    "helpChain": "Chain order = priority. Top is tried first. Use ↑/↓ to reorder.",
+    "helpModel": "Fallback Model: optional default model name used when the failed call has no model (e.g. qwen2.5, gpt-4o-mini). Leave empty to keep provider's default model.",
+    "helpNote": "Config is stored in admin_settings (DB) + mirrored to OAOS_LLM_FALLBACK_JSON / OAOS_FALLBACK_PROVIDERS and Hermes config if configured. Never contains API keys.",
+    "enabledLabel": "Fallback enabled",
+    "enabledDesc": "When off, no fallback is attempted — failures return immediately.",
+    "chainTitle": "Fallback Chain (ordered)",
+    "chainDesc": "Add providers below. Drag or use arrows to reorder. Toggle enabled per entry.",
+    "addTitle": "Add fallback entry",
+    "providerLabel": "Provider",
+    "modelLabel": "Model (optional)",
+    "modelPlaceholder": "e.g. claude-3-5-sonnet, gpt-4o-mini",
+    "fallbackModelLabel": "Default Fallback Model (optional)",
+    "fallbackModelPlaceholder": "e.g. qwen2.5",
+    "fallbackModelHelp": "Used when model is empty on an entry and no model was set on the original call.",
+    "addBtn": "Add to chain",
+    "saveBtn": "Save fallback config",
+    "saving": "Saving...",
+    "saved": "Saved.",
+    "saveFailed": "Save failed",
+    "loadFailed": "Failed to load fallback config",
+    "emptyChain": "No fallback entries — add one above. Requests will not fallback.",
+    "removeConfirm": "Remove this entry?",
+    "validationProvider": "Provider is required",
+    "validationDuplicate": "Duplicate provider+model already in chain",
+    "l5Only": "Only L5 can modify fallback settings.",
+    "updatedBy": "Updated by",
+    "updatedAt": "Updated at",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "viewProviders": "View Providers"
   }
 }

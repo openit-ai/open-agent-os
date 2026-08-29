@@ -76,6 +76,8 @@ _llm_providers_mod = _load_admin_sibling("llm_providers")
 llm_providers_router = _llm_providers_mod.router
 _runtime_mode_mod = _load_admin_sibling("runtime_mode")
 runtime_mode_router = _runtime_mode_mod.router
+_fallback_mod = _load_admin_sibling("fallback")
+fallback_router = _fallback_mod.router
 
 app = FastAPI(title="Open Agent OS Admin API", version="0.1.1")
 
@@ -179,6 +181,7 @@ app.include_router(managed_router)
 app.include_router(user_mappings_router)
 app.include_router(llm_providers_router)
 app.include_router(runtime_mode_router)
+app.include_router(fallback_router)
 
 # ── Personal Wiki (skeleton, lazy, fail-graceful) ──────────────────
 try:

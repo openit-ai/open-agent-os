@@ -653,3 +653,28 @@ export function getRuntimeMode(): Promise<RuntimeModeResponse> {
 export function setRuntimeMode(mode: RuntimeMode): Promise<RuntimeModeResponse> {
   return apiFetch<RuntimeModeResponse>("/v1/runtime/mode", { method: "POST", body: JSON.stringify({ mode }) });
 }
+
+// ---- Fallback settings (LLM fallback chain) ----
+export interface FallbackEntry {
+  provider: string;
+  model?: string | null;
+  enabled: boolean;
+}
+export interface FallbackConfig {
+  enabled: boolean;
+  chain: FallbackEntry[];
+  fallback_model?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+export interface FallbackUpdateRequest {
+  enabled?: boolean;
+  chain?: FallbackEntry[];
+  fallback_model?: string | null;
+}
+export function getFallbackConfig(): Promise<FallbackConfig> {
+  return apiFetch<FallbackConfig>("/v1/llm/fallback");
+}
+export function updateFallbackConfig(payload: FallbackUpdateRequest): Promise<FallbackConfig> {
+  return apiFetch<FallbackConfig>("/v1/llm/fallback", { method: "PUT", body: JSON.stringify(payload) });
+}
