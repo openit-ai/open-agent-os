@@ -93,6 +93,29 @@ _ADMIN_DDL = [
         created_by TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_llm_providers (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        encrypted_api_key TEXT,
+        secret_ref TEXT,
+        vault_backend TEXT,
+        base_url TEXT,
+        model TEXT,
+        path TEXT,
+        url TEXT,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_test_at TIMESTAMPTZ,
+        last_test_status TEXT,
+        last_test_latency_ms DOUBLE PRECISION,
+        extra JSONB
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_provider ON admin_llm_providers (provider)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_secret_ref ON admin_llm_providers (secret_ref)",
 ]
 
 # SQLite-compatible DDL (no TIMESTAMPTZ, NOW())
@@ -133,6 +156,29 @@ _ADMIN_DDL_SQLITE = [
         created_by TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_llm_providers (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        encrypted_api_key TEXT,
+        secret_ref TEXT,
+        vault_backend TEXT,
+        base_url TEXT,
+        model TEXT,
+        path TEXT,
+        url TEXT,
+        enabled BOOLEAN NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_test_at TEXT,
+        last_test_status TEXT,
+        last_test_latency_ms REAL,
+        extra TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_provider ON admin_llm_providers (provider)",
+    "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_secret_ref ON admin_llm_providers (secret_ref)",
 ]
 
 
