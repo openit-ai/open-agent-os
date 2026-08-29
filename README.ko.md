@@ -4,6 +4,14 @@
 
 **한국어** | [English](README.md)
 
+<p align="center">
+  <img src="assets/oaos-logo.jpg" alt="OAOS 로고" width="220" />
+</p>
+
+<h1 align="center">OAOS</h1>
+<p align="center"><strong>사람과 지식, 그리고 AI가 연결되는 곳.</strong></p>
+
+- **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
 - **Architecture:** `docs/architecture-v1.5.1.md` (Sections 1–47 + §§16A–16K — LLM/Hermes dual runtime, untrusted worker, tool policy, data access pattern; §§16A.3.1 workspace isolation / 16A.6 Controlled Egress Proxy new — `4c2c1b85`, 3615 lines) — Control Plane / Execution Gateway / Security & Governance + Zero-Bypass Invariants / Runtime-Agnostic (Previous: [`docs/architecture-v1.5.md`](docs/architecture-v1.5.md) `b19f54ab` · [`docs/architecture-v1.4.1.md`](docs/architecture-v1.4.1.md) `646a8fe` · [`docs/architecture-v1.3.md`](docs/architecture-v1.3.md) `4a0383c8` · _v1.1 preserved as `docs/architecture-v1.1.md`_)
 - **Status:** `v0.1.1` — Workstream A+B+C + MVP Demo + Admin Console (11 routes) 완료, `226 tests pass`, `npm run build ✓`
