@@ -1,0 +1,126 @@
+{
+  "command": "pytest -q",
+  "timestamp": "2026-08-29T10:32:49.903851+00:00",
+  "commit": "e0a744df5314cdc829869274f231d0e970b27d64",
+  "pytest": {
+    "passed": 927,
+    "skipped": 1,
+    "failed": 0,
+    "warnings": 74,
+    "raw": "ch.ao.quantization.quantize_fx.prepare_fx,torch.ao.quantization.quantize_fx.convert_fx, please migrate to use torchao pt2e quantization API instead (prepare_pt2e, convert_pt2e) \n  3. pt2e quantization has been migrated to torchao (https://github.com/pytorch/ao/tree/main/torchao/quantization/pt2e) \n  see https://github.com/pytorch/ao/issues/2259 for more details\n    torch.quantization.quantize_dynamic(net, dtype=torch.qint8, inplace=True)\n\ntests/test_personal_wiki_e2e.py::test_e2e_extractor_dispatch_txt_md_and_importer_bulk_copy\ntests/test_personal_wiki_e2e.py::test_e2e_extractor_dispatch_txt_md_and_importer_bulk_copy\n  /home/openitsvc/.hermes/hermes-agent/venv/lib/python3.11/site-packages/torch/ao/quantization/quantize.py:570: DeprecationWarning: torch.ao.quantization is deprecated and will be removed in 2.10. \n  For migrations of users: \n  1. Eager mode quantization (torch.ao.quantization.quantize, torch.ao.quantization.quantize_dynamic), please migrate to use torchao eager mode quantize_ API instead \n  2. FX graph mode quantization (torch.ao.quantization.quantize_fx.prepare_fx,torch.ao.quantization.quantize_fx.convert_fx, please migrate to use torchao pt2e quantization API instead (prepare_pt2e, convert_pt2e) \n  3. pt2e quantization has been migrated to torchao (https://github.com/pytorch/ao/tree/main/torchao/quantization/pt2e) \n  see https://github.com/pytorch/ao/issues/2259 for more details\n    convert(model, mapping, inplace=True)\n\ntests/test_personal_wiki_e2e.py::test_e2e_extractor_dispatch_txt_md_and_importer_bulk_copy\n  /home/openitsvc/.hermes/hermes-agent/venv/lib/python3.11/site-packages/easyocr/recognition.py:177: DeprecationWarning: torch.ao.quantization is deprecated and will be removed in 2.10. \n  For migrations of users: \n  1. Eager mode quantization (torch.ao.quantization.quantize, torch.ao.quantization.quantize_dynamic), please migrate to use torchao eager mode quantize_ API instead \n  2. FX graph mode quantization (torch.ao.quantization.quantize_fx.prepare_fx,torch.ao.quantization.quantize_fx.convert_fx, please migrate to use torchao pt2e quantization API instead (prepare_pt2e, convert_pt2e) \n  3. pt2e quantization has been migrated to torchao (https://github.com/pytorch/ao/tree/main/torchao/quantization/pt2e) \n  see https://github.com/pytorch/ao/issues/2259 for more details\n    torch.quantization.quantize_dynamic(model, dtype=torch.qint8, inplace=True)\n\ntests/test_personal_wiki_e2e.py::test_e2e_extractor_dispatch_txt_md_and_importer_bulk_copy\n  /home/openitsvc/.hermes/hermes-agent/venv/lib/python3.11/site-packages/torch/ao/nn/quantized/dynamic/modules/rnn.py:162: UserWarning: torch.quantize_per_tensor, torch.quantize_per_channel and other quantized tensor creation functions that produce tensors with dtype torch.quint8, torch.qint8, and torch.qint32 are deprecated and will be removed in a future PyTorch release. Please see https://github.com/pytorch/pytorch/issues/184982 for more information. (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/quantized/Quantizer.cpp:111.)\n    w_ih = torch.quantize_per_tensor(\n\ntests/test_workstream_c.py::test_credential_vault_isolation\n  /home/openitsvc/open-agent-os/tests/test_workstream_c.py:116: DeprecationWarning: EncryptedPostgresVault using legacy encrypted_postgres backend (encrypted_token in DB). Set VAULT_BACKEND=hashicorp_vault or aws_secrets for externalized secrets.\n    vault = EncryptedPostgresVault(encryption_key=b\"test-key-32bytes-long-enough!!\")\n\ntests/test_workstream_c.py::test_vault_encryption_roundtrip\n  /home/openitsvc/open-agent-os/tests/test_workstream_c.py:140: DeprecationWarning: EncryptedPostgresVault using legacy encrypted_postgres backend (encrypted_token in DB). Set VAULT_BACKEND=hashicorp_vault or aws_secrets for externalized secrets.\n    vault = EncryptedPostgresVault(encryption_key=b\"another-key-32bytes!!!!\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n927 passed, 1 skipped, 74 warnings in 255.01s (0:04:15)\n",
+    "exit_code": 0
+  },
+  "tiers": {
+    "unit": 927,
+    "integration": 0,
+    "distributed": 0,
+    "external": 0,
+    "total_passed": 927,
+    "skipped": 1,
+    "failed": 0,
+    "warnings": 74
+  },
+  "prerequisites": {
+    "redis": {
+      "available": false,
+      "reason": "redis-cli not found and REDIS_URL not set or not reachable"
+    },
+    "kind": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "kubectl": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "helm": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "hubble": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "cni_enforcement": {
+      "available": false,
+      "reason": "requires kind+kubectl+live cluster with Cilium/Calico"
+    },
+    "outline": {
+      "available": false,
+      "reason": "env ['OUTLINE_API_TOKEN', 'OAOS_OUTLINE_TOKEN'] not set or not live-verified"
+    },
+    "notion": {
+      "available": false,
+      "reason": "env ['NOTION_API_TOKEN', 'OAOS_NOTION_TOKEN'] not set or not live-verified"
+    },
+    "mattermost": {
+      "available": false,
+      "reason": "env ['MATTERMOST_URL', 'OAOS_MATTERMOST_URL'] not set or not live-verified"
+    },
+    "slack": {
+      "available": false,
+      "reason": "env ['SLACK_BOT_TOKEN', 'OAOS_SLACK_TOKEN'] not set or not live-verified"
+    },
+    "llm_gateway": {
+      "available": false,
+      "reason": "env ['OPENAI_API_KEY', 'OAOS_LLM_GATEWAY_URL', 'ANTHROPIC_API_KEY'] not set or not live-verified"
+    }
+  },
+  "unavailable_prerequisites": {
+    "redis": {
+      "available": false,
+      "reason": "redis-cli not found and REDIS_URL not set or not reachable"
+    },
+    "kind": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "kubectl": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "helm": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "hubble": {
+      "available": false,
+      "reason": "not found in PATH"
+    },
+    "cni_enforcement": {
+      "available": false,
+      "reason": "requires kind+kubectl+live cluster with Cilium/Calico"
+    },
+    "outline": {
+      "available": false,
+      "reason": "env ['OUTLINE_API_TOKEN', 'OAOS_OUTLINE_TOKEN'] not set or not live-verified"
+    },
+    "notion": {
+      "available": false,
+      "reason": "env ['NOTION_API_TOKEN', 'OAOS_NOTION_TOKEN'] not set or not live-verified"
+    },
+    "mattermost": {
+      "available": false,
+      "reason": "env ['MATTERMOST_URL', 'OAOS_MATTERMOST_URL'] not set or not live-verified"
+    },
+    "slack": {
+      "available": false,
+      "reason": "env ['SLACK_BOT_TOKEN', 'OAOS_SLACK_TOKEN'] not set or not live-verified"
+    },
+    "llm_gateway": {
+      "available": false,
+      "reason": "env ['OPENAI_API_KEY', 'OAOS_LLM_GATEWAY_URL', 'ANTHROPIC_API_KEY'] not set or not live-verified"
+    }
+  },
+  "rag_distinction": {
+    "personal_wiki": "implemented — owner-isolated Vault FS + pgvector, unit-tested",
+    "knowledge_index": "implemented — schema/repository/retrieval/chunking/embedding boundary/Outline-Notion adapters/idempotent sync/ACL revalidation — unit-tested",
+    "live_external_integration": "not claimed — requires live Outline/Notion credentials + network + corpus backfill; marked as operational integration work"
+  },
+  "invariants": [
+    "unit tests are never labeled as distributed/external",
+    "distributed requires live Redis + kind + CNI flow-log evidence",
+    "external requires live Outline/Notion/Mattermost/Slack/LLM gateway verification"
+  ],
+  "violations": []
+}

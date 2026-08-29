@@ -4,9 +4,9 @@
 > Product: **Open Agent OS**  
 > 문서 성격: 제품 아키텍처 기준서 + 개발 명세 + 코딩 에이전트 작업지침  
 > 배포 모델: **고객사 서버 또는 고객사 전용 클라우드/VPS에 설치되는 Source-Available Enterprise Agent Platform**  
-> Version: **v1.7.1** — 2026-08-29 (v1.7.0 → v1.7.1 Secret lifecycle + RAG implementation + H4-H7 implementation status)
+> Version: **v1.7.1** — 2026-08-29 (v1.7.0 → v1.7.1 Secret lifecycle + RAG implementation + H4-H8 implementation status)
 > Base: `docs/architecture-v1.7.1-design.md` v1.7.1-design (2026-08-29) — design source; this document is the implementation architecture (verified facts vs residual plan)
-> Status: **H4/H5/H6/H7 implemented (verified by git/tests) · H8 residual · RAG architecture and implementation complete for the v1.7.1 scope, Personal Wiki implemented, enterprise Knowledge Index + Outline/Notion sync implemented · Secrets lifecycle implemented via systemd installer**
+> Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete for the v1.7.1 scope, Personal Wiki implemented, enterprise Knowledge Index + Outline/Notion sync implemented · Secrets lifecycle implemented via systemd installer · Evidence tiers verified (unit: 927 passed, distributed: 0, external: 0)**
 > Deployment: **Docker (`deploy/docker-compose.*.yml` + `.env`) and systemd (`deploy/systemd/` + `/etc/oaos/oaos.env` or `config/oaos.env` 0600) are parallel, separate paths sharing code — neither modifies the other**
 
 ---
@@ -1683,17 +1683,23 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 - Non-production에서만 명시적 test/mock 경로를 허용한다.
 - Tests: `tests/test_mock_fallback_hardening.py`, `tests/test_runtime_hardening.py` — **13 passed**.
 
-#### H8 — Test evidence 과장 — 등급 분리
+#### H8 — Test evidence 과장 — 등급 분리 (Implemented)
 
-> H8은 현재 residual이다. v1.7.1의 검증 가능한 구현은 H4~H7과 RAG unit/integration 범위까지이며, 단일 전체 테스트 수를 `unit`·`distributed`·`external` 등급으로 분리하는 작업은 H8에서 완료한다.
+> H8은 **implemented**다. `scripts/verify-evidence-tiers.py`가 `unit`·`distributed`·`external` 등급을 분리 검증하고, `docs/deployment-verification-v1.7.1.md` + `docs/evidence-report-v1.7.1.json`에 `command`·`timestamp`·`commit`·`counts`·`unavailable prerequisites`를 기록한다. Unit 테스트를 distributed/external로 오표기하지 않으며, 지원되지 않는 주장 시 `exit 1`로 실패한다.
+
+- **등급 분리**: `unit: 927 passed, 1 skipped` (2026-08-29 `pytest -q`, fakeredis/SQLite/file mocks 포함 — live multi-replica 아님), `distributed: 0 passed`, `external: 0 passed`. Single `648`/`927` 집계는 `unit`으로만 표기.
+- **Prerequisites**: `redis`/`kind`/`kubectl`/`helm`/`hubble`/`cni_enforcement` 및 `outline`/`notion`/`mattermost`/`slack`/`llm_gateway` 모두 `unavailable`로 기록 — live Redis/CNI/Outline 증거를 발명하지 않음.
+- **RAG 구분**: Knowledge Index schema/repository/retrieval/chunking/embedding boundary/Outline-Notion adapter/idempotent sync/ACL revalidation은 **implemented + unit-tested**이며, live 외부 자격증명·네트워크·corpus backfill은 **운영 통합 범위**로 분리 표기.
+- **재현**: `python scripts/verify-evidence-tiers.py` (full `pytest -q` + report), `python scripts/verify-evidence-tiers.py --check-only` (문서 과장 시 실패), `python scripts/verify-evidence-tiers.py --skip-pytest` (빠른 검증). CI에서는 `verify-evidence-tiers --check-only`로 문서 과장 방지.
+- **검증**: `tests/test_evidence_tiers.py` 8건 — unit 오표기 금지, 필수 필드 기록, unsupported claim 실패, distributed/external 0, RAG distinction.
 
 ---
 
-### 16.11 잔여 로드맵 (v1.7.2+) — H8 evidence tiers / live RAG integration
+### 16.11 잔여 로드맵 (v1.7.2+) — live distributed/external integration
 
-```
-Quota 분산, Vault 외부화, /readyz strict, env_gate 단일화
-```
+- **H8 증거 등급**: `unit: 927 passed` 검증 완료 (`scripts/verify-evidence-tiers.py` + `tests/test_evidence_tiers.py`). `distributed`/`external`은 live `kind`+Redis+CNI 및 Outline/Notion/Mattermost/Slack/LLM gateway 연동 시 별도 카운트 — 현재 0으로 명시.
+- **Live RAG 통합**: Knowledge Index는 unit-tested이나, 운영 corpus backfill 및 live Outline/Notion 자격증명 연동은 v1.7.2+ 운영 검증 범위.
+- **분산 일관성**: kind 2-replica + Redis Lua `k6` 병렬 검증, `hubble --verdict DROPPED` 캡처는 v1.7.2+에서 `distributed: N passed`로 승격.
 
 ## 16.2 Hermes Runtime
 ## 16.2 Hermes Runtime
