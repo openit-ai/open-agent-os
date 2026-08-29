@@ -69,18 +69,63 @@ app = FastAPI(title="Open Agent OS — Security & Governance", version="0.1.1")
 # ── 전역 싱글톤 (프로세스 내 공유) ──────────────────────────────
 _DEV_SIGNING_KEY = "dev-signing-key-please-change"
 # One explicit env-configured signing key contract: OAOS_SECURITY_SERVICE_SIGNING_KEY primary, OAOS_SIGNING_KEY fallback
-# Test fixtures must set OAOS_SECURITY_SERVICE_SIGNING_KEY to the same value used for signing (see tests/test_security_auth.py).
-SIGNING_KEY = os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY", _DEV_SIGNING_KEY)
-# Fail-closed in production: dev default OAOS_SIGNING_KEY must be overridden (like persistence.py)
-if os.environ.get("OAOS_ENV", "").lower() == "production" and SIGNING_KEY == _DEV_SIGNING_KEY:
-    raise RuntimeError("OAOS_SIGNING_KEY must be set to a strong value when OAOS_ENV=production (fail-closed)")
+# Dynamic getter — no stale snapshot, rotation-safe, production fail-closed
+def get_signing_key() -> str:
+    key = os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY") or _DEV_SIGNING_KEY
+    if os.environ.get("OAOS_ENV", "").lower() == "production" and key == _DEV_SIGNING_KEY:
+        raise RuntimeError("OAOS_SIGNING_KEY must be set to a strong value when OAOS_ENV=production (fail-closed)")
+    return key
+
+def __getattr__(name: str):  # PEP 562 — dynamic env resolution, no stale snapshot
+    if name == "SIGNING_KEY":
+        return get_signing_key()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+# Early fail-closed at import if already production
+if os.environ.get("OAOS_ENV", "").lower() == "production" and (os.environ.get("OAOS_SECURITY_SERVICE_SIGNING_KEY") or os.environ.get("OAOS_SIGNING_KEY") or _DEV_SIGNING_KEY) == _DEV_SIGNING_KEY:
+    # validate via getter (raises if dev key in prod)
+    get_signing_key()
+
+def _ensure_signing_key_fresh() -> None:
+    """Refresh singleton signing keys from env on each request — rotation-safe, preserves in-memory stores."""
+    try:
+        fresh = get_signing_key()
+    except RuntimeError:
+        raise
+    # Update in place so existing object identity (and in-memory nonce stores) is preserved
+    for svc in (token_service, approval_store, audit_ledger):
+        try:
+            if hasattr(svc, "signing_key") and getattr(svc, "signing_key") != fresh:
+                svc.signing_key = fresh
+        except Exception:
+            pass
+    # Also handle TokenService's alternate attribute names
+    for svc in (token_service,):
+        for attr in ("signing_key", "_signing_key"):
+            try:
+                if hasattr(svc, attr) and getattr(svc, attr) != fresh:
+                    setattr(svc, attr, fresh)
+            except Exception:
+                pass
+
 ENCRYPTION_KEY = os.environ.get("OAOS_ENCRYPTION_KEY", "dev-encryption-key-32bytes!!").encode()
 
 delegation_service = DelegationService()
-token_service = TokenService(signing_key=SIGNING_KEY)
-approval_store = ApprovalStore(signing_key=SIGNING_KEY)
-audit_ledger = AuditLedger(signing_key=SIGNING_KEY)
+token_service = TokenService(signing_key=get_signing_key())
+approval_store = ApprovalStore(signing_key=get_signing_key())
+audit_ledger = AuditLedger(signing_key=get_signing_key())
 policy_engine = PolicyEngine(bundles=[default_bundle(tenant_id="default")])
+
+@app.middleware("http")
+async def _refresh_signing_key_middleware(request: Request, call_next):  # rotation-safe, no stale snapshot
+    try:
+        _ensure_signing_key_fresh()
+    except RuntimeError:
+        # fail-closed in production — propagate as 503 so token/approval/audit signing doesn't use stale key
+        from fastapi.responses import JSONResponse
+        if os.environ.get("OAOS_ENV", "").lower() == "production":
+            return JSONResponse(status_code=503, content={"detail": "signing key not configured in production"})
+    return await call_next(request)
 
 # ── revoke cascade wiring (MemoryStore + Vault) — lazy, best-effort ──
 # DelegationService.revoke() will try these; wiring here ensures app singleton is connected.

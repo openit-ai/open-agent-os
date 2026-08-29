@@ -43,8 +43,12 @@ def get_expected_audience() -> str:
         if v and v.strip(): return v.strip()
     return _DEFAULT_AUDIENCE
 
-EXPECTED_ISSUER = os.getenv("OAOS_USER_JWT_ISSUER") or os.getenv("OAOS_JWT_ISSUER") or _DEFAULT_ISSUER
-EXPECTED_AUDIENCE = os.getenv("OAOS_USER_JWT_AUDIENCE") or os.getenv("OAOS_JWT_AUDIENCE") or _DEFAULT_AUDIENCE
+def __getattr__(name: str):  # PEP 562 — dynamic env resolution, no stale snapshot
+    if name == "EXPECTED_ISSUER":
+        return get_expected_issuer()
+    if name == "EXPECTED_AUDIENCE":
+        return get_expected_audience()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 def _fail_open_telemetry(reason: str, **fields) -> None:
     extra=" ".join(f"{k}={v}" for k,v in fields.items())

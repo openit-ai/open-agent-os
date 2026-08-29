@@ -29,6 +29,153 @@ from fastapi import FastAPI, Header, Request, HTTPException, Depends
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# H3 Memory Service Auth Hardening — verified JWT only, no unverified claims
+# ---------------------------------------------------------------------------
+# Prod fail-closed: verified JWT required (issuer/audience/exp/iat/jti/sub/tenant/agent/scope)
+# Non-prod explicit fixture only: X-User-Id fallback allowed ONLY when OAOS_ENV != production
+# and (PYTEST_CURRENT_TEST set or OAOS_ALLOW_TEST_FIXTURE truthy)
+# Health endpoints remain public. No anonymous/default tenant fallback in prod.
+_ALLOWED_ISSUERS = {"open-agent-os-auth", "control-plane", "security"}
+_ALLOWED_AUDIENCES = {"memory-service", "control-plane", "security", "wiki-fs", "wiki"}
+_ALLOWED_SCOPES = {"memory:read", "memory:write", "memory:admin", "wiki:read", "wiki:write"}
+_DEV_KEY_SENTINEL = "dev-signing-key-please-change"
+
+def _is_production() -> bool:
+    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        v = os.environ.get(k, "").strip().lower()
+        if v in ("production", "prod"):
+            return True
+    return False
+
+def _allow_test_fixture() -> bool:
+    if _is_production():
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    flag = os.environ.get("OAOS_ALLOW_TEST_FIXTURE", "") or os.environ.get("OAOS_ALLOW_TEST_FALLBACK", "") or os.environ.get("OAOS_TEST_ALLOW_PLAINTEXT", "")
+    if flag.strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    if os.environ.get("OAOS_ENFORCE_SIGNED_CONTEXT", "").lower() in ("1", "true", "yes", "on"):
+        return False
+    # also allow PYTEST_RUN for compat
+    if os.environ.get("PYTEST_RUN", "").lower() in ("1", "true"):
+        return True
+    # fallback: if OAOS_ENV not set and PYTEST_CURRENT_TEST missing but we are in pytest, still allow via presence of PYTEST_CURRENT_TEST is primary
+    return False
+
+def _memory_signing_key() -> str:
+    for k in ("OAOS_SIGNING_KEY", "OAOS_SECURITY_SERVICE_SIGNING_KEY", "OAOS_JWT_SIGNING_KEY", "JWT_SIGNING_KEY", "OAOS_MEMORY_JWT_SIGNING_KEY", "OAOS_USER_JWT_SIGNING_KEY", "ADMIN_JWT_SECRET"):
+        v = os.environ.get(k, "")
+        if v and v.strip():
+            return v.strip()
+    if _is_production():
+        raise HTTPException(status_code=503, detail="memory JWT signing key not configured in production")
+    return _DEV_KEY_SENTINEL
+
+def _verify_memory_jwt(token: str, required_scope: str | None = None) -> dict:
+    if not token or not token.strip():
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    # reject none alg early
+    try:
+        from jose import jwt as _jwt, JWTError as _JE, ExpiredSignatureError as _ESE
+    except Exception:
+        raise HTTPException(status_code=500, detail="jwt library unavailable")
+    key = _memory_signing_key()
+    if _is_production() and key == _DEV_KEY_SENTINEL:
+        raise HTTPException(status_code=503, detail="memory JWT signing key not configured in production")
+    # detect none alg without verification (header manipulation)
+    try:
+        import base64, json
+        parts = token.split(".")
+        if len(parts) == 3:
+            hdr_b64 = parts[0] + "=" * (-len(parts[0]) % 4)
+            hdr = json.loads(base64.urlsafe_b64decode(hdr_b64).decode())
+            if hdr.get("alg", "").lower() == "none":
+                raise HTTPException(status_code=401, detail="invalid bearer: none algorithm not allowed")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    try:
+        payload = _jwt.decode(token, key, algorithms=["HS256"], options={"verify_aud": False, "verify_iss": False})
+    except _ESE as e:
+        raise HTTPException(status_code=401, detail=f"token expired: {e}") from e
+    except _JE as e:
+        raise HTTPException(status_code=401, detail=f"invalid bearer: {e}") from e
+    iss = payload.get("iss")
+    if not iss or iss not in _ALLOWED_ISSUERS:
+        raise HTTPException(status_code=401, detail=f"invalid issuer: {iss}")
+    aud = payload.get("aud")
+    aud_ok = False
+    if isinstance(aud, list):
+        aud_ok = any(a in _ALLOWED_AUDIENCES for a in aud)
+    elif isinstance(aud, str):
+        aud_ok = aud in _ALLOWED_AUDIENCES
+    if not aud_ok:
+        raise HTTPException(status_code=401, detail=f"invalid audience: {aud}")
+    sub = payload.get("sub")
+    if not sub or not isinstance(sub, str) or not sub.strip():
+        raise HTTPException(status_code=401, detail="missing sub claim")
+    tenant_id = payload.get("tenant_id") or payload.get("tenant")
+    if not tenant_id or not isinstance(tenant_id, str) or not tenant_id.strip():
+        raise HTTPException(status_code=401, detail="missing tenant_id claim")
+    # normalize tenant_id
+    payload["tenant_id"] = tenant_id.strip()
+    agent_id = payload.get("agent_id") or payload.get("agent")
+    if not agent_id or not isinstance(agent_id, str) or not agent_id.strip():
+        raise HTTPException(status_code=401, detail="missing agent_id claim")
+    payload["agent_id"] = agent_id.strip()
+    scope = payload.get("scope")
+    if not scope or not isinstance(scope, str) or scope.strip() not in _ALLOWED_SCOPES:
+        raise HTTPException(status_code=401, detail=f"missing or invalid scope: {scope}")
+    if "exp" not in payload:
+        raise HTTPException(status_code=401, detail="missing exp claim")
+    if "iat" not in payload:
+        raise HTTPException(status_code=401, detail="missing iat claim")
+    jti = payload.get("jti")
+    if not jti or not isinstance(jti, str) or not jti.strip():
+        raise HTTPException(status_code=401, detail="missing jti claim")
+    # scope enforcement
+    if required_scope:
+        if required_scope == "memory:read":
+            if scope not in ("memory:read", "memory:write", "memory:admin", "wiki:read", "wiki:write"):
+                raise HTTPException(status_code=401, detail=f"invalid scope for read: {scope}")
+            # write scopes satisfy read
+            if scope not in ("memory:read", "memory:write", "memory:admin", "wiki:read", "wiki:write"):
+                raise HTTPException(status_code=401, detail=f"scope {scope} not authorized for read")
+        elif required_scope == "memory:write":
+            if scope not in ("memory:write", "memory:admin", "wiki:write"):
+                raise HTTPException(status_code=401, detail=f"scope {scope} not authorized for write (requires memory:write)")
+        else:
+            if scope != required_scope:
+                raise HTTPException(status_code=401, detail=f"scope mismatch: {scope} != {required_scope}")
+    return payload
+
+def _extract_bearer(request: Request, authorization: str | None = None) -> str | None:
+    auth = authorization or request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if not auth:
+        return None
+    if not auth.lower().startswith("bearer "):
+        # present but malformed -> treat as missing for strict 401 path
+        return None
+    tok = auth[7:].strip()
+    return tok if tok else None
+
+def _verify_tenant_binding(payload: dict, requested_tenant: str | None) -> None:
+    if requested_tenant is None or (isinstance(requested_tenant, str) and not requested_tenant.strip()):
+        return
+    jwt_tenant = payload.get("tenant_id") or payload.get("tenant")
+    if str(jwt_tenant).strip() != str(requested_tenant).strip():
+        raise HTTPException(status_code=403, detail=f"tenant mismatch: token tenant {jwt_tenant} != requested {requested_tenant}")
+
+def _verify_agent_binding(payload: dict, requested_agent: str | None) -> None:
+    if requested_agent is None or (isinstance(requested_agent, str) and not requested_agent.strip()):
+        return
+    jwt_agent = payload.get("agent_id")
+    if str(jwt_agent).strip() != str(requested_agent).strip():
+        raise HTTPException(status_code=403, detail=f"agent mismatch: token agent {jwt_agent} != requested {requested_agent}")
+
 app = FastAPI(title="Open Agent OS — Memory Service", version="0.1.1")
 
 
@@ -165,58 +312,85 @@ def _extract_auth(
     x_user_id: str | None = None,
     x_tenant_id: str | None = None,
     authorization: str | None = None,
+    required_scope: str | None = None,
 ) -> dict[str, Any]:
-    """Auth placeholder: x-user-id header or JWT Bearer."""
-    user_id = x_user_id
-    tenant_id = x_tenant_id or request.headers.get("x-tenant-id") or request.headers.get("X-Tenant-Id") or "default"
-    agent_id = request.headers.get("x-agent-id") or request.headers.get("X-Agent-Id")
-    # Try Authorization Bearer JWT
-    auth_header = authorization or request.headers.get("authorization") or request.headers.get("Authorization") or ""
-    if not user_id and auth_header.lower().startswith("bearer "):
-        token = auth_header[7:].strip()
-        # Try to decode JWT without verification for placeholder (extract sub)
-        try:
-            from jose import jwt  # type: ignore
+    """H3 hardened auth: verified JWT only; no unverified claims, no anonymous/default in prod.
 
-            # try decode without verify if signing key not available
-            try:
-                payload = jwt.get_unverified_claims(token)
-                user_id = payload.get("sub") or payload.get("user_id") or payload.get("on_behalf_of")
-                if payload.get("tenant_id"):
-                    tenant_id = payload["tenant_id"]
-            except Exception:
-                pass
-            # try verified decode if JWT_SIGNING_KEY set
-            if not user_id:
-                key = os.environ.get("JWT_SIGNING_KEY") or os.environ.get("OAOS_JWT_SIGNING_KEY", "")
-                if key:
-                    payload = jwt.decode(token, key, algorithms=["HS256"])
-                    user_id = payload.get("sub") or payload.get("user_id")
-        except Exception:
-            pass
-    # Also check X-User-Id case-insensitive via request.headers
-    if not user_id:
-        for k, v in request.headers.items():
-            if k.lower() == "x-user-id" and v:
-                user_id = v
-                break
-    # Fallback: anonymous allowed for tests (uses default owner)
-    if not user_id:
-        user_id = "employee:anonymous"
-    if not agent_id and user_id:
-        agent_id = user_id.replace("employee:", "agent:assistant:")
-        if not agent_id.startswith("agent:"):
-            agent_id = f"agent:assistant:{user_id}"
-    groups: list[str] = []
-    grp_hdr = request.headers.get("x-groups") or request.headers.get("X-Groups") or ""
-    if grp_hdr:
-        groups = [g.strip() for g in grp_hdr.split(",") if g.strip()]
-    return {
-        "user_id": user_id,
-        "tenant_id": tenant_id,
-        "agent_id": agent_id,
-        "groups": groups,
-    }
+    - Bearer JWT is verified with issuer/audience/exp/iat/jti/sub/tenant_id/agent_id/scope.
+    - X-Tenant-Id / X-Agent-Id headers if present must match JWT claims (tenant/agent binding).
+    - Body tenant binding is enforced by callers (memory_write/search).
+    - In non-prod with explicit test fixture (PYTEST_CURRENT_TEST or OAOS_ALLOW_TEST_FIXTURE), X-User-Id fallback is allowed.
+    - Otherwise 401. No default tenant.
+    """
+    bearer = _extract_bearer(request, authorization)
+    if bearer:
+        # verify JWT; required_scope passed by endpoint
+        payload = _verify_memory_jwt(bearer, required_scope=required_scope)
+        user_id = payload.get("sub") or payload.get("user_id")
+        tenant_id = payload.get("tenant_id")
+        agent_id = payload.get("agent_id")
+        scope = payload.get("scope")
+        # header tenant/agent binding if present
+        # x-tenant-id / X-Tenant-Id
+        hdr_tenant = x_tenant_id or request.headers.get("x-tenant-id") or request.headers.get("X-Tenant-Id")
+        if hdr_tenant is not None and hdr_tenant.strip():
+            _verify_tenant_binding(payload, hdr_tenant.strip())
+        # x-agent-id
+        hdr_agent = request.headers.get("x-agent-id") or request.headers.get("X-Agent-Id")
+        if hdr_agent is not None and hdr_agent.strip():
+            _verify_agent_binding(payload, hdr_agent.strip())
+        # also check legacy x_tenant_id arg already handled
+        groups: list[str] = []
+        grp_hdr = request.headers.get("x-groups") or request.headers.get("X-Groups") or ""
+        if grp_hdr:
+            groups = [g.strip() for g in grp_hdr.split(",") if g.strip()]
+        return {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
+            "scope": scope,
+            "groups": groups,
+            "jwt_payload": payload,
+        }
+    # no bearer -> check explicit non-prod test fixture fallback
+    if _allow_test_fixture():
+        # allow X-User-Id header as identity in non-prod test
+        fallback_user = x_user_id
+        if not fallback_user:
+            for k, v in request.headers.items():
+                if k.lower() == "x-user-id" and v:
+                    fallback_user = v.strip()
+                    break
+        if fallback_user:
+            # tenant/agent from headers or default? Use header if provided else fallback_user tenant inference
+            fallback_tenant = x_tenant_id or request.headers.get("x-tenant-id") or request.headers.get("X-Tenant-Id")
+            # still require tenant? In test fixture we allow missing tenant -> infer from fallback? But for strictness we still need tenant; default to test-tenant if missing for backcompat
+            # Task says remove default tenant fallback in production; in non-prod we may still allow default for existing tests that lack tenant header.
+            # To preserve existing non-prod tests, allow default but only here (non-prod fixture).
+            if not fallback_tenant or not fallback_tenant.strip():
+                fallback_tenant = "test-tenant" if os.environ.get("PYTEST_CURRENT_TEST") else "default"
+            fallback_tenant = fallback_tenant.strip()
+            fallback_agent = request.headers.get("x-agent-id") or request.headers.get("X-Agent-Id")
+            if not fallback_agent:
+                fallback_agent = fallback_user.replace("employee:", "agent:assistant:")
+                if not fallback_agent.startswith("agent:"):
+                    fallback_agent = f"agent:assistant:{fallback_user}"
+            groups: list[str] = []
+            grp_hdr = request.headers.get("x-groups") or request.headers.get("X-Groups") or ""
+            if grp_hdr:
+                groups = [g.strip() for g in grp_hdr.split(",") if g.strip()]
+            # telemetry
+            logger.info(f"[AUDIT] MEMORY_TEST_FIXTURE_FALLBACK user={fallback_user} tenant={fallback_tenant}")
+            return {
+                "user_id": fallback_user,
+                "tenant_id": fallback_tenant,
+                "agent_id": fallback_agent,
+                "scope": "memory:write",  # test fixture broad scope
+                "groups": groups,
+                "jwt_payload": None,
+            }
+    # no bearer and no allowed fallback -> 401
+    raise HTTPException(status_code=401, detail="missing or invalid bearer: JWT required")
 
 
 def _record_to_response(rec: Any, db_provenance: dict | None = None) -> dict[str, Any]:
@@ -655,11 +829,27 @@ async def memory_write(payload: dict, request: Request):
             raise HTTPException(status_code=422, detail=str(e))
         req = payload  # type: ignore
 
-    auth = _extract_auth(request)
+    auth = _extract_auth(request, required_scope="memory:write")
+    # --- H3 tenant/body binding: body tenant_id must match JWT tenant ---
+    body_tenant = getattr(req, "tenant_id", None) or payload.get("tenant_id")
+    if body_tenant is not None and str(body_tenant).strip():
+        _verify_tenant_binding(auth.get("jwt_payload") or {"tenant_id": auth.get("tenant_id")}, str(body_tenant).strip())
+    body_agent = getattr(req, "agent_id", None) or payload.get("agent_id")
+    if body_agent is not None and str(body_agent).strip():
+        _verify_agent_binding(auth.get("jwt_payload") or {"agent_id": auth.get("agent_id")}, str(body_agent).strip())
     # normalize fields
-    owner = getattr(req, "owner", None) or payload.get("owner") or auth["user_id"]
-    tenant_id = getattr(req, "tenant_id", None) or payload.get("tenant_id") or auth["tenant_id"] or "default"
-    agent_id = getattr(req, "agent_id", None) or payload.get("agent_id") or auth.get("agent_id") or owner.replace("employee:", "agent:assistant:")
+    requested_owner = getattr(req, "owner", None) or payload.get("owner")
+    # owner isolation: if body provides owner, it must match JWT sub (no impersonation) unless scope is admin
+    if requested_owner is not None and str(requested_owner).strip():
+        if str(requested_owner).strip() != str(auth["user_id"]).strip():
+            # allow only if JWT scope is admin? otherwise strict
+            jwt_scope = auth.get("scope") or (auth.get("jwt_payload") or {}).get("scope", "")
+            if jwt_scope not in ("memory:admin",):
+                raise HTTPException(status_code=403, detail=f"owner mismatch: token sub {auth['user_id']} != requested owner {requested_owner}")
+    owner = requested_owner or auth["user_id"]
+    tenant_id = auth["tenant_id"]
+    # enforce body tenant binding already; ignore body tenant value (use JWT tenant authoritative)
+    agent_id = auth.get("agent_id") or owner.replace("employee:", "agent:assistant:")
     scope = getattr(req, "scope", None) or payload.get("scope") or "personal"
     classification = getattr(req, "classification", None) or payload.get("classification") or "INTERNAL"
     content = getattr(req, "content", None) or payload.get("content") or ""
@@ -886,7 +1076,7 @@ async def memory_search(payload: dict, request: Request):
             raise HTTPException(status_code=422, detail=str(e))
         req = payload  # type: ignore
 
-    auth = _extract_auth(request)
+    auth = _extract_auth(request, required_scope="memory:read")
     query = getattr(req, "query", None) if hasattr(req, "query") else payload.get("query")
     scope = getattr(req, "scope", None) if hasattr(req, "scope") else payload.get("scope")
     owner = getattr(req, "owner", None) if hasattr(req, "owner") else payload.get("owner")
@@ -896,8 +1086,26 @@ async def memory_search(payload: dict, request: Request):
     limit = int(getattr(req, "limit", 10) if hasattr(req, "limit") else payload.get("limit", 10))
     include_invalidated = bool(getattr(req, "include_invalidated", False) if hasattr(req, "include_invalidated") else payload.get("include_invalidated", False))
 
-    # tenant defaults to auth tenant, but allow explicit filter
-    effective_tenant = tenant_id or auth.get("tenant_id") or "default"
+    # H3 tenant/body binding: payload tenant must match JWT tenant
+    if tenant_id is not None and str(tenant_id).strip():
+        _verify_tenant_binding(auth.get("jwt_payload") or {"tenant_id": auth.get("tenant_id")}, str(tenant_id).strip())
+    if agent_id is not None and str(agent_id).strip():
+        _verify_agent_binding(auth.get("jwt_payload") or {"agent_id": auth.get("agent_id")}, str(agent_id).strip())
+    # tenant authoritative from JWT
+    effective_tenant = auth.get("tenant_id")
+    # owner isolation for search: if owner filter provided and scope personal, must match JWT sub unless admin
+    if owner is not None and str(owner).strip():
+        if str(owner).strip() != str(auth.get("user_id")).strip():
+            # for personal scope, cross-owner search is ACL filtered, but enforce strict for personal? check scope
+            jwt_scope = auth.get("scope") or (auth.get("jwt_payload") or {}).get("scope", "")
+            # if requesting personal owner != self, treat as 403 unless admin or corporate/team allowed via ACL? We rely on ACL but also prevent enumeration: allow but ACL will filter to 0
+            # For strict H3, enforce 403 when owner != JWT sub and not admin (to prevent cross-owner enumeration)
+            if jwt_scope not in ("memory:admin",):
+                # For search, we treat cross-owner as forbidden for personal scope; for team/corporate, ACL allows broader
+                # Only enforce when scope is personal or not specified (default personal)
+                req_scope_val = scope or "personal"
+                if str(req_scope_val).lower() == "personal":
+                    raise HTTPException(status_code=403, detail=f"owner mismatch: token sub {auth.get('user_id')} != requested owner {owner}")
     # requester for ACL — use auth identity
     requester: dict[str, Any] = {
         "user_id": auth.get("user_id"),
@@ -1146,7 +1354,7 @@ async def memory_search(payload: dict, request: Request):
 
 @app.get("/v1/memory/{memory_id}")
 async def memory_get(memory_id: str, request: Request):
-    auth = _extract_auth(request)
+    auth = _extract_auth(request, required_scope="memory:read")
     requester = {"user_id": auth.get("user_id"), "tenant_id": auth.get("tenant_id"), "groups": auth.get("groups", [])}
     store = _get_store()
 
@@ -1248,7 +1456,11 @@ async def memory_get(memory_id: str, request: Request):
 @app.post("/v1/memory/invalidate")
 async def memory_invalidate(payload: dict, request: Request):
     """Soft revoke: marks memories invalidated (invalidated_at/reason) — survives search filter."""
-    auth = _extract_auth(request)
+    auth = _extract_auth(request, required_scope="memory:write")
+    # H3: if payload contains tenant_id, enforce binding (even though invalidate req has no tenant field, body might)
+    _pt = payload.get("tenant_id")
+    if _pt is not None and str(_pt).strip():
+        _verify_tenant_binding(auth.get("jwt_payload") or {"tenant_id": auth.get("tenant_id")}, str(_pt).strip())
     try:
         req = InvalidateRequest(**payload)  # type: ignore
     except Exception:
@@ -1319,6 +1531,13 @@ async def memory_invalidate(payload: dict, request: Request):
             pass
         return {"invalidated": count, "by": "resource", "source_resource_id": source_resource_id, "reason": reason}
     if memory_id:
+        # H3 owner/tenant isolation for single invalidate
+        raw = store.get(memory_id)
+        if raw is not None:
+            if getattr(raw, "tenant_id", None) and getattr(raw, "tenant_id") != auth.get("tenant_id"):
+                raise HTTPException(status_code=404, detail="memory not found or access denied")
+            if not store._can_access(raw, {"user_id": auth.get("user_id"), "tenant_id": auth.get("tenant_id"), "groups": auth.get("groups", [])}):  # type: ignore
+                raise HTTPException(status_code=403, detail="access denied")
         ok = store.invalidate(memory_id, reason=reason)
         if _is_db_configured():
             maker = await _get_db_maker()
@@ -1354,7 +1573,10 @@ async def memory_invalidate_by_delegation(payload: dict, request: Request):
 @app.post("/v1/memory/delete")
 async def memory_delete(payload: dict, request: Request):
     """Physical delete: removes row + embeddings + access_bindings + sources. Distinct from invalidate (soft)."""
-    auth = _extract_auth(request)
+    auth = _extract_auth(request, required_scope="memory:write")
+    _pt = payload.get("tenant_id")
+    if _pt is not None and str(_pt).strip():
+        _verify_tenant_binding(auth.get("jwt_payload") or {"tenant_id": auth.get("tenant_id")}, str(_pt).strip())
     try:
         req = DeleteRequest(**payload)  # type: ignore
     except Exception:
@@ -1415,6 +1637,13 @@ async def memory_delete(payload: dict, request: Request):
         return {"deleted": count_mem, "by": "resource", "source_resource_id": source_resource_id, "reason": reason}
 
     if memory_id:
+        # H3 owner/tenant isolation for single delete
+        raw = store.get(memory_id)
+        if raw is not None:
+            if getattr(raw, "tenant_id", None) and getattr(raw, "tenant_id") != auth.get("tenant_id"):
+                raise HTTPException(status_code=404, detail="memory not found or access denied")
+            if not store._can_access(raw, {"user_id": auth.get("user_id"), "tenant_id": auth.get("tenant_id"), "groups": auth.get("groups", [])}):  # type: ignore
+                raise HTTPException(status_code=403, detail="access denied")
         ok = _store_physical_delete_single(store, memory_id)
         db_deleted = await _db_physical_delete([memory_id])
         count = 1 if (ok or db_deleted > 0) else 0

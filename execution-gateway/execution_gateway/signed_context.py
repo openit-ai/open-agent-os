@@ -62,8 +62,12 @@ def get_audience() -> str:
             return v.strip()
     return _DEFAULT_AUDIENCE
 
-ISSUER = os.getenv("OAOS_AGENT_CONTEXT_ISSUER") or os.getenv("OAOS_SIGNED_CONTEXT_ISSUER") or _DEFAULT_ISSUER
-AUDIENCE = os.getenv("OAOS_AGENT_CONTEXT_AUDIENCE") or os.getenv("OAOS_SIGNED_CONTEXT_AUDIENCE") or _DEFAULT_AUDIENCE
+def __getattr__(name: str):  # PEP 562 — dynamic env resolution, no stale snapshot
+    if name == "ISSUER":
+        return get_issuer()
+    if name == "AUDIENCE":
+        return get_audience()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 def _allow_plaintext() -> bool:
     if _is_production():

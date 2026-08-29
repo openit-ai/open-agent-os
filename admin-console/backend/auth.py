@@ -53,18 +53,29 @@ except Exception as _argon2_import_exc:  # pragma: no cover - missing lib path
 # Config
 # ---------------------------------------------------------------------------
 _DEV_JWT_SECRET = "dev-admin-jwt-secret-please-change"
-JWT_SECRET = os.environ.get("ADMIN_JWT_SECRET", _DEV_JWT_SECRET)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 8
 
 def _is_production() -> bool:
     return os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
 
-# Fail-closed in production: dev default ADMIN_JWT_SECRET must be overridden (like persistence.py)
-if _is_production() and JWT_SECRET == _DEV_JWT_SECRET:
-    raise RuntimeError("ADMIN_JWT_SECRET must be set to a strong value when OAOS_ENV=production (fail-closed)")
-if _is_production() and len(JWT_SECRET.strip()) < 32:
-    raise RuntimeError("ADMIN_JWT_SECRET must be at least 32 characters when OAOS_ENV=production (fail-closed)")
+def get_jwt_secret() -> str:
+    """Dynamic JWT secret — reads env on each call, fail-closed in production."""
+    key = os.environ.get("ADMIN_JWT_SECRET", _DEV_JWT_SECRET)
+    if _is_production() and key == _DEV_JWT_SECRET:
+        raise RuntimeError("ADMIN_JWT_SECRET must be set to a strong value when OAOS_ENV=production (fail-closed)")
+    if _is_production() and len(key.strip()) < 32:
+        raise RuntimeError("ADMIN_JWT_SECRET must be at least 32 characters when OAOS_ENV=production (fail-closed)")
+    return key
+
+def __getattr__(name: str):  # PEP 562 — dynamic env resolution, no stale snapshot
+    if name == "JWT_SECRET":
+        return get_jwt_secret()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+# Fail-closed at import when already in production (early crash), but rotation is still dynamic via get_jwt_secret
+if _is_production():
+    get_jwt_secret()
 
 # ---------------------------------------------------------------------------
 # Role
@@ -174,7 +185,7 @@ def _needs_rehash(hashed: str) -> bool:
 def _create_jwt(email: str, role: str) -> tuple[str, int]:
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {"sub": email, "role": role, "exp": expire}
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    token = jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
     expires_in = int(JWT_EXPIRE_HOURS * 3600)
     return token, expires_in
 
@@ -621,7 +632,7 @@ def get_current_admin(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     token = credentials.credentials
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         email: str | None = payload.get("sub")
         if email is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
