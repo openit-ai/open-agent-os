@@ -18,6 +18,7 @@ from .identity import map_user_to_agent
 from .session import session_store, new_request_id
 from .router import route_session
 from .acp_adapter import ACPAdapter
+from .auth import resolve_caller_user  # H1: verified JWT identity
 from .internal_api import CreateSessionRequest, CreateSessionResponse, SendPromptRequest
 from .mattermost_adapter.webhook import router as mattermost_router
 from .demo import router as demo_router
@@ -209,8 +210,8 @@ def health_detailed():
     return {"status": "degraded" if degraded else "ok", "service": "control-plane", "checks": checks, "latency_ms": total, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
-async def create_session(req: CreateSessionRequest, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    caller = _caller_user(x_user_id or req.user_id)
+async def create_session(req: CreateSessionRequest, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    caller = resolve_caller_user(authorization, x_user_id, body_user_id=req.user_id, body_tenant_id=req.tenant_id)
     # Identity mapping — 1:1 logical agent
     mapping = map_user_to_agent(caller, req.tenant_id, req.security_domain)
     # -- RuntimeRouter selection (lazy, respects EXECUTE runtime/hermes capability) --
@@ -260,8 +261,8 @@ async def notfound_handler(request: Request, exc: KeyError):
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 @app.get("/v1/sessions/{session_id}")
-def get_session(session_id: str, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    caller = _caller_user(x_user_id)
+def get_session(session_id: str, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    caller = resolve_caller_user(authorization, x_user_id)
     rec = session_store.get(session_id, caller)
     return {
         "session_id": rec.session_id,
@@ -274,8 +275,8 @@ def get_session(session_id: str, x_user_id: str | None = Header(default=None, al
     }
 
 @app.post("/v1/sessions/{session_id}/prompt")
-async def send_prompt(session_id: str, req: SendPromptRequest, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    caller = _caller_user(x_user_id)
+async def send_prompt(session_id: str, req: SendPromptRequest, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    caller = resolve_caller_user(authorization, x_user_id)
     rec = session_store.get(session_id, caller)
     rid = req.request_id or new_request_id()
     session_store.append_prompt(session_id, caller, req.prompt, rid)
@@ -286,8 +287,8 @@ async def send_prompt(session_id: str, req: SendPromptRequest, x_user_id: str | 
     return {"request_id": rid, "trace_id": rec.trace_id, "acp": result}
 
 @app.get("/v1/sessions/{session_id}/stream")
-async def stream(session_id: str, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    caller = _caller_user(x_user_id)
+async def stream(session_id: str, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    caller = resolve_caller_user(authorization, x_user_id)
     try:
         rec = session_store.get(session_id, caller)
     except (KeyError, PermissionError) as e:
@@ -307,13 +308,13 @@ async def stream(session_id: str, x_user_id: str | None = Header(default=None, a
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.post("/v1/sessions/{session_id}/cancel")
-def cancel_session(session_id: str, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    caller = _caller_user(x_user_id)
+def cancel_session(session_id: str, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    caller = resolve_caller_user(authorization, x_user_id)
     session_store.cancel(session_id, caller)
     return {"status": "cancelled", "session_id": session_id}
 
 @app.get("/v1/context/{session_id}")
-def get_agent_context(session_id: str, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    caller = _caller_user(x_user_id)
+def get_agent_context(session_id: str, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    caller = resolve_caller_user(authorization, x_user_id)
     rec = session_store.get(session_id, caller)
     return rec.to_agent_context()

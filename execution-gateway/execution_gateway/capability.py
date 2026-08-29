@@ -111,6 +111,13 @@ def verify_capability(token: dict, action: str, resource: str, context: dict | N
         if ctx_delegation and ctx_delegation != token_delegation:
             return CapabilityCheck(False, f"delegation binding mismatch: token={token_delegation} context={ctx_delegation}")
 
+    # 4b. session binding 검증 (H2: capability session must match AgentContext session)
+    token_session = _get_token_field(token, "session_id")
+    if context is not None and token_session:
+        ctx_session = context.get("session_id") if isinstance(context, dict) else getattr(context, "session_id", None)
+        if ctx_session and ctx_session != token_session:
+            return CapabilityCheck(False, f"session binding mismatch: token={token_session} context={ctx_session}")
+
     # 5. principal 검증 (on_behalf_of 일치)
     token_on_behalf = _get_token_field(token, "on_behalf_of")
     if context is not None and token_on_behalf:

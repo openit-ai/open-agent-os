@@ -41,6 +41,14 @@ try:
 except Exception:
     AgentContext = None  # type: ignore
 
+try:
+    from .signed_context import parse_and_verify_context  # H2: signed AgentContext JWT
+except Exception:
+    try:
+        from execution_gateway.signed_context import parse_and_verify_context  # type: ignore
+    except Exception:
+        parse_and_verify_context = None  # type: ignore  # fallback defined below
+
 app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.1")
 
 # -- Graceful shutdown + queue draining (SIGTERM 30s) --
@@ -350,6 +358,7 @@ def list_tools():
 async def execute(
     req: ExecuteRequest,
     request: Request,
+    x_agent_context_jwt: str | None = Header(default=None, alias="X-Agent-Context-JWT"),
     x_agent_context: str | None = Header(default=None, alias="X-Agent-Context"),
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
@@ -372,15 +381,28 @@ async def execute(
     Returns:
       execution result with trace_id, risk, delegation binding
     """
-    # 1. AgentContext 파싱
-    ctx = _parse_agent_context_header(
-        x_agent_context, x_tenant_id, x_user_id, x_agent_id, x_session_id, x_trace_id, x_request_id
-    )
-    # delegation headers
-    if x_delegation_id:
-        ctx["delegation_id"] = x_delegation_id
-    if x_credential_binding_id:
-        ctx["credential_binding_id"] = x_credential_binding_id
+    # 1. AgentContext 파싱 — H2 signed JWT verification (fail-closed prod, explicit non-prod test fixture only)
+    if parse_and_verify_context is not None:
+        ctx = parse_and_verify_context(
+            x_agent_context_jwt,
+            x_agent_context,
+            x_tenant_id,
+            x_user_id,
+            x_agent_id,
+            x_session_id,
+            x_trace_id,
+            x_request_id,
+            x_delegation_id,
+            x_credential_binding_id,
+        )
+    else:
+        ctx = _parse_agent_context_header(
+            x_agent_context, x_tenant_id, x_user_id, x_agent_id, x_session_id, x_trace_id, x_request_id
+        )
+        if x_delegation_id:
+            ctx["delegation_id"] = x_delegation_id
+        if x_credential_binding_id:
+            ctx["credential_binding_id"] = x_credential_binding_id
     # body의 capability_token이 문자열이면 ctx에 별도 보관 (proxy에서 검증)
     ctx = _require_context(ctx)
 
