@@ -44,13 +44,17 @@ from .base import FetchResult, SourceAdapter
 # Env resolution
 # ---------------------------------------------------------------------------
 def _resolve_api_url(explicit: str | None) -> str:
-    if explicit is not None:
-        return explicit.strip().rstrip("/")
-    for k in ("OUTLINE_API_URL", "OAOS_OUTLINE_URL", "OAOS_OUTLINE_API_URL"):
-        v = os.environ.get(k, "").strip()
-        if v:
-            return v.rstrip("/")
-    return ""
+    value = explicit.strip() if explicit is not None else ""
+    if not value:
+        for k in ("OUTLINE_API_URL", "OAOS_OUTLINE_URL", "OAOS_OUTLINE_API_URL"):
+            value = os.environ.get(k, "").strip()
+            if value:
+                break
+    value = value.rstrip("/")
+    # Accept both host and host/api configuration; request paths add /api.
+    if value.lower().endswith("/api"):
+        value = value[:-4].rstrip("/")
+    return value
 
 
 def _resolve_api_token(explicit: str | None) -> str:
