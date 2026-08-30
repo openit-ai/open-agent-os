@@ -836,7 +836,7 @@ async def materialize_knowledge_to_outline(
                     tenant_id=tenant_id,
                     group_id=None,  # materialized as tenant-public; caller may add ACL refining if needed
                     agent_id=None,
-                    chunk_id=c.chunk_id,
+                    chunk_id=_short_chunk_id(c.chunk_id),
                     chunk_text=c.text,
                     embedding=emb,
                     content_hash=content_hash(c.text),
