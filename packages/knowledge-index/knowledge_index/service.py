@@ -498,7 +498,7 @@ async def sync_outline_to_index(
                     tenant_id=tenant_id,
                     group_id=None,
                     agent_id=None,
-                    chunk_id=chunk.chunk_id,
+                    chunk_id=_short_chunk_id(chunk.chunk_id),
                     chunk_text=chunk.text,
                     embedding=emb,
                     content_hash=stored.content_hash,
@@ -527,7 +527,7 @@ async def sync_outline_to_index(
                         tenant_id=tenant_id,
                         group_id=gid,
                         agent_id=None,
-                        chunk_id=chunk.chunk_id,
+                        chunk_id=_short_chunk_id(chunk.chunk_id),
                         chunk_text=chunk.text,
                         embedding=emb,
                         content_hash=stored.content_hash,
@@ -552,7 +552,7 @@ async def sync_outline_to_index(
                         tenant_id=tenant_id,
                         group_id=None,
                         agent_id=uid,
-                        chunk_id=chunk.chunk_id,
+                        chunk_id=_short_chunk_id(chunk.chunk_id),
                         chunk_text=chunk.text,
                         embedding=emb,
                         content_hash=stored.content_hash,
@@ -611,6 +611,14 @@ async def sync_outline_to_index(
         errors=list(sync_result.errors),
         checkpoint=sync_result.checkpoint,
     )
+
+
+def _short_chunk_id(chunk_id: str) -> str:
+    """Keep persisted chunk IDs within the schema's VARCHAR(64) bound."""
+    raw = str(chunk_id)
+    if len(raw) <= 64:
+        return raw
+    return raw[:47] + ":" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _short_index_id(rid: str, chunk_id: str, suffix: str = "") -> str:
