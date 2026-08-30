@@ -13,7 +13,7 @@ VAULT_ALLOW_FILES = {
     "admin-console/backend/personal_wiki.py",
     "docs/vault-externalization-design.md",
     "docs/architecture-v1.7.0.md",
-    "docs/architecture-v1.7.1-design.md",
+    "docs/architecture-v1.7.2-design.md",
 }
 
 # Lines containing these substrings are exempt (vault paths, package names)

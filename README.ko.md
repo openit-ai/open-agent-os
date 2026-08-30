@@ -234,7 +234,7 @@ docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1
 ## 11. Docs
 
 - [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening). Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8`(historical), `docs/architecture-v1.1.md` preserved.
-- [`docs/architecture-v1.7.1-design.md`](docs/architecture-v1.7.1-design.md) — Critical/High hardening 설계(C1/H1–H8, Personal Wiki JWT, 전사 Knowledge Index spec, readiness strict, 분산 상태).
+- [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening 설계(C1/H1–H8, Personal Wiki JWT, 전사 Knowledge Index spec, readiness strict, 분산 상태).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service 연동.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.
 - [`docs/ha.md`](docs/ha.md) + [`docs/deployment.md`](docs/deployment.md) — HA probes, PDB, HPA, zero-downtime 절차.

@@ -3,7 +3,7 @@
 > Base: `open-agent-os` HEAD `932e558868` (v1.7.0 5026줄, 648 tests — 현재 상태)  
 > 성격: **설계안만** — 구현 코드 포함 금지. 모든 서술은 `현재 증거(파일:라인, 동작)` 와 `목표 불변식` 을 분리 기술. 추측 금지.  
 > 범위: security API 인증, CP identity, EGW signed context, Personal Wiki JWT, readiness, distributed quota/state, NetworkPolicy enforcement, mock/fallback/test evidence/docs  
-> 문서 버전: v1.7.1-design (2026-08-29) — 2차 검증 후 구현 착수용
+> 문서 버전: v1.7.2-design (2026-08-30) — Adaptive Profile Engine 설계 반영·구현 착수용
 > 현재 상태 vs 목표: HEAD 932e558868은 v1.7.0 증거(5026줄, 648 tests, in-memory/distributed 미검증, readiness 200 degraded, NetworkPolicy YAML만, 평문 context, mock env 가능)를 그대로 보유 — v1.7.1 목표는 아래 불변식을 모두 충족한 상태에서만 구현 착수로 인정.
 
 ---
@@ -728,11 +728,11 @@ def is_mock_allowed() -> bool:
 | 합계 |  | 664 |  |
 ```
 
-- `docs/architecture-v1.7.1.md` 헤더에 `Residual` 배지, 해소 시 제거.
+- `docs/architecture-v1.7.2.md` 헤더에 `Residual` 배지, 해소 시 제거.
 
 ### 10.5 마이그레이션
 
-1. `README.md`·`SECURITY.md`·`docs/architecture-v1.7.1.md` 헤더를 등급 분리 표로 교체, 기존 `648` 은 `unit+integration` 로 재정의.
+1. `README.md`·`SECURITY.md`·`docs/architecture-v1.7.2.md` 헤더를 등급 분리 표로 교체, 기존 `648` 은 `unit+integration` 로 재정의.
 2. `Makefile` 에 `make verify-distributed` (kind+redis) 타겟 추가, CI `verify-distributed` job 신설.
 3. `docs/deployment-verification-2026-08-29.md` 를 80줄 이상으로 확장 — `kubectl`, `curl /readyz`, `redis-cli`, `hubble` 캡처 포함.
 
@@ -754,7 +754,7 @@ Phase 0 — 정본화 (1일) — 단일 env_gate 패키지와 CI
   - 단일 정본 패키지 확립: packages/env-gate (또는 packages/agent-runtime/env_gate.py 를 정본으로 단일화)
   - 모든 서비스에서 import env_gate.is_production() 만 사용, mirror drift 제거
   - CI: grep -r "OAOS_ENV.*production" --exclude=env_gate.py 시 fail, helm lint에서 prod 완화 키 존재 시 fail
-  - docs/architecture-v1.7.1-design.md 머지, README Residual 배너 추가
+  - docs/architecture-v1.7.2-design.md 머지, README Residual 배너 추가
   - 현재 상태: env_gate 분산, readiness 200, 평문 context, in-memory quota — 목표와의 차이를 Residual로 명시
 
 Phase 1 — 인증/서명 원자 배포 (2~3일) — C1+H1+H2+H3
@@ -846,7 +846,7 @@ deploy/k8s/networkpolicy.yaml            # CiliumNetworkPolicy 분리
 deploy/k8s/configmap.yaml                # prod 완화 키 없음 — 서명에 필요한 키만
 deploy/scripts/verify-network-policy.sh  # 신설
 Makefile                                 # verify-distributed
-docs/architecture-v1.7.1.md              # 5026→ ~5400줄, Residual 갱신
+docs/architecture-v1.7.2.md              # 5026→ ~5400줄, Residual 갱신
 README.md / SECURITY.md                  # 증거 등급 분리
 ```
 
@@ -854,7 +854,7 @@ README.md / SECURITY.md                  # 증거 등급 분리
 
 ## 15. 문서·증거 갱신
 
-- `docs/architecture-v1.7.1.md` — 본 설계안을 반영한 정본. `v1.7.0` 5026줄 대비 `+~400줄`. 헤더에 `Residual` 배지 유지, 해소 시 제거. 현재 상태(HEAD 932e558868: in-memory, 200 degraded, 평문 context)가 목표와 어떻게 다른지 명시.
+- `docs/architecture-v1.7.2.md` — 본 설계안을 반영한 정본. `v1.7.0` 5026줄 대비 `+~400줄`. 헤더에 `Residual` 배지 유지, 해소 시 제거. 현재 상태(HEAD 932e558868: in-memory, 200 degraded, 평문 context)가 목표와 어떻게 다른지 명시.
 - `docs/deployment-verification-2026-08-29.md` — kind/helm/k6/hubble 캡처 80줄 이상.
 - `docs/security-review-gateway-bypass.md` — H2 해소 후 `gateway bypass` 시나리오 재검증.
 - `docs/ARCHITECTURE_DECISIONS.md` — ADRs: `ADR-014 Security API auth`, `ADR-015 Signed AgentContext`, `ADR-016 Readiness strict`, `ADR-017 Distributed quota`.

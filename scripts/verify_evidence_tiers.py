@@ -17,7 +17,7 @@ Usage:
   python scripts/verify-evidence-tiers.py --check-only   # fail if claims unsupported, no report write
   pytest tests/test_evidence_tiers.py -v  # TDD for this script's contracts
 
-Design: see docs/architecture-v1.7.1-design.md §10 (H8).
+Design: see docs/architecture-v1.7.2-design.md §10 (H8).
 """
 from __future__ import annotations
 
@@ -367,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Load doc texts for claim verification
     doc_texts = []
-    for p in [ROOT / "README.md", ROOT / "docs" / "architecture-v1.7.1.md"]:
+    for p in [ROOT / "README.md", ROOT / "docs" / "architecture-v1.7.2.md"]:
         try:
             doc_texts.append(p.read_text(encoding="utf-8"))
         except Exception:

@@ -47,8 +47,8 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 ## Canonical Architecture
 
-- [`docs/architecture-v1.7.1.md`](docs/architecture-v1.7.1.md) — current canonical implementation architecture; v1.7.2 Adaptive Profile Engine design is included in §16.12. Also covers ACL-aware Enterprise Knowledge Index RAG, Personal Wiki owner isolation, H4–H8 evidence tiers, production hardening, Secret lifecycle, and Docker/systemd parallel deployment.
-- [`docs/architecture-v1.7.1-design.md`](docs/architecture-v1.7.1-design.md) — v1.7.1 design source, hardening contracts, and residual/live-integration boundaries.
+- [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — current canonical implementation architecture; v1.7.2 Adaptive Profile Engine design is included in §16.12. Also covers ACL-aware Enterprise Knowledge Index RAG, Personal Wiki owner isolation, H4–H8 evidence tiers, production hardening, Secret lifecycle, and Docker/systemd parallel deployment.
+- [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — v1.7.1 design source, hardening contracts, and residual/live-integration boundaries.
 - `docs/security-model.md` — security boundary reference
 
 ## Scope
@@ -74,7 +74,7 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 Open Agent OS is a **Self-Hosted Enterprise Personal Agent Platform** — `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + JIT approval)`, `Cross-user always DENY`, `Auditable (hash-chain)`.
 
-- Architecture: [`docs/architecture-v1.7.1.md`](docs/architecture-v1.7.1.md) — current v1.7.2 architecture design, including Adaptive Profile Engine (§16.12), ACL-aware Knowledge Index RAG, Personal Wiki, and production security contracts. Previous `v1.7.1` baseline and historical versions are preserved.
+- Architecture: [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — current v1.7.2 architecture design, including Adaptive Profile Engine (§16.12), ACL-aware Knowledge Index RAG, Personal Wiki, and production security contracts. Previous `v1.7.1` baseline and historical versions are preserved.
 - Security Model: [`docs/security-model.md`](docs/security-model.md) (§§16A–16I — Dual Runtime / Untrusted Worker / Tool Policy / Data Access, v1.5.1: 16A.3.1 workspace isolation + 16A.6 Controlled Egress Proxy)
 - Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.6.4 — 612 tests passed
 - Threat review — Execution Gateway bypass: [`docs/security-review-gateway-bypass.md`](docs/security-review-gateway-bypass.md) — why "cannot bypass" matters more than "gateway exists", and the 3 remaining production hardenings (NetworkPolicy / Runtime hardening / DB re-verification)

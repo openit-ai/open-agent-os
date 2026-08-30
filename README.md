@@ -13,7 +13,7 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Canonical architecture:** [`docs/architecture-v1.7.1.md`](docs/architecture-v1.7.1.md) — v1.7.2 Adaptive Profile Engine design included (see §16.12)
+- **Canonical architecture:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine design included (see §16.12)
 
 
 ---
@@ -124,7 +124,7 @@ Enterprise Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/N
 
 **Invariants:** `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + approval)`, `Explicit Deny > Personal`, `Agent Permission ≤ User Permission`, `Cross-user always DENY`, `Auditable (hash-chain + HMAC checkpoint)`.
 
-**Runtime:** LLM Runtime canonical (`llm`, `safe` is deprecated alias) + Hermes Runtime advanced — Registry YAML (LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker (§16G), tool policy (§16H), data access (§16I), and Adaptive Profile Engine design (§16.12). See [`docs/architecture-v1.7.1.md`](docs/architecture-v1.7.1.md) §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.12.
+**Runtime:** LLM Runtime canonical (`llm`, `safe` is deprecated alias) + Hermes Runtime advanced — Registry YAML (LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker (§16G), tool policy (§16H), data access (§16I), and Adaptive Profile Engine design (§16.12). See [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.12.
 
 ## 5. Core Values
 
@@ -300,13 +300,13 @@ config/                    # oaos.env.example — systemd unified env template (
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + systemd (oaos-*.service) + firewall (hermes-egress.nft)
 scripts/                   # check-production-config.sh — friendly preflight (no secret output)
 tests/                     # see Verification Evidence — run pytest -q for the current count
-docs/architecture-v1.7.1.md  # Canonical implementation architecture — v1.7.2 Adaptive Profile Engine design (§16.12) included
+docs/architecture-v1.7.2.md  # Canonical implementation architecture — v1.7.2 Adaptive Profile Engine design (§16.12) included
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.1.md`](docs/architecture-v1.7.1.md) — Current canonical implementation architecture; includes the v1.7.2 Adaptive Profile Engine design (§16.12). Previous: [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) (historical), [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` (historical).
-- [`docs/architecture-v1.7.1-design.md`](docs/architecture-v1.7.1-design.md) — Critical/High hardening design (C1/H1–H8, Personal Wiki JWT, Enterprise Knowledge Index spec, readiness strict, distributed state).
+- [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — Current canonical implementation architecture; includes the v1.7.2 Adaptive Profile Engine design (§16.12). Previous: [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) (historical), [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` (historical).
+- [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening design (C1/H1–H8, Personal Wiki JWT, Enterprise Knowledge Index spec, readiness strict, distributed state).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service integration.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.
 - [`docs/ha.md`](docs/ha.md) + [`docs/deployment.md`](docs/deployment.md) — HA probes, PDB, HPA, zero-downtime procedures.

@@ -4,15 +4,15 @@
 > Product: **Open Agent OS**  
 > 문서 성격: 제품 아키텍처 기준서 + 개발 명세 + 코딩 에이전트 작업지침  
 > 배포 모델: **고객사 서버 또는 고객사 전용 클라우드/VPS에 설치되는 Source-Available Enterprise Agent Platform**  
-> Version: **v1.7.1** — 2026-08-29 (v1.7.0 → v1.7.1 Secret lifecycle + RAG implementation + H4-H8 implementation status)
-> Base: `docs/architecture-v1.7.1-design.md` v1.7.1-design (2026-08-29) — design source; this document is the implementation architecture (verified facts vs residual plan)
+> Version: **v1.7.2** — 2026-08-30 (v1.7.1 → v1.7.2 Adaptive Profile Engine architecture design)
+> Base: `docs/architecture-v1.7.2-design.md` v1.7.1-design (2026-08-29) — design source; this document is the implementation architecture (verified facts vs residual plan)
 > Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete for the v1.7.1 scope, Personal Wiki implemented, enterprise Knowledge Index + Outline/Notion sync implemented · Secrets lifecycle implemented via systemd installer · Evidence tiers verified (unit: 927 passed, distributed: 0, external: 0)**
 > Deployment: **Docker (`deploy/docker-compose.*.yml` + `.env`) and systemd (`deploy/systemd/` + `/etc/oaos/oaos.env` or `config/oaos.env` 0600) are parallel, separate paths sharing code — neither modifies the other**
 
 ---
 ## 0. 설계 원칙, Personal Wiki, Enterprise Knowledge Index (v1.7.1-design §0 faithful)
 
-> Source: `docs/architecture-v1.7.1-design.md` §0.1–0.4 (e8f23fb459, af447b2a20, af6d55228c). This section is **architecture**, not implementation claim — it preserves the design verbatim and separates it from implementation status in §16.9–§16.11.
+> Source: `docs/architecture-v1.7.2-design.md` §0.1–0.4 (e8f23fb459, af447b2a20, af6d55228c). This section is **architecture**, not implementation claim — it preserves the design verbatim and separates it from implementation status in §16.9–§16.11.
 
 ### 0.1 원칙 (증거 분리 · fail-closed · 분산 일관성 · 서명 경계 · 검증 가능성)
 
@@ -149,7 +149,7 @@ Mattermost와 Slack의 Web·Desktop·Mobile 클라이언트에서 동일한 Pers
 | Provenance 필드 | `source_ref(trace_id)`, `tenant_id`, `owner_agent_id`, `Vector(1536)` | `source_system`, `source_resource_id`, `source_uri`, `content_hash`, `source_updated_at`, `acl_version`, `provenance` |
 | 구현 상태 (v1.7.1) | **Implemented** (v1.6.1 §27B, verified) | **Implemented** — Knowledge Index schema/repository/retrieval, chunking/embedding provider boundary, Outline/Notion source adapters, idempotent incremental sync, deletion handling, ACL version invalidation/revalidation (`knowledge_index/`, commits `60ffe4bfba`, `6dab8761c2`) |
 
-> 구현 상태는 `docs/architecture-v1.7.1-design.md`의 "증거 분리" 원칙을 따른다: Personal Wiki와 enterprise Knowledge Index의 schema/retrieval/sync/ACL revalidation은 코드·테스트로 검증된 **구현됨**이며, live Outline/Notion API 연결은 외부 자격증명·네트워크 통합 검증 범위로 별도 관리한다.
+> 구현 상태는 `docs/architecture-v1.7.2-design.md`의 "증거 분리" 원칙을 따른다: Personal Wiki와 enterprise Knowledge Index의 schema/retrieval/sync/ACL revalidation은 코드·테스트로 검증된 **구현됨**이며, live Outline/Notion API 연결은 외부 자격증명·네트워크 통합 검증 범위로 별도 관리한다.
 
 ---
 
@@ -1642,7 +1642,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 ### 16.9 Verified RAG Architecture & Implementation Status — v1.7.1
 
-> Design source: `docs/architecture-v1.7.1-design.md` §0.4 (e8f23fb459) + README alignment af447b2a20. Personal Wiki와 enterprise Knowledge Index의 schema/retrieval/sync/ACL revalidation은 **implemented**이며, live Outline/Notion API 자격증명·네트워크 통합 검증은 별도 운영 검증 범위다.
+> Design source: `docs/architecture-v1.7.2-design.md` §0.4 (e8f23fb459) + README alignment af447b2a20. Personal Wiki와 enterprise Knowledge Index의 schema/retrieval/sync/ACL revalidation은 **implemented**이며, live Outline/Notion API 자격증명·네트워크 통합 검증은 별도 운영 검증 범위다.
 
 #### 16.9.1 Personal Wiki — owner-isolated (Implemented)
 

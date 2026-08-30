@@ -4,7 +4,7 @@ Revision ID: 012_knowledge_index
 Revises: 011_admin_llm_usage
 Create Date: 2026-08-29
 
-Fields per architecture-v1.7.1 §0.4.1:
+Fields per architecture-v1.7.2 §0.4.1:
  index_id, source_system, source_resource_id, source_uri, tenant_id,
  group_id/agent_id, chunk_id, chunk_text, embedding VECTOR(1536) nullable
  (SQLite fallback to Text/JSON), content_hash, source_updated_at, indexed_at,
