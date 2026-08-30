@@ -1715,9 +1715,9 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 - **Live RAG 통합**: Knowledge Index는 unit-tested이나, 운영 corpus backfill 및 live Outline/Notion 자격증명 연동은 v1.7.2+ 운영 검증 범위.
 - **분산 일관성**: kind 2-replica + Redis Lua `k6` 병렬 검증, `hubble --verdict DROPPED` 캡처는 v1.7.2+에서 `distributed: N passed`로 승격.
 
-### 16.12 Adaptive Profile Engine — 핵심 개인화 기능 설계 (v1.7.2 설계 반영)
+### 16.12 Adaptive Profile Engine — 핵심 개인화 기능 MVP 구현 완료 (v1.7.2)
 
-> **상태: 핵심 기능 코드 구현·운영 DB migration·Control Plane router mount 완료.** 현재 확인된 범위는 tenant/user 격리 Profile API, PostgreSQL persistence, deterministic policy synthesis, bilingual Evidence extractor, 비동기 Evidence Worker, Mattermost ingress 후처리, ACP 경계 Response Policy 주입, Personal Wiki 첨부·추출·소유자 Vault 저장이다. 최신 코드의 운영 프로세스 반영과 실제 사용자 경로 E2E는 서비스 재기동 후 별도 검증이 필요하다.
+> **상태: MVP 코드 구현·운영 DB migration(014_adaptive_profile)·Control Plane router mount(`/v1/profile`)·Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인 범위로 구현 완료, distributed/external/live RAG 미검증.** 현재 확인된 범위는 tenant/user 격리 Profile API, PostgreSQL persistence, deterministic policy synthesis, bilingual Evidence extractor, 비동기 Evidence Worker, Mattermost ingress 후처리, ACP 경계 Response Policy 주입, Personal Wiki 첨부·추출·소유자 Vault 저장이다. distributed/external/live RAG 및 최신 코드의 운영 프로세스 반영·실제 사용자 경로 전체 E2E는 서비스 재기동 후 별도 검증이 필요하다.
 
 #### 16.12.1 목적과 기존 아키텍처 정합성
 
@@ -1824,7 +1824,7 @@ Runtime에는 다음과 같은 최소 정책만 전달한다.
 - Profile API/Skill의 본인 범위 검증은 기존 JWT·ACP·Policy·Audit를 재사용한다. 별도 보안 계층을 만들지 않는다.
 - 조직 정책·접근권한·승인 규칙은 Profile보다 우선한다. Profile Hook 장애 시 기본 Response Policy로 안전하게 축소하며 권한·도구 실행을 허용하는 우회로 사용하지 않는다.
 - 초기화·삭제·중단은 명시적인 사용자 요청과 감사 이벤트를 요구한다.
-- 검증은 unit(가중치·감쇠·confidence·명시 우선순위), integration(tenant/user 격리·cache invalidation·worker idempotency), external/runtime(Hermes Hook 전후 정책 적용)로 구분한다. 현재는 설계 단계이므로 구현·운영 E2E PASS를 주장하지 않는다.
+- 검증은 unit(가중치·감쇠·confidence·명시 우선순위), integration(tenant/user 격리·cache invalidation·worker idempotency), external/runtime(Hermes Hook 전후 정책 적용)로 구분한다. 현재 MVP는 unit/integration 범위에서 코드·운영 DB migration·router mount·Mattermost ingress/ACP hook·이미지 active-runtime E2E까지 확인되었으며, distributed/external/live RAG 및 운영 전체 E2E PASS는 미검증으로 별도 검증이 필요하다.
 
 #### 16.12.7 단계적 구현 순서와 잔여사항
 
@@ -1832,7 +1832,7 @@ Runtime에는 다음과 같은 최소 정책만 전달한다.
 2. MVP 검증: 현재 대화 직접 지시 우선, cross-user 차단, 동일 Evidence idempotency, Hook 장애 시 기본 정책, 사용자 초기화·감사.
 3. 후속: task-specific preference·Interaction Style·confidence 설명·decay·contradiction handling·multi-runtime adapter·비식별 통계.
 
-**Residual**: Profile 전용 DB migration·API·기본 Runtime Hook은 구현 및 현재 운영 DB/router까지 반영되었으나, post-interaction Evidence Worker, Hermes LLM critical-path 자동 주입, Profile Skill, UI, cache invalidation, 운영 external E2E는 아직 남아 있다. 따라서 이번 단계는 **MVP 구현·검증 완료**이지 전체 개인화 기능 완성이나 사용자 행동 성능 개선의 증거는 아니다.
+**Residual**: Profile 전용 DB migration·API·기본 Runtime Hook은 구현 및 현재 운영 DB/router까지 반영되었으나(Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인 범위), post-interaction Evidence Worker의 운영 전체 E2E, Hermes LLM critical-path 자동 주입, Profile Skill, UI, cache invalidation, distributed/external/live RAG 운영 E2E는 미검증으로 별도 검증이 필요하다. 따라서 이번 단계는 **MVP 구현 완료(확인 범위 한정)** 이지 전체 개인화 기능 완성이나 사용자 행동 성능 개선의 증거는 아니다.
 
 ## 16.2 Hermes Runtime
 ## 16.2 Hermes Runtime
@@ -5394,7 +5394,7 @@ Audit
 | **v1.6.3** | **2026-08-28** | **§16.1.2 LLM Multi-Provider (6 Providers + Registry + Fallback + Hotfixes)** — 6 Providers(claude/codex/gemini/opencode-go/openrouter/ollama) Registry(Argo runners.mjs 패턴 ProviderSpec), Admin UI(llm_provider_config + Vault secret_ref, fallback_order), Runtime Dispatch(task/session/tenant 우선순위), Fallback(chain+circuit breaker+audit), Vault-only secrets(평문 DB 저장 금지, tenant 격리), **Hotfixes (2026-08-29)**: llm_runtime 7-key Registry + opencode alias(re-export), Provider fail-fast(503/mock 차단), runtime_mode DB 영속화(8010/3012 일치), hermes 409 guard(HERMES_MODE_NOOP), openrouter openai-SDK+httpx 이중 경로+tool_choice |
 | **v1.6.4** | **2026-08-29** | **§16.4 Tenant Quota (010)** — daily 100 / per-minute 10, 429 QUOTA_EXCEEDED, 테넌트 격리, DB+in-memory 이중, fail-open, `POST /providers/{id}/test` guard + **§16.5 Usage Tracking & Dashboard (011)** — admin_llm_usage(cost/latency/p95), deque 10000+DB persist, pricing per 1k tokens, summary/history API(`/usage/summary|history`), /llm-usage UI(progress/sparkline/bar/10s poll, #22C55E/#F59E0B/#DC2626) + **§16.6 HA (012)** — /healthz(liveness) / /readyz(readiness fail-open) / /v1/health/detailed 3종(3-tier), retry(_is_retryable 500/429/timeout, 3회 backoff) + CircuitBreaker(3/30s, per-model) + audit, active_requests middleware + SIGTERM 30s drain, compose healthcheck(unless-stopped, depends_on service_healthy) + k8s replicas 2/RollingUpdate/liveness+readiness/antiAffinity + PDB(minAvailable 1) — docs/ha.md 정본 — **612 tests** |
 | **v1.7.1** | **2026-08-29** | **§16.8 Secret Lifecycle (014) + §0.4/§16.9 RAG architecture (Personal Wiki §27B implemented, Knowledge Index defined, e8f23fb459) + §16.10 H4(1afdc193ee) H5(2a3014e54e) H6(47f3219106) implemented, H7/H8 residual — Docker/systemd parallel, 0600, 64-hex auto-generate/preserve/--rotate** |
-| **v1.7.2 설계 반영** | **2026-08-30** | **§16.12 Adaptive Profile Engine 추가 — 기존 Identity/Session/Policy/ACP/Memory/Hermes 경계를 유지하는 핵심 개인화 Core Module 설계, 설계만 반영·구현 미착수** |
+| **v1.7.2 MVP 구현 완료** | **2026-08-30** | **§16.12 Adaptive Profile Engine MVP — 코드 구현·운영 DB migration(014_adaptive_profile)·CP router mount(`/v1/profile`)·Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인 범위로 구현 완료, distributed/external/live RAG 미검증 — Profile API/persistence/policy synthesis/Runtime Hook 확인, distributed/external/live RAG 및 운영 E2E는 잔여 검증** |
 | **v1.7.0** | **2026-08-29** | **§16.7 Production Hardening (013)** — `OAOS_ENV=production|prod` fail-closed — Env Gate(`is_production`/`is_mock_allowed`/`fail_open_telemetry`, 3벌 mirror), Runtime(`llm_runtime` quota `503 QUOTA_BACKEND_UNAVAILABLE`/missing provider fail-closed, `mcp_client` gateway_unreachable fail-closed, proxy mock 게이트, `/readyz` bounded 0.8s threadpool+degraded 200), Auth(`admin-console/backend/auth.py` Argon2id+bcrypt, `OAOS_ADMIN_BOOTSTRAP_PASSWORD` 12자, JWT 32자, 기본 시드 금지), Deploy(`compose prod` `:?`/_FILE+`expose` only, `compose dev` `127.0.0.1`, k8s `ConfigMap OAOS_ENV=production`+`OAOS_ENV`×3+`NetworkPolicy` 8종+`secret.yaml.template` DO NOT commit), Audit/Approval/Token/Rate(DB/Redis primary prod fail-closed non-prod in-memory+telemetry — `audit_ledger`/`approval_workflow` DB, `token_service` Redis `SET NX`, `ToolRateLimiter` Redis Lua→`503`), Secrets(`.env.example` `CHANGE_ME`+`OAOS_ADMIN_BOOTSTRAP_PASSWORD/EMAIL`, `README` bootstrap L5) — **648 tests** (612→648, `test_runtime_hardening`+`test_auth_production_hardening` 9+`test_deploy_hardening` 15) + **Residual**: quota `TODO distributed`, Vault `encrypted_postgres` legacy, `/readyz` 200+degraded, env gate mirror drift, Redis HA 필요 |
 
 # Table of Contents (v1.7.1)

@@ -99,7 +99,7 @@ OAOS v1.7.2 introduces the architecture for an **Adaptive Profile Engine**: inst
 
 > **The longer an agent works with your team, the better it understands not only what to remember, but how to work.**
 
-> **Implementation status:** v1.7.2 MVP code is implemented with tenant-isolated Profile API, PostgreSQL migration, deterministic policy synthesis, and Runtime Hook interfaces. Automatic post-interaction Evidence Worker processing and full LLM call-path injection remain subsequent integration work; the current implementation status is documented in `docs/architecture-v1.7.2.md` §16.12.
+> **Implementation status:** v1.7.2 MVP implemented in the confirmed scope — code, operational DB migration(014_adaptive_profile), CP router mount(`/v1/profile`), Mattermost ingress/ACP hook, image active-runtime E2E — with distributed/external/live RAG unverified (requires separate operational verification). See `docs/architecture-v1.7.2.md` §16.12 for the verified vs residual boundary.
 
 
 ```text
@@ -124,7 +124,7 @@ Enterprise Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/N
 
 **Invariants:** `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + approval)`, `Explicit Deny > Personal`, `Agent Permission ≤ User Permission`, `Cross-user always DENY`, `Auditable (hash-chain + HMAC checkpoint)`.
 
-**Runtime:** LLM Runtime canonical (`llm`, `safe` is deprecated alias) + Hermes Runtime advanced — Registry YAML (LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker (§16G), tool policy (§16H), data access (§16I), and Adaptive Profile Engine design (§16.12). See [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.12.
+**Runtime:** LLM Runtime canonical (`llm`, `safe` is deprecated alias) + Hermes Runtime advanced — Registry YAML (LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker (§16G), tool policy (§16H), data access (§16I), and Adaptive Profile Engine MVP implemented (§16.12 — code/DB migration/CP router/Mattermost ingress/ACP hook/image active-runtime E2E confirmed; distributed/external/live RAG unverified). See [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.12.
 
 ## 5. Core Values
 
@@ -281,7 +281,7 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **This README reports the current measured result** (`pytest -q` on the checked-out commit). Do not treat it as a fixed guarantee — rerun to confirm after changes.
 - **Liveness / readiness (fail-closed in production):** `GET /healthz` always `200`; `GET /readyz` returns `503` when DB/Redis checks fail in production (`non-prod` may return `200 degraded` with `checks` detail), and during `SIGTERM` draining (`terminationGracePeriodSeconds: 30`). K8s `readinessProbe` removes the pod from traffic on `503`.
 - **Audit chain:** `verify_chain` detects tampering; `checkpoint` is HMAC-signed.
-- **RAG distinction:** Knowledge Index (schema/repository/retrieval/chunking/embedding/Outline-Notion adapters/sync/ACL revalidation) is implemented and unit-tested; live external connector credentials/network and production corpus backfill remain operational integration work — not claimed as external evidence.
+- **RAG distinction:** Knowledge Index (schema/repository/retrieval/chunking/embedding/Outline-Notion adapters/sync/ACL revalidation) is implemented and unit-tested; live external connector credentials/network and production corpus backfill remain operational integration work — not claimed as external evidence. distributed/external/live RAG remains unverified.
 
 > **Historical note (for reference only):** `docs/architecture-v1.7.0.md` (`2ebeb981`, 5026 lines) was recorded at `648 tests` including production hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets). At `v1.6.4` the count was `612`; earlier milestones were `590` / `180`. Those numbers are point-in-time snapshots, not the current result.
 

@@ -83,7 +83,7 @@ A bypass of the Gateway via direct Hermes → DB / Internal API / credential acc
 
 ## v1.7.2 Security Contracts
 
-The v1.7.2 architecture adds the Adaptive Profile Engine as a personalization layer, not an authorization layer. User instructions, organization policy, authorization, approval, and audit remain authoritative. Profile data is tenant/user isolated, and Runtime receives only the minimum response policy required for the current task; detailed evidence and behavioral history are not exposed to the LLM. The v1.7.2 MVP Profile API, persistence migration, deterministic policy engine, and Runtime Hook interfaces are implemented; automatic Evidence Worker processing and full LLM call-path injection remain integration work.
+The v1.7.2 architecture adds the Adaptive Profile Engine as a personalization layer, not an authorization layer. User instructions, organization policy, authorization, approval, and audit remain authoritative. Profile data is tenant/user isolated, and Runtime receives only the minimum response policy required for the current task; detailed evidence and behavioral history are not exposed to the LLM. The v1.7.2 MVP is implemented in the confirmed scope — code, operational DB migration(014_adaptive_profile), CP router mount(`/v1/profile`), Mattermost ingress/ACP hook, image active-runtime E2E — with distributed/external/live RAG unverified (requires separate operational verification).
 
 ## v1.7.1 Security Contracts
 
@@ -123,4 +123,4 @@ Self-hosted operators should:
 
 ---
 
-*Last updated: 2026-08-30 — v1.7.2 architecture design (Adaptive Profile Engine in §16.12; implementation status explicitly marked planned). For general questions (non-security), use GitHub Issues.*
+*Last updated: 2026-08-30 — v1.7.2 MVP implemented (code·operational DB migration·CP router mount·Mattermost ingress/ACP hook·image active-runtime E2E confirmed; distributed/external/live RAG unverified) — see docs/architecture-v1.7.2.md §16.12. For general questions (non-security), use GitHub Issues.*

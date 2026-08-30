@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **기준 아키텍처:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — 5026 lines, SHA `2ebeb981`
+- **기준 아키텍처:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine MVP 구현 완료(코드·운영 DB migration·CP router mount·Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인, distributed/external/live RAG 미검증) — 상세 §16.12
 
 ---
 
