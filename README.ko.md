@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **기준 아키텍처:** [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) — 5026 lines, SHA `2ebeb981`
+- **기준 아키텍처:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — 5026 lines, SHA `2ebeb981`
 
 ---
 
@@ -107,7 +107,7 @@ Personal Wiki (Vault FS + memory_service pgvector) ◄── Execution Gateway a
 
 **불변식:** `Personal Delegation(내 자원은 내가 위임) ↔ Enterprise Authorization(회사 자원은 정책+승인)`, `Explicit Deny > Personal`, `Agent Permission ≤ User Permission`, `Cross-user 항상 DENY`, `Auditable(hash-chain + HMAC checkpoint)`.
 
-**런타임:** LLM Runtime이 canonical(`llm`, `safe`는 deprecated alias)이고 Hermes Runtime이 advanced — Registry YAML(LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker(§16G), tool policy(§16H), data access(§16I). 상세: `docs/architecture-v1.7.0.md` §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.8.
+**런타임:** LLM Runtime이 canonical(`llm`, `safe`는 deprecated alias)이고 Hermes Runtime이 advanced — Registry YAML(LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker(§16G), tool policy(§16H), data access(§16I). 상세: `docs/architecture-v1.7.2.md` §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.8.
 
 ## 5. 핵심 가치 5가지
 
@@ -213,7 +213,7 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Liveness / readiness (production fail-closed):** `GET /healthz`는 항상 `200`, `GET /readyz`는 production에서 DB/Redis 체크 실패 시 `503`을 반환해 pod을 트래픽에서 제외한다(non-prod에서는 `checks` 상세를 담은 `200 degraded`일 수 있음). `SIGTERM` 드레이닝 중에도 `terminationGracePeriodSeconds: 30` 동안 `503 draining`으로 트래픽을 차단한다. K8s는 `readinessProbe` 실패 시 Endpoints에서 제외한다.
 - **Audit chain:** `verify_chain`으로 변조를 탐지하고 `checkpoint`는 HMAC으로 서명된다.
 
-> **Historical note (참고용):** `docs/architecture-v1.7.0.md`(`2ebeb981`, 5026 lines)는 `648 tests` 포함한 production hardening(fail-closed runtime/deploy/audit/approval/token/rate + secrets) 시점에 기록되었다. `v1.6.4` 시점은 `612`, 그 이전 마일스톤은 `590` / `180`이었다. 이 수치는 특정 시점의 스냅샷이며 현재 결과를 대체하지 않는다.
+> **Historical note (참고용):** `docs/architecture-v1.7.2.md`(`2ebeb981`, 5026 lines)는 `648 tests` 포함한 production hardening(fail-closed runtime/deploy/audit/approval/token/rate + secrets) 시점에 기록되었다. `v1.6.4` 시점은 `612`, 그 이전 마일스톤은 `590` / `180`이었다. 이 수치는 특정 시점의 스냅샷이며 현재 결과를 대체하지 않는다.
 
 ## 10. Repository Structure
 
@@ -228,12 +228,12 @@ packages/personal-wiki/    # Personal Wiki Vault FS(journal/notes/projects/files
 examples/morning-briefing/ # MVP — orchestrator(per-user kim vs lee) + output.json(13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + firewall(hermes-egress.nft)
 tests/                     # 검증 근거 참조 — 현재 수치는 pytest -q로 확인
-docs/architecture-v1.7.0.md  # Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening — SHA 2ebeb981)
+docs/architecture-v1.7.2.md  # 최신 정본 — v1.7.2 Adaptive Profile Engine (§16.12) 포함
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) — Canonical (47 Sections + §§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault + §§16.7–16.8 Production Hardening). Previous: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8`(historical), `docs/architecture-v1.1.md` preserved.
+- [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — 최신 정본 구현 아키텍처이며 v1.7.2 Adaptive Profile Engine 설계(§16.12)를 포함한다. 이전 버전은 과거 기준으로 보존한다.
 - [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening 설계(C1/H1–H8, Personal Wiki JWT, 전사 Knowledge Index spec, readiness strict, 분산 상태).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service 연동.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.

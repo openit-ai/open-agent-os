@@ -6,7 +6,7 @@
 > 배포 모델: **고객사 서버 또는 고객사 전용 클라우드/VPS에 설치되는 Source-Available Enterprise Agent Platform**  
 > Version: **v1.7.2** — 2026-08-30 (v1.7.1 → v1.7.2 Adaptive Profile Engine architecture design)
 > Base: `docs/architecture-v1.7.2-design.md` v1.7.1-design (2026-08-29) — design source; this document is the implementation architecture (verified facts vs residual plan)
-> Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete for the v1.7.1 scope, Personal Wiki implemented, enterprise Knowledge Index + Outline/Notion sync implemented · Secrets lifecycle implemented via systemd installer · Evidence tiers verified (unit: 927 passed, distributed: 0, external: 0)**
+> Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete, Personal Wiki module implemented and tested, Adaptive Profile v1.7.2 MVP implemented (Profile API/persistence/policy synthesis/Runtime Hook) · Secrets lifecycle implemented via systemd installer · Evidence tiers verified (unit: 927 passed, distributed: 0, external: 0)**
 > Deployment: **Docker (`deploy/docker-compose.*.yml` + `.env`) and systemd (`deploy/systemd/` + `/etc/oaos/oaos.env` or `config/oaos.env` 0600) are parallel, separate paths sharing code — neither modifies the other**
 
 ---
