@@ -22,6 +22,8 @@ from .auth import resolve_caller_user  # H1: verified JWT identity
 from .internal_api import CreateSessionRequest, CreateSessionResponse, SendPromptRequest
 from .mattermost_adapter.webhook import router as mattermost_router
 from .demo import router as demo_router
+# Adaptive Profile MVP (v1.7.2 design) — code complete, NOT live deployed until migration + service verification
+from .adaptive_profile.router import router as profile_router
 import logging
 import os
 import signal
@@ -262,6 +264,8 @@ def _ha_checks():
 acp = ACPAdapter(settings.hermes_base_url)
 app.include_router(mattermost_router, prefix="/v1", tags=["mattermost"])
 app.include_router(demo_router, prefix="/v1", tags=["demo"])
+# Adaptive Profile MVP — profile_router already prefixed /v1/profile; NOT live until DB migration + verification
+app.include_router(profile_router)
 
 # -- Lazy RuntimeRouter wiring (section 16F) --
 def _get_runtime_router():

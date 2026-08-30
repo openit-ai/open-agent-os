@@ -57,6 +57,11 @@ from security.models.orm import (  # noqa: F401,E402
     AdminLlmUsageORM,
     AdminSettingORM,
     AdminPolicyVersionORM,
+    UserProfileORM,
+    TraitScoreORM,
+    TaskTraitScoreORM,
+    ProfileEvidenceORM,
+    ExplicitPreferenceORM,
 )
 
 # Knowledge Index (v1.7.1 §0.4.1) — pgvector 1536 + SQLite fallback

@@ -1717,7 +1717,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 ### 16.12 Adaptive Profile Engine — 핵심 개인화 기능 설계 (v1.7.2 설계 반영)
 
-> **상태: 설계 반영만 완료.** 현재 저장소에 Adaptive Profile 전용 서비스·DB 모델·Runtime Hook·Skill 구현 증거가 없으므로 구현 완료로 간주하지 않는다. 본 기능은 기존 OAOS Identity·Session·Policy·ACP·Memory·Hermes Runtime 경계를 확장하는 핵심 Core Module 설계다.
+> **상태: MVP 코드 구현·운영 DB migration·Control Plane router mount 완료.** 현재 확인된 범위는 tenant/user 격리 Profile API, PostgreSQL persistence, deterministic policy synthesis, Evidence idempotency, Runtime Hook interface다. 자동 post-interaction Evidence Worker와 Hermes LLM critical-path 자동 주입은 아직 통합 작업으로 남아 있으므로 전체 기능 완료로 간주하지 않는다.
 
 #### 16.12.1 목적과 기존 아키텍처 정합성
 
@@ -1832,7 +1832,7 @@ Runtime에는 다음과 같은 최소 정책만 전달한다.
 2. MVP 검증: 현재 대화 직접 지시 우선, cross-user 차단, 동일 Evidence idempotency, Hook 장애 시 기본 정책, 사용자 초기화·감사.
 3. 후속: task-specific preference·Interaction Style·confidence 설명·decay·contradiction handling·multi-runtime adapter·비식별 통계.
 
-**Residual**: Profile 전용 DB migration, API, worker, Hermes Hook, Skill, UI 및 운영 external E2E는 아직 구현되지 않았다. 본 설계 추가는 기존 아키텍처 정합성 검토를 통과한 **설계 반영**이며, 구현 완료나 사용자 행동 성능 개선을 의미하지 않는다.
+**Residual**: Profile 전용 DB migration·API·기본 Runtime Hook은 구현 및 현재 운영 DB/router까지 반영되었으나, post-interaction Evidence Worker, Hermes LLM critical-path 자동 주입, Profile Skill, UI, cache invalidation, 운영 external E2E는 아직 남아 있다. 따라서 이번 단계는 **MVP 구현·검증 완료**이지 전체 개인화 기능 완성이나 사용자 행동 성능 개선의 증거는 아니다.
 
 ## 16.2 Hermes Runtime
 ## 16.2 Hermes Runtime

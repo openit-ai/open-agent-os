@@ -83,7 +83,7 @@ A bypass of the Gateway via direct Hermes → DB / Internal API / credential acc
 
 ## v1.7.2 Security Contracts
 
-The v1.7.2 architecture adds the Adaptive Profile Engine as a personalization layer, not an authorization layer. User instructions, organization policy, authorization, approval, and audit remain authoritative. Profile data is tenant/user isolated, and Runtime receives only the minimum response policy required for the current task; detailed evidence and behavioral history are not exposed to the LLM. The dedicated Profile API, worker, Runtime Hook, and Skills remain planned implementation work.
+The v1.7.2 architecture adds the Adaptive Profile Engine as a personalization layer, not an authorization layer. User instructions, organization policy, authorization, approval, and audit remain authoritative. Profile data is tenant/user isolated, and Runtime receives only the minimum response policy required for the current task; detailed evidence and behavioral history are not exposed to the LLM. The v1.7.2 MVP Profile API, persistence migration, deterministic policy engine, and Runtime Hook interfaces are implemented; automatic Evidence Worker processing and full LLM call-path injection remain integration work.
 
 ## v1.7.1 Security Contracts
 

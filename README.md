@@ -99,7 +99,7 @@ OAOS v1.7.2 introduces the architecture for an **Adaptive Profile Engine**: inst
 
 > **The longer an agent works with your team, the better it understands not only what to remember, but how to work.**
 
-> **Design status:** The Adaptive Profile Engine is an architecture feature in v1.7.2; the dedicated API, worker, Runtime Hook, and Profile Skills are planned for implementation and are not claimed as currently implemented.
+> **Implementation status:** v1.7.2 MVP code is implemented with tenant-isolated Profile API, PostgreSQL migration, deterministic policy synthesis, and Runtime Hook interfaces. Automatic post-interaction Evidence Worker processing and full LLM call-path injection remain subsequent integration work; the current implementation status is documented in `docs/architecture-v1.7.2.md` §16.12.
 
 
 ```text

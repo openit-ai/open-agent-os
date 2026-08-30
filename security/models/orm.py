@@ -343,6 +343,8 @@ class AdminUserMappingORM(Base):
     employee_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     employee_principal: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -464,5 +466,121 @@ class AdminPolicyVersionORM(Base):
     __table_args__ = (
         Index("ix_policy_tenant_status", "tenant_id", "status"),
         Index("ix_policy_bundle", "bundle_id", "version"),
+    )
+
+
+# ── v1.7.2 Adaptive Profile Engine (MVP) ──────────────────────────────────
+# Tenant+user isolated profile. All queries must include tenant_id + user_id.
+
+
+class UserProfileORM(Base):
+    """Root profile row per user/tenant — versioned, evidence-counted."""
+
+    __tablename__ = "user_profiles"
+
+    user_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    overall_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_user_profiles_tenant", "tenant_id"),
+        Index("ix_user_profiles_updated", "updated_at"),
+    )
+
+
+class TraitScoreORM(Base):
+    """Global trait score per user/tenant/trait — EMA over evidence."""
+
+    __tablename__ = "trait_scores"
+
+    user_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    trait_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    global_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_trait_scores_tenant_user", "tenant_id", "user_id"),
+        Index("ix_trait_scores_trait", "trait_name"),
+    )
+
+
+class TaskTraitScoreORM(Base):
+    """Task-specific trait score per user/tenant/task_type/trait."""
+
+    __tablename__ = "task_trait_scores"
+
+    user_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    task_type: Mapped[str] = mapped_column(Text, primary_key=True)
+    trait_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_task_trait_tenant_user", "tenant_id", "user_id"),
+        Index("ix_task_trait_task", "task_type"),
+    )
+
+
+class ProfileEvidenceORM(Base):
+    """Evidence — immutable observation, idempotent via content_hash."""
+
+    __tablename__ = "profile_evidence"
+
+    evidence_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trait: Mapped[str] = mapped_column(Text, nullable=False)
+    direction: Mapped[int] = mapped_column(Integer, nullable=False)  # -1 or 1
+    strength: Mapped[float] = mapped_column(Float, nullable=False)
+    source_type: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("ix_profile_evidence_tenant_user", "tenant_id", "user_id"),
+        Index("ix_profile_evidence_content_hash", "content_hash", unique=True),
+        Index("ix_profile_evidence_trait", "trait"),
+        Index("ix_profile_evidence_task", "task_type"),
+        Index("ix_profile_evidence_observed", "observed_at"),
+    )
+
+
+class ExplicitPreferenceORM(Base):
+    """Explicit preference — highest precedence after current instruction."""
+
+    __tablename__ = "explicit_preferences"
+
+    preference_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False, default="global")  # global | task
+    task_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_explicit_pref_tenant_user", "tenant_id", "user_id"),
+        Index("ix_explicit_pref_key", "key"),
+        Index("ix_explicit_pref_scope", "scope"),
+        Index("ix_explicit_pref_tenant_user_key", "tenant_id", "user_id", "key"),
     )
 
