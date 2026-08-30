@@ -4,7 +4,8 @@
 
 | Version | Supported | Notes |
 |---|---|---|
-| `v1.7.1` | ✅ | Current canonical — H4–H8 evidence tiers, ACL-aware Knowledge Index RAG, H7 production mock immutable gate, Docker/systemd parallel deployment |
+| `v1.7.2` | ✅ | Current canonical architecture design — includes Adaptive Profile Engine (§16.12), H4–H8 evidence tiers, ACL-aware Knowledge Index RAG, production hardening, Docker/systemd parallel deployment |
+| `v1.7.1` | ✅ | Previous canonical baseline — H4–H8 evidence tiers, ACL-aware Knowledge Index RAG, H7 production mock immutable gate, Docker/systemd parallel deployment |
 | `v1.6.4` | ✅ | Historical supported baseline — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), quota/usage/HA |
 | `v1.6.3` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.3.md` (§§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §27B Wiki Vault, 4732 lines, SHA `2868226b`) |
 | `v1.6.2` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.2.md` (4526 lines, SHA `4456bd4c`) |
@@ -46,8 +47,8 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 ## Canonical Architecture
 
-- `docs/architecture-v1.7.1.md` — current implementation architecture: ACL-aware Enterprise Knowledge Index RAG, Personal Wiki owner isolation, H4–H8 evidence tiers, H7 immutable production mock gate, Secret lifecycle, Docker/systemd parallel deployment
-- `docs/architecture-v1.7.1-design.md` — v1.7.1 design source and residual/live-integration boundaries
+- [`docs/architecture-v1.7.1.md`](docs/architecture-v1.7.1.md) — current canonical implementation architecture; v1.7.2 Adaptive Profile Engine design is included in §16.12. Also covers ACL-aware Enterprise Knowledge Index RAG, Personal Wiki owner isolation, H4–H8 evidence tiers, production hardening, Secret lifecycle, and Docker/systemd parallel deployment.
+- [`docs/architecture-v1.7.1-design.md`](docs/architecture-v1.7.1-design.md) — v1.7.1 design source, hardening contracts, and residual/live-integration boundaries.
 - `docs/security-model.md` — security boundary reference
 
 ## Scope
@@ -73,12 +74,16 @@ Please encrypt sensitive PoCs if needed — we will share a PGP key on request.
 
 Open Agent OS is a **Self-Hosted Enterprise Personal Agent Platform** — `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + JIT approval)`, `Cross-user always DENY`, `Auditable (hash-chain)`.
 
-- Architecture: [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) (§16A–16K + §16.1.1–16.1.2 LLM 6-Provider + §§16.4–16.6 Quota/Usage/HA + §27B Wiki Vault — canonical v1.6.4 `e10c1af8`) — Previous `v1.6.3` `2868226b` / `v1.6.2` `4456bd4c` preserved
+- Architecture: [`docs/architecture-v1.7.1.md`](docs/architecture-v1.7.1.md) — current v1.7.2 architecture design, including Adaptive Profile Engine (§16.12), ACL-aware Knowledge Index RAG, Personal Wiki, and production security contracts. Previous `v1.7.1` baseline and historical versions are preserved.
 - Security Model: [`docs/security-model.md`](docs/security-model.md) (§§16A–16I — Dual Runtime / Untrusted Worker / Tool Policy / Data Access, v1.5.1: 16A.3.1 workspace isolation + 16A.6 Controlled Egress Proxy)
 - Conformance: [`docs/architecture-conformance.md`](docs/architecture-conformance.md) v1.6.4 — 612 tests passed
 - Threat review — Execution Gateway bypass: [`docs/security-review-gateway-bypass.md`](docs/security-review-gateway-bypass.md) — why "cannot bypass" matters more than "gateway exists", and the 3 remaining production hardenings (NetworkPolicy / Runtime hardening / DB re-verification)
 
 A bypass of the Gateway via direct Hermes → DB / Internal API / credential access is considered a **security boundary failure**, not a feature.
+
+## v1.7.2 Security Contracts
+
+The v1.7.2 architecture adds the Adaptive Profile Engine as a personalization layer, not an authorization layer. User instructions, organization policy, authorization, approval, and audit remain authoritative. Profile data is tenant/user isolated, and Runtime receives only the minimum response policy required for the current task; detailed evidence and behavioral history are not exposed to the LLM. The dedicated Profile API, worker, Runtime Hook, and Skills remain planned implementation work.
 
 ## v1.7.1 Security Contracts
 
@@ -118,4 +123,4 @@ Self-hosted operators should:
 
 ---
 
-*Last updated: 2026-08-29 — v1.6.4 canonical (Quota/Usage/HA) (4945 lines, SHA e10c1af8, 612 tests). For general questions (non-security), use GitHub Issues.*
+*Last updated: 2026-08-30 — v1.7.2 architecture design (Adaptive Profile Engine in §16.12; implementation status explicitly marked planned). For general questions (non-security), use GitHub Issues.*
