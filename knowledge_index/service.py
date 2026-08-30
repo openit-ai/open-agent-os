@@ -122,6 +122,12 @@ def _assert_no_hash_provider_in_production(provider: EmbeddingProvider) -> None:
     # also guard provider class name fallback
     if provider.__class__.__name__.lower().startswith("hash"):
         raise RuntimeError("hash embedding provider blocked in production")
+    # Fake embeddings are likewise blocked in production (must use Ollama).
+    # Ollama provider has name 'ollama'; only it is allowed in prod.
+    if getattr(provider, "name", "") == "fake":
+        raise RuntimeError("fake embeddings blocked in production (use OllamaEmbeddingProvider via OAOS_EMBED_API_URL)")
+    if provider.__class__.__name__ == "FakeEmbeddingProvider":
+        raise RuntimeError("FakeEmbeddingProvider is not allowed in production")
 
 
 def _assert_no_mock_adapter_in_production(adapter: SourceAdapter) -> None:
@@ -611,9 +617,8 @@ def _short_index_id(rid: str, chunk_id: str, suffix: str = "") -> str:
     raw = f"{rid}:{chunk_id}{suffix}"
     if len(raw) <= 64:
         return raw
-    # hash to fit 64 limit: keep 16-char hash suffix
+    # Preserve readable prefix while guaranteeing the ORM's 64-char limit.
     h = hashlib.sha256(raw.encode()).hexdigest()[:16]
-    # truncate raw to 47 chars + ':' + 16 = 64
     prefix_len = 64 - 17
     return raw[:prefix_len] + ":" + h
 
