@@ -105,5 +105,144 @@ class AdaptiveProfileHook:
         return "\n".join(lines)
 
 
+def _sync_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict:
+    """Attempt to load profile data synchronously via async DB (best-effort).
+    Returns {} on failure so caller falls back to DEFAULT_POLICY.
+    Never raises, never leaks scores directly.
+    """
+    try:
+        # Use sync-ish attempt: create async engine and run
+        import asyncio
+
+        async def _load():
+            try:
+                from security.models.db import get_sessionmaker
+                from security.models.orm import ExplicitPreferenceORM, TraitScoreORM, TaskTraitScoreORM
+                from sqlalchemy import select
+
+                maker = get_sessionmaker()
+                async with maker() as session:
+                    res3 = await session.execute(select(ExplicitPreferenceORM).where(ExplicitPreferenceORM.user_id == user_id, ExplicitPreferenceORM.tenant_id == tenant_id))
+                    explicit: dict = {}
+                    for r in res3.scalars().all():
+                        if r.scope == "global":
+                            explicit[r.key] = r.value
+                        elif r.task_type == task_type:
+                            explicit[r.key] = r.value
+                        # coerce boolean/int loosely
+                        v = explicit.get(r.key)
+                        if isinstance(v, str):
+                            if v.lower() in ("true", "false"):
+                                explicit[r.key] = v.lower() == "true"
+                            elif v.isdigit():
+                                try:
+                                    explicit[r.key] = int(v)
+                                except Exception:
+                                    pass
+                    res = await session.execute(select(TraitScoreORM).where(TraitScoreORM.user_id == user_id, TraitScoreORM.tenant_id == tenant_id))
+                    global_scores = {r.trait_name: r.global_score for r in res.scalars().all()}
+                    res2 = await session.execute(select(TaskTraitScoreORM).where(TaskTraitScoreORM.user_id == user_id, TaskTraitScoreORM.tenant_id == tenant_id, TaskTraitScoreORM.task_type == task_type))
+                    task_scores = {r.trait_name: r.score for r in res2.scalars().all()}
+                    return {"explicit_prefs": explicit, "task_scores": task_scores, "global_scores": global_scores}
+            except Exception as e:
+                logger.debug(f"_sync_profile_loader load failed: {e}")
+                return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
+
+        # If running in async context, don't block
+        try:
+            asyncio.get_running_loop()
+            # in async context: cannot run blocking load; return empty (caller will use async loader)
+            return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
+        except RuntimeError:
+            pass
+        return asyncio.run(_load())
+    except Exception as e:
+        logger.debug(f"_sync_profile_loader outer fail: {e}")
+        return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
+
+
+async def _async_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict:
+    """Async DB loader for use inside async ACP path."""
+    try:
+        from security.models.db import get_sessionmaker
+        from security.models.orm import ExplicitPreferenceORM, TraitScoreORM, TaskTraitScoreORM
+        from sqlalchemy import select
+
+        maker = get_sessionmaker()
+        async with maker() as session:
+            res3 = await session.execute(select(ExplicitPreferenceORM).where(ExplicitPreferenceORM.user_id == user_id, ExplicitPreferenceORM.tenant_id == tenant_id))
+            explicit: dict = {}
+            for r in res3.scalars().all():
+                if r.scope == "global":
+                    explicit[r.key] = r.value
+                elif r.task_type == task_type:
+                    explicit[r.key] = r.value
+                v = explicit.get(r.key)
+                if isinstance(v, str):
+                    if v.lower() in ("true", "false"):
+                        explicit[r.key] = v.lower() == "true"
+                    elif v.isdigit():
+                        try:
+                            explicit[r.key] = int(v)
+                        except Exception:
+                            pass
+            res = await session.execute(select(TraitScoreORM).where(TraitScoreORM.user_id == user_id, TraitScoreORM.tenant_id == tenant_id))
+            global_scores = {r.trait_name: r.global_score for r in res.scalars().all()}
+            res2 = await session.execute(select(TaskTraitScoreORM).where(TaskTraitScoreORM.user_id == user_id, TaskTraitScoreORM.tenant_id == tenant_id, TaskTraitScoreORM.task_type == task_type))
+            task_scores = {r.trait_name: r.score for r in res2.scalars().all()}
+            return {"explicit_prefs": explicit, "task_scores": task_scores, "global_scores": global_scores}
+    except Exception as e:
+        logger.debug(f"_async_profile_loader failed: {e}")
+        return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
+
+
+def get_response_policy(
+    tenant_id: str,
+    user_id: str,
+    task_type: str | None = None,
+    current_instruction: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Synchronous adapter seam — Control Plane / ACP boundary.
+    Loads profile via DB loader with safe fallback to DEFAULT_POLICY.
+    Never leaks scores/evidence; returns minimal 7-key policy.
+    """
+    task_type = validate_task_type(task_type)
+    cur = current_instruction or {}
+    try:
+        data = _sync_profile_loader(tenant_id, user_id, task_type)
+        return default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
+    except Exception as e:
+        logger.warning(f"get_response_policy fallback: {e}")
+        merged = dict(DEFAULT_POLICY)
+        for k in merged:
+            if k in cur:
+                merged[k] = cur[k]
+        return merged
+
+
+async def get_response_policy_async(
+    tenant_id: str,
+    user_id: str,
+    task_type: str | None = None,
+    current_instruction: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Async variant for ACP adapter streaming path."""
+    task_type = validate_task_type(task_type)
+    cur = current_instruction or {}
+    try:
+        data = await _async_profile_loader(tenant_id, user_id, task_type)
+        return default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
+    except Exception as e:
+        logger.warning(f"get_response_policy_async fallback: {e}")
+        merged = dict(DEFAULT_POLICY)
+        for k in merged:
+            if k in cur:
+                merged[k] = cur[k]
+        return merged
+
+# Alias for compatibility
+resolve_policy = get_response_policy
+resolve_policy_async = get_response_policy_async
+
 # Singleton for convenience
 default_hook = AdaptiveProfileHook()

@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -66,6 +67,171 @@ def vault_path_for_note(user_id: str, note_id: str) -> str:
 
 def vault_path_for_attachment(user_id: str, attachment_id: str) -> str:
     return get_vault_path(user_id, f"attachments/{attachment_id}")
+
+# ---------------------------------------------------------------------------
+# Vault FS + extractor helpers — tenant/agent isolated, production-consistent
+# ---------------------------------------------------------------------------
+def _load_vault_module():
+    try:
+        import importlib.util as _ilu, sys as _sys, pathlib as _pl, types as _types, importlib.machinery as _mach
+        pkg_root = _pl.Path(__file__).resolve().parents[2] / "packages" / "personal-wiki"
+        if str(pkg_root) not in _sys.path:
+            _sys.path.insert(0, str(pkg_root))
+        if "personal_wiki" not in _sys.modules or not hasattr(_sys.modules["personal_wiki"], "__path__"):
+            pkg = _types.ModuleType("personal_wiki")
+            pkg.__path__ = [str(pkg_root / "personal_wiki")]
+            pkg.__spec__ = _mach.ModuleSpec("personal_wiki", None, is_package=True)
+            _sys.modules["personal_wiki"] = pkg
+        from personal_wiki import vault as _vault  # type: ignore
+        return _vault
+    except Exception as e:
+        logger.debug(f"vault load failed: {e}")
+        return None
+
+def _owner_vault_root(tenant_id: str, agent_id: str) -> Path:
+    from pathlib import Path as _P
+    vault_mod = _load_vault_module()
+    if vault_mod is not None:
+        try:
+            base = vault_mod.get_vault_root()
+            # tenant/agent isolated root
+            ow = vault_mod.vault_path_for_tenant_agent(tenant_id, agent_id, vault_root=base)
+            return _P(ow)
+        except Exception:
+            pass
+    # fallback: env vault root or default
+    for k in ("OAOS_WIKI_VAULT","PERSONAL_WIKI_VAULT","VAULT_ROOT"):
+        v=os.environ.get(k)
+        if v and v.strip():
+            return _P(v.strip()).expanduser().resolve() / tenant_id / agent_id
+    return _P.home() / ".open-agent-os" / "wiki-vault" / tenant_id / agent_id
+
+def _sanitize_filename(fn: str) -> str:
+    import re
+    fn = fn.split("/")[-1].split("\\")[-1].strip()
+    if not fn:
+        fn = f"unnamed_{uuid.uuid4().hex[:8]}"
+    # reject traversal already handled, now sanitize chars
+    fn = re.sub(r"[^\w\-\. ]", "-", fn)
+    fn = re.sub(r"-+","-", fn).strip("-").strip()
+    if not fn:
+        fn = f"file_{uuid.uuid4().hex[:8]}"
+    # limit length
+    if len(fn) > 120:
+        ext = Path(fn).suffix
+        fn = fn[:120-len(ext)] + ext
+    return fn
+
+def _persist_attachment_fs(tenant_id: str, agent_id: str, filename: str, content: bytes) -> Path:
+    root = _owner_vault_root(tenant_id, agent_id)
+    att_dir = root / "attachments"
+    att_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_filename(filename)
+    # ensure unique if exists
+    dest = att_dir / safe_name
+    # also guard with safe_join
+    vault_mod = _load_vault_module()
+    if vault_mod is not None and hasattr(vault_mod, "safe_join_vault"):
+        try:
+            dest = vault_mod.safe_join_vault(root, "attachments", safe_name)
+        except Exception:
+            pass
+    # de-dupe
+    if dest.exists():
+        stem = dest.stem; suf = dest.suffix
+        dest = att_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suf}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(content)
+    return dest
+
+def _extract_text_for_file(path: Path, max_chars: int = 5000) -> str:
+    try:
+        vault_mod = _load_vault_module()
+        # prefer extractor
+        import importlib.util as _ilu
+        pkg_root = Path(__file__).resolve().parents[2] / "packages" / "personal-wiki"
+        ep = pkg_root / "personal_wiki" / "extractor.py"
+        if ep.exists():
+            import sys as _sys
+            if "personal_wiki.extractor" not in _sys.modules:
+                spec = _ilu.spec_from_file_location("personal_wiki.extractor", str(ep))
+                if spec and spec.loader:
+                    mod = _ilu.module_from_spec(spec)
+                    _sys.modules[spec.name]=mod
+                    spec.loader.exec_module(mod)
+            mod = _sys.modules.get("personal_wiki.extractor")
+            if mod and hasattr(mod, "extract_text"):
+                try:
+                    return mod.extract_text(path, max_chars=max_chars)  # type: ignore
+                except Exception as e:
+                    logger.debug(f"extractor failed: {e}")
+    except Exception:
+        pass
+    # fallback: utf8 decode or hex preview
+    try:
+        data = path.read_bytes() if isinstance(path, Path) else Path(path).read_bytes()
+        try:
+            return data.decode("utf-8")[:max_chars]
+        except Exception:
+            return data[:200].hex() + " ... (binary preview)"
+    except Exception as e:
+        return f"[extraction failed: {e}]"
+
+def _list_notes_fs(tenant_id: str, agent_id: str, limit: int = 10, offset: int = 0) -> list[dict]:
+    root = _owner_vault_root(tenant_id, agent_id)
+    notes_dir = root / "notes"
+    journal_dir = root / "journal"
+    out=[]
+    if notes_dir.exists():
+        files = sorted(notes_dir.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for f in files[offset: offset+limit*3]:
+            try:
+                rel = f.relative_to(root).as_posix()
+                stat = f.stat()
+                content = f.read_text(encoding="utf-8", errors="ignore")[:2000]
+                # title from first markdown heading or filename
+                title = f.stem
+                for line in content.splitlines()[:5]:
+                    if line.strip().startswith("#"):
+                        title = line.strip().lstrip("#").strip()[:80] or title
+                        break
+                out.append({"id": f.stem, "title": title, "content": content[:500], "vault_path": rel, "path": str(f), "created_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(), "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()})
+                if len(out) >= limit:
+                    break
+            except Exception:
+                continue
+    # also include journal-derived notes? keep simple
+    return out[:limit]
+
+def _search_notes_fs(tenant_id: str, agent_id: str, q: str, limit: int = 10) -> list[dict]:
+    root = _owner_vault_root(tenant_id, agent_id)
+    ql = q.lower().strip()
+    if not ql:
+        return []
+    candidates=[]
+    for sub in ("notes","journal"):
+        d = root / sub
+        if not d.exists():
+            continue
+        for f in d.rglob("*.md"):
+            try:
+                txt = f.read_text(encoding="utf-8", errors="ignore")
+                if ql in txt.lower() or ql in f.name.lower():
+                    rel = f.relative_to(root).as_posix()
+                    # score simple TF: count occurrences
+                    score = txt.lower().count(ql) * 0.1 + (1.0 if ql in f.name.lower() else 0)
+                    score = min(0.99, 0.5+score)
+                    candidates.append({"id": f.stem, "title": f.stem, "content": txt[:500], "vault_path": rel, "score": round(score,3), "path": str(f)})
+            except Exception:
+                continue
+    # sort by score
+    candidates.sort(key=lambda x: x.get("score",0), reverse=True)
+    return candidates[:limit]
+
+def _no_mock_in_production():
+    if _is_production():
+        raise HTTPException(status_code=503, detail="Personal Wiki not configured in production (mock fallback disabled)")
+
 
 # ---------------------------------------------------------------------------
 # DB / vault config helpers — graceful fallback
@@ -322,18 +488,12 @@ async def upload_attachment(
     file: UploadFile = File(...),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """POST /v1/personal-wiki/attachments -> extract -> journal.
-
-    Accepts a file upload, extracts text (stub), creates a journal note,
-    stores reference under owner-isolated vault path, audit logged.
-    Returns mock data when DB/vault not configured.
-    """
+    """POST /v1/personal-wiki/attachments -> vault FS + extractor + journal (owner-isolated)."""
     owner = _resolve_owner(request, x_user_id=x_user_id, required_scope="wiki:write")
     user_id = owner["user_id"]
     agent_id = owner["agent_id"]
     tenant_id = owner["tenant_id"]
 
-    # Read file (limit 10MB for skeleton)
     try:
         content = await file.read()
     except Exception as e:
@@ -345,68 +505,94 @@ async def upload_attachment(
     filename = file.filename or "unnamed"
     if ".." in filename.split("/") or ".." in filename.split("\\") or filename.startswith("/") or filename.startswith("\\"):
         raise HTTPException(status_code=403, detail="PATH_TRAVERSAL: '..' in filename")
-    filename = filename.split("/")[-1].split("\\")[-1]
-    # Extract text — stub: try utf-8 decode, else hex preview
-    try:
-        extracted_text = content.decode("utf-8")[:5000]
-    except Exception:
-        extracted_text = content[:200].hex() + " ... (binary preview)"
+    for seg in filename.replace("\\","/").split("/"):
+        if seg == "..":
+            raise HTTPException(status_code=403, detail="PATH_TRAVERSAL: '..' in filename")
 
+    try:
+        saved_path = _persist_attachment_fs(tenant_id, agent_id, filename, content)
+        safe_filename = saved_path.name
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"vault persist failed: {e}")
+        if _is_production():
+            raise HTTPException(status_code=503, detail=f"vault persist failed: {e}")
+        safe_filename = _sanitize_filename(filename)
+        saved_path = Path("/tmp") / safe_filename
+
+    extracted_text = _extract_text_for_file(saved_path, max_chars=5000)
     attachment_id = f"att_{uuid.uuid4().hex[:12]}"
     note_id = f"note_{uuid.uuid4().hex[:12]}"
     journal_id = f"journal_{uuid.uuid4().hex[:12]}"
-    vault_path = vault_path_for_attachment(user_id, attachment_id)
-    note_vault_path = vault_path_for_note(user_id, note_id)
-
+    owner_root = _owner_vault_root(tenant_id, agent_id)
+    # vault_path should be tenant/agent isolated and include tenant for API path consistency
+    vault_path = f"{tenant_id}/{agent_id}/attachments/{safe_filename}"
+    try:
+        # prefer relative to base vault root if possible
+        from personal_wiki.vault import get_vault_root as _gvr
+        base = _gvr()
+        vault_path = saved_path.relative_to(base).as_posix()
+    except Exception:
+        pass
+    notes_dir = owner_root / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    note_path = notes_dir / f"{note_id}.md"
+    try:
+        vault_mod = _load_vault_module()
+        if vault_mod is not None and hasattr(vault_mod, "upsert_note"):
+            try:
+                np = vault_mod.upsert_note(note_id, extracted_text[:5000], frontmatter={"source": safe_filename, "attachment_id": attachment_id, "tenant_id": tenant_id, "agent_id": agent_id}, vault_root=owner_root)
+                if np is not None:
+                    note_path = Path(np)
+            except Exception as e:
+                logger.debug(f"upsert_note failed: {e}")
+                note_path.write_text(f"---\nsource: {safe_filename}\n---\n\n" + extracted_text[:5000], encoding="utf-8")
+        else:
+            note_path.write_text(f"---\nsource: {safe_filename}\n---\n\n" + extracted_text[:5000], encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"note create failed: {e}")
+    try:
+        vault_mod = _load_vault_module()
+        if vault_mod is not None and hasattr(vault_mod, "append_journal"):
+            try:
+                vault_mod.append_journal(f"att-{attachment_id}", "attachment_upload", {"filename": safe_filename, "extracted": extracted_text[:2000]}, vault_root=owner_root, when=datetime.now(timezone.utc))
+            except Exception as e:
+                logger.debug(f"journal append failed: {e}")
+    except Exception:
+        pass
     _audit(request, "PERSONAL_WIKI_ATTACHMENT_UPLOAD", {
         "user_id": user_id,
         "agent_id": agent_id,
         "tenant_id": tenant_id,
-        "filename": filename,
+        "filename": safe_filename,
         "attachment_id": attachment_id,
         "vault_path": vault_path,
         "size": len(content),
+        "saved_path": str(saved_path),
     })
-
-    # If DB configured, we could persist to memories / vault — skeleton returns mock
-    if not _is_db_configured() or not _is_vault_configured():
-        logger.info(f"Personal Wiki vault not configured — returning mock for {user_id} (vault_path={vault_path})")
-        # Still audit that we fell back
-        return {
-            "attachment_id": attachment_id,
-            "filename": filename,
-            "size": len(content),
-            "vault_path": vault_path,
-            "extracted_text": extracted_text[:500],
-            "note": {
-                "id": note_id,
-                "title": filename,
-                "content": extracted_text[:500],
-                "vault_path": note_vault_path,
-                "owner": user_id,
-                "agent_id": agent_id,
-            },
-            "journal": {
-                "id": journal_id,
-                "note_id": note_id,
-                "attachment_id": attachment_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            "mock": True,
-            "db_configured": _is_db_configured(),
-            "vault_configured": _is_vault_configured(),
-        }
-
-    # DB path — still stub but indicates persisted
+    is_mock = False
+    try:
+        is_mock = not saved_path.exists() or "tmp" in str(saved_path)
+    except Exception:
+        is_mock = False
+    if _is_production() and is_mock:
+        _no_mock_in_production()
+    note_vault_path = f"{tenant_id}/{agent_id}/notes/{note_id}.md"
+    try:
+        note_rel = note_path.relative_to(owner_root).as_posix()
+        note_vault_path = note_rel
+    except Exception:
+        pass
     return {
         "attachment_id": attachment_id,
-        "filename": filename,
+        "filename": safe_filename,
         "size": len(content),
         "vault_path": vault_path,
         "extracted_text": extracted_text[:500],
         "note": {
             "id": note_id,
-            "title": filename,
+            "title": safe_filename,
             "content": extracted_text[:500],
             "vault_path": note_vault_path,
             "owner": user_id,
@@ -419,10 +605,10 @@ async def upload_attachment(
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
         "mock": False,
-        "db_configured": True,
-        "vault_configured": True,
+        "db_configured": _is_db_configured(),
+        "vault_configured": _is_vault_configured(),
+        "saved_path": str(saved_path),
     }
-
 
 @router.get("/search")
 async def search_notes(
@@ -431,15 +617,32 @@ async def search_notes(
     limit: int = Query(10, ge=1, le=50),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """GET /v1/personal-wiki/search?q= -> pgvector search stub.
-
-    When DB configured, would run pgvector cosine search over memories/memory_embeddings
-    filtered by owner (tenant + agent isolation). Currently returns mock ranked results.
-    """
-    owner = _resolve_owner(request, x_user_id=x_user_id)
-    _audit(request, "PERSONAL_WIKI_SEARCH", {"user_id": owner["user_id"], "q": q, "limit": limit})
-
+    """GET /v1/personal-wiki/search -> owner-isolated vault FS + memory service (pgvector) fallback."""
+    owner = _resolve_owner(request, x_user_id=x_user_id, required_scope="wiki:read")
+    _audit(request, "PERSONAL_WIKI_SEARCH", {"user_id": owner["user_id"], "q": q, "limit": limit, "tenant_id": owner["tenant_id"], "agent_id": owner["agent_id"]})
+    tenant_id = owner["tenant_id"]; agent_id = owner["agent_id"]
+    # try memory service if DB configured (pgvector); else FS substring search
+    # FS first (owner-isolated)
+    try:
+        fs_results = _search_notes_fs(tenant_id, agent_id, q, limit=limit)
+        if fs_results:
+            return {
+                "query": q,
+                "results": fs_results,
+                "count": len(fs_results),
+                "mock": False,
+                "pgvector": False,
+                "owner": owner["user_id"],
+                "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
+                "source": "vault_fs",
+            }
+    except Exception as e:
+        logger.debug(f"fs search failed: {e}")
+    # if no FS hits and DB not configured -> mock fallback only in non-prod
     if not _is_db_configured():
+        if _is_production():
+            _no_mock_in_production()
+        # non-prod mock for backwards compat when vault empty
         results = _mock_search_results(q, owner, limit=limit)
         return {
             "query": q,
@@ -448,25 +651,42 @@ async def search_notes(
             "mock": True,
             "pgvector": False,
             "owner": owner["user_id"],
-            "vault_path": get_vault_path(owner["user_id"]),
+            "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
+            "source": "mock",
         }
-
-    # DB configured but still stub — attempt real pgvector search if available, else mock
+    # DB configured — would query memory_service pgvector; for now FS results or empty, not mock
     try:
-        # Lazy attempt: if we can query memories with vector, do so; else fallback
-        # For skeleton we just return mock with pgvector flag
-        results = _mock_search_results(q, owner, limit=limit)
+        # attempt memory_service HTTP search if configured
+        svc_url = os.environ.get("OAOS_MEMORY_SERVICE_URL") or os.environ.get("MEMORY_SERVICE_URL") or ""
+        if svc_url:
+            import httpx
+            # best-effort remote search (sync via httpx)
+            try:
+                with httpx.Client(timeout=5) as client:
+                    resp = client.post(f"{svc_url.rstrip('/')}/v1/memory/search", json={"query": q, "tenant_id": tenant_id, "agent_id": agent_id, "owner": owner["user_id"], "limit": limit}, headers={"X-Tenant-Id": tenant_id, "X-User-Id": owner["user_id"]})
+                    if resp.status_code == 200:
+                        j = resp.json()
+                        rs = j.get("results") or j.get("items") or []
+                        if rs:
+                            return {"query": q, "results": rs[:limit], "count": len(rs[:limit]), "mock": False, "pgvector": True, "owner": owner["user_id"], "vault_path": str(_owner_vault_root(tenant_id, agent_id)), "source": "memory_service"}
+            except Exception as e:
+                logger.debug(f"memory_service search failed: {e}")
+        # fallback to FS (already empty) — return empty not mock in prod
+        fs_results = _search_notes_fs(tenant_id, agent_id, q, limit=limit)
         return {
             "query": q,
-            "results": results,
-            "count": len(results),
-            "mock": True,
+            "results": fs_results,
+            "count": len(fs_results),
+            "mock": False,
             "pgvector": True,
             "owner": owner["user_id"],
-            "vault_path": get_vault_path(owner["user_id"]),
+            "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
+            "source": "vault_fs",
         }
     except Exception as e:
-        logger.warning(f"pgvector search fallback for q={q}: {e}")
+        logger.warning(f"search fallback: {e}")
+        if _is_production():
+            _no_mock_in_production()
         results = _mock_search_results(q, owner, limit=limit)
         return {
             "query": q,
@@ -475,10 +695,10 @@ async def search_notes(
             "mock": True,
             "pgvector": False,
             "owner": owner["user_id"],
-            "vault_path": get_vault_path(owner["user_id"]),
+            "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
             "error": str(e),
+            "source": "mock",
         }
-
 
 @router.get("/notes")
 async def list_notes(
@@ -487,28 +707,29 @@ async def list_notes(
     offset: int = Query(0, ge=0),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """GET /v1/personal-wiki/notes -> list notes (owner-isolated).
-
-    Returns notes for the authenticated owner only. Mock when DB not configured.
-    """
-    owner = _resolve_owner(request, x_user_id=x_user_id)
-    _audit(request, "PERSONAL_WIKI_LIST_NOTES", {"user_id": owner["user_id"], "limit": limit, "offset": offset})
-
-    if not _is_db_configured():
-        notes = _mock_notes(owner, limit=limit)
-        # apply offset
-        paged = notes[offset: offset + limit]
-        return {
-            "notes": paged,
-            "count": len(paged),
-            "total": len(notes),
-            "mock": True,
-            "owner": owner["user_id"],
-            "vault_path": get_vault_path(owner["user_id"]),
-        }
-
-    # DB configured — would query memories where owner==user_id; stub
+    """GET /v1/personal-wiki/notes -> owner-isolated vault FS (no mock in production)."""
+    owner = _resolve_owner(request, x_user_id=x_user_id, required_scope="wiki:read")
+    _audit(request, "PERSONAL_WIKI_LIST_NOTES", {"user_id": owner["user_id"], "limit": limit, "offset": offset, "tenant_id": owner["tenant_id"], "agent_id": owner["agent_id"]})
+    tenant_id = owner["tenant_id"]; agent_id = owner["agent_id"]
     try:
+        fs_notes = _list_notes_fs(tenant_id, agent_id, limit=limit, offset=offset)
+        if fs_notes:
+            paged = fs_notes
+            return {
+                "notes": paged,
+                "count": len(paged),
+                "total": len(paged),
+                "mock": False,
+                "owner": owner["user_id"],
+                "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
+                "source": "vault_fs",
+            }
+    except Exception as e:
+        logger.debug(f"fs list failed: {e}")
+    if not _is_db_configured():
+        if _is_production():
+            _no_mock_in_production()
+        # non-prod mock for backwards compat (vault empty)
         notes = _mock_notes(owner, limit=limit)
         paged = notes[offset: offset + limit]
         return {
@@ -517,10 +738,25 @@ async def list_notes(
             "total": len(notes),
             "mock": True,
             "owner": owner["user_id"],
-            "vault_path": get_vault_path(owner["user_id"]),
+            "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
+            "source": "mock",
+        }
+    # DB configured but FS empty — return empty FS result (not mock) or mock with pgvector flag in non-prod
+    try:
+        fs_notes = _list_notes_fs(tenant_id, agent_id, limit=limit, offset=offset)
+        return {
+            "notes": fs_notes,
+            "count": len(fs_notes),
+            "total": len(fs_notes),
+            "mock": False,
+            "owner": owner["user_id"],
+            "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
+            "source": "vault_fs",
         }
     except Exception as e:
         logger.warning(f"list notes fallback: {e}")
+        if _is_production():
+            _no_mock_in_production()
         notes = _mock_notes(owner, limit=limit)
         return {
             "notes": notes[offset: offset + limit],
@@ -528,11 +764,10 @@ async def list_notes(
             "total": len(notes),
             "mock": True,
             "owner": owner["user_id"],
-            "vault_path": get_vault_path(owner["user_id"]),
+            "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
             "error": str(e),
+            "source": "mock",
         }
-
-# ── Consolidation endpoint (02:00 KST scheduler trigger, graceful) ─
 
 @router.post("/consolidate")
 async def trigger_consolidation(

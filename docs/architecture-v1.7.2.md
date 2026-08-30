@@ -1717,7 +1717,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 ### 16.12 Adaptive Profile Engine — 핵심 개인화 기능 설계 (v1.7.2 설계 반영)
 
-> **상태: MVP 코드 구현·운영 DB migration·Control Plane router mount 완료.** 현재 확인된 범위는 tenant/user 격리 Profile API, PostgreSQL persistence, deterministic policy synthesis, Evidence idempotency, Runtime Hook interface다. 자동 post-interaction Evidence Worker와 Hermes LLM critical-path 자동 주입은 아직 통합 작업으로 남아 있으므로 전체 기능 완료로 간주하지 않는다.
+> **상태: 핵심 기능 코드 구현·운영 DB migration·Control Plane router mount 완료.** 현재 확인된 범위는 tenant/user 격리 Profile API, PostgreSQL persistence, deterministic policy synthesis, bilingual Evidence extractor, 비동기 Evidence Worker, Mattermost ingress 후처리, ACP 경계 Response Policy 주입, Personal Wiki 첨부·추출·소유자 Vault 저장이다. 최신 코드의 운영 프로세스 반영과 실제 사용자 경로 E2E는 서비스 재기동 후 별도 검증이 필요하다.
 
 #### 16.12.1 목적과 기존 아키텍처 정합성
 

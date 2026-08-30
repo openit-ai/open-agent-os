@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+import logging
 import os
 from pathlib import Path
 from typing import AsyncGenerator, Any
@@ -155,6 +156,79 @@ class ACPAdapter:
     def __init__(self, hermes_base_url: str, timeout_s: float = 30.0):
         self.hermes_base_url = hermes_base_url.rstrip("/")
         self.timeout_s = timeout_s
+
+    # ── Adaptive Profile — Response Policy seam (LLM call boundary) ──
+    def _resolve_policy_sync(self, session: SessionRecord, current_instruction: dict | None = None) -> dict:
+        """Sync policy resolve with safe default fallback, no leakage."""
+        try:
+            from control_plane.adaptive_profile.hook import get_response_policy, DEFAULT_POLICY
+            task_type = getattr(session, "security_domain", None) or "general_chat"
+            # map general -> general_chat for profile
+            if task_type == "general":
+                task_type = "general_chat"
+            policy = get_response_policy(session.tenant_id, session.user_id, task_type, current_instruction or {})
+            # ensure minimal keys only
+            allowed = set(DEFAULT_POLICY.keys())
+            return {k: v for k, v in policy.items() if k in allowed}
+        except Exception:
+            try:
+                from control_plane.adaptive_profile.engine import DEFAULT_POLICY as _DP
+                merged = dict(_DP)
+                cur = current_instruction or {}
+                for k in merged:
+                    if k in cur:
+                        merged[k] = cur[k]
+                return merged
+            except Exception:
+                return {"conclusion_first": False, "verbosity": "medium", "technical_depth": "medium", "evidence_requirement": "medium", "challenge_assumptions": False, "alternatives": 1, "confirmation_level": "medium"}
+
+    async def _resolve_policy_async(self, session: SessionRecord, current_instruction: dict | None = None) -> dict:
+        try:
+            from control_plane.adaptive_profile.hook import get_response_policy_async, DEFAULT_POLICY
+            task_type = getattr(session, "security_domain", None) or "general_chat"
+            if task_type == "general":
+                task_type = "general_chat"
+            policy = await get_response_policy_async(session.tenant_id, session.user_id, task_type, current_instruction or {})
+            allowed = set(DEFAULT_POLICY.keys())
+            return {k: v for k, v in policy.items() if k in allowed}
+        except Exception:
+            return self._resolve_policy_sync(session, current_instruction)
+
+    def resolve_policy(self, session: SessionRecord, current_instruction: dict | None = None) -> dict:
+        """Public adapter seam — Control Plane/ACP LLM boundary."""
+        return self._resolve_policy_sync(session, current_instruction)
+
+    def build_llm_messages(self, session: SessionRecord, prompt_text: str, policy: dict | None = None, system_base: str | None = None) -> list[dict]:
+        """Build LLM messages with minimal Response Policy injected (no scores)."""
+        try:
+            from control_plane.adaptive_profile.hook import default_hook
+            from control_plane.adaptive_profile.engine import DEFAULT_POLICY
+            if policy is None:
+                policy = self._resolve_policy_sync(session)
+            # ensure minimal
+            allowed = set(DEFAULT_POLICY.keys())
+            policy = {k: v for k, v in policy.items() if k in allowed}
+            injection = default_hook.format_prompt_injection(policy)
+        except Exception:
+            injection = ""
+            policy = {}
+        base = system_base or (
+            f"You are Open Agent OS personal agent {session.agent_id} for user {session.user_id} "
+            f"(tenant {session.tenant_id}, session {session.session_id})."
+        )
+        system_content = base
+        if injection:
+            system_content = base + "\n\n" + injection
+        # Ensure no raw scores leak
+        if "global_score" in system_content or "sample_count" in system_content:
+            system_content = base
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt_text},
+        ]
+
+    # Back-compat naming
+    _build_messages_with_policy = build_llm_messages
 
     def _headers(self, session: SessionRecord) -> dict[str, str]:
         # AgentContext propagated as headers (Section 18) + workspace
@@ -309,26 +383,54 @@ class ACPAdapter:
             # Hermes gateway is at 8642, but config may point to wrong port — fixup if needed
             if ":8001" in gateway_url:
                 gateway_url = gateway_url.replace(":8001", ":8642")
-            system_prompt = (
+            # A안: personal display_name injection
+            _dn = getattr(session, "display_name", None) or getattr(session, "agent_id", "")
+            # if display_name equals agent_id suffix, use it as friendly name
+            _friendly = _dn if _dn and not _dn.startswith("agent:") else getattr(session, "display_name", None) or session.agent_id.split(":")[-1]
+            base_system = (
                 f"You are Open Agent OS personal agent {session.agent_id} for user {session.user_id} "
                 f"(tenant {session.tenant_id}, session {session.session_id}). "
+                f"Your display name is '{_friendly}'. Always refer to yourself as '{_friendly}' if the user asks your name. "
                 "You are SEPARATE from Hermes @openit CoCo (company-wide). "
                 "Reply in Korean, concise, helpful. Keep identity consistent."
             )
+            # Adaptive Profile: resolve minimal Response Policy (safe fallback, no leakage)
+            try:
+                _policy = await self._resolve_policy_async(session)
+                _msgs = self.build_llm_messages(session, prompt_text, policy=_policy, system_base=base_system)
+                system_prompt = _msgs[0]["content"]
+            except Exception:
+                system_prompt = base_system
             try:
                 async with httpx.AsyncClient(timeout=40.0) as client:
-                    r = await client.post(
-                        gateway_url,
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                        json={
-                            "model": model,
-                            "messages": [
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": prompt_text},
-                            ],
-                            "temperature": 0.7,
-                        },
-                    )
+                    payload = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt_text},
+                        ],
+                        "temperature": 0.7,
+                    }
+                    r = None
+                    for attempt in range(3):
+                        r = await client.post(
+                            gateway_url,
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                            json=payload,
+                        )
+                        if r.status_code not in (429, 500, 502, 503, 504) or attempt == 2:
+                            break
+                        retry_after = r.headers.get("Retry-After", "")
+                        try:
+                            delay = min(5.0, max(0.5, float(retry_after)))
+                        except ValueError:
+                            delay = 1.0 * (attempt + 1)
+                        logging.getLogger(__name__).warning(
+                            "Hermes gateway retry status=%s attempt=%d/3 trace=%s delay=%.1fs",
+                            r.status_code, attempt + 1, session.trace_id, delay,
+                        )
+                        await asyncio.sleep(delay)
+                    assert r is not None
                     r.raise_for_status()
                     data = r.json()
                     content = ""
@@ -338,9 +440,10 @@ class ACPAdapter:
                         content = data.get("content", "") or ""
                     content = content.strip()
                     if content:
-                        # yield in chunks to simulate streaming
-                        mid = len(content) // 2
-                        for chunk in ([content[:mid]] if mid and len(content) > 200 else [content]):
+                        # yield in bounded chunks to simulate streaming and avoid half-truncation
+                        chunk_size = 800
+                        for i in range(0, len(content), chunk_size):
+                            chunk = content[i:i+chunk_size]
                             if chunk:
                                 yield {"type": "token", "data": {"text": chunk}, "trace_id": session.trace_id}
                                 await asyncio.sleep(0.02)
@@ -349,7 +452,6 @@ class ACPAdapter:
             except Exception as e:
                 # log and fall through — no synthetic, let agent runtime handle
                 try:
-                    import logging
                     logging.getLogger(__name__).warning(f"Hermes gateway fallback failed: {e}")
                 except Exception:
                     pass

@@ -476,6 +476,20 @@ async def send_prompt(session_id: str, req: SendPromptRequest, authorization: st
         raise HTTPException(status_code=403, detail=f"policy gate error: {e}")
     # Only after ALLOW + successful audit, persist and forward
     session_store.append_prompt(session_id, caller, req.prompt, rid)
+    # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
+    try:
+        from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
+        _ap_handle({
+            "tenant_id": rec.tenant_id,
+            "user_id": rec.user_id,
+            "session_id": session_id,
+            "conversation_id": session_id,
+            "message_id": rid,
+            "task_type": rec.security_domain,
+            "text": req.prompt,
+        })
+    except Exception:
+        pass
     # Forward to Hermes via ACP
     result = await acp.send_prompt(rec, req.prompt, rid)
     # Also push a local stream event so SSE has something

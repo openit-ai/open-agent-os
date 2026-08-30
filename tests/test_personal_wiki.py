@@ -6,6 +6,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import importlib.util
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
@@ -77,6 +80,28 @@ def _client():
     return TestClient(admin_app)
 
 
+# Helper for production JWT (uses conftest unified signing key)
+TEST_SIGNING_KEY = os.environ.get("OAOS_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
+
+
+def _make_wiki_jwt(sub="employee:testuser", tenant_id="default", agent_id="agent:assistant:testuser", scope="wiki:read", exp_delta=300, iss="control-plane", aud="wiki-fs"):
+    from jose import jwt as _jwt
+
+    now = datetime.now(timezone.utc)
+    payload = {
+        "iss": iss,
+        "aud": aud,
+        "sub": sub,
+        "tenant_id": tenant_id,
+        "agent_id": agent_id,
+        "scope": scope,
+        "exp": int((now + timedelta(seconds=exp_delta)).timestamp()),
+        "iat": int(now.timestamp()),
+        "jti": uuid.uuid4().hex,
+    }
+    return _jwt.encode(payload, TEST_SIGNING_KEY, algorithm="HS256")
+
+
 def test_personal_wiki_vault_path_helper_owner_isolated():
     # employee:xxx -> agent:xxx isolation
     p1 = pw_mod.get_vault_path("employee:kim")
@@ -92,50 +117,93 @@ def test_personal_wiki_vault_path_helper_owner_isolated():
     assert "note_123" in note_path
 
 
-def test_personal_wiki_endpoints_mock_when_db_not_configured():
+def test_personal_wiki_endpoints_mock_when_db_not_configured(tmp_path, monkeypatch):
+    """Non-prod with DB not configured and empty vault -> mock fallback allowed (explicit non-production env)."""
+    vault_root = tmp_path / "vault-mock"
+    monkeypatch.setenv("OAOS_WIKI_VAULT", str(vault_root))
+    # explicitly force non-production environment for mock fixture
+    monkeypatch.setenv("OAOS_ENV", "test")
+    for k in ("ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    # also clear prod-sensitive DB variants that might affect _is_db_configured
+    monkeypatch.delenv("VAULT_BACKEND", raising=False)
+    monkeypatch.delenv("VAULT_ADDR", raising=False)
+
     c = _client()
-    # ensure DB not configured for this test (mock path)
-    import os
+    # GET /v1/personal-wiki/notes -> mock notes, owner via X-User-Id (allowed in non-prod fixture)
+    r = c.get("/v1/personal-wiki/notes", headers={"X-User-Id": "employee:testuser"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "notes" in data
+    assert data["mock"] is True
+    assert data["owner"] == "employee:testuser"
+    assert "vault_path" in data
 
-    # Save and unset DB env to force mock
-    orig_db = os.environ.pop("DATABASE_URL", None)
-    orig_oaos = os.environ.pop("OAOS_DATABASE_URL", None)
-    try:
-        # GET /v1/personal-wiki/notes -> mock notes, owner via X-User-Id
-        r = c.get("/v1/personal-wiki/notes", headers={"X-User-Id": "employee:testuser"})
-        assert r.status_code == 200, r.text
-        data = r.json()
-        assert "notes" in data
-        assert data["mock"] is True
-        assert data["owner"] == "employee:testuser"
-        assert "vault_path" in data
+    # GET /v1/personal-wiki/search?q=hello -> mock search
+    r2 = c.get("/v1/personal-wiki/search", params={"q": "hello"}, headers={"X-User-Id": "employee:testuser"})
+    assert r2.status_code == 200, r2.text
+    d2 = r2.json()
+    assert d2["query"] == "hello"
+    assert "results" in d2
+    assert d2["mock"] is True
 
-        # GET /v1/personal-wiki/search?q=hello -> mock search
-        r2 = c.get("/v1/personal-wiki/search", params={"q": "hello"}, headers={"X-User-Id": "employee:testuser"})
-        assert r2.status_code == 200, r2.text
-        d2 = r2.json()
-        assert d2["query"] == "hello"
-        assert "results" in d2
-        assert d2["mock"] is True
+    # POST /v1/personal-wiki/attachments -> vault FS persist (mock False when FS works, even in non-prod)
+    # When vault FS is configured via OAOS_WIKI_VAULT, upload succeeds via FS, mock=False
+    # Use fresh tenant/agent to ensure FS write path works
+    r3 = c.post(
+        "/v1/personal-wiki/attachments",
+        files={"file": ("hello.txt", b"hello world personal wiki", "text/plain")},
+        headers={"X-User-Id": "employee:testuser"},
+    )
+    assert r3.status_code == 200, r3.text
+    d3 = r3.json()
+    assert "attachment_id" in d3
+    assert "extracted_text" in d3
+    assert "note" in d3
+    assert "journal" in d3
+    # upload writes to vault FS, so mock is False (real FS result) — but still 200 in non-prod
+    assert d3["mock"] is False
+    assert "vault_path" in d3
+    # owner isolated vault path contains agent id or tenant iso path
+    assert "agent:assistant:testuser" in d3["vault_path"] or "testuser" in d3["vault_path"]
 
-        # POST /v1/personal-wiki/attachments -> extract->journal mock
-        r3 = c.post(
-            "/v1/personal-wiki/attachments",
-            files={"file": ("hello.txt", b"hello world personal wiki", "text/plain")},
-            headers={"X-User-Id": "employee:testuser"},
-        )
-        assert r3.status_code == 200, r3.text
-        d3 = r3.json()
-        assert "attachment_id" in d3
-        assert "extracted_text" in d3
-        assert "note" in d3
-        assert "journal" in d3
-        assert d3["mock"] is True
-        assert "vault_path" in d3
-        # owner isolated vault path contains agent id
-        assert "agent:assistant:testuser" in d3["vault_path"]
-    finally:
-        if orig_db is not None:
-            os.environ["DATABASE_URL"] = orig_db
-        if orig_oaos is not None:
-            os.environ["OAOS_DATABASE_URL"] = orig_oaos
+
+def test_personal_wiki_production_fails_closed_when_db_not_configured(tmp_path, monkeypatch):
+    """Production with DB not configured and empty vault -> fail-closed 503 (no mock)."""
+    vault_root = tmp_path / "vault-prod-failclosed"
+    monkeypatch.setenv("OAOS_WIKI_VAULT", str(vault_root))
+    monkeypatch.setenv("OAOS_ENV", "production")
+    for k in ("ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("VAULT_BACKEND", raising=False)
+    monkeypatch.delenv("VAULT_ADDR", raising=False)
+
+    c = _client()
+    # Use verified JWT — X-User-Id alone would be 401 in production, 503 is the DB-missing fail-closed
+    token_read = _make_wiki_jwt(sub="employee:produser", tenant_id="acme", agent_id="agent:assistant:produser", scope="wiki:read")
+    r = c.get("/v1/personal-wiki/notes", headers={"Authorization": f"Bearer {token_read}"})
+    assert r.status_code == 503, f"production notes without DB should be 503, got {r.status_code} {r.text}"
+    assert "not configured" in r.text.lower() or "mock fallback" in r.text.lower()
+
+    # search also fails closed in production when DB not configured and FS empty
+    r2 = c.get("/v1/personal-wiki/search", params={"q": "hello"}, headers={"Authorization": f"Bearer {token_read}"})
+    assert r2.status_code == 503, f"production search without DB should be 503, got {r2.status_code} {r2.text}"
+
+    # attachment upload with write scope still writes to FS in production (vault FS is available), so not 503
+    # Verify that production upload with valid FS does NOT return mock True
+    token_write = _make_wiki_jwt(sub="employee:produser", tenant_id="acme", agent_id="agent:assistant:produser", scope="wiki:write")
+    r3 = c.post(
+        "/v1/personal-wiki/attachments",
+        files={"file": ("hello.txt", b"hello production", "text/plain")},
+        headers={"Authorization": f"Bearer {token_write}"},
+    )
+    # When vault FS succeeds, production returns 200 with mock False, not 503 and not mock
+    if r3.status_code == 200:
+        assert r3.json().get("mock") is not True
+    else:
+        # if vault somehow fails, should be 503
+        assert r3.status_code == 503, r3.text

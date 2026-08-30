@@ -27,6 +27,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import sys
 import urllib.parse
@@ -42,6 +43,7 @@ from ..router import route_session
 from ..session import new_request_id, session_store
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 # ── Small-business Mattermost -> ACP -> Policy Engine gate ─────────────
 # Deterministic gate: identity/ownership validated + PolicyEngine evaluated
@@ -245,7 +247,41 @@ def _get_mattermost_adapter():
                 )
         except Exception:
             return None
-    return None
+def _get_personal_display_name(agent_id: str) -> tuple[str | None, str | None]:
+    """Resolve A안 display_name/avatar_url for agent_id from admin_user_mappings (DB if available)."""
+    if not agent_id:
+        return None, None
+    # try DB via SECURITY models / direct psycopg
+    try:
+        import os
+        db_url = os.getenv("OAOS_DATABASE_URL") or os.getenv("DATABASE_URL") or ""
+        if db_url:
+            # normalize asyncpg / driver
+            url = db_url.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace("postgresql://", "postgresql+psycopg://").replace("+aiosqlite","").replace("sqlite+aiosqlite://","sqlite://")
+            # try sqlalchemy
+            try:
+                from sqlalchemy import create_engine, text as sa_text
+                eng = create_engine(url, pool_pre_ping=True, connect_args={"check_same_thread": False} if "sqlite" in url else {})
+                with eng.connect() as conn:
+                    row = conn.execute(sa_text("SELECT display_name, avatar_url FROM admin_user_mappings WHERE agent_id=:aid LIMIT 1"), {"aid": agent_id}).mappings().first()
+                    if row and (row.get("display_name") or row.get("avatar_url")):
+                        return row.get("display_name"), row.get("avatar_url")
+            except Exception:
+                pass
+            # try psycopg directly
+            try:
+                import psycopg  # type: ignore
+                with psycopg.connect(url) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT display_name, avatar_url FROM admin_user_mappings WHERE agent_id=%s LIMIT 1", (agent_id,))
+                        r = cur.fetchone()
+                        if r:
+                            return r[0], r[1]
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None, None
 
 
 def _get_approval_store():
@@ -266,50 +302,87 @@ def _get_approval_store():
         return None
 
 
+async def _post_with_retry(adapter: Any, channel_id: str, text: str, root_id: str | None, trace_id: str, session_id: str, display_name: str | None = None, avatar_url: str | None = None) -> bool:
+    """Post one response with bounded retry; never hide delivery failures. Splits over-long posts."""
+    if not text.strip():
+        return True
+    # Mattermost MaxPostSize 16383, use 4000 safe chunk to avoid UI truncation/collapse
+    MAX_MM = 4000
+    chunks = [text[i:i+MAX_MM] for i in range(0, len(text), MAX_MM)] if len(text) > MAX_MM else [text]
+    ok = True
+    for chunk in chunks:
+        for attempt in range(1, 4):
+            try:
+                props = {}
+                if display_name:
+                    props["override_username"] = display_name
+                if avatar_url:
+                    props["override_icon_url"] = avatar_url
+                kwargs = {"root_id": root_id}
+                if props:
+                    kwargs["props"] = props
+                result = await adapter.send_message(channel_id, chunk, **kwargs)
+                if isinstance(result, dict) and result.get("_skeleton"):
+                    raise RuntimeError("Mattermost adapter returned skeleton response")
+                post_id = result.get("id", "") if isinstance(result, dict) else ""
+                log.info("mattermost response posted channel=%s root=%s post=%s trace=%s session=%s attempt=%d chunk_len=%d", channel_id, root_id, post_id, trace_id, session_id, attempt, len(chunk))
+                ok = ok and bool(post_id)
+                break
+            except Exception as exc:
+                log.warning("mattermost response post failed channel=%s root=%s trace=%s session=%s attempt=%d error=%s", channel_id, root_id, trace_id, session_id, attempt, str(exc)[:300], exc_info=attempt == 3)
+                if attempt < 3:
+                    await asyncio.sleep(0.5 * attempt)
+                else:
+                    ok = False
+    return ok
+
+
 async def _stream_and_post_to_mattermost(
     channel_id: str | None,
     root_id: str | None,
     session_rec: Any,
 ) -> None:
-    """Fetch ACP stream and post incremental updates via MattermostAdapter.send_message (threaded)."""
+    """Fetch ACP stream and post responses with bounded retry and delivery logging."""
     if not channel_id:
+        log.warning("mattermost response skipped: missing channel trace=%s session=%s", getattr(session_rec, "trace_id", ""), getattr(session_rec, "session_id", ""))
         return
     adapter = _get_mattermost_adapter()
     if adapter is None:
+        log.error("mattermost adapter unavailable channel=%s root=%s trace=%s session=%s", channel_id, root_id, getattr(session_rec, "trace_id", ""), getattr(session_rec, "session_id", ""))
         return
+    trace_id = getattr(session_rec, "trace_id", "")
+    session_id = getattr(session_rec, "session_id", "")
+    # A안: resolve personal display_name/icon per user (session preferred, DB fallback)
+    display_name = getattr(session_rec, "display_name", None)
+    avatar_url = getattr(session_rec, "avatar_url", None)
+    if not display_name:
+        try:
+            aid = getattr(session_rec, "agent_id", "") or ""
+            dn, av = _get_personal_display_name(aid)
+            if dn:
+                display_name = dn
+            if av and not avatar_url:
+                avatar_url = av
+        except Exception:
+            pass
+    buffer = ""
     try:
         acp = ACPAdapter(settings.hermes_base_url)
-        buffer = ""
         async for ev in acp.stream_events(session_rec):
             etype = ev.get("type", "")
-            text_chunk = ""
-            if etype == "token":
-                text_chunk = ev.get("data", {}).get("text", "") or ev.get("text", "")
-            elif etype == "briefing":
+            if etype == "briefing":
                 continue
+            if etype == "token":
+                buffer += ev.get("data", {}).get("text", "") or ev.get("text", "")
+                if len(buffer) > 800 or buffer.endswith("\n"):
+                    if await _post_with_retry(adapter, channel_id, buffer, root_id, trace_id, session_id, display_name=display_name, avatar_url=avatar_url):
+                        buffer = ""
             elif etype == "done":
-                if buffer.strip():
-                    try:
-                        await adapter.send_message(channel_id, buffer, root_id=root_id)
-                    except Exception:
-                        pass
-                    buffer = ""
                 break
-            if text_chunk:
-                buffer += text_chunk
-                if len(buffer) > 500 or text_chunk.endswith("\n"):
-                    try:
-                        await adapter.send_message(channel_id, buffer, root_id=root_id)
-                    except Exception:
-                        pass
-                    buffer = ""
         if buffer.strip():
-            try:
-                await adapter.send_message(channel_id, buffer, root_id=root_id)
-            except Exception:
-                pass
-    except Exception:
-        pass
+            await _post_with_retry(adapter, channel_id, buffer, root_id, trace_id, session_id, display_name=display_name, avatar_url=avatar_url)
+    except Exception as exc:
+        log.error("mattermost response stream failed channel=%s root=%s trace=%s session=%s error=%s", channel_id, root_id, trace_id, session_id, str(exc)[:500], exc_info=True)
 
 
 async def _handle_core_logic(
@@ -333,12 +406,17 @@ async def _handle_core_logic(
             raise HTTPException(status_code=404 if isinstance(e, KeyError) else 403, detail=str(e))
     else:
         routing = route_session(mapping.security_domain)
+        # A안: resolve display_name/avatar_url for this agent before session create
+        _dn, _av = _get_personal_display_name(mapping.agent_principal)
+        # also try personal_agent display_name from mapping if available via make_profile? fallback to mapped agent_id suffix
         rec = session_store.create(
             tenant_id=tenant_id,
             user_id=mapping.human_principal,
             agent_id=mapping.agent_principal,
             security_domain=mapping.security_domain,
             hermes_worker=routing["pool"],
+            display_name=_dn,
+            avatar_url=_av,
         )
         session_id = rec.session_id
 
@@ -372,6 +450,20 @@ async def _handle_core_logic(
             briefing_result = await run_briefing(agent_ctx, tenant_id)
             rid = new_request_id()
             session_store.append_prompt(session_id, user_id, text, rid)
+            # Adaptive Profile: async evidence worker (fire-and-forget, never blocks)
+            try:
+                from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
+                _ap_handle({
+                    "tenant_id": tenant_id,
+                    "user_id": mapping.human_principal,
+                    "session_id": session_id,
+                    "conversation_id": session_id,
+                    "message_id": rid,
+                    "task_type": mapping.security_domain,
+                    "text": text,
+                })
+            except Exception:
+                pass
             session_store.append_stream_event(session_id, {"type": "briefing", "data": briefing_result, "trace_id": rec.trace_id})
             # optional: post briefing summary to Mattermost threaded
             if channel_id:
@@ -400,6 +492,20 @@ async def _handle_core_logic(
     # Forward prompt (non-briefing path)
     rid = new_request_id()
     session_store.append_prompt(session_id, user_id, text, rid)
+    # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
+    try:
+        from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
+        _ap_handle({
+            "tenant_id": tenant_id,
+            "user_id": mapping.human_principal,
+            "session_id": session_id,
+            "conversation_id": session_id,
+            "message_id": rid,
+            "task_type": mapping.security_domain,
+            "text": text,
+        })
+    except Exception:
+        pass
     acp = ACPAdapter(settings.hermes_base_url)
     acp_result = await acp.send_prompt(rec, text, rid)
     session_store.append_stream_event(session_id, {"type": "prompt_queued", "data": {"text": text, "request_id": rid}, "trace_id": rec.trace_id})
