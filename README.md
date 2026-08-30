@@ -85,6 +85,22 @@ Outline / Notion (originals + current ACLs)
 
 **Continuity across clients:** The same Personal Agent is used from any client; a single question can target Personal Wiki only, the enterprise Knowledge Index only, or both.
 
+### Adaptive Profile Engine — work the way your team works
+
+OAOS v1.7.2 introduces the architecture for an **Adaptive Profile Engine**: instead of treating personalization as a static user record, OAOS learns how each employee prefers to collaborate with an agent and turns those signals into a focused response policy.
+
+- **Personalized interaction, not personality labeling** — learn observable work preferences such as conclusion-first communication, evidence depth, decision speed, and confirmation style without exposing psychological types.
+- **Context-aware by design** — combine global behavior with task-specific preferences for research, engineering, writing, meetings, and more.
+- **Explicit control always wins** — the user’s current instruction overrides stored preferences; organization policy, authorization, and approval rules always override personalization.
+- **Private by default** — profiles and evidence remain tenant/user isolated. Runtime receives only the minimum policy needed for the current task, never a detailed behavioral history.
+- **Runtime-independent** — the design separates the Profile Engine from Runtime Adapters, enabling the same personalization layer across Hermes and future runtimes.
+- **Quietly improving in the background** — post-interaction evidence processing is asynchronous, so personalization improves over time without slowing the critical response path.
+
+> **The longer an agent works with your team, the better it understands not only what to remember, but how to work.**
+
+> **Design status:** The Adaptive Profile Engine is an architecture feature in v1.7.2; the dedicated API, worker, Runtime Hook, and Profile Skills are planned for implementation and are not claimed as currently implemented.
+
+
 ```text
 "what I handled last week"          → Personal Wiki + work tools
 "company policy and related docs"   → Enterprise Knowledge Index
