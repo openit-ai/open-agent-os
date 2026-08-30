@@ -1963,22 +1963,53 @@ async def knowledge_sync(payload: dict, request: Request):
                 sys.path.insert(0, _cand)
         from knowledge_index.service import sync_outline_to_index  # type: ignore
         from knowledge_index.repository import KnowledgeIndexRepository  # type: ignore
-        from knowledge_index.embedding import FakeEmbeddingProvider, HashEmbeddingProvider  # type: ignore
+        from knowledge_index.embedding import FakeEmbeddingProvider, HashEmbeddingProvider, OllamaEmbeddingProvider  # type: ignore
         from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter  # type: ignore
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"knowledge service import failed: {e}")
 
-    # Decide provider
+    # Decide provider — production uses Ollama (env OAOS_EMBED_API_URL/MODEL), non-prod uses Fake.
+    # OAOS_EMBED_API_URL may be bare host (http://127.0.0.1:11434) or full /api/embed; provider normalizes.
     provider = None
     # Allow payload to select dim for tests
     dim = int(payload.get("embedding_dim") or 1536)
     try:
-        # Production guard: do not silently use hash in prod
         is_prod = os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
-        if is_prod and not os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("OAOS_ALLOW_HASH_EMBED", "").strip().lower() in ("1", "true", "yes", "on"):
-            # In prod without real embed config, fail-closed (no fake)
-            raise HTTPException(status_code=503, detail="No embedding provider configured in production (set OAOS_EMBED_API_URL + key or inject real provider)")
-        provider = FakeEmbeddingProvider(dim=dim)
+        embed_url = (os.environ.get("OAOS_EMBED_API_URL") or "").strip()
+        embed_model = (os.environ.get("OAOS_EMBED_MODEL") or "bge-m3:latest").strip()
+        # Default dim: bge-m3 is 1024; env OAOS_EMBED_DIM overrides
+        _ed = os.environ.get("OAOS_EMBED_DIM", "").strip()
+        if _ed:
+            try:
+                embed_dim = int(_ed)
+            except Exception:
+                embed_dim = int(dim)
+        else:
+            # in prod prefer 1024 for bge-m3, else payload dim
+            if is_prod and "bge-m3" in embed_model.lower():
+                embed_dim = 1024
+            else:
+                embed_dim = int(dim)
+        # Production: Ollama only; Fake only when explicit test fixture in prod, or in non-prod
+        _allow_test_fixture = (
+            bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            or os.environ.get("OAOS_ALLOW_TEST_FIXTURE", "").strip().lower() in ("1", "true", "yes", "on")
+            or os.environ.get("OAOS_ALLOW_FAKE_EMBED", "").strip().lower() in ("1", "true", "yes", "on")
+        )
+        if is_prod:
+            if not embed_url:
+                if _allow_test_fixture:
+                    provider = FakeEmbeddingProvider(dim=dim)
+                else:
+                    raise HTTPException(status_code=503, detail="No embedding provider configured in production (set OAOS_EMBED_API_URL)")
+            else:
+                provider = OllamaEmbeddingProvider(api_url=embed_url, model=embed_model, dim=embed_dim)
+        else:
+            # Non-prod: if OAOS_EMBED_API_URL explicitly set, honor Ollama for prod-parity testing
+            if embed_url:
+                provider = OllamaEmbeddingProvider(api_url=embed_url, model=embed_model, dim=embed_dim)
+            else:
+                provider = FakeEmbeddingProvider(dim=dim)
     except HTTPException:
         raise
     except Exception as e:
@@ -2129,7 +2160,7 @@ async def knowledge_materialize(payload: dict, request: Request):
                 sys.path.insert(0, _cand)
         from knowledge_index.service import materialize_knowledge_to_outline  # type: ignore
         from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter  # type: ignore
-        from knowledge_index.embedding import FakeEmbeddingProvider  # type: ignore
+        from knowledge_index.embedding import FakeEmbeddingProvider, OllamaEmbeddingProvider  # type: ignore
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"knowledge service import failed: {e}")
 
@@ -2158,13 +2189,28 @@ async def knowledge_materialize(payload: dict, request: Request):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"invalid Outline adapter: {e}")
 
-    # Provider for optional post-materialize indexing
+    # Provider for optional post-materialize indexing; production uses Ollama only.
     provider = None
+    is_prod = os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
     if repo is not None:
         try:
-            provider = FakeEmbeddingProvider(dim=1536)  # type: ignore
-        except Exception:
+            is_prod = os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
+            if is_prod:
+                embed_url = (os.environ.get("OAOS_EMBED_API_URL") or "").strip()
+                if not embed_url:
+                    raise RuntimeError("OAOS_EMBED_API_URL is required in production")
+                provider = OllamaEmbeddingProvider(
+                    api_url=embed_url,
+                    model=(os.environ.get("OAOS_EMBED_MODEL") or "bge-m3:latest").strip(),
+                    dim=int(os.environ.get("OAOS_EMBED_DIM", "1024")),
+                )
+            else:
+                provider = FakeEmbeddingProvider(dim=1536)
+        except Exception as exc:
+            logger.warning("knowledge materialization embedding provider unavailable: %s", exc)
             provider = None
+            if is_prod:
+                raise HTTPException(status_code=503, detail=f"embedding provider unavailable: {exc}")
 
     try:
         result = await materialize_knowledge_to_outline(
@@ -2209,5 +2255,5 @@ async def knowledge_materialize(payload: dict, request: Request):
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("MEMORY_SERVICE_PORT", "8004"))
+    port = int(os.environ.get("MEMORY_SERVICE_PORT", "8200"))
     uvicorn.run(app, host="0.0.0.0", port=port)
