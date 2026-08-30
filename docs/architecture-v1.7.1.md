@@ -107,7 +107,21 @@ Knowledge Index는 검색 후보를 빠르게 구성하기 위한 **파생 인�
 
 > **ACL은 결과를 만든 뒤 제거하는 방식이 아니라 검색 후보를 만들기 전에 적용**한다. Personal Wiki 검색은 `agent_id` 중심으로, 전사 위키·기업 문서 검색은 source의 사용자·그룹·collection ACL과 `tenant_id`를 중심으로 적용한다.
 
-#### 0.4.3 OAOS 업무 연속성 — Personal Wiki vs Enterprise Knowledge Index 결합
+#### 0.4.3 임베딩 처리 lifecycle 및 실행 위치
+
+Knowledge Index의 초기 대규모 backfill과 일상 증분 업데이트는 서로 다른 실행 규모로 분리한다.
+
+- 초기 backfill은 외부 또는 별도 GPU 임베딩 인프라를 사용할 수 있다.
+- 일상 증분은 변경 문서만 동일한 임베딩 계약을 준수하는 내부 CPU worker로 처리할 수 있다.
+- 초기·증분 처리의 모델 계열, 모델 버전/digest, 출력 차원, 전처리, chunking·overlap·정규화 규칙은 동일하게 고정한다.
+- `content_hash`, `source_updated_at`, `acl_version`이 모두 동일한 문서는 재임베딩하지 않는다.
+- 임베딩 실패 시 hash/fake embedding으로 대체하지 않으며, 해당 문서의 checkpoint를 확정하지 않고 bounded retry한다.
+- 모델 계약이 바뀌면 기존 인덱스를 덮어쓰지 않고 병렬 인덱스를 구축·검증한 뒤 전환한다.
+- 외부 GPU 사용 시 원문 반출 여부, 암호화 전송, 보존·삭제, PII·기밀정보 처리 정책을 별도로 충족해야 한다.
+
+이는 특정 임베딩 제품을 필수화하는 규칙이 아니다. Ollama, 외부 API, 별도 GPU worker 등은 동일한 provider contract와 보안·차원·버전 불변조건을 만족하는 범위에서 선택한다.
+
+#### 0.4.4 OAOS 업무 연속성 — Personal Wiki vs Enterprise Knowledge Index 결합
 
 Mattermost와 Slack의 Web·Desktop·Mobile 클라이언트에서 동일한 Personal Agent를 사용하며, 사용자의 업무 질문에 따라 Personal Wiki와 기업 Knowledge Index를 선택하거나 결합한다.
 
