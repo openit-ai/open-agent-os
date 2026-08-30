@@ -98,8 +98,13 @@ class TokenService:
         request_id: str,
         delegation_id: str | None = None,
         ttl_seconds: int | None = None,
+        tenant_id: str | None = None,
+        **kwargs,
     ) -> str:
         ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl
+        # backward compat: allow tenant/tid alias
+        if tenant_id is None:
+            tenant_id = kwargs.get("tenant_id") or kwargs.get("tenant") or kwargs.get("tid")
         now = datetime.now(timezone.utc)
         payload = {
             "sub": sub,
@@ -109,11 +114,19 @@ class TokenService:
             "session_id": session_id,
             "request_id": request_id,
             "delegation_id": delegation_id,
+            "tenant_id": tenant_id,
+            "tenant": tenant_id,
+            "tid": tenant_id,
             "nonce": uuid.uuid4().hex,
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(seconds=ttl)).timestamp()),
             "jti": uuid.uuid4().hex,
         }
+        # remove None tenant aliases to keep backward compat with older verifiers that expect missing=skip
+        if tenant_id is None:
+            payload.pop("tenant_id", None)
+            payload.pop("tenant", None)
+            payload.pop("tid", None)
         return jwt.encode(payload, self.signing_key, algorithm=ALG)
 
     def verify(self, token: str) -> dict:
@@ -257,7 +270,11 @@ def issue_capability_token(
     request_id: str,
     delegation_id: str | None = None,
     ttl_seconds: int = 300,
+    tenant_id: str | None = None,
+    **kwargs,
 ) -> str:
+    if tenant_id is None:
+        tenant_id = kwargs.get("tenant_id") or kwargs.get("tenant") or kwargs.get("tid")
     now = datetime.now(timezone.utc)
     payload = {
         "sub": sub,
@@ -267,11 +284,18 @@ def issue_capability_token(
         "session_id": session_id,
         "request_id": request_id,
         "delegation_id": delegation_id,
+        "tenant_id": tenant_id,
+        "tenant": tenant_id,
+        "tid": tenant_id,
         "nonce": uuid.uuid4().hex,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=ttl_seconds)).timestamp()),
         "jti": uuid.uuid4().hex,
     }
+    if tenant_id is None:
+        payload.pop("tenant_id", None)
+        payload.pop("tenant", None)
+        payload.pop("tid", None)
     return jwt.encode(payload, signing_key, algorithm=ALG)
 
 

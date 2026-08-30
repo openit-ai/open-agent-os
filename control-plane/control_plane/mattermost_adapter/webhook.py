@@ -27,6 +27,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import sys
 import urllib.parse
 from pathlib import Path
@@ -41,6 +42,60 @@ from ..router import route_session
 from ..session import new_request_id, session_store
 
 router = APIRouter()
+
+# ── Small-business Mattermost -> ACP -> Policy Engine gate ─────────────
+# Deterministic gate: identity/ownership validated + PolicyEngine evaluated
+# BEFORE ACP/LLM forwarding. Every ingress (including low-risk INTERACT)
+# produces a POLICY_DECISION audit event. Explicit DENY overrides.
+# Reuses existing PolicyEngine / AuthorizationHook / AuditLedger via mattermost_policy_gate.
+# Ordinary chat is low-risk INTERACT but still audited.
+_INGRESS_ACTION = "INTERACT"  # low-risk conversational prompt
+
+def _get_policy_engine(tenant_id: str):  # compat shim — delegates to mattermost_policy_gate
+    try:
+        from ..mattermost_policy_gate import _get_small_business_engine  # type: ignore
+        return _get_small_business_engine(tenant_id)
+    except Exception:
+        return None
+
+def _get_audit_ledger():  # compat shim
+    try:
+        from ..mattermost_policy_gate import _get_audit_ledger as _gal  # type: ignore
+        return _gal()
+    except Exception:
+        return None
+
+def _emit_policy_audit(*args, **kwargs):  # compat shim — fail-closed via gate
+    from ..mattermost_policy_gate import _emit_policy_audit as _epa  # type: ignore
+    return _epa(*args, **kwargs)
+
+async def _evaluate_ingress_policy(
+    *,
+    tenant_id: str,
+    mapping: Any,
+    session_id: str,
+    trace_id: str,
+    request_id: str,
+    channel_id: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Evaluate low-risk ingress via deterministic gate (AuthorizationHook + small-business bundle).
+
+    Always produces POLICY_DECISION audit (fail-closed). Raises HTTPException 403 on DENY/APPROVAL_REQUIRED.
+    """
+    try:
+        from ..mattermost_policy_gate import get_mattermost_gate  # type: ignore
+        gate = get_mattermost_gate(tenant_id)
+        result = await gate.authorize_ingress(mapping, session_id, trace_id, request_id, channel_id)
+        # result is AuthzResult-like
+        decision = getattr(result, "decision", "ALLOW")
+        reason = getattr(result, "reason", "")
+        pv = getattr(result, "matched_rule_id", None) or getattr(result, "policy_version", None)
+        return decision, reason, pv
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Fallback direct (should not happen) — fail-closed
+        raise HTTPException(status_code=403, detail=f"policy denied: gate error: {e}")
 
 # Lazy import for orchestrator (avoid circular at import time)
 def _load_orchestrator():
@@ -78,13 +133,70 @@ def _is_briefing_request(text: str) -> bool:
     return any(kw in text for kw in BRIEFING_KEYWORDS)
 
 
+def _is_production() -> bool:
+    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        if os.getenv(k, "").strip().lower() in ("production", "prod"):
+            return True
+    return False
+
 def verify_mattermost_signature(body: bytes, signature: str | None, secret: str | None) -> bool:
+    # Production: fail-closed — empty secret or missing signature must deny
     if not secret:
-        return True  # dev: no secret configured → accept
+        return False if _is_production() else True  # dev: no secret configured → accept; prod → deny
     if not signature:
         return False
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+def _resolve_tenant_id(payload_tenant: str | None) -> str:
+    # Never trust payload tenant_id — always use server-configured tenant
+    # (payload HMAC proves it came from Mattermost, but tenant scoping is server authority)
+    _ = payload_tenant  # explicitly ignored
+    return settings.tenant_id
+
+def _allow_test_identity() -> bool:
+    # Only allow arbitrary employee: payload identities when explicitly marked as internal test AND non-production
+    if _is_production():
+        return False
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    for k in ("OAOS_ALLOW_TEST_IDENTITY", "OAOS_ALLOW_TEST_FIXTURE", "OAOS_ALLOW_TEST_FALLBACK"):
+        if os.getenv(k, "").strip().lower() in ("1", "true", "yes", "on"):
+            return True
+    return False
+
+def _resolve_user_id(raw_user_id: str, raw_user_name: str | None = None) -> str:
+    # Map Mattermost user id/username → employee: principal deterministically — never trust payload as-is if not namespaced
+    # Arbitrary employee: identities are blocked unless _allow_test_identity() (internal test + non-production)
+    uid = (raw_user_id or "").strip()
+    uname = (raw_user_name or "").strip() or None
+    if uid.startswith("employee:"):
+        if _allow_test_identity():
+            return uid
+        # Non-test: do not trust payload employee: — derive via adapter from raw suffix
+        suffix = uid.split(":", 1)[1].strip()
+        try:
+            adapter = _get_mattermost_adapter()
+            if adapter is not None:
+                return adapter.map_mattermost_user(suffix or uid, uname or suffix)
+        except Exception:
+            pass
+        import re as _re2
+        raw2 = uname or suffix or uid
+        suf2 = _re2.sub(r"[^a-z0-9_.-]", "", raw2.lower()) or "unknown"
+        return f"employee:{suf2}"
+    # Try adapter mapping for deterministic derivation
+    try:
+        adapter = _get_mattermost_adapter()
+        if adapter is not None:
+            return adapter.map_mattermost_user(uid, uname)
+    except Exception:
+        pass
+    # Fallback deterministic sanitize
+    import re as _re
+    raw = uname or uid
+    suffix = _re.sub(r"[^a-z0-9_.-]", "", raw.lower()) or "unknown"
+    return f"employee:{suffix}"
 
 
 def _get_mattermost_adapter():
@@ -97,10 +209,23 @@ def _get_mattermost_adapter():
             sys.path.insert(0, str(p))
         from mattermost.adapter import MattermostAdapter  # type: ignore
 
+        base_url = getattr(settings, "mattermost_url", "") or os.getenv("MATTERMOST_URL", "")
+        bot_token = getattr(settings, "mattermost_bot_token", "") or os.getenv("MATTERMOST_BOT_TOKEN", "")
+        webhook_secret = getattr(settings, "mattermost_webhook_secret", "") or os.getenv("MATTERMOST_WEBHOOK_SECRET", "")
+        if not bot_token:
+            try:
+                for line in (Path.home() / ".hermes" / ".env").read_text(encoding="utf-8").splitlines():
+                    key, sep, value = line.partition("=")
+                    if sep and key == "MATTERMOST_BOT_TOKEN":
+                        bot_token = value.strip().strip('"').strip("'")
+                    elif sep and key == "MATTERMOST_URL" and not base_url:
+                        base_url = value.strip().strip('"').strip("'")
+            except OSError:
+                pass
         return MattermostAdapter(
-            base_url=getattr(settings, "mattermost_url", "") or "",
-            bot_token=getattr(settings, "mattermost_bot_token", "") or "",
-            webhook_secret=getattr(settings, "mattermost_webhook_secret", "") or "",
+            base_url=base_url,
+            bot_token=bot_token,
+            webhook_secret=webhook_secret,
         )
     except Exception:
         # Fallback import relative
@@ -217,6 +342,20 @@ async def _handle_core_logic(
         )
         session_id = rec.session_id
 
+    # ── Mattermost -> ACP Policy Gate (small-business profile) ──────────
+    # Identity/ownership already validated above (map + session_store.get).
+    # Now deterministic PolicyEngine evaluation BEFORE any ACP/LLM forwarding.
+    # Ordinary conversational prompt is INTERACT low-risk but still audited.
+    _pre_rid = new_request_id()
+    await _evaluate_ingress_policy(
+        tenant_id=tenant_id,
+        mapping=mapping,
+        session_id=session_id,
+        trace_id=rec.trace_id,
+        request_id=_pre_rid,
+        channel_id=channel_id,
+    )
+
     # ── Phase 1 MVP: "정리해줘" keyword → demo orchestrator routing ──
     if _is_briefing_request(text):
         run_briefing = _load_orchestrator()
@@ -300,8 +439,15 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
         raise HTTPException(status_code=400, detail="invalid JSON")
 
     # Expected payload (MVP): {"tenant_id": "...", "user_id": "employee:kim", "text": "...", "channel_id": "...", "session_id": "...?"}
-    tenant_id: str = payload.get("tenant_id") or settings.tenant_id
-    user_id: str = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
+    # Tenant: never trust payload tenant_id — use server-configured tenant (HMAC only proves Mattermost origin, not tenant scope)
+    tenant_id: str = _resolve_tenant_id(payload.get("tenant_id"))
+    raw_user_id: str = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
+    raw_user_name: str | None = payload.get("user_name") or payload.get("user", {}).get("username") or payload.get("username")
+    # Preserve 400 on truly missing identity — do not silently map empty to employee:unknown
+    if not (raw_user_id or "").strip() and not (raw_user_name or "").strip():
+        user_id: str = ""
+    else:
+        user_id: str = _resolve_user_id(raw_user_id, raw_user_name)
     text: str = payload.get("text") or payload.get("message") or ""
     session_id: str | None = payload.get("session_id")
     channel_id: str | None = payload.get("channel_id") or payload.get("channel", {}).get("id")
@@ -345,11 +491,14 @@ async def mattermost_slash(request: Request, x_signature: str | None = Header(de
 
             command = _get("command")
             text = _get("text")
-            user_id = _get("user_id") or _get("user")
+            _raw_uid_form = _get("user_id") or _get("user")
+            _raw_uname_form = _get("user_name")
+            user_id = _resolve_user_id(_raw_uid_form, _raw_uname_form) if _raw_uid_form else ""
             channel_id = _get("channel_id") or None
             team_id = _get("team_id") or None
             session_id = _get("session_id") or None
-            tenant_id = _get("tenant_id") or tenant_id
+            _payload_tenant_form = _get("tenant_id")
+            tenant_id = _resolve_tenant_id(_payload_tenant_form) if _payload_tenant_form else tenant_id
             # also allow explicit payload json in text? keep text as-is
         except Exception:
             raise HTTPException(status_code=400, detail="invalid form payload")
@@ -360,11 +509,17 @@ async def mattermost_slash(request: Request, x_signature: str | None = Header(de
             raise HTTPException(status_code=400, detail="invalid JSON")
         command = payload.get("command") or ""
         text = payload.get("text") or payload.get("message") or ""
-        user_id = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
+        _raw_uid = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
+        _raw_uname = payload.get("user_name") or payload.get("user", {}).get("username")
+        if not (_raw_uid or "").strip() and not (_raw_uname or "").strip():
+            user_id = ""
+        else:
+            user_id = _resolve_user_id(_raw_uid, _raw_uname)
         channel_id = payload.get("channel_id") or payload.get("channel", {}).get("id")
         team_id = payload.get("team_id")
         session_id = payload.get("session_id")
-        tenant_id = payload.get("tenant_id") or tenant_id
+        _payload_tenant_json = payload.get("tenant_id")
+        tenant_id = _resolve_tenant_id(_payload_tenant_json) if _payload_tenant_json else tenant_id
 
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id required")

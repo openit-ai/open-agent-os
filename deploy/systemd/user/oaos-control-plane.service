@@ -11,6 +11,8 @@ Type=simple
 WorkingDirectory=%h/open-agent-os/control-plane
 # Single canonical env file for the user-systemd distribution.
 EnvironmentFile=-%h/open-agent-os/config/oaos.env
+EnvironmentFile=-%h/open-agent-os/.env
+Environment=OAOS_SESSION_BACKEND=redis
 Environment=PYTHONPATH=%h/open-agent-os:%h/open-agent-os/control-plane
 ExecStart=%h/.hermes/hermes-agent/venv/bin/python -m uvicorn control_plane.app:app --host 127.0.0.1 --port 8100 --workers 1
 Restart=always

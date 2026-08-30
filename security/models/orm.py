@@ -434,3 +434,35 @@ class AdminSettingORM(Base):
     updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
 
+
+class AdminPolicyVersionORM(Base):
+    """Admin policy versions — immutable version history for Draft→Approve→Publish.
+
+    Mirrors admin-console/backend/policy.py & persistence.py DDL:
+      id TEXT PK, tenant_id, bundle_id, name, version, status, rules_json,
+      created_by, created_at, approved_by, approved_at, published_at, parent_version
+    Indexes: ix_policy_tenant_status (tenant_id,status), ix_policy_bundle (bundle_id,version).
+    PG + SQLite compatible (Text, DateTime timezone-aware via Generic).
+    """
+
+    __tablename__ = "admin_policy_versions"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    bundle_id: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # draft|approved|published
+    rules_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    parent_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_policy_tenant_status", "tenant_id", "status"),
+        Index("ix_policy_bundle", "bundle_id", "version"),
+    )
+

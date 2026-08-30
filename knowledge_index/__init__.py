@@ -38,3 +38,30 @@ __all__ = [
     "KnowledgeIndexRetriever",
     "RetrievalHit",
 ]
+
+# Re-export RAG service wrappers (no import side-effects if service missing)
+try:
+    from .service import (  # type: ignore
+        KnowledgeSearchService,
+        KnowledgeSyncService,
+        KnowledgeMaterializationService,
+        OutlineSyncService,
+        OutlineMaterializationService,
+        KnowledgeIndexService,
+        search_knowledge,
+        sync_outline_to_index,
+        materialize_knowledge_to_outline,
+        SyncServiceConfig,
+    )
+except Exception:  # pragma: no cover
+    KnowledgeSearchService = None  # type: ignore
+    KnowledgeSyncService = None  # type: ignore
+    KnowledgeMaterializationService = None  # type: ignore
+    OutlineSyncService = None  # type: ignore
+    OutlineMaterializationService = None  # type: ignore
+    KnowledgeIndexService = None  # type: ignore
+    search_knowledge = None  # type: ignore
+    sync_outline_to_index = None  # type: ignore
+    materialize_knowledge_to_outline = None  # type: ignore
+    SyncServiceConfig = None  # type: ignore
+

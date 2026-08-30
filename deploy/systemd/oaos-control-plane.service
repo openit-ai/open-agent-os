@@ -18,6 +18,7 @@ Group=oaos
 # WorkingDirectory is replaced at install time with the actual repo path.
 WorkingDirectory=/home/openitsvc/open-agent-os/control-plane
 EnvironmentFile=-/etc/oaos/oaos.env
+Environment=OAOS_SESSION_BACKEND=redis
 # PYTHONPATH: repo root + control-plane package dir (required for `control_plane.app`)
 Environment=PYTHONPATH=/home/openitsvc/open-agent-os:/home/openitsvc/open-agent-os/control-plane
 # Port is fixed at 8100 to match production (192.168.6.61 oaos-control-plane :8100)

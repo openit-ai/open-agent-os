@@ -81,12 +81,16 @@ def _require_db_if_prod() -> None:
 
 def _normalize_sync_url(url: str) -> str:
     u = url.strip()
-    if "+asyncpg" in u:
-        u = u.replace("+asyncpg", "")
+    # The systemd OAOS environment uses asyncpg URLs, while this synchronous
+    # ledger must use the installed psycopg v3 driver (psycopg2 is not present).
+    if u.startswith("postgresql+asyncpg://"):
+        u = u.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    elif u.startswith("postgresql://"):
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
     if "+aiosqlite" in u:
         u = u.replace("+aiosqlite", "")
-    if u.startswith("postgresql+asyncpg://"):
-        u = u.replace("postgresql+asyncpg://", "postgresql://", 1)
+    if u.startswith("postgresql+psycopg2://"):
+        u = u.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
     if u.startswith("sqlite+aiosqlite://"):
         u = u.replace("sqlite+aiosqlite://", "sqlite://", 1)
     return u

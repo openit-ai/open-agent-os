@@ -421,8 +421,56 @@ def get_session(session_id: str, authorization: str | None = Header(default=None
 @app.post("/v1/sessions/{session_id}/prompt")
 async def send_prompt(session_id: str, req: SendPromptRequest, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
     caller = resolve_caller_user(authorization, x_user_id)
+    # path vs body session_id integrity (if body provides session_id, must match path)
+    if req.session_id and req.session_id != session_id:
+        raise HTTPException(status_code=400, detail="session_id mismatch: path vs body")
     rec = session_store.get(session_id, caller)
+    # tenant integrity: if JWT present, token tenant must match session tenant
+    if authorization and authorization.strip().lower().startswith("bearer "):
+        token = authorization.strip()[7:].strip()
+        if token:
+            try:
+                from .auth import verify_user_jwt as _verify_jwt
+                claims = _verify_jwt(token)
+                token_tenant = claims.get("tenant_id")
+                if token_tenant and token_tenant != rec.tenant_id:
+                    raise HTTPException(status_code=401, detail="TENANT_MISMATCH: token tenant != session tenant")
+            except HTTPException:
+                raise
+            except Exception:
+                # verify_user_jwt already raises HTTPException on failure; non-JWT case handled by resolve_caller_user
+                pass
     rid = req.request_id or new_request_id()
+    # owner/agent/tenant integrity via deterministic mapping (no LLM)
+    try:
+        mapping = map_user_to_agent(caller, rec.tenant_id, rec.security_domain)
+        if mapping.human_principal != rec.user_id or mapping.agent_principal != rec.agent_id:
+            raise HTTPException(status_code=403, detail=f"owner/agent mismatch: mapping {mapping.human_principal}/{mapping.agent_principal} != session {rec.user_id}/{rec.agent_id}")
+        if mapping.tenant_id != rec.tenant_id:
+            raise HTTPException(status_code=403, detail=f"tenant mismatch: mapping tenant {mapping.tenant_id} != session tenant {rec.tenant_id}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        if _is_production():
+            raise HTTPException(status_code=403, detail=f"identity mapping failed fail-closed: {e}")
+        raise HTTPException(status_code=403, detail=f"identity mapping failed: {e}")
+    # Global Policy Gate enforcement BEFORE ACP (deterministic, no LLM classifier)
+    # MUST audit before forward; DENY/APPROVAL_REQUIRED never forwards; production fail-closed if gate/policy/audit unavailable
+    try:
+        from .mattermost_policy_gate import get_mattermost_gate as _get_gate
+        gate = _get_gate(rec.tenant_id)
+        if gate is None:
+            if _is_production():
+                raise HTTPException(status_code=403, detail="policy gate unavailable — fail-closed")
+            raise HTTPException(status_code=403, detail="policy gate unavailable")
+        await gate.authorize_ingress(mapping, session_id, rec.trace_id, rid)
+    except HTTPException:
+        raise
+    except Exception as e:
+        if _is_production():
+            raise HTTPException(status_code=403, detail=f"policy gate unavailable fail-closed: {e}")
+        raise HTTPException(status_code=403, detail=f"policy gate error: {e}")
+    # Only after ALLOW + successful audit, persist and forward
     session_store.append_prompt(session_id, caller, req.prompt, rid)
     # Forward to Hermes via ACP
     result = await acp.send_prompt(rec, req.prompt, rid)

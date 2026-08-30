@@ -1,17 +1,17 @@
 # Deployment Verification — v1.7.1 (H8 Evidence Tiers)
 
-> **Commit:** `e0a744df5314cdc829869274f231d0e970b27d64` · **Timestamp (UTC):** `2026-08-29T10:32:49.903851+00:00` · **Command:** `pytest -q`
-> **pytest:** `927 passed, 1 skipped, 0 failed, 74 warnings`
+> **Commit:** `a36d236761e68c4e3e5c4ef656268048400fc336` · **Timestamp (UTC):** `2026-08-30T03:28:30.098551+00:00` · **Command:** `pytest -q`
+> **pytest:** `1031 passed, 1 skipped, 2 failed, 84 warnings`
 
 ## 1. Evidence Tiers (H8)
 
 | Tier | Count | Prerequisites | Evidence |
 |------|-------|---------------|----------|
-| unit | 927 passed | none (local) | `pytest -q` — includes fakeredis/SQLite/filesystem mocks for distributed logic, but NOT live multi-replica |
+| unit | 1031 passed | none (local) | `pytest -q` — includes fakeredis/SQLite/filesystem mocks for distributed logic, but NOT live multi-replica |
 | integration | 0 | none (local) | counted within unit total; separate integration suite not split |
 | distributed | 0 passed | Redis + kind + K8s + CNI enforcement | requires `kind` cluster + `redis-cli ping PONG` + `hubble --verdict DROPPED`/`flow log` capture |
 | external | 0 passed | Outline/Notion/Mattermost/Slack/LLM gateway live | requires live credentials + network + `docs/deployment-verification-*.md` curl/kubectl/hubble captures |
-| **total** | **927 passed, 1 skipped** |  |  |
+| **total** | **1031 passed, 1 skipped** |  |  |
 
 > **Invariant:** Unit tests are never labeled as distributed/external. Distributed/external counts remain 0 until live verification is captured; current `927` is `unit` only.
 
@@ -20,9 +20,9 @@
 | Prerequisite | Available | Reason |
 |--------------|-----------|--------|
 | redis | ❌ | redis-cli not found and REDIS_URL not set or not reachable |
-| kind | ❌ | not found in PATH |
-| kubectl | ❌ | not found in PATH |
-| helm | ❌ | not found in PATH |
+| kind | ✅ | found and version check attempted |
+| kubectl | ✅ | found and version check attempted |
+| helm | ✅ | found and version check attempted |
 | hubble | ❌ | not found in PATH |
 | cni_enforcement | ❌ | requires kind+kubectl+live cluster with Cilium/Calico |
 | outline | ❌ | env ['OUTLINE_API_TOKEN', 'OAOS_OUTLINE_TOKEN'] not set or not live-verified |
@@ -31,7 +31,7 @@
 | slack | ❌ | env ['SLACK_BOT_TOKEN', 'OAOS_SLACK_TOKEN'] not set or not live-verified |
 | llm_gateway | ❌ | env ['OPENAI_API_KEY', 'OAOS_LLM_GATEWAY_URL', 'ANTHROPIC_API_KEY'] not set or not live-verified |
 
-**Unavailable prerequisites (11):** cni_enforcement, helm, hubble, kind, kubectl, llm_gateway, mattermost, notion, outline, redis, slack — distributed/external evidence cannot be claimed.
+**Unavailable prerequisites (8):** cni_enforcement, hubble, llm_gateway, mattermost, notion, outline, redis, slack — distributed/external evidence cannot be claimed.
 
 ## 3. RAG Implementation vs Live External Integration
 
@@ -41,27 +41,7 @@
 
 Knowledge Index schema/repository/retrieval, stable chunking, embedding provider boundary, Outline/Notion source adapters, idempotent incremental sync, deletion handling, ACL version invalidation/revalidation are **implemented and unit-tested** (`knowledge_index/` commits `60ffe4bfba`, `6dab8761c2`). Live connector credentials/network and production corpus backfill remain **operational integration work**, not claimed as complete here.
 
-## 4. Systemd Operational Verification (2026-08-29)
-
-> This is a live verification of the non-Docker systemd deployment on `192.168.6.61`. It is recorded separately from `distributed` because this host is a single replica and is not a Kubernetes/CNI cluster.
-
-| Check | Result |
-|------|--------|
-| `oaos-control-plane.service` | active |
-| `oaos-admin-api.service` | active |
-| `oaos-admin-console.service` | active |
-| Control Plane `/healthz` | HTTP 200 |
-| Admin API `/health` | HTTP 200 |
-| PostgreSQL database/user | `oaos|oaos` |
-| PostgreSQL extension | `vector` |
-| Redis `PING` | `PONG` |
-| Redis Lua atomic counter | sequential results `1,2` |
-| Environment file | `config/oaos.env`, `0600`, `openitsvc:openitsvc` |
-| Ports | `8100`, `8010`, `3012` listening on localhost |
-
-The Kubernetes `kind`/CNI/Hubble proof is **not applicable to this systemd deployment** and remains `distributed: 0`. Historical pre-rename authentication errors in journal logs are not current service errors; current health and service checks pass.
-
-## 5. Static Verification (no live infra required)
+## 4. Static Verification (no live infra required)
 
 - `deploy/k8s/networkpolicy.yaml` — raw manifests, no Helm templating, `default-deny-all` + allow-* (verified by `tests/test_network_policy.py`)
 - `deploy/docker-compose.*.yml` — `healthcheck: /healthz`, `livenessProbe: /healthz`, `readinessProbe: /readyz`
@@ -81,8 +61,7 @@ python scripts/verify-evidence-tiers.py --check-only  # exits 1 if docs claim un
 ## 6. Raw pytest Tail (last 4000 chars)
 
 ```
-ch.ao.quantization.quantize_fx.prepare_fx,torch.ao.quantization.quantize_fx.convert_fx, please migrate to use torchao pt2e quantization API instead (prepare_pt2e, convert_pt2e) 
-  3. pt2e quantization has been migrated to torchao (https://github.com/pytorch/ao/tree/main/torchao/quantization/pt2e) 
+rchao/quantization/pt2e) 
   see https://github.com/pytorch/ao/issues/2259 for more details
     torch.quantization.quantize_dynamic(net, dtype=torch.qint8, inplace=True)
 
@@ -118,6 +97,9 @@ tests/test_workstream_c.py::test_vault_encryption_roundtrip
     vault = EncryptedPostgresVault(encryption_key=b"another-key-32bytes!!!!")
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-927 passed, 1 skipped, 74 warnings in 255.01s (0:04:15)
+=========================== short test summary info ============================
+FAILED tests/test_iam_adapter.py::TestGroupPolicyBinding::test_build_policy_bundles_for_user
+FAILED tests/test_iam_adapter.py::TestPolicyPrecedence::test_default_deny_when_no_match
+2 failed, 1031 passed, 1 skipped, 84 warnings in 307.89s (0:05:07)
 
 ```

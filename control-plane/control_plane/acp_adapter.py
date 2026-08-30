@@ -165,6 +165,9 @@ class ACPAdapter:
             "X-Session-Id": session.session_id,
             "X-Trace-Id": session.trace_id,
             "X-Security-Domain": session.security_domain,
+            "X-OAOS-Session-Namespace": getattr(session, "session_namespace", "oaos:mattermost"),
+            "X-OAOS-Runtime-Provider": getattr(session, "runtime_provider", "opencode-go"),
+            "X-OAOS-Runtime-Model": getattr(session, "runtime_model", "muse-spark-1.2-contributor"),
         }
         # Lazy workspace header — per-session isolation (§16A.3.1)
         ws = getattr(session, "workspace", None)
@@ -204,7 +207,7 @@ class ACPAdapter:
                 return m
         except Exception:
             pass
-        return os.getenv("OAOS_CP_HERMES_MODEL", "") or "qwen2.5"
+        return os.getenv("OAOS_CP_HERMES_MODEL", "") or "hermes-agent"
 
     async def create_session_remote(self, session: SessionRecord, workspace: str | None = None) -> dict[str, Any]:
         """POST /acp/sessions — create Hermes-side session. Falls back to local if Hermes unavailable (dev)."""
@@ -235,7 +238,18 @@ class ACPAdapter:
             # Dev fallback — Hermes not yet running
             return {"status": "local_fallback", "reason": str(e), "session_id": session.session_id, "workspace": ws}
 
+    def _acp_enabled(self) -> bool:
+        """Whether this deployment exposes Hermes ACP session endpoints.
+
+        The production Gateway exposes the OpenAI-compatible API on :8642 but
+        not /acp/sessions. Keep ACP available as an explicit opt-in so every
+        Mattermost turn does not pay for a guaranteed 404 probe.
+        """
+        return os.getenv("OAOS_CP_HERMES_ACP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
     async def send_prompt(self, session: SessionRecord, prompt: str, request_id: str) -> dict[str, Any]:
+        if not self._acp_enabled():
+            return {"status": "gateway_fallback", "request_id": request_id}
         url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/prompt"
         payload = {"prompt": prompt, "request_id": request_id, "trace_id": session.trace_id}
         async def _do():
@@ -255,8 +269,13 @@ class ACPAdapter:
         /v1/chat/completions (same LLM that powers @openit CoCo) and yield its
         reply as token stream. This keeps Mattermost @agent on the Hermes-configured LLM.
         """
-        url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/stream"
+        if self._acp_enabled():
+            url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/stream"
+        else:
+            url = ""
         try:
+            if not url:
+                raise RuntimeError("Hermes ACP session endpoints disabled; using Gateway API")
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 async with client.stream("GET", url, headers=self._headers(session)) as resp:
                     if resp.status_code != 200:

@@ -253,9 +253,60 @@ export interface PolicyBundle {
   name: string;
   version: string;
   rules: PolicyRule[];
+  status?: string;
 }
-export function getPolicyBundles(): Promise<{ bundles: PolicyBundle[]; evaluation_order: string[] }> {
+export interface PolicyDraftBundle {
+  id: string;
+  tenant_id: string;
+  name: string;
+  version: string;
+  rules: PolicyRule[];
+  status: string;
+  created_by?: string | null;
+  created_at?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  published_at?: string | null;
+  parent_version?: string | null;
+  id_row?: string;
+}
+export interface PolicyBundlesResponse {
+  bundles: PolicyBundle[];
+  evaluation_order: string[];
+  draft?: PolicyDraftBundle | null;
+  active_version?: string | null;
+}
+export function getPolicyBundles(): Promise<PolicyBundlesResponse> {
   return apiFetch("/v1/policy/bundles");
+}
+export interface PolicyDraftResponse { draft: PolicyDraftBundle | null }
+export function getPolicyDraft(): Promise<PolicyDraftResponse> {
+  return apiFetch("/v1/policy/draft");
+}
+export interface PolicyHistoryResponse { items: PolicyDraftBundle[]; count: number; active_version?: string | null }
+export function getPolicyHistory(): Promise<PolicyHistoryResponse> {
+  return apiFetch("/v1/policy/history");
+}
+export interface PolicyValidateResponse { ok: boolean; valid: boolean; errors: string[] }
+export function validatePolicy(rules: PolicyRule[], allow_remove_mandatory = false): Promise<PolicyValidateResponse> {
+  return apiFetch("/v1/policy/validate", { method: "POST", body: JSON.stringify({ rules, allow_remove_mandatory }) });
+}
+export interface PolicySimulateRequest { action: string; resource: string; use_draft?: boolean; tenant_id?: string; rules?: PolicyRule[] }
+export interface PolicySimulateResponse { request: { action: string; resource: string }; result: { decision: string; source: string; reason: string; matched_rule: PolicyRule | null }; evaluated_rules: number }
+export function simulatePolicy(payload: PolicySimulateRequest): Promise<PolicySimulateResponse> {
+  return apiFetch("/v1/policy/simulate", { method: "POST", body: JSON.stringify(payload) });
+}
+export function upsertPolicyDraft(payload: { rules: PolicyRule[]; tenant_id?: string; bundle_id?: string; name?: string; version?: string; allow_remove_mandatory?: boolean }): Promise<{ draft: PolicyDraftBundle }> {
+  return apiFetch("/v1/policy/draft", { method: "POST", body: JSON.stringify(payload) });
+}
+export function approvePolicy(tenant_id = "default"): Promise<{ draft: PolicyDraftBundle; status: string }> {
+  return apiFetch("/v1/policy/approve", { method: "POST", body: JSON.stringify({ tenant_id }) });
+}
+export function publishPolicy(tenant_id = "default"): Promise<{ published: PolicyDraftBundle; active_version: string }> {
+  return apiFetch("/v1/policy/publish", { method: "POST", body: JSON.stringify({ tenant_id }) });
+}
+export function rollbackPolicy(target_version: string, tenant_id = "default"): Promise<{ published: PolicyDraftBundle; active_version: string }> {
+  return apiFetch("/v1/policy/rollback", { method: "POST", body: JSON.stringify({ target_version, tenant_id }) });
 }
 
 // ---- approvals (Section 23-24) ----

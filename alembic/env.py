@@ -24,6 +24,9 @@ db_url = os.environ.get("DATABASE_URL") or os.environ.get("OAOS_DATABASE_URL")
 if db_url:
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    # SQLite async driver for isolated tests (sqlite:// -> sqlite+aiosqlite://)
+    elif db_url.startswith("sqlite://") and "+aiosqlite" not in db_url:
+        db_url = db_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
     config.set_main_option("sqlalchemy.url", db_url)
 else:
     if not config.get_main_option("sqlalchemy.url"):
@@ -49,6 +52,11 @@ from security.models.orm import (  # noqa: F401,E402
     AdminUserORM,
     AdminInfraServiceORM,
     AdminUserMappingORM,
+    AdminLLMProviderORM,
+    AdminLLMQuotaORM,
+    AdminLlmUsageORM,
+    AdminSettingORM,
+    AdminPolicyVersionORM,
 )
 
 # Knowledge Index (v1.7.1 §0.4.1) — pgvector 1536 + SQLite fallback

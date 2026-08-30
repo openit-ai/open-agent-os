@@ -182,6 +182,14 @@ app.include_router(user_mappings_router)
 app.include_router(llm_providers_router)
 app.include_router(runtime_mode_router)
 app.include_router(fallback_router)
+# Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
+try:
+    _policy_mod = _load_admin_sibling("policy")
+    policy_router = _policy_mod.router
+    app.include_router(policy_router)
+    logger.info("Policy router mounted at /v1/policy")
+except Exception as _pe:
+    logger.warning(f"Policy router not mounted: {_pe}")
 
 # ── Personal Wiki (skeleton, lazy, fail-graceful) ──────────────────
 try:
@@ -625,13 +633,41 @@ def audit_checkpoint(admin: AdminUser = Depends(get_current_admin)):
 
 
 # ── Policy bundles proxy (Section 25) ──────────────────────────
+# Delegates to policy module (active published bundle is authoritative). Kept here for backwards compat
+# if policy router failed to mount; otherwise policy router handles /v1/policy/bundles.
+try:
+    _policy_mod_legacy = sys.modules.get("admin_console.backend.policy") or _load_admin_sibling("policy")
+    _legacy_active = getattr(_policy_mod_legacy, "get_active_published_bundle", None)
+    _legacy_draft = getattr(_policy_mod_legacy, "get_draft_bundle", None)
+except Exception:
+    _legacy_active = None
+    _legacy_draft = None
+
 @app.get("/v1/policy/bundles")
 def policy_bundles(admin: AdminUser = Depends(get_current_admin)):
-    """Return Policy Bundles from security policy_engine (importlib, fallback default_bundle)."""
+    """Return Policy Bundles — active published bundle is authoritative (policy module). Fallback to default_bundle if none published."""
+    # Prefer policy module's DB-published bundle when available (authoritative per spec).
+    try:
+        if _legacy_active is not None:
+            active = _legacy_active("default")
+            if active is not None:
+                try:
+                    from pathlib import Path as _P
+                    import sys as _sys2
+                    for _p in [str(_P(__file__).resolve().parents[2] / "packages" / "policy-model"), str(_P(__file__).resolve().parents[2] / "security" / "policy-engine")]:
+                        if _p not in _sys2.path:
+                            _sys2.path.insert(0, _p)
+                    from policy_model import POLICY_EVALUATION_ORDER  # type: ignore
+                    order = [s.value for s in POLICY_EVALUATION_ORDER]
+                except Exception:
+                    order = ["explicit_deny","security_boundary_deny","personal_delegation","persistent_user_grant","group_grant","default_bundle","jit_approval","default_deny"]
+                bundle = {"id": active.get("bundle_id") or "default-bundle-v1", "tenant_id": active.get("tenant_id") or "default", "name": active.get("name") or "Default Policy Bundle", "version": active.get("version"), "rules": active.get("rules") or []}
+                return {"bundles": [bundle], "evaluation_order": order, "draft": _legacy_draft("default") if _legacy_draft else None, "active_version": active.get("version")}
+    except Exception:
+        pass
     bundles_data: list[dict] = []
     policy_order: list[str] = []
     try:
-        # try import policy_model directly
         import sys as _sys2
         from pathlib import Path as _P
         for _p in [str(_P(__file__).resolve().parents[2] / "packages" / "policy-model"), str(_P(__file__).resolve().parents[2] / "security" / "policy-engine")]:
@@ -641,7 +677,6 @@ def policy_bundles(admin: AdminUser = Depends(get_current_admin)):
         policy_order = [s.value for s in POLICY_EVALUATION_ORDER]
     except Exception:
         policy_order = ["explicit_deny","security_boundary_deny","personal_delegation","persistent_user_grant","group_grant","default_bundle","jit_approval","default_deny"]
-    # try live security import
     try:
         import security.app as sec  # type: ignore
         pe = getattr(sec, "policy_engine", None)

@@ -34,10 +34,11 @@ def _allow_hash_embed() -> bool:
     flag = os.environ.get("OAOS_ALLOW_HASH_EMBED", "") or os.environ.get("OAOS_ALLOW_FAKE_EMBED", "")
     if flag.strip().lower() in ("1", "true", "yes", "on"):
         return True
-    # tests may set PYTEST_CURRENT_TEST
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return True
     if os.environ.get("OAOS_ALLOW_TEST_FIXTURE", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    if _is_production():
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
         return True
     return False
 

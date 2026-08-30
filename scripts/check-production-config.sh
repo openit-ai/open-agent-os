@@ -319,6 +319,20 @@ else:
     print(f"  → Fix: set OAOS_ENV=production in {env_file}")
     failures += 1
 
+# H5 §14 v1.7.1: session state primary is Redis in production
+_backend = (env.get("OAOS_SESSION_BACKEND") or "").strip().lower()
+if oaos_env in ("production", "prod"):
+    if _backend == "redis":
+        ok(f"OAOS_SESSION_BACKEND=redis (production) — {env_file}")
+    elif not _backend:
+        print(f"{RED}[ERROR]{RESET} OAOS_SESSION_BACKEND must be 'redis' for production (H5 fail-closed, §14 v1.7.1) — file: {env_file} (found: empty)")
+        print(f"  → Fix: set OAOS_SESSION_BACKEND=redis in {env_file}")
+        failures += 1
+    else:
+        print(f"{RED}[ERROR]{RESET} OAOS_SESSION_BACKEND must be 'redis' in production, found '{_backend}' — file: {env_file}")
+        print(f"  → Fix: set OAOS_SESSION_BACKEND=redis in {env_file}")
+        failures += 1
+
 # Optional warnings
 if not env.get("REDIS_URL"):
     print(f"{YELLOW}[WARN]{RESET} REDIS_URL not set — file: {env_file} (will default to redis://localhost:6379/0)")

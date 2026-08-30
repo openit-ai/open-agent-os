@@ -279,11 +279,18 @@ def check_required(key, min_len=0, alternatives=None):
         return True
 
 # --- Required checks ---------------------------------------------------
-# DATABASE_URL: must exist, not placeholder, must contain postgresql or postgres
-db = env.get("DATABASE_URL") or env.get("OAOS_DATABASE_URL") or ""
-if not db or is_placeholder(db):
+# DATABASE_URL: accept global/admin/control-plane-prefixed forms used by systemd.
+# The selected URL must not be a placeholder and must contain postgresql/postgres.
+_db_key = ""
+for _candidate in ("DATABASE_URL", "OAOS_DATABASE_URL", "OAOS_CP_DATABASE_URL"):
+    if env.get(_candidate):
+        _db_key = _candidate
+        break
+_db = env.get(_db_key) or ""
+db = _db
+if not _db or is_placeholder(_db):
     print(f"{RED}[ERROR]{RESET} Missing or placeholder: DATABASE_URL — file: {env_file}")
-    print(f"  → Fix: set DATABASE_URL in {env_file}")
+    print(f"  → Fix: set DATABASE_URL (or OAOS_DATABASE_URL / OAOS_CP_DATABASE_URL) in {env_file}")
     print(f"     Example: DATABASE_URL=postgresql+asyncpg://oaos:STRONG_PASSWORD@localhost:5432/oaos")
     failures += 1
 else:
@@ -311,6 +318,20 @@ else:
     print(f"{RED}[ERROR]{RESET} OAOS_ENV must be 'production' for systemd production — file: {env_file} (found: '{oaos_env or 'empty'}')")
     print(f"  → Fix: set OAOS_ENV=production in {env_file}")
     failures += 1
+
+# H5 §14 v1.7.1: session state primary is Redis in production
+_backend = (env.get("OAOS_SESSION_BACKEND") or "").strip().lower()
+if oaos_env in ("production", "prod"):
+    if _backend == "redis":
+        ok(f"OAOS_SESSION_BACKEND=redis (production) — {env_file}")
+    elif not _backend:
+        print(f"{RED}[ERROR]{RESET} OAOS_SESSION_BACKEND must be 'redis' for production (H5 fail-closed, §14 v1.7.1) — file: {env_file} (found: empty)")
+        print(f"  → Fix: set OAOS_SESSION_BACKEND=redis in {env_file}")
+        failures += 1
+    else:
+        print(f"{RED}[ERROR]{RESET} OAOS_SESSION_BACKEND must be 'redis' in production, found '{_backend}' — file: {env_file}")
+        print(f"  → Fix: set OAOS_SESSION_BACKEND=redis in {env_file}")
+        failures += 1
 
 # Optional warnings
 if not env.get("REDIS_URL"):

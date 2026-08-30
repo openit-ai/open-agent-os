@@ -116,6 +116,25 @@ _ADMIN_DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_provider ON admin_llm_providers (provider)",
     "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_secret_ref ON admin_llm_providers (secret_ref)",
+    """
+    CREATE TABLE IF NOT EXISTS admin_policy_versions (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        bundle_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        version TEXT NOT NULL,
+        status TEXT NOT NULL,
+        rules_json TEXT NOT NULL,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        approved_by TEXT,
+        approved_at TIMESTAMPTZ,
+        published_at TIMESTAMPTZ,
+        parent_version TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_policy_tenant_status ON admin_policy_versions (tenant_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_policy_bundle ON admin_policy_versions (bundle_id, version)",
 ]
 
 # SQLite-compatible DDL (no TIMESTAMPTZ, NOW())
@@ -179,6 +198,25 @@ _ADMIN_DDL_SQLITE = [
     """,
     "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_provider ON admin_llm_providers (provider)",
     "CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_secret_ref ON admin_llm_providers (secret_ref)",
+    """
+    CREATE TABLE IF NOT EXISTS admin_policy_versions (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        bundle_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        version TEXT NOT NULL,
+        status TEXT NOT NULL,
+        rules_json TEXT NOT NULL,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        approved_by TEXT,
+        approved_at TEXT,
+        published_at TEXT,
+        parent_version TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_policy_tenant_status ON admin_policy_versions (tenant_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_policy_bundle ON admin_policy_versions (bundle_id, version)",
 ]
 
 

@@ -42,6 +42,10 @@ class SessionRecord:
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
     hermes_worker: str | None = None
+    # OAOS runtime binding is explicit and never inherited from Hermes/Telegram.
+    runtime_provider: str = "opencode-go"
+    runtime_model: str = "muse-spark-1.2-contributor"
+    session_namespace: str = "oaos:mattermost"
     prompt_history: list[dict] = field(default_factory=list)
     stream_events: list[dict] = field(default_factory=list)
     status: str = "active"  # active | cancelled | ended
@@ -61,6 +65,9 @@ class SessionRecord:
             "trace_id": self.trace_id,
             "request_id": request_id or new_request_id(),
             "security_domain": self.security_domain,
+            "session_namespace": self.session_namespace,
+            "runtime_provider": self.runtime_provider,
+            "runtime_model": self.runtime_model,
         }
 
     def to_dict(self) -> dict:
@@ -126,6 +133,9 @@ class InMemorySessionStore(BaseSessionStore):
             trace_id=new_trace_id(),
             security_domain=security_domain,
             hermes_worker=hermes_worker,
+            runtime_provider="opencode-go",
+            runtime_model="muse-spark-1.2-contributor",
+            session_namespace="oaos:mattermost",
         )
         self._store[rec.session_id] = rec
         return rec
@@ -240,6 +250,9 @@ class RedisSessionStore(BaseSessionStore):
             trace_id=new_trace_id(),
             security_domain=security_domain,
             hermes_worker=hermes_worker,
+            runtime_provider="opencode-go",
+            runtime_model="muse-spark-1.2-contributor",
+            session_namespace="oaos:mattermost",
         )
         if self._client is None:
             if self._fallback_store is None:
@@ -290,12 +303,27 @@ def create_session_store(backend: str = "memory", redis_url: str | None = None, 
     return InMemorySessionStore()
 
 
-# Global singleton for dev — prod should use create_session_store via dependency injection
-session_store: BaseSessionStore = InMemorySessionStore()
-# If REDIS_URL is set and reachable, prefer Redis in prod; keep memory for tests
-if os.environ.get("OAOS_SESSION_BACKEND") == "redis":
+# Global singleton — production must use Redis (H5 fail-closed, §14, v1.7.1)
+# - production (OAOS_ENV=production): mandatory RedisSessionStore fallback=False; startup fails if Redis unavailable
+# - non-prod with OAOS_SESSION_BACKEND=redis: try Redis, fallback to memory for test compat
+# - otherwise: InMemory
+def _session_is_production() -> bool:
     try:
-        # H5: fallback computed inside RedisSessionStore (prod fail-closed)
+        from .env_gate import is_production as _ip  # type: ignore
+
+        return _ip()
+    except Exception:
+        return os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
+
+
+_session_backend = os.environ.get("OAOS_SESSION_BACKEND", "").strip().lower()
+if _session_is_production():
+    # H5: mandatory Redis, no silent fallback — let RuntimeError propagate (service startup fails)
+    session_store: BaseSessionStore = RedisSessionStore(fallback=False)
+elif _session_backend == "redis":
+    try:
         session_store = RedisSessionStore()
     except Exception:
         session_store = InMemorySessionStore()
+else:
+    session_store = InMemorySessionStore()

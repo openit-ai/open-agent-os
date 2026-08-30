@@ -132,6 +132,13 @@ def verify_capability(token: dict, action: str, resource: str, context: dict | N
         if ctx_agent and token_sub != ctx_agent:
             return CapabilityCheck(False, f"agent mismatch: token sub={token_sub} context agent={ctx_agent}")
 
+    # 6b. tenant binding (Stage4: exact tenant)
+    token_tenant = _get_token_field(token, "tenant_id") or _get_token_field(token, "tenant") or _get_token_field(token, "tid")
+    if context is not None and token_tenant:
+        ctx_tenant = context.get("tenant_id") if isinstance(context, dict) else getattr(context, "tenant_id", None)
+        if ctx_tenant and str(token_tenant) != str(ctx_tenant):
+            return CapabilityCheck(False, f"tenant mismatch: token tenant={token_tenant} context tenant={ctx_tenant}")
+
     jti = _get_token_field(token, "jti") or _get_token_field(token, "nonce")
     return CapabilityCheck(True, "ok", jti, token_delegation)
 
