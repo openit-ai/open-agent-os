@@ -1715,6 +1715,125 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 - **Live RAG 통합**: Knowledge Index는 unit-tested이나, 운영 corpus backfill 및 live Outline/Notion 자격증명 연동은 v1.7.2+ 운영 검증 범위.
 - **분산 일관성**: kind 2-replica + Redis Lua `k6` 병렬 검증, `hubble --verdict DROPPED` 캡처는 v1.7.2+에서 `distributed: N passed`로 승격.
 
+### 16.12 Adaptive Profile Engine — 핵심 개인화 기능 설계 (v1.7.2 설계 반영)
+
+> **상태: 설계 반영만 완료.** 현재 저장소에 Adaptive Profile 전용 서비스·DB 모델·Runtime Hook·Skill 구현 증거가 없으므로 구현 완료로 간주하지 않는다. 본 기능은 기존 OAOS Identity·Session·Policy·ACP·Memory·Hermes Runtime 경계를 확장하는 핵심 Core Module 설계다.
+
+#### 16.12.1 목적과 기존 아키텍처 정합성
+
+Adaptive Profile Engine은 사용자의 업무·상호작용 선호를 학습하여 현재 Task에 필요한 최소 `Response Policy`를 생성한다. 사용자를 성격 유형으로 분류하거나 평가하지 않으며, 기존 Personal Wiki/Memory가 저장하는 업무 지식·사실과 구분되는 **업무 수행 방식의 파생 프로필**이다.
+
+정합성 판정: **통합 가능 — 기존 경계를 유지한 확장**.
+
+- `Identity / Session`: 모든 프로필·Evidence 키는 검증된 `tenant_id + user_id/agent_id`에 귀속한다. 요청 본문이나 LLM 추론으로 사용자를 결정하지 않는다.
+- `Policy / Security`: Profile은 권한 엔진이 아니다. 기존 조직 정책·승인·금지 규칙이 항상 우선하며, `agent_autonomy`가 높아도 승인·외부전송·삭제·결제·관리자 행위를 우회할 수 없다.
+- `Memory / Knowledge`: Personal Wiki·Enterprise Knowledge Index와 저장 목적을 분리한다. 원문 대화는 Profile DB에 중복 장기 저장하지 않고 최소 Evidence·요약·provenance만 저장한다. 기업 Knowledge Index에 개인 Behavioral Profile을 넣지 않는다.
+- `ACP / Runtime`: LLM 호출 전 Hook이 Profile API에서 현재 Task의 최소 Response Policy만 조회하고, Hermes/LLM에는 상세 Score·Evidence·계산 이유를 전달하지 않는다. LLM 호출 후 분석은 비동기 Worker 경로로 분리하여 Critical Path 지연을 막는다.
+- `Redis / PostgreSQL`: 기존 OAOS PostgreSQL을 Profile/Evidence의 정본 저장소로 사용하고, Redis는 `user_id + task_type + profile_version` 정책 캐시로만 사용한다. 새 Vector DB·새 보안 계층·새 Policy Compiler는 추가하지 않는다.
+
+#### 16.12.2 논리 구성과 데이터 흐름
+
+```text
+Mattermost / Slack / other OAOS clients
+        ↓ verified Identity + ACP Context
+Agent Runtime
+  ├─ beforeLLMCall Hook
+  │     ↓ task_type + tenant/user scope
+  │  Profile API → Response Policy cache
+  │     ↓ minimal policy only
+  │  Hermes Runtime / LLM → response
+  └─ afterInteraction event (async)
+        ↓
+Interaction Analyzer → Evidence Store → Profile Update
+                                      ├─ Behavioral Profile
+                                      ├─ Work Preference
+                                      ├─ Interaction Style
+                                      └─ Confidence / version
+```
+
+구성요소의 책임은 다음과 같다.
+
+- **Adaptive Profile Engine**: Evidence 추출·가중치/감쇠·confidence 계산·프로필 버전 관리·정책 생성.
+- **Profile API**: 기본적으로 본인 범위만 조회·수정. `tenant_id`, `user_id`, `agent_id` 바인딩을 검증한다.
+- **Runtime Adapter / Hook**: Hermes 등 Runtime별 공통 인터페이스로 `beforeLLMCall`/`afterInteraction`을 연결한다. 기존 ACP·Security·Execution Gateway를 대체하지 않는다.
+- **Evidence Worker**: 응답 Critical Path 밖에서 rule-based 후보 검출 후 필요할 때만 구조화 분석을 수행한다. 실패 시 응답을 실패시키지 않되, 저장 실패·재처리 상태는 감사·운영 로그에 남긴다.
+- **Skill**: `get_my_profile`, `get_response_policy`, `get_work_preference`, `explain_my_profile`, `record_explicit_preference`, `reset_my_profile`를 본인 범위로 제공한다. 타 사용자 프로필 조회 Skill은 제공하지 않는다.
+
+#### 16.12.3 데이터 모델과 저장 경계
+
+```text
+user_profile(user_id, tenant_id, profile_version, status, evidence_count,
+             overall_confidence, created_at, updated_at)
+trait_scores(user_id, tenant_id, trait_name, global_score, confidence,
+             sample_count, last_updated)
+task_trait_scores(user_id, tenant_id, task_type, trait_name, score,
+                  confidence, sample_count)
+profile_evidence(evidence_id, user_id, tenant_id, conversation_id,
+                 message_id, task_type, trait, direction, strength,
+                 source_type, confidence, observed_at, content_hash)
+explicit_preferences(preference_id, user_id, tenant_id, scope, key,
+                     value, priority, created_at, updated_at)
+```
+
+필수 불변식:
+
+- 모든 조회·갱신은 `tenant_id + user_id`를 포함하고 cross-user/cross-tenant는 거부한다.
+- Explicit Preference 우선순위는 `현재 사용자 지시 > 저장 Explicit Preference > Task Preference > Behavioral Profile > 기본 정책`이다.
+- Evidence source weight는 명시 지시 `1.00`, 반복 수정 `0.90`, 실제 선택 `0.85`, 업무 패턴 `0.70`, 일반 표현 `0.40`, 문체 추론 `0.25`를 기본값으로 하되 운영 데이터로 조정 가능하게 한다.
+- 동일 Evidence의 중복 반영을 막는 결정적 `content_hash`/idempotency key를 둔다.
+- 원문 발화 전체를 장기 Profile 데이터로 복제하지 않으며, 보존기간·삭제·초기화·Adaptive Profile 중단을 지원한다.
+- `explicit_preferences`와 프로필 변경은 기존 Policy/Audit 경계에서 감사한다. 관리자는 개인 Evidence/상세 Profile을 기본 조회하지 않으며, 운영 통계는 비식별 집계만 허용한다.
+
+#### 16.12.4 Profile Policy 생성 및 런타임 적용
+
+```text
+verified Agent Context
+  → classify task_type
+  → load profile version (cache/DB)
+  → merge current instruction + explicit/task/global preference
+  → organization policy / approval constraints remain authoritative
+  → emit minimal Response Policy
+  → Hermes Runtime prompt/context injection
+```
+
+Runtime에는 다음과 같은 최소 정책만 전달한다.
+
+```json
+{
+  "conclusion_first": true,
+  "verbosity": "medium",
+  "technical_depth": "high",
+  "evidence_requirement": "high",
+  "challenge_assumptions": true,
+  "alternatives": 2,
+  "confirmation_level": "low"
+}
+```
+
+상세 Score, Evidence History, 개인 식별이 가능한 분석 근거는 Runtime/LLM에 전달하지 않는다. 현재 대화의 직접 지시가 저장 프로필보다 항상 우선한다.
+
+#### 16.12.5 초기 Trait·Task taxonomy
+
+초기 Behavioral Trait은 `conclusion_first`, `verbosity`, `directness`, `explanation_depth`, `repetition_tolerance`, `evidence_requirement`, `quantitative_preference`, `critical_challenge`, `uncertainty_tolerance`, `recommendation_decisiveness`, `alternative_preference`, `risk_tolerance`, `novelty_preference`, `decision_speed`, `agent_autonomy`, `confirmation_requirement`, `planning_orientation`, `completion_orientation`, `experimentation_preference`, `delegation_preference`, `control_preference`, `disagreement_tolerance`로 시작한다.
+
+초기 Task Type은 `general_chat`, `technical_research`, `software_engineering`, `architecture`, `decision_support`, `writing`, `meeting`, `calendar`, `email`, `project_management`, `data_analysis`, `brainstorming`, `strategy`로 제한한다. 분류 불확실 시 `general_chat` 및 기본 정책으로 fail-safe한다.
+
+#### 16.12.6 보안·운영 제한과 검증 기준
+
+- Profile은 사용자를 채용·해고·승진·급여·인사고과·순위화하거나 의학적/정신건강 진단하는 데 사용하지 않는다.
+- Profile API/Skill의 본인 범위 검증은 기존 JWT·ACP·Policy·Audit를 재사용한다. 별도 보안 계층을 만들지 않는다.
+- 조직 정책·접근권한·승인 규칙은 Profile보다 우선한다. Profile Hook 장애 시 기본 Response Policy로 안전하게 축소하며 권한·도구 실행을 허용하는 우회로 사용하지 않는다.
+- 초기화·삭제·중단은 명시적인 사용자 요청과 감사 이벤트를 요구한다.
+- 검증은 unit(가중치·감쇠·confidence·명시 우선순위), integration(tenant/user 격리·cache invalidation·worker idempotency), external/runtime(Hermes Hook 전후 정책 적용)로 구분한다. 현재는 설계 단계이므로 구현·운영 E2E PASS를 주장하지 않는다.
+
+#### 16.12.7 단계적 구현 순서와 잔여사항
+
+1. MVP: Profile/Evidence/Explicit Preference PostgreSQL 모델·API·tenant/user 격리·정책 합성·Hermes Hook·비동기 worker·본인 Profile Skill.
+2. MVP 검증: 현재 대화 직접 지시 우선, cross-user 차단, 동일 Evidence idempotency, Hook 장애 시 기본 정책, 사용자 초기화·감사.
+3. 후속: task-specific preference·Interaction Style·confidence 설명·decay·contradiction handling·multi-runtime adapter·비식별 통계.
+
+**Residual**: Profile 전용 DB migration, API, worker, Hermes Hook, Skill, UI 및 운영 external E2E는 아직 구현되지 않았다. 본 설계 추가는 기존 아키텍처 정합성 검토를 통과한 **설계 반영**이며, 구현 완료나 사용자 행동 성능 개선을 의미하지 않는다.
+
 ## 16.2 Hermes Runtime
 ## 16.2 Hermes Runtime
 
@@ -5275,6 +5394,7 @@ Audit
 | **v1.6.3** | **2026-08-28** | **§16.1.2 LLM Multi-Provider (6 Providers + Registry + Fallback + Hotfixes)** — 6 Providers(claude/codex/gemini/opencode-go/openrouter/ollama) Registry(Argo runners.mjs 패턴 ProviderSpec), Admin UI(llm_provider_config + Vault secret_ref, fallback_order), Runtime Dispatch(task/session/tenant 우선순위), Fallback(chain+circuit breaker+audit), Vault-only secrets(평문 DB 저장 금지, tenant 격리), **Hotfixes (2026-08-29)**: llm_runtime 7-key Registry + opencode alias(re-export), Provider fail-fast(503/mock 차단), runtime_mode DB 영속화(8010/3012 일치), hermes 409 guard(HERMES_MODE_NOOP), openrouter openai-SDK+httpx 이중 경로+tool_choice |
 | **v1.6.4** | **2026-08-29** | **§16.4 Tenant Quota (010)** — daily 100 / per-minute 10, 429 QUOTA_EXCEEDED, 테넌트 격리, DB+in-memory 이중, fail-open, `POST /providers/{id}/test` guard + **§16.5 Usage Tracking & Dashboard (011)** — admin_llm_usage(cost/latency/p95), deque 10000+DB persist, pricing per 1k tokens, summary/history API(`/usage/summary|history`), /llm-usage UI(progress/sparkline/bar/10s poll, #22C55E/#F59E0B/#DC2626) + **§16.6 HA (012)** — /healthz(liveness) / /readyz(readiness fail-open) / /v1/health/detailed 3종(3-tier), retry(_is_retryable 500/429/timeout, 3회 backoff) + CircuitBreaker(3/30s, per-model) + audit, active_requests middleware + SIGTERM 30s drain, compose healthcheck(unless-stopped, depends_on service_healthy) + k8s replicas 2/RollingUpdate/liveness+readiness/antiAffinity + PDB(minAvailable 1) — docs/ha.md 정본 — **612 tests** |
 | **v1.7.1** | **2026-08-29** | **§16.8 Secret Lifecycle (014) + §0.4/§16.9 RAG architecture (Personal Wiki §27B implemented, Knowledge Index defined, e8f23fb459) + §16.10 H4(1afdc193ee) H5(2a3014e54e) H6(47f3219106) implemented, H7/H8 residual — Docker/systemd parallel, 0600, 64-hex auto-generate/preserve/--rotate** |
+| **v1.7.2 설계 반영** | **2026-08-30** | **§16.12 Adaptive Profile Engine 추가 — 기존 Identity/Session/Policy/ACP/Memory/Hermes 경계를 유지하는 핵심 개인화 Core Module 설계, 설계만 반영·구현 미착수** |
 | **v1.7.0** | **2026-08-29** | **§16.7 Production Hardening (013)** — `OAOS_ENV=production|prod` fail-closed — Env Gate(`is_production`/`is_mock_allowed`/`fail_open_telemetry`, 3벌 mirror), Runtime(`llm_runtime` quota `503 QUOTA_BACKEND_UNAVAILABLE`/missing provider fail-closed, `mcp_client` gateway_unreachable fail-closed, proxy mock 게이트, `/readyz` bounded 0.8s threadpool+degraded 200), Auth(`admin-console/backend/auth.py` Argon2id+bcrypt, `OAOS_ADMIN_BOOTSTRAP_PASSWORD` 12자, JWT 32자, 기본 시드 금지), Deploy(`compose prod` `:?`/_FILE+`expose` only, `compose dev` `127.0.0.1`, k8s `ConfigMap OAOS_ENV=production`+`OAOS_ENV`×3+`NetworkPolicy` 8종+`secret.yaml.template` DO NOT commit), Audit/Approval/Token/Rate(DB/Redis primary prod fail-closed non-prod in-memory+telemetry — `audit_ledger`/`approval_workflow` DB, `token_service` Redis `SET NX`, `ToolRateLimiter` Redis Lua→`503`), Secrets(`.env.example` `CHANGE_ME`+`OAOS_ADMIN_BOOTSTRAP_PASSWORD/EMAIL`, `README` bootstrap L5) — **648 tests** (612→648, `test_runtime_hardening`+`test_auth_production_hardening` 9+`test_deploy_hardening` 15) + **Residual**: quota `TODO distributed`, Vault `encrypted_postgres` legacy, `/readyz` 200+degraded, env gate mirror drift, Redis HA 필요 |
 
 # Table of Contents (v1.7.1)

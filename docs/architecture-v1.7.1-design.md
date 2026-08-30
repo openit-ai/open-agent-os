@@ -835,7 +835,12 @@ packages/personal-wiki/personal_wiki/vault.py # verify_wiki_jwt, PATH_TRAVERSAL
 memory_service/app.py                    # Wiki JWT middleware
 packages/agent-runtime/agent_runtime/llm_runtime.py # Redis Lua quota, prod 503
 packages/agent-runtime/agent_runtime/mcp_client.py # env_gate 정본 import
-admin-console/backend/llm_providers.py   # Redis Lua quota
+admin-console/backend/llm_providers.py # Redis Lua quota
+packages/adaptive-profile/adaptive_profile/ # Adaptive Profile Engine (MVP: profile/evidence/preferences/policy)
+profile_service/app.py                         # Profile API — tenant/user self-scope, JWT/ACP/Audit reuse
+profile_worker/worker.py                        # 비동기 Evidence 분석·멱등 Profile 업데이트
+packages/agent-runtime/agent_runtime/profile_hook.py # beforeLLMCall/afterInteraction Runtime Hook
+skills/profile/                                 # 본인 Profile 조회·설명·수정 Skill (구현 시)
 security/token/token_service/service.py  # prod Redis mandatory 유지, 문서화
 deploy/k8s/networkpolicy.yaml            # CiliumNetworkPolicy 분리
 deploy/k8s/configmap.yaml                # prod 완화 키 없음 — 서명에 필요한 키만
