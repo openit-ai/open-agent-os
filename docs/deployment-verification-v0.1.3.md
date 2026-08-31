@@ -1,6 +1,7 @@
 # Deployment Verification — v0.1.3 (H8 Evidence Tiers)
 
-> **Product:** `v0.1.3` · **Architecture:** `v1.7.2` · **Commit:** `d7a5062986de78ef873f176c5a3f391872151d6f` · **Timestamp (UTC):** `2026-08-31T10:08:55.065609+00:00` · **Command:** `pytest -q`
+> **Product:** `v0.1.3` · **Architecture:** `v1.7.2` · **Code-test commit:** `d7a5062986de78ef873f176c5a3f391872151d6f`
+> **Final candidate commit:** `603bd1d3c8f149ac4bf596ebd84fedf7f596067a` · **Timestamp (UTC):** `2026-08-31T10:08:55.065609+00:00` · **Command:** `pytest -q`
 > **pytest:** `1252 passed, 5 skipped, 0 failed, 85 warnings in 359.06s` · **Branch:** `release/v0.1.3-remediation`
 > **Historical v1.7.1 evidence preserved:** `docs/deployment-verification-v1.7.1.md` / `docs/evidence-report-v1.7.1.json` not overwritten — this is the current v0.1.3 candidate.
 

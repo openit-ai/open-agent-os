@@ -2,15 +2,15 @@
   "command": "python -m pytest -q",
   "timestamp": "2026-08-31T09:58:28Z",
   "completed_at": "2026-08-31T10:04:28Z",
-  "commit": "d7a5062986de78ef873f176c5a3f391872151d6f",
+  "commit": "603bd1d3c8f149ac4bf596ebd84fedf7f596067a",
   "branch": "release/v0.1.3-remediation",
   "product_version": "0.1.3",
   "architecture_version": "v1.7.2",
   "pytest": {"passed": 1252, "skipped": 5, "failed": 0, "warnings": 85, "duration_seconds": 359.06, "exit_code": 0},
   "tiers": {"unit": 1252, "integration": 0, "distributed": 0, "external": 0, "total_passed": 1252, "skipped": 5, "failed": 0, "warnings": 85},
   "evidence_boundary": {
-    "repository": "PASS — full pytest completed with zero failures",
-    "process": "NOT VERIFIED — running services predate d7a5062986 and were not restarted",
+    "repository": "PASS — full pytest completed with zero failures; final commit adds documentation-only candidate reference updates",
+    "process": "NOT VERIFIED — running services predate the candidate and were not restarted",
     "runtime": "NOT VERIFIED — no fresh external user-path round trip in this gate",
     "distributed": "NOT VERIFIED — live Redis/multi-replica/Kubernetes/CNI evidence not executed",
     "external": "NOT VERIFIED — live connector/runtime/user-path evidence not executed"
@@ -30,7 +30,8 @@
   "notes": [
     "This report records the exact completed full pytest run and does not promote unit evidence to distributed or external evidence.",
     "Historical v1.7.1 evidence files are preserved and not overwritten.",
-    "Operational DB migration, service restart, external connector verification, and user-facing E2E remain separate gates."
+    "Operational DB migration, service restart, external connector verification, and user-facing E2E remain separate gates.",
+    "Final candidate commit 603bd1d3c8 contains documentation-only candidate reference updates after the authoritative code test run at d7a5062986."
   ],
   "violations": []
 }
