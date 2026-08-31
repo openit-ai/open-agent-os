@@ -19,6 +19,7 @@ All DB imports are lazy (no DB at import time).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -1698,6 +1699,23 @@ async def memory_delete_by_delegation(payload: dict, request: Request):
 _knowledge_db_maker = None  # type: ignore
 _knowledge_db_engine = None  # type: ignore
 
+# P1 availability: bounded non-blocking sync (single worker starvation fix)
+# Bounded concurrency via semaphore + offload blocking sync work via asyncio.to_thread.
+# External API semantics unchanged; health never acquires semaphore.
+try:
+    _KN_SYNC_CONC = int((os.environ.get("OAOS_KNOWLEDGE_SYNC_CONCURRENCY") or "2").strip() or "2")
+except Exception:
+    _KN_SYNC_CONC = 2
+_KNOWLEDGE_SYNC_CONCURRENCY = max(1, min(_KN_SYNC_CONC, 4))
+_KNOWLEDGE_SYNC_SEMAPHORE: asyncio.Semaphore | None = None  # lazy
+
+
+def _get_knowledge_sync_semaphore() -> asyncio.Semaphore:
+    global _KNOWLEDGE_SYNC_SEMAPHORE
+    if _KNOWLEDGE_SYNC_SEMAPHORE is None:
+        _KNOWLEDGE_SYNC_SEMAPHORE = asyncio.Semaphore(_KNOWLEDGE_SYNC_CONCURRENCY)
+    return _KNOWLEDGE_SYNC_SEMAPHORE
+
 
 async def _get_knowledge_maker():
     """Reuse memory_service DB maker but ensure knowledge_index table exists."""
@@ -2053,9 +2071,10 @@ async def knowledge_sync(payload: dict, request: Request):
                 elif isinstance(d, str):
                     docs.append(SourceDocument(resource_id=f"outline/{collection_id or 'team'}/{d}", source_system="outline", title=d, content=d, tenant_id=tenant_id))
             adapter = InMemorySourceAdapter(documents=docs)  # type: ignore
-            # Run sync via library (it accepts InMemory in non-prod)
+            # Bounded non-blocking: semaphore + to_thread inside service; outer bound here
             repo = KnowledgeIndexRepository(maker)
-            result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter, chunk_config=None)
+            async with _get_knowledge_sync_semaphore():
+                result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter, chunk_config=None)
             try:
                 out = result.to_dict()  # type: ignore
             except Exception:
@@ -2086,7 +2105,8 @@ async def knowledge_sync(payload: dict, request: Request):
 
     repo = KnowledgeIndexRepository(maker)
     try:
-        result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter)
+        async with _get_knowledge_sync_semaphore():
+            result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:
