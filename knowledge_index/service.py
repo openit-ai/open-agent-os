@@ -24,6 +24,7 @@ are kept identical; the latter re-exports from ROOT for pip-install compat.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -341,14 +342,20 @@ async def sync_outline_to_index(
         retry_backoff_s=retry_backoff_s,
     )
 
-    # SyncOrchestrator.sync is synchronous (blocks on time.sleep for retries, stdlib HTTP)
-    # We call it in-thread to avoid blocking event loop for long? For now direct.
-    # Wrap to allow async repository usage afterwards.
-    # Since this is I/O-bound but short in tests, direct call is acceptable.
-
+    # SyncOrchestrator.sync is synchronous (blocks on time.sleep for retries, stdlib HTTP + Ollama /api/embed urllib)
+    # P1 availability fix: offload to thread to avoid starving event loop when single worker.
+    # Bounded concurrency is enforced at HTTP layer (memory_service semaphore); here we ensure non-blocking.
     # Check: embedding dim vs index expectation
     try:
-        sync_result = orchestrator.sync()
+        try:
+            # If running inside an event loop, offload blocking sync to thread pool
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            sync_result = await asyncio.to_thread(orchestrator.sync)
+        else:
+            sync_result = orchestrator.sync()
     except RuntimeError as e:
         # production hash guard surfaces as RuntimeError — propagate
         raise
@@ -439,7 +446,6 @@ async def sync_outline_to_index(
                             )
                         )
                         await session.commit()
-                import asyncio
                 try:
                     # if running in async context, await
                     await _delete_resource()
