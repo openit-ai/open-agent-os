@@ -92,10 +92,20 @@ def do_health(page_limit: int = 1) -> dict:
         print(f"Outline health BLOCKED: {r.blocker}")
         out["outline"] = r.to_dict()
 
-    # Notion
-    from knowledge_index.health import probe_notion_health
+    # Notion — deterministic fail-closed if adapter missing (no crash, no fabricated health)
+    try:
+        from knowledge_index.health import probe_notion_health
 
-    r2 = probe_notion_health(page_limit=page_limit)
+        r2 = probe_notion_health(page_limit=page_limit)
+    except (ModuleNotFoundError, ImportError) as e:
+        # health module itself missing Notion adapter should be handled inside, but guard CLI too
+        from knowledge_index.health import HealthProbeResult as _HPR, _NOTION_ADAPTER_MISSING_BLOCKER  # type: ignore
+
+        r2 = _HPR(source="notion", ok=False, blocker=f"{_NOTION_ADAPTER_MISSING_BLOCKER} ({type(e).__name__}: {e})", error="adapter missing — fail-closed")
+    except Exception as e:
+        from knowledge_index.health import HealthProbeResult as _HPR2  # type: ignore
+
+        r2 = _HPR2(source="notion", ok=False, error=f"{type(e).__name__}: {str(e)[:300]}", blocker=None)
     if r2.ok:
         print(f"Notion health OK: fetched={r2.fetched} pages={r2.pages}")
     else:

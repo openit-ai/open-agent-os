@@ -58,10 +58,13 @@ class TestCredentialPresence:
         from knowledge_index.health import check_notion_credentials
 
         res = check_notion_credentials()
-        # without creds, blocker must be set, not silently stubbed
+        # without creds, blocker must be set, not silently stubbed; when adapter missing, blocker mentions adapter
         if not res["verifiable"]:
             assert res["blocker"] is not None
-            assert "Notion credentials missing" in res["blocker"]
+            # fail-closed blocker must mention Notion (credentials missing OR adapter missing)
+            assert "Notion" in res["blocker"]
+            # must not fabricate verifiable True
+            assert res["verifiable"] is False
 
     def test_health_never_prints_secrets(self, capsys):
         from knowledge_index.health import check_outline_credentials, check_notion_credentials
@@ -123,7 +126,10 @@ class TestConnectorHealth:
         assert d.source_system == "outline"
 
     def test_notion_health_fake_bounded(self):
-        from knowledge_index.connectors.http_notion import HttpNotionSourceAdapter
+        try:
+            from knowledge_index.connectors.http_notion import HttpNotionSourceAdapter
+        except (ModuleNotFoundError, ImportError) as e:
+            pytest.skip(f"HttpNotionSourceAdapter not present in this checkout (fail-closed expected): {e}")
 
         raw_page = {
             "object": "page",
@@ -379,3 +385,109 @@ class TestLiveBackfillDryRun:
         assert len(data) <= 2
         # has_more indicates live corpus larger than page — but we don't fetch all without approval
         assert isinstance(has_more, bool)
+
+# ---------------------------------------------------------------------------
+# Regression: missing Notion adapter must be fail-closed, not ModuleNotFoundError
+# ---------------------------------------------------------------------------
+class TestNotionAdapterMissingFailClosed:
+    """Clean-checkout regression: when http_notion.py is absent, health must return blocker not crash."""
+
+    def test_check_notion_credentials_missing_adapter_is_blocker_not_crash(self, monkeypatch):
+        import sys
+        import importlib
+        # Hide the module in this process without deleting files: simulate clean checkout
+        hid = {}
+        for mod in list(sys.modules.keys()):
+            if "http_notion" in mod:
+                hid[mod] = sys.modules.pop(mod)
+        # Also ensure find_spec would fail by blocking import via monkeypatch
+        orig_import = __import__
+
+        def _blocked_import(name, *args, **kwargs):
+            if "http_notion" in name:
+                raise ModuleNotFoundError(f"No module named '{name}' (simulated clean checkout)")
+            return orig_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _blocked_import)
+        try:
+            # Reload health to exercise missing path (health already handles both)
+            import knowledge_index.health as hmod
+            import importlib
+            importlib.reload(hmod)
+            res = hmod.check_notion_credentials()
+            assert res["verifiable"] is False
+            assert res["blocker"] is not None
+            assert "Notion adapter missing" in res["blocker"]
+            assert res.get("adapter_missing") is True
+            # must not raise
+        finally:
+            monkeypatch.undo()
+            for k, v in hid.items():
+                sys.modules[k] = v
+            # restore health module to normal (reimport with real adapter)
+            import importlib as _il
+            import knowledge_index.health as _hm
+            _il.reload(_hm)
+
+    def test_probe_notion_health_missing_adapter_is_blocker_not_crash(self, monkeypatch):
+        import sys
+        import importlib
+        hid = {}
+        for mod in list(sys.modules.keys()):
+            if "http_notion" in mod:
+                hid[mod] = sys.modules.pop(mod)
+        orig_import = __import__
+
+        def _blocked_import(name, *args, **kwargs):
+            if "http_notion" in name:
+                raise ModuleNotFoundError(f"No module named '{name}' (simulated clean checkout)")
+            return orig_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _blocked_import)
+        try:
+            import knowledge_index.health as hmod
+            importlib.reload(hmod)
+            r = hmod.probe_notion_health(page_limit=1, http_client=None)
+            assert r.ok is False
+            assert r.blocker is not None
+            assert "Notion adapter missing" in r.blocker
+            assert "fail-closed" in (r.error or "").lower()
+        finally:
+            monkeypatch.undo()
+            for k, v in hid.items():
+                sys.modules[k] = v
+            import importlib as _il2
+            import knowledge_index.health as _hm2
+            _il2.reload(_hm2)
+
+    def test_check_all_credentials_survives_missing_notion_adapter(self, monkeypatch):
+        import sys
+        hid = {}
+        for mod in list(sys.modules.keys()):
+            if "http_notion" in mod:
+                hid[mod] = sys.modules.pop(mod)
+        orig_import = __import__
+
+        def _blocked_import(name, *args, **kwargs):
+            if "http_notion" in name:
+                raise ModuleNotFoundError(f"No module named '{name}'")
+            return orig_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _blocked_import)
+        try:
+            import knowledge_index.health as hmod
+            import importlib
+            importlib.reload(hmod)
+            res = hmod.check_all_credentials()
+            # outline part must still exist; notion part must be blocker
+            assert "outline" in res and "notion" in res
+            assert res["notion"]["verifiable"] is False
+            assert "Notion adapter missing" in res["notion"]["blocker"]
+        finally:
+            monkeypatch.undo()
+            for k, v in hid.items():
+                sys.modules[k] = v
+            import importlib as _il3
+            import knowledge_index.health as _hm3
+            _il3.reload(_hm3)
+

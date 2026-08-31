@@ -5,6 +5,7 @@ Safe operational boundary:
 - Health probes are read-only, bounded (page_limit 1-5, single page), no DB writes
 - ACL/tenant pre-filter validated before retrieval
 - External network only if credentials present; otherwise fail-closed with blocker description
+- Missing Notion adapter (http_notion.py absent) is treated deterministically as a blocker — no crash, no fabricated health
 """
 
 from __future__ import annotations
@@ -16,6 +17,13 @@ from typing import Any
 
 OUTLINE_ENV_KEYS = ("OUTLINE_API_URL", "OUTLINE_API_KEY", "OUTLINE_API_TOKEN", "OAOS_OUTLINE_URL", "OAOS_OUTLINE_TOKEN", "OAOS_OUTLINE_API_KEY", "OUTLINE_TOKEN")
 NOTION_ENV_KEYS = ("NOTION_API_KEY", "NOTION_TOKEN", "NOTION_API_TOKEN", "OAOS_NOTION_TOKEN", "OAOS_NOTION_API_KEY", "OAOS_NOTION_URL", "NOTION_API_URL")
+
+# Deterministic blocker when the live Notion connector implementation is absent from checkout
+_NOTION_ADAPTER_MISSING_BLOCKER = (
+    "Notion adapter missing: knowledge_index/connectors/http_notion.py not present "
+    "(packages/knowledge-index/knowledge_index/connectors/http_notion.py) — "
+    "live Notion connector not verifiable (fail-closed, no mock fallback)"
+)
 
 
 def _cred_status(keys: tuple[str, ...]) -> dict[str, Any]:
@@ -29,6 +37,30 @@ def _cred_status(keys: tuple[str, ...]) -> dict[str, Any]:
         # do not expose value
     # outline mandatory pair: URL + token
     return {"keys": details}
+
+
+def _fallback_notion_url() -> str:
+    """Resolve Notion API URL without importing http_notion (env-only fallback)."""
+    value = ""
+    for k in ("NOTION_API_URL", "OAOS_NOTION_URL", "OAOS_NOTION_API_URL"):
+        v = os.environ.get(k, "").strip()
+        if v:
+            value = v
+            break
+    if not value:
+        value = "https://api.notion.com"
+    value = value.rstrip("/")
+    if value.endswith("/v1"):
+        value = value[:-3].rstrip("/")
+    return value
+
+
+def _fallback_notion_token() -> str:
+    for k in ("NOTION_API_KEY", "NOTION_TOKEN", "OAOS_NOTION_TOKEN", "OAOS_NOTION_API_KEY", "NOTION_API_TOKEN"):
+        v = os.environ.get(k, "").strip()
+        if v:
+            return v
+    return ""
 
 
 def check_outline_credentials() -> dict[str, Any]:
@@ -51,20 +83,59 @@ def check_outline_credentials() -> dict[str, Any]:
 
 
 def check_notion_credentials() -> dict[str, Any]:
-    from .connectors.http_notion import _resolve_api_url, _resolve_api_token  # type: ignore
+    """Return Notion credential presence; if adapter missing, fail-closed with deterministic blocker."""
+    try:
+        from .connectors.http_notion import _resolve_api_url, _resolve_api_token  # type: ignore
 
-    url = _resolve_api_url(None)
-    tok = _resolve_api_token(None)
-    return {
-        "source": "notion",
-        "api_url_present": bool(url),
-        "api_url_len": len(url),
-        "api_token_present": bool(tok),
-        "api_token_len": len(tok),
-        "env_details": _cred_status(NOTION_ENV_KEYS),
-        "verifiable": bool(url and tok),
-        "blocker": None if (url and tok) else "Notion credentials missing: set NOTION_API_KEY/NOTION_TOKEN or OAOS_NOTION_TOKEN — live Notion connector not verifiable",
-    }
+        url = _resolve_api_url(None)
+        tok = _resolve_api_token(None)
+        verifiable = bool(url and tok)
+        return {
+            "source": "notion",
+            "api_url_present": bool(url),
+            "api_url_len": len(url),
+            "api_token_present": bool(tok),
+            "api_token_len": len(tok),
+            "env_details": _cred_status(NOTION_ENV_KEYS),
+            "verifiable": verifiable,
+            "adapter_missing": False,
+            "blocker": None if verifiable else "Notion credentials missing: set NOTION_API_KEY/NOTION_TOKEN or OAOS_NOTION_TOKEN — live Notion connector not verifiable",
+        }
+    except (ModuleNotFoundError, ImportError) as e:
+        # Adapter not present in this checkout — resolve env-only and report missing as blocker
+        url = _fallback_notion_url()
+        tok = _fallback_notion_token()
+        # Adapter missing is always a blocker even if creds happen to be present (cannot verify health)
+        blocker = f"{_NOTION_ADAPTER_MISSING_BLOCKER} ({type(e).__name__}: {e})"
+        if not tok:
+            blocker = blocker + " — also credentials missing: set NOTION_API_KEY/NOTION_TOKEN or OAOS_NOTION_TOKEN"
+        return {
+            "source": "notion",
+            "api_url_present": bool(url),
+            "api_url_len": len(url),
+            "api_token_present": bool(tok),
+            "api_token_len": len(tok),
+            "env_details": _cred_status(NOTION_ENV_KEYS),
+            "verifiable": False,
+            "adapter_missing": True,
+            "adapter_error": f"{type(e).__name__}: {e}",
+            "blocker": blocker,
+        }
+    except Exception as e:
+        url = _fallback_notion_url()
+        tok = _fallback_notion_token()
+        return {
+            "source": "notion",
+            "api_url_present": bool(url),
+            "api_url_len": len(url),
+            "api_token_present": bool(tok),
+            "api_token_len": len(tok),
+            "env_details": _cred_status(NOTION_ENV_KEYS),
+            "verifiable": False,
+            "adapter_missing": True,
+            "adapter_error": f"{type(e).__name__}: {e}",
+            "blocker": f"{_NOTION_ADAPTER_MISSING_BLOCKER} (unexpected: {type(e).__name__}: {e})",
+        }
 
 
 def check_all_credentials() -> dict[str, Any]:
@@ -130,11 +201,30 @@ def probe_outline_health(*, page_limit: int = 1, timeout_s: float = 8.0, http_cl
 def probe_notion_health(*, page_limit: int = 1, timeout_s: float = 8.0, http_client: Any | None = None) -> HealthProbeResult:
     cred = check_notion_credentials()
     if not cred["verifiable"]:
-        return HealthProbeResult(source="notion", ok=False, blocker=cred["blocker"], error="credentials missing — fail-closed")
+        # cred already contains deterministic blocker (adapter missing or credentials missing)
+        # Do not fabricate health; do not crash
+        err = "adapter missing — fail-closed" if cred.get("adapter_missing") else "credentials missing — fail-closed"
+        return HealthProbeResult(source="notion", ok=False, blocker=cred["blocker"], error=err)
     t0 = time.time()
     try:
-        from .connectors.http_notion import HttpNotionSourceAdapter
-
+        try:
+            from .connectors.http_notion import HttpNotionSourceAdapter
+        except (ModuleNotFoundError, ImportError) as e:
+            return HealthProbeResult(
+                source="notion",
+                ok=False,
+                latency_ms=int((time.time() - t0) * 1000),
+                error="adapter missing — fail-closed",
+                blocker=f"{_NOTION_ADAPTER_MISSING_BLOCKER} ({type(e).__name__}: {e})",
+            )
+        if HttpNotionSourceAdapter is None:  # defensive: package init may set None
+            return HealthProbeResult(
+                source="notion",
+                ok=False,
+                latency_ms=int((time.time() - t0) * 1000),
+                error="adapter missing — fail-closed",
+                blocker=_NOTION_ADAPTER_MISSING_BLOCKER,
+            )
         adapter = HttpNotionSourceAdapter(page_limit=page_limit, timeout_s=timeout_s, http_client=http_client)
         res = adapter.fetch(checkpoint=None)
         latency = int((time.time() - t0) * 1000)
@@ -147,7 +237,11 @@ def probe_notion_health(*, page_limit: int = 1, timeout_s: float = 8.0, http_cli
         return HealthProbeResult(source="notion", ok=True, fetched=len(res.documents), pages=pages, sample_ids=sample, latency_ms=latency)
     except Exception as e:
         latency = int((time.time() - t0) * 1000)
-        return HealthProbeResult(source="notion", ok=False, latency_ms=latency, error=f"{type(e).__name__}: {str(e)[:300]}", blocker=None)
+        # If adapter missing was the cause, keep that blocker; otherwise leave blocker None (credentials were present)
+        blocker = None
+        if "adapter missing" in str(e).lower() or "http_notion" in str(e):
+            blocker = f"{_NOTION_ADAPTER_MISSING_BLOCKER} ({type(e).__name__}: {str(e)[:200]})"
+        return HealthProbeResult(source="notion", ok=False, latency_ms=latency, error=f"{type(e).__name__}: {str(e)[:300]}", blocker=blocker)
 
 
 def verify_acl_prefilter_contract() -> dict[str, Any]:
