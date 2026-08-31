@@ -23,6 +23,11 @@ def extract_features(text: str, observed_at: str | None = None) -> list[Behavior
     features: list[BehavioralFeature] = []
     def add(name: str, value: float, source: str = "general_expression", confidence: float = .4) -> None:
         features.append(BehavioralFeature(name, max(-1.0, min(1.0, value)), source, confidence, observed_at))
+    # Low-cost interaction shape metrics are observations, not personality labels.
+    # They allow later windowed aggregation without blocking the response path.
+    add("message_length", min(1.0, len(text) / 1000.0), "style_inference", .25)
+    add("question_ratio", 1.0 if "?" in text or "？" in text else -1.0, "general_expression", .4)
+    add("instruction_ratio", 1.0 if re.search(r"해줘|해라|진행|확인|부탁|please|do\b", text, re.I) else -1.0, "general_expression", .4)
     if re.search(r"결론부터|결론.*먼저|conclusion.*first", text, re.I): add("conclusion_first", 1, "explicit_feedback", .95)
     if re.search(r"간결|짧게|너무.*길|concise|brief", text, re.I): add("verbosity", -1, "explicit_feedback", .95)
     if re.search(r"자세히|더.*길게|more detail|elaborate", text, re.I): add("verbosity", 1, "explicit_feedback", .9)

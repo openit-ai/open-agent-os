@@ -9,7 +9,8 @@ def test_behavioral_features_are_deterministic_and_weighted():
     result = extract_features("결론부터 말하고 출처를 검증해줘. 묻지 말고 진행해.", "2026-08-31T00:00:00+00:00")
     names = {f.name for f in result}
     assert {"conclusion_first", "evidence_requirement", "agent_autonomy", "confirmation_requirement"} <= names
-    assert all(f.source_type == "explicit_feedback" for f in result)
+    assert any(f.source_type == "explicit_feedback" for f in result)
+    assert any(f.name == "message_length" and f.source_type == "style_inference" for f in result)
     assert extract_features("결론부터 말하고 출처를 검증해줘.", "2026-08-31T00:00:00+00:00") == extract_features("결론부터 말하고 출처를 검증해줘.", "2026-08-31T00:00:00+00:00")
 
 
