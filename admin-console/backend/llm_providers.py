@@ -1350,7 +1350,8 @@ def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[
                         q = q.filter(AdminLlmUsageORM.tenant_id == tenant_id)
                     q = q.limit(max(1, min(100, limit)))
                     for r in q.all():
-                        items.append({"id": r.id, "tenant_id": r.tenant_id, "provider": r.provider, "model": r.model, "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens, "total_tokens": r.total_tokens, "cost_usd": r.cost_usd, "latency_ms": r.latency_ms, "status": r.status, "error": r.error, "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at)})
+                        _ts = r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at)
+                        items.append({"id": r.id, "tenant_id": r.tenant_id, "tenant": r.tenant_id, "provider": r.provider, "model": r.model, "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens, "total_tokens": r.total_tokens, "cost_usd": r.cost_usd, "latency_ms": r.latency_ms, "status": r.status, "error": r.error, "created_at": _ts, "timestamp": _ts})
                     if items:
                         return items
         except Exception:
@@ -1364,6 +1365,9 @@ def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[
         c = dict(r)
         if hasattr(c["created_at"], "isoformat"):
             c["created_at"] = c["created_at"].isoformat()
+        # frontend aliases
+        c["tenant"] = c.get("tenant") or c.get("tenant_id") or "default"
+        c["timestamp"] = c.get("timestamp") or c.get("created_at") or ""
         items.append(c)
     return items
 
@@ -1403,6 +1407,28 @@ def _admin_usage_summary(tenant_id: str | None = None) -> dict:
         idx = max(0, min(idx, len(latencies) - 1))
         p95 = float(latencies[idx])
     # daily = today UTC, per_minute = last 60s
+    def _is_today(ca, now_dt):
+        if isinstance(ca, str):
+            try:
+                ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
+            except Exception:
+                return False
+        if ca is None:
+            return False
+        if ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
+        return ca.date() == now_dt.date()
+    def _is_recent(ca, now_dt, secs: int):
+        if isinstance(ca, str):
+            try:
+                ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
+            except Exception:
+                return False
+        if ca is None:
+            return False
+        if ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
+        return 0 <= (now_dt - ca).total_seconds() <= secs
     daily = 0
     per_min = 0
     for r in recs:
@@ -1420,7 +1446,45 @@ def _admin_usage_summary(tenant_id: str | None = None) -> dict:
             daily += 1
         if (now - ca).total_seconds() <= 60:
             per_min += 1
-    return {"tenant_id": tenant_id or "all", "total_requests": total, "success_count": success, "failed_count": failed, "total_cost_usd": total_cost, "total_tokens": total_tokens, "avg_latency_ms": avg_lat, "p95_latency_ms": round(p95, 2), "daily_count": daily, "per_minute_count": per_min, "window": "all-time"}
+    # --- frontend-compatible extensions (keep original keys for backward compat) ---
+    daily_tokens = sum(int(r.get("total_tokens") or 0) for r in recs if _is_today(r.get("created_at"), now))
+    per_min_tokens = sum(int(r.get("total_tokens") or 0) for r in recs if _is_recent(r.get("created_at"), now, 60))
+    daily_quota = 50000
+    per_minute_limit = 2000
+    daily_ratio = round((daily_tokens / daily_quota) if daily_quota else 0, 4)
+    succ_rate = round((success / total) if total else 0, 4)
+    p50 = 0.0
+    p99 = 0.0
+    if latencies:
+        p50 = float(latencies[max(0, min(_usage_math.ceil(0.5 * len(latencies)) - 1, len(latencies) - 1))])
+        p99 = float(latencies[max(0, min(_usage_math.ceil(0.99 * len(latencies)) - 1, len(latencies) - 1))])
+    hourly_tokens: list[int] = [0] * 24
+    hourly_cost: list[float] = [0.0] * 24
+    hourly_latency: list[float] = [0.0] * 24
+    _hour_counts: list[int] = [0] * 24
+    for r in recs:
+        ca = r.get("created_at")
+        if isinstance(ca, str):
+            try:
+                ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
+            except Exception:
+                continue
+        if ca is None:
+            continue
+        if ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
+        age_h = (now - ca).total_seconds() / 3600
+        if 0 <= age_h < 24:
+            idx = 23 - int(age_h)
+            if 0 <= idx < 24:
+                hourly_tokens[idx] += int(r.get("total_tokens") or 0)
+                hourly_cost[idx] = round(hourly_cost[idx] + float(r.get("cost_usd") or 0), 6)
+                hourly_latency[idx] += float(r.get("latency_ms") or 0)
+                _hour_counts[idx] += 1
+    for i in range(24):
+        if _hour_counts[i]:
+            hourly_latency[i] = round(hourly_latency[i] / _hour_counts[i], 2)
+    return {"tenant_id": tenant_id or "all", "total_requests": total, "success_count": success, "failed_count": failed, "total_cost_usd": total_cost, "total_tokens": total_tokens, "avg_latency_ms": avg_lat, "p95_latency_ms": round(p95, 2), "daily_count": daily, "per_minute_count": per_min, "window": "all-time", "daily_tokens": daily_tokens, "daily_quota": daily_quota, "daily_usage_ratio": daily_ratio, "per_minute_tokens": per_min_tokens, "per_minute_limit": per_minute_limit, "success_rate": succ_rate, "p50_latency_ms": round(p50, 2), "p99_latency_ms": round(p99, 2), "hourly_tokens": hourly_tokens, "hourly_cost": hourly_cost, "hourly_latency": hourly_latency, "updated_at": now.isoformat()}
 
 @router.get("/usage/summary")
 def usage_summary(tenant_id: str | None = None, admin: AdminUser = Depends(get_current_admin)):
@@ -1428,7 +1492,8 @@ def usage_summary(tenant_id: str | None = None, admin: AdminUser = Depends(get_c
 
 @router.get("/usage/history")
 def usage_history(limit: int = 20, tenant_id: str | None = None, admin: AdminUser = Depends(get_current_admin)):
-    return {"items": _admin_usage_history(limit=limit, tenant_id=tenant_id), "count": len(_admin_usage_history(limit=limit, tenant_id=tenant_id))}
+    items = _admin_usage_history(limit=limit, tenant_id=tenant_id)
+    return {"items": items, "count": len(items), "total": len(items)}
 
 def clear_usage() -> None:
     _admin_clear_usage()

@@ -1,6 +1,7 @@
 "use client";
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Same-origin API path avoids browser-side localhost/CORS failures behind the nginx /api proxy.
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 const TOKEN_KEY = "admin_token";
 
 // ---- token helpers ----
@@ -15,6 +16,74 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+// ---- 401 handling ----
+function isLoginPath(path: string): boolean {
+  return path.includes("/v1/auth/login");
+}
+
+function handleUnauthorized(path: string): void {
+  if (typeof window === "undefined") return;
+  if (isLoginPath(path)) return;
+  // Avoid redirect loop if already on /login (Next.js app route)
+  try {
+    if (window.location.pathname === "/login") return;
+  } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    // Clear avatar as well so a stale avatar is not shown after re-login as different user
+    localStorage.removeItem("admin_avatar_url");
+  } catch { /* ignore */ }
+  // Use replace to avoid polluting history; guard against multiple simultaneous 401s
+  try {
+    window.location.replace("/login");
+  } catch {
+    window.location.href = "/login";
+  }
+}
+
+// ---- error-detail normalization: never emit "[object Object]" ----
+function formatApiErrorDetail(value: unknown, fallback: string): string {
+  if (value == null) return fallback;
+  if (typeof value === "string") {
+    const t = value.trim();
+    return t || fallback;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    const parts = value.map((v) => formatApiErrorDetail(v, "")).filter(Boolean);
+    return parts.length ? parts.join("; ") : fallback;
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const candidates: unknown[] = [obj.message, obj.msg, obj.error, obj.detail, obj.reason, obj.title];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) return c.trim();
+    }
+    for (const c of candidates) {
+      if (c != null && typeof c === "object") {
+        const nested = formatApiErrorDetail(c, "");
+        if (nested) return nested;
+      }
+    }
+    try {
+      const s = JSON.stringify(value);
+      if (s && s !== "{}" && s !== "[]") return s;
+    } catch { /* ignore */ }
+    try {
+      const s = String(value);
+      if (s !== "[object Object]") return s;
+    } catch { /* ignore */ }
+    return fallback;
+  }
+  try {
+    const s = String(value);
+    if (s === "[object Object]") return fallback;
+    return s || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 // ---- generic fetch ----
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
@@ -25,15 +94,35 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+  if (res.status === 401) {
+    handleUnauthorized(path);
+  }
   if (!res.ok) {
-    let detail = res.statusText;
+    const fallback = res.statusText || `Request failed: ${res.status}`;
+    let detail = fallback;
     try {
-      const body = await res.json();
-      detail = body.detail ?? body.message ?? JSON.stringify(body);
+      const text = await res.text();
+      if (text) {
+        try {
+          const body = JSON.parse(text) as unknown;
+          if (body != null && typeof body === "object") {
+            const b = body as Record<string, unknown>;
+            const raw = b.detail ?? b.message ?? b.error ?? b.msg ?? body;
+            detail = formatApiErrorDetail(raw, text || fallback);
+          } else {
+            detail = formatApiErrorDetail(body, text || fallback);
+          }
+        } catch {
+          detail = formatApiErrorDetail(text, fallback);
+        }
+      }
     } catch {
-      try { detail = await res.text(); } catch { /* ignore */ }
+      // body read failed — keep fallback
     }
-    throw new Error(detail || `Request failed: ${res.status}`);
+    if (detail === "[object Object]" || detail.includes("[object Object]")) {
+      detail = fallback !== "[object Object]" ? fallback : `Request failed: ${res.status}`;
+    }
+    throw new Error(detail || fallback);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -148,6 +237,8 @@ export interface UserMapping {
   mm_user_id: string;
   mm_username: string | null;
   username?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
   employee_principal: string;
   agent_id: string;
   status: string;
@@ -159,6 +250,8 @@ export interface UserMappingCreatePayload {
   mm_user_id?: string;
   mm_username?: string;
   employee_principal?: string;
+  display_name?: string | null;
+  avatar_url?: string | null;
 }
 
 export interface UserMappingListResponse {
@@ -194,6 +287,10 @@ export function createMapping(payload: UserMappingCreatePayload): Promise<UserMa
   });
 }
 
+
+export function updateMapping(id: string, payload: { display_name?: string | null; avatar_url?: string | null; employee_principal?: string }): Promise<UserMapping> {
+  return apiFetch<UserMapping>(`/v1/user-mappings/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
 export function deleteMapping(id: string): Promise<{ status: string; id: string } | void> {
   return apiFetch(`/v1/user-mappings/${id}`, { method: "DELETE" });
 }
@@ -615,6 +712,84 @@ export interface LLMUsageHistoryParams {
   status?: string;
 }
 
+// ---- LLM usage normalizers: bridge backend contract (tenant_id,total_requests,success_count,failed_count,total_tokens,avg_latency_ms,p95_latency_ms,daily_count,per_minute_count,created_at/tenant_id) -> frontend contract (daily_tokens,daily_quota,daily_usage_ratio,per_minute_tokens,success_rate,hourly_*,timestamp/tenant) ----
+function _num(v: unknown, fallback: number): number {
+  const n = typeof v === "string" ? Number(v) : (v as number);
+  return Number.isFinite(n) ? n : fallback;
+}
+function _arrNum(v: unknown): number[] | undefined {
+  return Array.isArray(v) ? (v as unknown[]).map((x) => _num(x, 0)) : undefined;
+}
+export function normalizeLLMUsageSummary(raw: unknown): LLMUsageSummary {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const total_requests = _num(r.total_requests, _num(r.success_count, 0) + _num(r.failed_count, 0));
+  const success_count = _num(r.success_count, 0);
+  const total_tokens = _num(r.total_tokens, 0);
+  const daily_tokens = _num(r.daily_tokens, total_tokens !== 0 ? total_tokens : _num(r.daily_count, 0));
+  const daily_quota = _num(r.daily_quota, 50000);
+  const druRaw = r.daily_usage_ratio as number | undefined;
+  const daily_usage_ratio = Number.isFinite(druRaw as number)
+    ? Math.max(0, Math.min(1, druRaw as number))
+    : daily_quota > 0 ? Math.max(0, Math.min(1, daily_tokens / daily_quota)) : 0;
+  const per_minute_tokens = _num(r.per_minute_tokens, _num(r.per_minute_count, 0));
+  const per_minute_limit = r.per_minute_limit != null ? _num(r.per_minute_limit, 2000) : 2000;
+  const srRaw = r.success_rate as number | undefined;
+  const success_rate = Number.isFinite(srRaw as number)
+    ? Math.max(0, Math.min(1, srRaw as number))
+    : total_requests > 0 ? Math.max(0, Math.min(1, success_count / total_requests)) : 0;
+  const updated_at_raw = (r.updated_at ?? r.created_at) as string | undefined;
+  const updated_at = typeof updated_at_raw === "string" && updated_at_raw ? updated_at_raw : new Date().toISOString();
+  return {
+    daily_tokens,
+    daily_quota,
+    daily_usage_ratio,
+    per_minute_tokens,
+    per_minute_limit,
+    total_cost_usd: _num(r.total_cost_usd, 0),
+    avg_latency_ms: _num(r.avg_latency_ms, 0),
+    p50_latency_ms: r.p50_latency_ms != null ? _num(r.p50_latency_ms, 0) : undefined,
+    p95_latency_ms: _num(r.p95_latency_ms, _num(r.avg_latency_ms, 0)),
+    p99_latency_ms: r.p99_latency_ms != null ? _num(r.p99_latency_ms, 0) : undefined,
+    total_requests,
+    success_rate,
+    hourly_tokens: _arrNum(r.hourly_tokens),
+    hourly_cost: _arrNum(r.hourly_cost),
+    hourly_latency: _arrNum(r.hourly_latency),
+    updated_at,
+  };
+}
+export function normalizeLLMUsageHistoryItem(raw: unknown): LLMUsageHistoryItem {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const ts = (r.timestamp ?? r.created_at ?? r.createdAt ?? new Date().toISOString()) as string;
+  const tenant = (r.tenant ?? r.tenant_id ?? r.tenantId ?? "default") as string;
+  const prompt_tokens = _num(r.prompt_tokens, 0);
+  const completion_tokens = _num(r.completion_tokens, 0);
+  const total_tokens = _num(r.total_tokens, prompt_tokens + completion_tokens);
+  return {
+    id: String(r.id ?? `usage_${Math.random().toString(36).slice(2, 10)}`),
+    timestamp: typeof ts === "string" ? ts : new Date().toISOString(),
+    tenant: typeof tenant === "string" ? tenant : "default",
+    provider: String(r.provider ?? "unknown"),
+    model: String(r.model ?? ""),
+    latency_ms: _num(r.latency_ms, 0),
+    prompt_tokens,
+    completion_tokens,
+    total_tokens,
+    cost_usd: _num(r.cost_usd, 0),
+    status: String(r.status ?? "success"),
+  };
+}
+export function normalizeLLMUsageHistory(raw: unknown): LLMUsageHistoryResponse {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const itemsRaw = Array.isArray(r.items) ? r.items : Array.isArray(raw) ? (raw as unknown[]) : [];
+  const items = (itemsRaw as unknown[]).map(normalizeLLMUsageHistoryItem);
+  const count = _num(r.count, items.length);
+  const total = _num(r.total, count);
+  const page = r.page != null ? _num(r.page, 1) : undefined;
+  const page_size = r.page_size != null ? _num(r.page_size, items.length) : undefined;
+  return { items, count, total, page, page_size };
+}
+
 // mock data fallback — keeps build green when backend not yet deployed
 function mockUsageSummary(): LLMUsageSummary {
   const hourly_tokens = [320, 480, 610, 540, 720, 890, 1100, 950, 1020, 1300, 1450, 1200, 980, 860, 1100, 1350, 1500, 1420, 1180, 900, 650, 480, 390, 300];
@@ -673,11 +848,18 @@ async function fetchWithMock<T>(path: string, mock: () => T): Promise<T> {
   }
 }
 
-export function getLLMUsageSummary(): Promise<LLMUsageSummary> {
-  return fetchWithMock<LLMUsageSummary>("/v1/llm/usage/summary", mockUsageSummary);
+export async function getLLMUsageSummary(): Promise<LLMUsageSummary> {
+  // Fetch raw 200 and normalize deterministically; preserve real 200 (do not hide contract failures behind mock).
+  // Only on transport failure fall back to mock so offline dev/build stays green.
+  try {
+    const raw = await apiFetch<unknown>("/v1/llm/usage/summary");
+    return normalizeLLMUsageSummary(raw);
+  } catch {
+    return mockUsageSummary();
+  }
 }
 
-export function getLLMUsageHistory(params: LLMUsageHistoryParams = {}): Promise<LLMUsageHistoryResponse> {
+export async function getLLMUsageHistory(params: LLMUsageHistoryParams = {}): Promise<LLMUsageHistoryResponse> {
   const qs = new URLSearchParams();
   if (params.limit) qs.set("limit", String(params.limit));
   if (params.offset) qs.set("offset", String(params.offset));
@@ -685,7 +867,12 @@ export function getLLMUsageHistory(params: LLMUsageHistoryParams = {}): Promise<
   if (params.provider) qs.set("provider", params.provider);
   if (params.status) qs.set("status", params.status);
   const suffix = qs.toString() ? `?${qs}` : "";
-  return fetchWithMock<LLMUsageHistoryResponse>(`/v1/llm/usage/history${suffix}`, () => mockUsageHistory(params.limit ?? 20));
+  try {
+    const raw = await apiFetch<unknown>(`/v1/llm/usage/history${suffix}`);
+    return normalizeLLMUsageHistory(raw);
+  } catch {
+    return mockUsageHistory(params.limit ?? 20);
+  }
 }
 
 // expose mocks for UI fallback / storybook

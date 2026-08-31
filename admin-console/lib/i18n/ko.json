@@ -62,7 +62,8 @@
     "korean": "한글",
     "current": "현재",
     "copyright": "© 2026 오픈잇. All rights reserved.",
-    "version": "Open Agent OS v1.5.1"
+    "version": "Open Agent OS v{version}",
+    "latestAvailable": "v{version}"
   },
   "login": {
     "title": "Admin Console",

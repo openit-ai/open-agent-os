@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { clearToken, getToken, getAvatarUrl, setAvatarUrl, clearAvatarUrl, changePassword, updateProfile, getMe, listUsers, login, setToken, type AdminUserPublic } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { VersionDisplay } from "@/components/VersionDisplay";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -85,8 +86,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
         <div className="border-t px-4 py-3">
-          <p className="text-[11px] leading-4 text-muted-foreground">{t("header.copyright")}</p>
-          <p className="text-[11px] text-muted-foreground/70">{t("header.version")}</p>
+          <VersionDisplay />
         </div>
       </aside>
 

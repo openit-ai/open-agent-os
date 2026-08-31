@@ -62,7 +62,8 @@
     "korean": "Korean",
     "current": "Current",
     "copyright": "© 2026 OpenIT. All rights reserved.",
-    "version": "Open Agent OS v1.5.1"
+    "version": "Open Agent OS v{version}",
+    "latestAvailable": "v{version}"
   },
   "login": {
     "title": "Admin Console",

@@ -98,18 +98,28 @@ function BarChart({ data, color, height = 64, ariaLabel }: { data: number[]; col
   );
 }
 
-function formatNumber(n: number): string {
-  return n.toLocaleString("ko-KR");
+function formatNumber(n: unknown): string {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return v.toLocaleString("ko-KR");
 }
-function formatCost(n: number): string {
-  return `$${n.toFixed(4)}`;
+function formatCost(n: unknown): string {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return `$${v.toFixed(4)}`;
 }
-function formatTime(iso: string): string {
+function safeNum(v: unknown, fallback = 0): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function formatTime(iso: string | null | undefined): string {
+  if (!iso || typeof iso !== "string") return "—";
   try {
     const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
     return d.toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
   } catch {
-    return iso;
+    return String(iso);
   }
 }
 
@@ -128,10 +138,25 @@ export default function LLMUsagePage() {
   const fetchAll = useCallback(async () => {
     try {
       const [s, h] = await Promise.all([getLLMUsageSummary(), getLLMUsageHistory({ limit: 30 })]);
+      // Defensive: api.ts already normalizes, but keep extra guard for mixed shapes
+      const rawItems = (h as { items?: unknown[] }).items ?? (Array.isArray(h) ? (h as unknown as unknown[]) : []);
+      const items: LLMUsageHistoryItem[] = (rawItems as Record<string, unknown>[]).map((it) => ({
+        id: String((it.id as string) ?? ""),
+        timestamp: String((it.timestamp as string) ?? (it.created_at as string) ?? ""),
+        tenant: String((it.tenant as string) ?? (it.tenant_id as string) ?? "default"),
+        provider: String(it.provider ?? "unknown"),
+        model: String(it.model ?? ""),
+        latency_ms: safeNum(it.latency_ms),
+        prompt_tokens: safeNum(it.prompt_tokens),
+        completion_tokens: safeNum(it.completion_tokens),
+        total_tokens: safeNum(it.total_tokens ?? (safeNum(it.prompt_tokens) + safeNum(it.completion_tokens))),
+        cost_usd: safeNum(it.cost_usd),
+        status: String(it.status ?? "unknown"),
+      }));
       setSummary(s);
-      const items = (h as { items?: LLMUsageHistoryItem[] }).items ?? (Array.isArray(h) ? (h as unknown as LLMUsageHistoryItem[]) : []);
       setHistory(items);
-      setHistoryTotal((h as { total?: number }).total ?? items.length);
+      const total = (h as { total?: number }).total ?? (h as { count?: number }).count ?? items.length;
+      setHistoryTotal(total);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("common.error"));
