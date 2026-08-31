@@ -24,6 +24,16 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+def _is_production() -> bool:
+    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        if os.getenv(k, "").strip().lower() in {"production", "prod"}:
+            return True
+    return False
+
+def _require_external_transport(condition: bool, message: str) -> None:
+    if _is_production() and not condition:
+        raise RuntimeError(message)
+
 # ── Abstract ──────────────────────────────────────────────────────────
 
 class VaultBackend(abc.ABC):
@@ -145,6 +155,7 @@ class HashiCorpVaultBackend(VaultBackend):
         # fallback in-memory store used when vault unreachable or unconfigured
         self._fallback: VaultBackend = fallback or EnvFileBackend()
         self._use_fallback = not bool(self.addr)
+        _require_external_transport(bool(self.addr), "VAULT_ADDR is required in production for hashicorp_vault backend")
         if self._use_fallback:
             logger.info("HashiCorpVaultBackend: VAULT_ADDR not set, using in-memory fallback")
         else:
@@ -207,11 +218,13 @@ class HashiCorpVaultBackend(VaultBackend):
         except ImportError:
             pass
         except Exception as e:
+            _require_external_transport(False, f"HashiCorp Vault put failed in production: {e}")
             logger.warning("HashiCorpVaultBackend.put failed, falling back to memory: %s", e)
             await self._fallback.put(secret_ref, secret, metadata)
             return
 
-        # no transport available -> fallback
+        # no transport available -> fallback only outside production
+        _require_external_transport(False, "HashiCorp Vault transport is unavailable in production")
         logger.debug("HashiCorpVaultBackend: no hvac/httpx available, using fallback")
         await self._fallback.put(secret_ref, secret, metadata)
 
@@ -232,6 +245,8 @@ class HashiCorpVaultBackend(VaultBackend):
         except ImportError:
             pass
         except Exception as e:
+            if _is_production():
+                raise RuntimeError(f"HashiCorp Vault get hvac failed in production: {e}") from e
             logger.debug("HashiCorpVaultBackend.get hvac failed: %s", e)
 
         try:
@@ -241,6 +256,10 @@ class HashiCorpVaultBackend(VaultBackend):
             async with httpx.AsyncClient(verify=self.tls_ca_bundle or True, timeout=5.0) as client:
                 resp = await client.get(url, headers=self._headers())
                 if resp.status_code == 404:
+                    if not _is_production():
+                        fb = await self._fallback.get(secret_ref)
+                        if fb is not None:
+                            return fb
                     return None
                 if resp.status_code == 200:
                     data = resp.json()
@@ -249,18 +268,28 @@ class HashiCorpVaultBackend(VaultBackend):
                     if b64 is not None:
                         return base64.b64decode(b64)
                     return None
+                if _is_production():
+                    raise RuntimeError(f"HashiCorp Vault get failed in production: {resp.status_code}")
                 logger.warning("HashiCorpVaultBackend.get httpx status=%s", resp.status_code)
+                fb = await self._fallback.get(secret_ref)
+                if fb is not None:
+                    return fb
                 return None
         except ImportError:
             pass
         except Exception as e:
+            if _is_production():
+                raise RuntimeError(f"HashiCorp Vault get httpx failed in production: {e}") from e
             logger.debug("HashiCorpVaultBackend.get httpx failed: %s", e)
 
-        # fallback
+        if _is_production():
+            raise RuntimeError("HashiCorp Vault transport unavailable in production")
         return await self._fallback.get(secret_ref)
 
     async def delete(self, secret_ref: str) -> None:
         if self._use_fallback:
+            if _is_production():
+                raise RuntimeError("AWS Secrets fallback delete not allowed in production")
             await self._fallback.delete(secret_ref)
             return
         try:
@@ -291,6 +320,8 @@ class HashiCorpVaultBackend(VaultBackend):
 
     async def health_check(self) -> bool:
         if self._use_fallback:
+            if _is_production():
+                return False
             return True
         # quick check: try sys/health or kv read
         try:
@@ -337,11 +368,14 @@ class AwsSecretsBackend(VaultBackend):
         self._fallback: VaultBackend = fallback or EnvFileBackend()
         # we don't require region at init; will fallback gracefully at call time
         self._use_fallback = False  # determined lazily
+        _require_external_transport(bool(self.region), "AWS_REGION or AWS_DEFAULT_REGION is required in production for aws_secrets backend")
         try:
             import boto3  # type: ignore
 
             _ = boto3  # noqa
         except ImportError:
+            if _is_production():
+                raise RuntimeError("boto3 is required in production for aws_secrets backend")
             self._use_fallback = True
             logger.info("AwsSecretsBackend: boto3 not installed, using in-memory fallback")
             return
@@ -400,14 +434,17 @@ class AwsSecretsBackend(VaultBackend):
         except ImportError:
             pass
         except Exception as e:
+            _require_external_transport(False, f"AWS Secrets put failed in production: {e}")
             logger.warning("AwsSecretsBackend.put failed (%s), falling back to memory", e)
             await self._fallback.put(secret_ref, secret, metadata)
             return
-        # fallback
+        _require_external_transport(False, "AWS Secrets transport unavailable in production")
         await self._fallback.put(secret_ref, secret, metadata)
 
     async def get(self, secret_ref: str) -> bytes | None:
         if self._use_fallback:
+            if _is_production():
+                raise RuntimeError("AWS Secrets fallback not allowed in production")
             return await self._fallback.get(secret_ref)
         try:
             import asyncio
@@ -433,11 +470,15 @@ class AwsSecretsBackend(VaultBackend):
             msg = str(e)
             if "ResourceNotFound" in msg or "not found" in msg.lower():
                 return None
+            if _is_production():
+                raise RuntimeError(f"AWS Secrets get failed in production: {e}") from e
             logger.debug("AwsSecretsBackend.get fallback due to: %s", e)
             return await self._fallback.get(secret_ref)
 
     async def delete(self, secret_ref: str) -> None:
         if self._use_fallback:
+            if _is_production():
+                raise RuntimeError("AWS Secrets fallback delete not allowed in production")
             await self._fallback.delete(secret_ref)
             return
         try:
@@ -461,6 +502,8 @@ class AwsSecretsBackend(VaultBackend):
 
     async def health_check(self) -> bool:
         if self._use_fallback:
+            if _is_production():
+                return False
             return True
         try:
             import asyncio
@@ -503,6 +546,11 @@ def get_vault_backend(backend: str | None = None) -> VaultBackend | None:
             return AwsSecretsBackend()
         return EnvFileBackend()
     if val in _LEGACY_VALUES:
+        if _is_production():
+            raise RuntimeError(
+                "VAULT_BACKEND must select an external backend in production; "
+                "encrypted_postgres legacy storage is disabled"
+            )
         return None
     if val in {"hashicorp", "hashicorp_vault", "vault", "external", "hashi", "hashicorp vault"}:
         return HashiCorpVaultBackend()

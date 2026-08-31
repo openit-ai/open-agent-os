@@ -151,6 +151,13 @@ def _env_flag(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _is_production() -> bool:
+    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        if os.getenv(k, "").strip().lower() in ("production", "prod"):
+            return True
+    return False
+
+
 class CredentialVault(ABC):
     @abstractmethod
     async def store(self, user_id: str, provider: str, scope: str, token: bytes) -> str:
@@ -227,6 +234,8 @@ class EncryptedPostgresVault(CredentialVault):
         except ValueError:
             raise
         except Exception as e:
+            if _is_production():
+                raise
             logger.debug("vault external backend init skipped: %s", e)
             self._external = None
 
@@ -472,6 +481,8 @@ class EncryptedPostgresVault(CredentialVault):
             try:
                 ext_bytes = await self._external.get(secret_ref)  # type: ignore
             except Exception as e:
+                if _is_production():
+                    raise RuntimeError(f"external vault get failed in production: {e}") from e
                 logger.warning("external vault get failed for %s: %s", secret_ref, e)
                 ext_bytes = None
 
@@ -498,8 +509,8 @@ class EncryptedPostgresVault(CredentialVault):
                 # decrypt is not needed — external already holds plaintext
                 return await self._audit_and_return(secret_ref, requester_agent_id, meta, ext_bytes)
 
-            # external miss — try fallback if enabled
-            if self._read_fallback() and encrypted is not None:
+            # external miss — try fallback if enabled (disabled in production fail-closed)
+            if not _is_production() and self._read_fallback() and encrypted is not None:
                 # legacy ciphertext fallback
                 try:
                     plaintext = self._fernet.decrypt(encrypted)
