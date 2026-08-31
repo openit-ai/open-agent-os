@@ -198,8 +198,8 @@ class ACPAdapter:
         """Public adapter seam — Control Plane/ACP LLM boundary."""
         return self._resolve_policy_sync(session, current_instruction)
 
-    def build_llm_messages(self, session: SessionRecord, prompt_text: str, policy: dict | None = None, system_base: str | None = None) -> list[dict]:
-        """Build LLM messages with minimal Response Policy injected (no scores)."""
+    def build_llm_messages(self, session: SessionRecord, prompt_text: str, policy: dict | None = None, system_base: str | None = None, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None) -> list[dict]:
+        """Build LLM messages with minimal Response Policy injected (no scores). Supports multimodal file_ids/attachments (no model selection)."""
         try:
             from control_plane.adaptive_profile.hook import default_hook
             from control_plane.adaptive_profile.engine import DEFAULT_POLICY
@@ -222,9 +222,61 @@ class ACPAdapter:
         # Ensure no raw scores leak
         if "global_score" in system_content or "sample_count" in system_content:
             system_content = base
+        # Multimodal current-session message contract — no model selection, direct delivery via active runtime
+        # Hermes runtime reliably consumes OpenAI multimodal image_url only when URL is data URL or accessible path.
+        # Prefer bounded base64/data URL from bridge's attachment_refs; fallback to file:// only when no bytes available.
+        user_content: str | list[dict] = prompt_text
+        if file_ids or attachment_refs:
+            parts: list[dict] = [{"type": "text", "text": prompt_text}]
+            refs = attachment_refs or []
+            fids = file_ids or [r.get("attachment_id") or r.get("file_id") or r.get("vault_path") for r in refs if isinstance(r, dict)]
+            # index refs by common ids for data_url lookup
+            def _ref_for_fid(fid: str) -> dict | None:
+                for r in refs:
+                    if not isinstance(r, dict):
+                        continue
+                    if fid in (r.get("file_id"), r.get("attachment_id"), r.get("vault_path"), r.get("filename")):
+                        return r
+                    # also match if fid is vault_path and ref has it
+                    if r.get("vault_path") == fid or r.get("file_id") == fid:
+                        return r
+                return None
+            for fid in (fids or []):
+                ref = _ref_for_fid(str(fid))
+                data_url = None
+                mime = "image/png"
+                if ref:
+                    mime = (ref.get("mime_type") or ref.get("mimeType") or "image/png").strip().lower().split(";")[0].strip() or "image/png"
+                    # MIME validation: only image/* allowed
+                    if not mime.startswith("image/"):
+                        mime = "image/png"
+                    # bounded data URL from bridge's authenticated download
+                    cand = ref.get("data_url") or ref.get("dataUrl") or ref.get("base64") or ""
+                    if isinstance(cand, str) and cand:
+                        cand = cand.strip()
+                        if cand.startswith("data:"):
+                            # validate is image data URL
+                            if cand.startswith("data:image/"):
+                                data_url = cand
+                            else:
+                                # reject non-image data URL, fallback
+                                data_url = None
+                        elif len(cand) > 20 and cand[:16].replace("/","+").replace("_","/"):  # heuristic base64
+                            # raw base64 -> build data URL with MIME, bounded
+                            # guard length: decoded must be <=20MB (already enforced by bridge)
+                            data_url = f"data:{mime};base64,{cand}"
+                        else:
+                            data_url = None
+                if data_url:
+                    parts.append({"type": "image_url", "image_url": {"url": data_url}, "file_id": str(fid)})
+                else:
+                    # Fallback: only if no bounded bytes available; preserves tenant/user/session/channel/post/root context via existing headers
+                    # No model/provider selection here; Hermes will attempt file:// only if path is actually accessible.
+                    parts.append({"type": "image_url", "image_url": {"url": f"file://{fid}"}, "file_id": str(fid)})
+            user_content = parts
         return [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": prompt_text},
+            {"role": "user", "content": user_content},
         ]
 
     # Back-compat naming
@@ -321,11 +373,26 @@ class ACPAdapter:
         """
         return os.getenv("OAOS_CP_HERMES_ACP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
-    async def send_prompt(self, session: SessionRecord, prompt: str, request_id: str) -> dict[str, Any]:
+    async def send_prompt(self, session: SessionRecord, prompt: str, request_id: str, attachment_refs: list[dict] | None = None, file_ids: list[str] | None = None, runtime_context: dict | None = None) -> dict[str, Any]:
         if not self._acp_enabled():
-            return {"status": "gateway_fallback", "request_id": request_id}
+            return {"status": "gateway_fallback", "request_id": request_id, "file_ids": file_ids, "attachment_refs": attachment_refs}
         url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/prompt"
-        payload = {"prompt": prompt, "request_id": request_id, "trace_id": session.trace_id}
+        payload: dict[str, Any] = {"prompt": prompt, "request_id": request_id, "trace_id": session.trace_id}
+        # Multimodal context forwarding — no model selection, just direct delivery via active runtime
+        if attachment_refs:
+            payload["attachment_refs"] = attachment_refs
+            payload["file_ids"] = file_ids or [r.get("attachment_id") or r.get("vault_path") for r in attachment_refs if isinstance(r, dict)]
+            # legacy alias
+            if len(attachment_refs) == 1:
+                payload["attachment_ref"] = attachment_refs[0]
+        if file_ids and "file_ids" not in payload:
+            payload["file_ids"] = file_ids
+        if runtime_context:
+            payload["runtime_context"] = runtime_context
+            # forward channel/root/post context as well
+            for k in ("channel_id", "root_id", "post_id"):
+                if runtime_context.get(k):
+                    payload.setdefault("context", {})[k] = runtime_context[k]
         async def _do():
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 r = await client.post(url, json=payload, headers=self._headers(session))
@@ -369,11 +436,16 @@ class ACPAdapter:
         # -- Hermes Gateway fallback (standard path — same LLM as @openit) --
         # Retrieve last user prompt from session_store
         prompt_text = ""
+        _last_file_ids: list[str] | None = None
+        _last_arefs: list[dict] | None = None
         try:
             from .session import session_store
             rec = session_store.get_any(session.session_id)
             if rec and rec.prompt_history:
-                prompt_text = rec.prompt_history[-1].get("prompt", "") or ""
+                last = rec.prompt_history[-1]
+                prompt_text = last.get("prompt", "") or ""
+                _last_file_ids = last.get("file_ids")
+                _last_arefs = last.get("attachment_refs")
         except Exception:
             pass
         if prompt_text:
@@ -397,17 +469,22 @@ class ACPAdapter:
             # Adaptive Profile: resolve minimal Response Policy (safe fallback, no leakage)
             try:
                 _policy = await self._resolve_policy_async(session)
-                _msgs = self.build_llm_messages(session, prompt_text, policy=_policy, system_base=base_system)
+                _msgs = self.build_llm_messages(session, prompt_text, policy=_policy, system_base=base_system, file_ids=_last_file_ids, attachment_refs=_last_arefs)
                 system_prompt = _msgs[0]["content"]
+                user_msg = _msgs[1]["content"]
             except Exception:
                 system_prompt = base_system
+                user_msg = prompt_text
             try:
-                async with httpx.AsyncClient(timeout=40.0) as client:
+                # Vision requests can legitimately take longer than text-only turns;
+                # keep one bounded request under the bridge's 45s confirmation window
+                # plus Gateway queue latency, without introducing another provider.
+                async with httpx.AsyncClient(timeout=180.0) as client:
                     payload = {
                         "model": model,
                         "messages": [
                             {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt_text},
+                            {"role": "user", "content": user_msg},
                         ],
                         "temperature": 0.7,
                     }

@@ -17,6 +17,16 @@ class SendPromptRequest(BaseModel):
     session_id: str
     prompt: str
     request_id: str | None = None
+    # Image/multimodal bridge — forwarded via active Agent Runtime (ACP/Hermes), NO model selection
+    attachment_ref: dict | None = None
+    attachment_refs: list[dict] | None = None
+    attachments: list[dict] | None = None
+    file_ids: list[str] | None = None
+    runtime_context: dict | None = None
+    # also accept the Personal Wiki forwarding shape `attachment_ref` + `runtime_context`
+    # extra fields allowed for bridge compatibility
+    class Config:
+        extra = "allow"
 
 class StreamEvent(BaseModel):
     type: str  # token | tool_call | approval_request | done | error

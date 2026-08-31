@@ -48,6 +48,8 @@ class SessionRecord:
     session_namespace: str = "oaos:mattermost"
     prompt_history: list[dict] = field(default_factory=list)
     stream_events: list[dict] = field(default_factory=list)
+    display_name: str | None = None
+    avatar_url: str | None = None
     status: str = "active"  # active | cancelled | ended
 
     def assert_owner(self, caller_user_id: str) -> None:
@@ -100,6 +102,8 @@ class BaseSessionStore(ABC):
         agent_id: str,
         security_domain: str = "general",
         hermes_worker: str | None = None,
+        display_name: str | None = None,
+        avatar_url: str | None = None,
     ) -> SessionRecord: ...
 
     @abstractmethod
@@ -109,7 +113,7 @@ class BaseSessionStore(ABC):
     def get_any(self, session_id: str) -> SessionRecord | None: ...
 
     @abstractmethod
-    def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str) -> None: ...
+    def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None, runtime_context: dict | None = None) -> None: ...
 
     @abstractmethod
     def append_stream_event(self, session_id: str, event: dict) -> None: ...
@@ -124,7 +128,7 @@ class InMemorySessionStore(BaseSessionStore):
     def __init__(self) -> None:
         self._store: dict[str, SessionRecord] = {}
 
-    def create(self, tenant_id: str, user_id: str, agent_id: str, security_domain: str = "general", hermes_worker: str | None = None) -> SessionRecord:
+    def create(self, tenant_id: str, user_id: str, agent_id: str, security_domain: str = "general", hermes_worker: str | None = None, display_name: str | None = None, avatar_url: str | None = None) -> SessionRecord:
         rec = SessionRecord(
             session_id=new_session_id(),
             tenant_id=tenant_id,
@@ -133,6 +137,8 @@ class InMemorySessionStore(BaseSessionStore):
             trace_id=new_trace_id(),
             security_domain=security_domain,
             hermes_worker=hermes_worker,
+            display_name=display_name,
+            avatar_url=avatar_url,
             runtime_provider="opencode-go",
             runtime_model="muse-spark-1.2-contributor",
             session_namespace="oaos:mattermost",
@@ -150,9 +156,17 @@ class InMemorySessionStore(BaseSessionStore):
     def get_any(self, session_id: str) -> SessionRecord | None:
         return self._store.get(session_id)
 
-    def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str) -> None:
+    def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None, runtime_context: dict | None = None) -> None:
         rec = self.get(session_id, caller_user_id)
-        rec.prompt_history.append({"prompt": prompt, "request_id": request_id, "at": _now().isoformat()})
+        entry: dict = {"prompt": prompt, "request_id": request_id, "at": _now().isoformat()}
+        if file_ids:
+            entry["file_ids"] = file_ids
+        if attachment_refs:
+            entry["attachment_refs"] = attachment_refs
+            entry["file_ids"] = file_ids or [r.get("attachment_id") or r.get("vault_path") for r in attachment_refs if isinstance(r, dict)]
+        if runtime_context:
+            entry["runtime_context"] = runtime_context
+        rec.prompt_history.append(entry)
         rec.updated_at = _now()
 
     def append_stream_event(self, session_id: str, event: dict) -> None:
@@ -241,7 +255,7 @@ class RedisSessionStore(BaseSessionStore):
             return
         self._client.set(self._key(rec.session_id), json.dumps(rec.to_dict(), ensure_ascii=False), ex=self._ttl)
 
-    def create(self, tenant_id: str, user_id: str, agent_id: str, security_domain: str = "general", hermes_worker: str | None = None) -> SessionRecord:
+    def create(self, tenant_id: str, user_id: str, agent_id: str, security_domain: str = "general", hermes_worker: str | None = None, display_name: str | None = None, avatar_url: str | None = None) -> SessionRecord:
         rec = SessionRecord(
             session_id=new_session_id(),
             tenant_id=tenant_id,
@@ -250,6 +264,8 @@ class RedisSessionStore(BaseSessionStore):
             trace_id=new_trace_id(),
             security_domain=security_domain,
             hermes_worker=hermes_worker,
+            display_name=display_name,
+            avatar_url=avatar_url,
             runtime_provider="opencode-go",
             runtime_model="muse-spark-1.2-contributor",
             session_namespace="oaos:mattermost",
@@ -272,11 +288,21 @@ class RedisSessionStore(BaseSessionStore):
     def get_any(self, session_id: str) -> SessionRecord | None:
         return self._load(session_id)
 
-    def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str) -> None:
+    def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None, runtime_context: dict | None = None) -> None:
         rec = self.get(session_id, caller_user_id)
-        rec.prompt_history.append({"prompt": prompt, "request_id": request_id, "at": _now().isoformat()})
+        entry: dict = {"prompt": prompt, "request_id": request_id, "at": _now().isoformat()}
+        if file_ids:
+            entry["file_ids"] = file_ids
+        if attachment_refs:
+            entry["attachment_refs"] = attachment_refs
+            entry["file_ids"] = file_ids or [r.get("attachment_id") or r.get("vault_path") for r in attachment_refs if isinstance(r, dict)]
+        if runtime_context:
+            entry["runtime_context"] = runtime_context
+        rec.prompt_history.append(entry)
         rec.updated_at = _now()
-        self._save(rec)
+        if hasattr(self, "_save"):
+            self._save(rec)
+        return
 
     def append_stream_event(self, session_id: str, event: dict) -> None:
         rec = self._load(session_id)

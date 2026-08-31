@@ -302,15 +302,20 @@ def _get_approval_store():
         return None
 
 
-async def _post_with_retry(adapter: Any, channel_id: str, text: str, root_id: str | None, trace_id: str, session_id: str, display_name: str | None = None, avatar_url: str | None = None) -> bool:
-    """Post one response with bounded retry; never hide delivery failures. Splits over-long posts."""
+async def _post_with_retry(adapter: Any, channel_id: str, text: str, root_id: str | None, trace_id: str, session_id: str, display_name: str | None = None, avatar_url: str | None = None) -> str:
+    """Post one response with bounded retry; never hide delivery failures. Splits over-long posts. Returns last post_id (compat)."""
+    ids = await _post_with_retry_collect(adapter, channel_id, text, root_id, trace_id, session_id, display_name=display_name, avatar_url=avatar_url)
+    return ids[-1] if ids else ""
+
+async def _post_with_retry_collect(adapter: Any, channel_id: str, text: str, root_id: str | None, trace_id: str, session_id: str, display_name: str | None = None, avatar_url: str | None = None) -> list[str]:
+    """Bounded retry per chunk; returns ALL successful post_ids (empty if all failed). Each chunk tried ≤3 times."""
     if not text.strip():
-        return True
-    # Mattermost MaxPostSize 16383, use 4000 safe chunk to avoid UI truncation/collapse
+        return []
     MAX_MM = 4000
     chunks = [text[i:i+MAX_MM] for i in range(0, len(text), MAX_MM)] if len(text) > MAX_MM else [text]
-    ok = True
+    all_ids: list[str] = []
     for chunk in chunks:
+        success = False
         for attempt in range(1, 4):
             try:
                 props = {}
@@ -326,23 +331,38 @@ async def _post_with_retry(adapter: Any, channel_id: str, text: str, root_id: st
                     raise RuntimeError("Mattermost adapter returned skeleton response")
                 post_id = result.get("id", "") if isinstance(result, dict) else ""
                 log.info("mattermost response posted channel=%s root=%s post=%s trace=%s session=%s attempt=%d chunk_len=%d", channel_id, root_id, post_id, trace_id, session_id, attempt, len(chunk))
-                ok = ok and bool(post_id)
+                if post_id:
+                    all_ids.append(post_id)
+                else:
+                    # empty id treated as failure → retry
+                    raise RuntimeError("empty post_id from mattermost adapter")
+                success = True
                 break
             except Exception as exc:
                 log.warning("mattermost response post failed channel=%s root=%s trace=%s session=%s attempt=%d error=%s", channel_id, root_id, trace_id, session_id, attempt, str(exc)[:300], exc_info=attempt == 3)
                 if attempt < 3:
                     await asyncio.sleep(0.5 * attempt)
                 else:
-                    ok = False
-    return ok
+                    pass
+        # if this chunk never succeeded, continue to next chunk but caller can detect partial by len(all_ids) < len(chunks)
+        if not success:
+            log.error("mattermost chunk ultimately failed channel=%s root=%s trace=%s session=%s chunk_len=%d", channel_id, root_id, trace_id, session_id, len(chunk))
+    return all_ids
+
+def _build_response_marker(text: str, channel_id: str | None, root_id: str | None) -> str:
+    """Deterministic marker for read-back dedup (hash of channel+root+text prefix)."""
+    import hashlib
+    raw = f"{channel_id or ''}\x1f{root_id or ''}\x1f{(text or '')[:200]}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 async def _stream_and_post_to_mattermost(
     channel_id: str | None,
     root_id: str | None,
     session_rec: Any,
+    idempotency_key: str | None = None,
 ) -> None:
-    """Fetch ACP stream and post responses with bounded retry and delivery logging."""
+    """Fetch ACP stream and post responses with bounded retry, idempotency completion, and delivery logging."""
     if not channel_id:
         log.warning("mattermost response skipped: missing channel trace=%s session=%s", getattr(session_rec, "trace_id", ""), getattr(session_rec, "session_id", ""))
         return
@@ -366,6 +386,9 @@ async def _stream_and_post_to_mattermost(
         except Exception:
             pass
     buffer = ""
+    full_text = ""
+    all_response_post_ids: list[str] = []
+    any_post_failed = False
     try:
         acp = ACPAdapter(settings.hermes_base_url)
         async for ev in acp.stream_events(session_rec):
@@ -373,16 +396,55 @@ async def _stream_and_post_to_mattermost(
             if etype == "briefing":
                 continue
             if etype == "token":
-                buffer += ev.get("data", {}).get("text", "") or ev.get("text", "")
+                chunk_text = ev.get("data", {}).get("text", "") or ev.get("text", "") or ""
+                buffer += chunk_text
+                full_text += chunk_text
                 if len(buffer) > 800 or buffer.endswith("\n"):
-                    if await _post_with_retry(adapter, channel_id, buffer, root_id, trace_id, session_id, display_name=display_name, avatar_url=avatar_url):
-                        buffer = ""
+                    ids = await _post_with_retry_collect(adapter, channel_id, buffer, root_id, trace_id, session_id, display_name=display_name, avatar_url=avatar_url)
+                    if ids:
+                        all_response_post_ids.extend(ids)
+                    else:
+                        # empty ids means this flush's chunks all failed after bounded retry
+                        if buffer.strip():
+                            any_post_failed = True
+                    buffer = ""
             elif etype == "done":
                 break
         if buffer.strip():
-            await _post_with_retry(adapter, channel_id, buffer, root_id, trace_id, session_id, display_name=display_name, avatar_url=avatar_url)
+            ids = await _post_with_retry_collect(adapter, channel_id, buffer, root_id, trace_id, session_id, display_name=display_name, avatar_url=avatar_url)
+            if ids:
+                all_response_post_ids.extend(ids)
+            else:
+                any_post_failed = True
+        # P0 idempotency: record response_post_ids for read-back + marker; fail-closed on delivery failure
+        # delivery complete condition (explicit): ALL chunks succeeded (any_post_failed==False) AND at least one Mattermost post_id exists.
+        # Any bound-retry-exhausted chunk → not complete, mark retryable failed so reclaim can retry; partial ids retained in fail record.
+        # Marker is deterministic on full response text (or idempotency_key fallback) — never on empty flush buffer.
+        if idempotency_key:
+            try:
+                from control_plane.idempotency import complete as _idem_complete, fail as _idem_fail2
+                marker_source = full_text.strip() or idempotency_key
+                marker = _build_response_marker(marker_source, channel_id, root_id)
+                delivery_complete = (not any_post_failed) and len(all_response_post_ids) > 0
+                if not delivery_complete:
+                    # delivery failed → do not mark completed; mark retryable failed so reclaim can retry; preserve partial ids
+                    _idem_fail2(idempotency_key, error="mattermost delivery failed (bounded retry exhausted)", retryable=True, response_post_ids=all_response_post_ids, response_marker=marker)
+                else:
+                    _idem_complete(idempotency_key, response_post_id=all_response_post_ids[-1], response_post_ids=all_response_post_ids, response_marker=marker, session_id=session_id, trace_id=trace_id)
+            except Exception as _idem_e:
+                # if complete/fail itself is 503 in prod, propagate visibly
+                from fastapi import HTTPException as _HEc
+                if isinstance(_idem_e, _HEc):
+                    raise
+                pass
     except Exception as exc:
         log.error("mattermost response stream failed channel=%s root=%s trace=%s session=%s error=%s", channel_id, root_id, trace_id, session_id, str(exc)[:500], exc_info=True)
+        if idempotency_key:
+            try:
+                from control_plane.idempotency import fail as _idem_fail, is_retryable_error as _is_retry
+                _idem_fail(idempotency_key, error=str(exc)[:500], retryable=_is_retry(exc))
+            except Exception:
+                pass
 
 
 async def _handle_core_logic(
@@ -393,12 +455,75 @@ async def _handle_core_logic(
     channel_id: str | None = None,
     post_id: str | None = None,
     root_id: str | None = None,
+    file_ids: list[str] | None = None,
+    attachment_refs: list[dict] | None = None,
+    runtime_context: dict | None = None,
 ) -> dict[str, Any]:
     """Shared session/briefing/ACP logic (reused by events + slash)."""
     # Identity mapping — 1:1 logical agent
     mapping = map_user_to_agent(user_id, tenant_id)
 
-    # Session: resume or create
+    # ── P0 Idempotency early gate (before session/policy/LLM side effects) ──
+    # If same post_id retries, we must NOT create a new session or call LLM again.
+    # So atomic claim happens before any side-effecting step. Policy & session creation
+    # only proceed for the first claim; duplicates return read-back immediately.
+    _pre_rid = new_request_id()
+    _idem_key: str | None = None
+    _idem_claim = None
+    _idem_early_claimed = False
+    if post_id:
+        try:
+            from control_plane.idempotency import try_claim as _idem_try_claim, build_idempotency_key as _idem_build
+            _idem_key = _idem_build(tenant_id, channel_id, post_id)
+            if _idem_key is not None:
+                # For early gate we have no rec yet; use provided session_id or deterministic pending placeholder
+                # trace_id placeholder derived from _pre_rid (real trace will be session's trace, updated on complete)
+                _tmp_sid = session_id or f"pending:{post_id[:24]}"
+                _tmp_trace = _pre_rid
+                _k, _c = _idem_try_claim(tenant_id=tenant_id, channel_id=channel_id, post_id=post_id, session_id=_tmp_sid, trace_id=_tmp_trace, request_id=_pre_rid)
+                if _c is not None and _c.is_duplicate:
+                    dup_rec = _c.record
+                    try:
+                        from control_plane.mattermost_policy_gate import _get_audit_ledger as _gal, _emit_policy_audit as _epa  # type: ignore
+                        _ledger2 = _gal()
+                        if _ledger2 is not None:
+                            _epa(_ledger2, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=dup_rec.get("session_id", _tmp_sid), trace_id=dup_rec.get("trace_id", _tmp_trace), request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{_tmp_sid}", decision="ALLOW", policy_version=None, reason=f"idempotency duplicate { _c.status} key={_k} response_post_id={dup_rec.get('response_post_id','')}")
+                    except Exception:
+                        pass
+                    return {
+                        "received": True,
+                        "duplicate": True,
+                        "idempotency_key": _k,
+                        "idempotency_status": _c.status,
+                        "session_id": dup_rec.get("session_id", _tmp_sid),
+                        "agent_id": mapping.agent_principal,
+                        "trace_id": dup_rec.get("trace_id", _tmp_trace),
+                        "request_id": dup_rec.get("request_id", _pre_rid),
+                        "response_post_id": dup_rec.get("response_post_id", ""),
+                        "response_post_ids": dup_rec.get("response_post_ids", [dup_rec.get("response_post_id")] if dup_rec.get("response_post_id") else []),
+                        "response_marker": dup_rec.get("response_marker", ""),
+                        "acp": {"status": "duplicate_suppressed", "idempotency_key": _k},
+                    }
+                if _c is not None and not _c.is_duplicate:
+                    _idem_key = _c.key
+                    _idem_claim = _c
+                    _idem_early_claimed = True
+                    try:
+                        from control_plane.mattermost_policy_gate import _get_audit_ledger as _gal2, _emit_policy_audit as _epa2  # type: ignore
+                        _ledger3 = _gal2()
+                        if _ledger3 is not None:
+                            _epa2(_ledger3, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=_tmp_sid, trace_id=_tmp_trace, request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{_tmp_sid}", decision="ALLOW", policy_version=None, reason=f"idempotency claimed key={_k}")
+                    except Exception:
+                        pass
+        except Exception as _idem_exc:
+            from fastapi import HTTPException as _HE2
+            if isinstance(_idem_exc, _HE2):
+                raise
+            import logging as _lg
+            _lg.getLogger(__name__).warning("idempotency early claim failed non-prod fallback: %s", _idem_exc)
+            # fall through to normal flow (non-prod fallback will proceed)
+
+    # Session: resume or create (only for non-duplicate; duplicates already returned above)
     if session_id:
         try:
             rec = session_store.get(session_id, user_id)
@@ -424,7 +549,7 @@ async def _handle_core_logic(
     # Identity/ownership already validated above (map + session_store.get).
     # Now deterministic PolicyEngine evaluation BEFORE any ACP/LLM forwarding.
     # Ordinary conversational prompt is INTERACT low-risk but still audited.
-    _pre_rid = new_request_id()
+    # _pre_rid already allocated at top for idempotency; reuse for policy audit
     await _evaluate_ingress_policy(
         tenant_id=tenant_id,
         mapping=mapping,
@@ -433,6 +558,51 @@ async def _handle_core_logic(
         request_id=_pre_rid,
         channel_id=channel_id,
     )
+
+    # ── P0 Idempotency gate (durable, CP authoritative) — late path only if early gate was skipped (e.g., no post_id at top or fallback) ──
+    if post_id and not _idem_early_claimed:
+        # Only run if we did not already claim in early gate (duplicate case already returned)
+        # This handles rare case where early gate fell through via exception fallback
+        _late_possible = _idem_key is None and _idem_claim is None
+        if _late_possible:
+            try:
+                from control_plane.idempotency import try_claim as _idem_try_claim2, build_idempotency_key as _idem_build2
+                _idem_key2 = _idem_build2(tenant_id, channel_id, post_id)
+                if _idem_key2 is not None:
+                    _claim_res2 = _idem_try_claim2(tenant_id=tenant_id, channel_id=channel_id, post_id=post_id, session_id=session_id, trace_id=rec.trace_id, request_id=_pre_rid)
+                    _, _idem_claim2 = _claim_res2
+                    if _idem_claim2 is not None and _idem_claim2.is_duplicate:
+                        dup_rec2 = _idem_claim2.record
+                        try:
+                            from control_plane.mattermost_policy_gate import _get_audit_ledger as _gal3, _emit_policy_audit as _epa3  # type: ignore
+                            _ledger4 = _gal3()
+                            if _ledger4 is not None:
+                                _epa3(_ledger4, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=dup_rec2.get("session_id", session_id), trace_id=dup_rec2.get("trace_id", rec.trace_id), request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{session_id}", decision="ALLOW", policy_version=None, reason=f"idempotency duplicate late { _idem_claim2.status} key={_idem_key2} response_post_id={dup_rec2.get('response_post_id','')}")
+                        except Exception:
+                            pass
+                        return {
+                            "received": True,
+                            "duplicate": True,
+                            "idempotency_key": _idem_key2,
+                            "idempotency_status": _idem_claim2.status,
+                            "session_id": dup_rec2.get("session_id", session_id),
+                            "agent_id": mapping.agent_principal,
+                            "trace_id": dup_rec2.get("trace_id", rec.trace_id),
+                            "request_id": dup_rec2.get("request_id", _pre_rid),
+                            "response_post_id": dup_rec2.get("response_post_id", ""),
+                            "response_post_ids": dup_rec2.get("response_post_ids", [dup_rec2.get("response_post_id")] if dup_rec2.get("response_post_id") else []),
+                            "response_marker": dup_rec2.get("response_marker", ""),
+                            "acp": {"status": "duplicate_suppressed", "idempotency_key": _idem_key2},
+                        }
+                    if _idem_claim2 is not None and not _idem_claim2.is_duplicate:
+                        _idem_key = _idem_claim2.key
+                        _idem_claim = _idem_claim2
+            except Exception as _idem_exc2:
+                from fastapi import HTTPException as _HE2b
+                if isinstance(_idem_exc2, _HE2b):
+                    raise
+                import logging as _lg2
+                _lg2.getLogger(__name__).warning("idempotency late claim failed non-prod fallback: %s", _idem_exc2)
 
     # ── Phase 1 MVP: "정리해줘" keyword → demo orchestrator routing ──
     if _is_briefing_request(text):
@@ -491,7 +661,21 @@ async def _handle_core_logic(
 
     # Forward prompt (non-briefing path)
     rid = new_request_id()
-    session_store.append_prompt(session_id, user_id, text, rid)
+    # multimodal: normalize runtime_context from caller (bridge) + canonical ids
+    _rctx = dict(runtime_context) if isinstance(runtime_context, dict) else {}
+    # ensure channel/root/post are in runtime_context for ACP trace
+    for _k, _v in (("channel_id", channel_id), ("root_id", root_id or post_id), ("post_id", post_id), ("tenant_id", tenant_id), ("user_id", user_id)):
+        if _v and _k not in _rctx:
+            _rctx[_k] = _v
+    _fid = file_ids or []
+    _arefs = attachment_refs or []
+    # also accept single attachment_ref alias
+    if not _arefs and isinstance(runtime_context, dict) and runtime_context.get("attachment_ref"):
+        _arefs = [runtime_context["attachment_ref"]]
+    if _arefs and not _fid:
+        _fid = [r.get("attachment_id") or r.get("vault_path") or r.get("file_id") for r in _arefs if isinstance(r, dict)]
+        _fid = [x for x in _fid if x]
+    session_store.append_prompt(session_id, user_id, text, rid, file_ids=_fid or None, attachment_refs=_arefs or None, runtime_context=_rctx or None)
     # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
     try:
         from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
@@ -507,15 +691,24 @@ async def _handle_core_logic(
     except Exception:
         pass
     acp = ACPAdapter(settings.hermes_base_url)
-    acp_result = await acp.send_prompt(rec, text, rid)
-    session_store.append_stream_event(session_id, {"type": "prompt_queued", "data": {"text": text, "request_id": rid}, "trace_id": rec.trace_id})
+    try:
+        acp_result = await acp.send_prompt(rec, text, rid, attachment_refs=_arefs or None, file_ids=_fid or None, runtime_context=_rctx or None)
+    except Exception as _acp_exc:
+        if _idem_key:
+            try:
+                from control_plane.idempotency import fail as _idem_fail2, is_retryable_error as _is_retry2
+                _idem_fail2(_idem_key, error=str(_acp_exc)[:500], retryable=_is_retry2(_acp_exc))
+            except Exception:
+                pass
+        raise
+    session_store.append_stream_event(session_id, {"type": "prompt_queued", "data": {"text": text, "request_id": rid, "file_ids": _fid, "attachment_refs": _arefs, "runtime_context": _rctx}, "trace_id": rec.trace_id})
 
     # Streaming: fetch stream and post incremental updates via MattermostAdapter (threaded, root_id)
     if channel_id:
         # background task — don't block response; use thread root if provided
         thread_root = root_id or post_id
         try:
-            asyncio.create_task(_stream_and_post_to_mattermost(channel_id, thread_root, rec))
+            asyncio.create_task(_stream_and_post_to_mattermost(channel_id, thread_root, rec, idempotency_key=_idem_key))
         except Exception:
             pass
 
@@ -525,6 +718,7 @@ async def _handle_core_logic(
         "agent_id": mapping.agent_principal,
         "trace_id": rec.trace_id,
         "request_id": rid,
+        "idempotency_key": _idem_key or "",
         "acp": acp_result,
     }
 
@@ -562,10 +756,20 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
 
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id (employee:...) required")
-    if not text:
-        raise HTTPException(status_code=400, detail="text/message required")
+    # Allow image-only posts (no text) when file_ids/attachments present — forwarded via Agent Runtime
+    _raw_fids = payload.get("file_ids") if isinstance(payload.get("file_ids"), list) else None
+    _raw_arefs = payload.get("attachment_refs") or payload.get("attachments") or ([payload.get("attachment_ref")] if payload.get("attachment_ref") else None)
+    if isinstance(_raw_arefs, dict):
+        _raw_arefs = [_raw_arefs]
+    _raw_rctx = payload.get("runtime_context") if isinstance(payload.get("runtime_context"), dict) else {}
+    # normalize runtime_context from bridge (already contains channel/root/post)
+    if not text and not (_raw_fids or _raw_arefs):
+        raise HTTPException(status_code=400, detail="text/message required (or file_ids/attachment_refs for image)")
+    # ensure text is at least placeholder for multimodal runtime (ACP builds list)
+    if not text and (_raw_fids or _raw_arefs):
+        text = payload.get("text") or ""  # allow empty; ACP will handle image-only via multimodal
 
-    return await _handle_core_logic(tenant_id, user_id, text, session_id, channel_id=channel_id, post_id=post_id, root_id=root_id)
+    return await _handle_core_logic(tenant_id, user_id, text, session_id, channel_id=channel_id, post_id=post_id, root_id=root_id, file_ids=_raw_fids, attachment_refs=_raw_arefs, runtime_context=_raw_rctx)
 
 
 @router.post("/mattermost/slash")

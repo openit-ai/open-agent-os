@@ -24,6 +24,11 @@ from .mattermost_adapter.webhook import router as mattermost_router
 from .demo import router as demo_router
 # Adaptive Profile MVP (v1.7.2 design) — code complete, NOT live deployed until migration + service verification
 from .adaptive_profile.router import router as profile_router
+try:
+    from .adaptive_profile.skills import register_profile_skills as _reg_ps
+    _reg_ps()
+except Exception:
+    pass
 import logging
 import os
 import signal
@@ -475,7 +480,17 @@ async def send_prompt(session_id: str, req: SendPromptRequest, authorization: st
             raise HTTPException(status_code=403, detail=f"policy gate unavailable fail-closed: {e}")
         raise HTTPException(status_code=403, detail=f"policy gate error: {e}")
     # Only after ALLOW + successful audit, persist and forward
-    session_store.append_prompt(session_id, caller, req.prompt, rid)
+    _fid = getattr(req, "file_ids", None) or getattr(req, "file_ids", None)
+    _arefs = getattr(req, "attachment_refs", None) or getattr(req, "attachments", None) or ([getattr(req, "attachment_ref", None)] if getattr(req, "attachment_ref", None) else None)
+    # normalize: if req carries single attachment_ref, wrap
+    if _arefs and isinstance(_arefs, dict):
+        _arefs = [_arefs]
+    _rctx = getattr(req, "runtime_context", None)
+    # file_ids derived from attachment_refs if not explicit (multimodal contract)
+    if _arefs and not _fid:
+        _fid = [r.get("attachment_id") or r.get("vault_path") or r.get("file_id") for r in _arefs if isinstance(r, dict)]
+        _fid = [x for x in _fid if x]
+    session_store.append_prompt(session_id, caller, req.prompt, rid, file_ids=_fid, attachment_refs=_arefs, runtime_context=_rctx)
     # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
     try:
         from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
@@ -490,10 +505,17 @@ async def send_prompt(session_id: str, req: SendPromptRequest, authorization: st
         })
     except Exception:
         pass
-    # Forward to Hermes via ACP
-    result = await acp.send_prompt(rec, req.prompt, rid)
-    # Also push a local stream event so SSE has something
-    session_store.append_stream_event(session_id, {"type": "prompt_queued", "data": {"prompt": req.prompt, "request_id": rid}, "trace_id": rec.trace_id})
+    # Forward to Hermes via ACP — direct delivery via active runtime, with file_ids/multimodal context (no model selection)
+    result = await acp.send_prompt(rec, req.prompt, rid, attachment_refs=_arefs, file_ids=_fid, runtime_context=_rctx)
+    # Also push a local stream event so SSE has something — include multimodal context if present
+    _queued_data = {"prompt": req.prompt, "request_id": rid}  # type: ignore
+    if _fid:
+        _queued_data["file_ids"] = _fid  # type: ignore
+    if _arefs:
+        _queued_data["attachment_refs"] = _arefs  # type: ignore
+    if _rctx:
+        _queued_data["runtime_context"] = _rctx  # type: ignore
+    session_store.append_stream_event(session_id, {"type": "prompt_queued", "data": _queued_data, "trace_id": rec.trace_id})
     return {"request_id": rid, "trace_id": rec.trace_id, "acp": result}
 
 @app.get("/v1/sessions/{session_id}/stream")

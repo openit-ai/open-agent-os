@@ -12,6 +12,8 @@ class ControlPlaneSettings(BaseSettings):
     mattermost_bot_token: str = ""
     mattermost_webhook_secret: str = ""
     mattermost_url: str = ""
-    model_config = {"env_prefix": "OAOS_CP_"}
+    # Production credentials are injected by the systemd EnvironmentFile.
+    # Do not load production files at import time: tests and local tools must remain isolated.
+    model_config = {"env_prefix": "OAOS_CP_", "extra": "ignore"}
 
 settings = ControlPlaneSettings()
