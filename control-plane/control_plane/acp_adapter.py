@@ -89,6 +89,18 @@ class CircuitBreaker:
 
 _acp_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_timeout_s=30.0, name="acp")
 
+
+def _llm_max_attempts() -> int:
+    """Bound one logical Mattermost post to one LLM request by default."""
+    raw = os.getenv("OAOS_LLM_MAX_ATTEMPTS", "")
+    if raw:
+        try:
+            return max(1, min(3, int(raw)))
+        except ValueError:
+            pass
+    return 1 if os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"} else 3
+
+
 def _audit_emit(event_type: str, trace_id: str, data: dict):
     try:
         # try audit_model + ledger if available, else no-op
@@ -359,7 +371,7 @@ class ACPAdapter:
                 r.raise_for_status()
                 return r.json()
         try:
-            return await _with_retry_acp(_do, max_retries=3, backoff_s=0.2, trace_id=session.trace_id)
+            return await _with_retry_acp(_do, max_retries=_llm_max_attempts() - 1, backoff_s=0.2, trace_id=session.trace_id)
         except Exception as e:
             # Dev fallback — Hermes not yet running
             return {"status": "local_fallback", "reason": str(e), "session_id": session.session_id, "workspace": ws}
@@ -399,7 +411,7 @@ class ACPAdapter:
                 r.raise_for_status()
                 return r.json()
         try:
-            return await _with_retry_acp(_do, max_retries=3, backoff_s=0.2, trace_id=session.trace_id)
+            return await _with_retry_acp(_do, max_retries=_llm_max_attempts() - 1, backoff_s=0.2, trace_id=session.trace_id)
         except Exception as e:
             return {"status": "queued_local", "reason": str(e), "request_id": request_id}
 
@@ -498,13 +510,15 @@ class ACPAdapter:
                         "temperature": 0.7,
                     }
                     r = None
-                    for attempt in range(3):
+                    max_attempts = _llm_max_attempts()
+                    for attempt in range(max_attempts):
                         r = await client.post(
                             gateway_url,
                             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                             json=payload,
                         )
-                        if r.status_code not in (429, 500, 502, 503, 504) or attempt == 2:
+                        _audit_emit("gateway_attempt", session.trace_id, {"request_id": session.session_id, "attempt": attempt + 1, "max_attempts": max_attempts, "status": r.status_code, "path": "gateway"})
+                        if r.status_code not in (429, 500, 502, 503, 504) or attempt + 1 >= max_attempts:
                             break
                         retry_after = r.headers.get("Retry-After", "")
                         try:
