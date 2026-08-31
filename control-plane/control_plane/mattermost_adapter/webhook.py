@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,29 @@ async def _evaluate_ingress_policy(
     except Exception as e:
         # Fallback direct (should not happen) — fail-closed
         raise HTTPException(status_code=403, detail=f"policy denied: gate error: {e}")
+
+# Per-owner async serialization: preserve prompt order within one session while
+# allowing different users to continue concurrently. Locks are process-local;
+# durable idempotency remains the cross-process duplicate guard.
+_owner_locks: dict[tuple[str, str], asyncio.Lock] = {}
+_owner_locks_guard = threading.Lock()
+
+
+def _owner_lock(tenant_id: str, user_id: str) -> asyncio.Lock:
+    key = (tenant_id, user_id)
+    with _owner_locks_guard:
+        lock = _owner_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _owner_locks[key] = lock
+        return lock
+
+
+async def run_owner_serialized(tenant_id: str, user_id: str, operation, *args, **kwargs):
+    """Run one owner operation in FIFO acquisition order for this process."""
+    async with _owner_lock(tenant_id, user_id):
+        return await operation(*args, **kwargs)
+
 
 # Lazy import for orchestrator (avoid circular at import time)
 def _load_orchestrator():
@@ -477,6 +501,36 @@ async def _stream_and_post_to_mattermost(
 
 
 async def _handle_core_logic(
+    tenant_id: str,
+    user_id: str,
+    text: str,
+    session_id: str | None,
+    channel_id: str | None = None,
+    post_id: str | None = None,
+    root_id: str | None = None,
+    file_ids: list[str] | None = None,
+    attachment_refs: list[dict] | None = None,
+    runtime_context: dict | None = None,
+) -> dict[str, Any]:
+    """Serialize all side effects for one verified owner."""
+    return await run_owner_serialized(
+        tenant_id,
+        user_id,
+        _handle_core_logic_unserialized,
+        tenant_id,
+        user_id,
+        text,
+        session_id,
+        channel_id,
+        post_id,
+        root_id,
+        file_ids,
+        attachment_refs,
+        runtime_context,
+    )
+
+
+async def _handle_core_logic_unserialized(
     tenant_id: str,
     user_id: str,
     text: str,

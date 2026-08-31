@@ -12,7 +12,32 @@ Builds attachment_refs with file_id/filename/mime_type/size and a safe vault/loc
 and passes file_ids/attachment_refs/runtime_context in the signed CP payload.
 """
 import os, json, time, pathlib, re, hmac, hashlib, threading, base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.request, urllib.error
+
+# Bound per-poll I/O concurrency so one slow user/channel cannot stall others.
+POLL_CHANNEL_WORKERS = 4
+
+
+def fetch_channel_posts_parallel(channels, max_workers=POLL_CHANNEL_WORKERS):
+    """Fetch DM channel posts concurrently with a bounded worker pool."""
+    def _fetch(channel):
+        cid = channel["id"]
+        try:
+            return cid, api_get(f"/api/v4/channels/{cid}/posts?page=0&per_page=20")
+        except Exception as exc:
+            print(f"[poll] posts failed channel={cid[:6]} err={str(exc)[:120]}", flush=True)
+            return cid, None
+
+    results = {}
+    worker_count = max(1, min(int(max_workers), POLL_CHANNEL_WORKERS))
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="mm-poll") as pool:
+        futures = [pool.submit(_fetch, channel) for channel in channels]
+        for future in as_completed(futures):
+            cid, data = future.result()
+            if data is not None:
+                results[cid] = data
+    return results
 
 # Vision inference can exceed the text path's latency; allow bounded read-back.
 POST_CONFIRM_TIMEOUT_S = 240
@@ -451,11 +476,11 @@ def poll_once(seen):
         return new_seen, 0
     dms = [c for c in channels if c.get("type")=="D"]
     replied = 0
+    channel_posts = fetch_channel_posts_parallel(dms)
     for ch in dms:
         cid = ch["id"]
-        try:
-            data = api_get(f"/api/v4/channels/{cid}/posts?page=0&per_page=20")
-        except Exception as e:
+        data = channel_posts.get(cid)
+        if not data:
             continue
         order = data.get("order", [])
         posts = data.get("posts", {})

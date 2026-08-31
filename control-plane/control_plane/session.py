@@ -27,6 +27,14 @@ def new_request_id() -> str:
     return f"req_{uuid.uuid4().hex[:12]}"
 
 
+def session_namespace_for_owner(tenant_id: str, user_id: str) -> str:
+    """Return a stable, non-secret namespace dedicated to one verified owner."""
+    def _safe(value: str) -> str:
+        return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(value))[:96] or "unknown"
+
+    return f"oaos:mattermost:{_safe(tenant_id)}:{_safe(user_id)}"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -144,7 +152,7 @@ class InMemorySessionStore(BaseSessionStore):
             avatar_url=avatar_url,
             runtime_provider="opencode-go",
             runtime_model="muse-spark-1.2-contributor",
-            session_namespace="oaos:mattermost",
+            session_namespace=session_namespace_for_owner(tenant_id, user_id),
         )
         self._store[rec.session_id] = rec
         return rec
@@ -280,7 +288,7 @@ class RedisSessionStore(BaseSessionStore):
             avatar_url=avatar_url,
             runtime_provider="opencode-go",
             runtime_model="muse-spark-1.2-contributor",
-            session_namespace="oaos:mattermost",
+            session_namespace=session_namespace_for_owner(tenant_id, user_id),
         )
         if self._client is None:
             if self._fallback_store is None:
