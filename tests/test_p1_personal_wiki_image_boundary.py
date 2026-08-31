@@ -120,6 +120,14 @@ def test_extractor_runtime_instruction_no_absolute_path(tmp_path):
 
 # --- admin personal_wiki.py boundary checks ---
 
+def test_admin_image_ref_contains_bytes_data_url(tmp_path):
+    src = _read_personal_wiki_src()
+    assert "data_url" in src and "base64" in src
+    # The data URL is generated from saved bytes, not a file:// reference.
+    assert "base64.b64encode(saved_path.read_bytes())" in src
+    assert "file://" not in src
+
+
 def test_personal_wiki_no_tmp_fallback_and_no_saved_path_leak():
     src = _read_personal_wiki_src()
     # /tmp fallback must be absent

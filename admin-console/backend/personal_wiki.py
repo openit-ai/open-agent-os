@@ -14,6 +14,7 @@ Wire into admin-console/backend/app.py with lazy include_router.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import uuid
@@ -254,6 +255,15 @@ def _build_image_attachment_ref(saved_path: Path, vault_path: str, attachment_id
         size = saved_path.stat().st_size if saved_path.exists() else 0
     except Exception:
         size = 0
+    # The active ACP/Hermes runtime must receive bytes, not only a local path.
+    # Keep the reference owner-scoped and path-free while providing an accepted
+    # multimodal data URL for runtimes that do not resolve vault references.
+    data_url = ""
+    try:
+        encoded = base64.b64encode(saved_path.read_bytes()).decode("ascii")
+        data_url = f"data:{mime};base64,{encoded}"
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"image bytes unavailable for runtime forwarding: {exc}") from exc
     return {
         "kind": IMAGE_RUNTIME_KIND,
         "attachment_id": attachment_id,
@@ -262,6 +272,8 @@ def _build_image_attachment_ref(saved_path: Path, vault_path: str, attachment_id
         "mime": mime,
         "size_bytes": size,
         "vault_path": vault_path,
+        "data_url": data_url,
+        "base64": data_url.split(",", 1)[1],
     }
 
 
