@@ -262,7 +262,6 @@ def _build_image_attachment_ref(saved_path: Path, vault_path: str, attachment_id
         "mime": mime,
         "size_bytes": size,
         "vault_path": vault_path,
-        "saved_path": str(saved_path),
     }
 
 
@@ -637,10 +636,8 @@ async def upload_attachment(
         raise
     except Exception as e:
         logger.warning(f"vault persist failed: {e}")
-        if _is_production():
-            raise HTTPException(status_code=503, detail=f"vault persist failed: {e}")
-        safe_filename = _sanitize_filename(filename)
-        saved_path = Path("/tmp") / safe_filename
+        # Fail-closed: do not fall back to /tmp (owner isolation bypass); surface error so caller knows storage failed
+        raise HTTPException(status_code=503, detail=f"vault persist failed: {e}")
 
     # --- Common IDs / vault paths ---
     attachment_id = f"att_{uuid.uuid4().hex[:12]}"
@@ -803,12 +800,11 @@ async def upload_attachment(
         "attachment_id": attachment_id,
         "vault_path": vault_path,
         "size": len(content),
-        "saved_path": str(saved_path),
         **({"is_image": True, "runtime_forwarding": runtime_forwarding.get("status")} if is_image else {}),
     })
     is_mock = False
     try:
-        is_mock = not saved_path.exists() or "tmp" in str(saved_path)
+        is_mock = not saved_path.exists()
     except Exception:
         is_mock = False
     if _is_production() and is_mock:
@@ -843,7 +839,6 @@ async def upload_attachment(
         "mock": False,
         "db_configured": _is_db_configured(),
         "vault_configured": _is_vault_configured(),
-        "saved_path": str(saved_path),
     }
     if is_image:
         # No provider/model selection — image is attachment reference forwarded via active runtime (direct delivery, multimodal contract)
