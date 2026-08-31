@@ -1550,10 +1550,10 @@ fail_open_telemetry(component, reason, **fields) → WARNING + stderr
 
 - `.env.example` CHANGE_ME + OAOS_ADMIN_BOOTSTRAP_PASSWORD/EMAIL + prod fail-closed 주석, README bootstrap L5 안내
 
-#### 16.7.6 검증 현황 — pytest 648 passed
+#### 16.7.6 검증 현황 — historical snapshot (pytest 648 passed)
 
 ```
-648 passed, 65 warnings (2026-08-29)
+648 passed, 65 warnings (2026-08-29; historical snapshot — rerun `python scripts/verify-evidence-tiers.py` on the v0.1.3 candidate; do not reuse as current evidence)
 신규: test_runtime_hardening + test_auth_production_hardening 9 + test_deploy_hardening 15 = +36 (612→648)
 ```
 

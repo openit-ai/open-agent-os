@@ -193,7 +193,7 @@ def test_security_updates_structure():
     r = c.get("/v1/security/updates", headers=_auth(token))
     assert r.status_code == 200
     data = r.json()
-    assert data["current_version"] == "0.1.1"
+    assert data["current_version"] == "0.1.3"
     assert data["count"] == 2
     assert len(data["updates"]) == 2
     for upd in data["updates"]:
@@ -286,7 +286,7 @@ def test_upgrade_status_viewer_allowed():
     c = _client()
     r = c.get("/v1/upgrade/status", headers=_auth(token_l4))
     assert r.status_code == 200
-    assert r.json()["current_version"] == "0.1.1"
+    assert r.json()["current_version"] == "0.1.3"
     assert r.json()["available_version"] == "0.2.0"
     assert r.json()["status"] == "idle"
 

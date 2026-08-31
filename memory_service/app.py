@@ -177,7 +177,7 @@ def _verify_agent_binding(payload: dict, requested_agent: str | None) -> None:
     if str(jwt_agent).strip() != str(requested_agent).strip():
         raise HTTPException(status_code=403, detail=f"agent mismatch: token agent {jwt_agent} != requested {requested_agent}")
 
-app = FastAPI(title="Open Agent OS — Memory Service", version="0.1.1")
+app = FastAPI(title="Open Agent OS — Memory Service", version="0.1.3")
 
 
 @app.get("/health")
@@ -193,7 +193,7 @@ def memory_health():
 
 @app.get("/")
 def root():
-    return {"service": "memory-service", "version": "0.1.1", "docs": "/docs"}
+    return {"service": "memory-service", "version": "0.1.3", "docs": "/docs"}
 
 
 # ---------------------------------------------------------------------------

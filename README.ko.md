@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.3` — 단일 진실 `admin-console/package.json` `0.1.3` (후보 브랜치 `release/v0.1.3-remediation` at `9ac4b8de86`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.2`(`docs/architecture-v1.7.2.md`)는 제품 버전 `0.1.3`와 별개** — v1.7.2는 Adaptive Profile Engine 설계(§16.12)를, 0.1.3는 제품 릴리즈 번호를 의미한다.
+- **제품 버전:** `0.1.3` — 단일 진실 `admin-console/package.json` `0.1.3` (후보 브랜치 `release/v0.1.3-remediation` at `cb445fd7cb`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.2`(`docs/architecture-v1.7.2.md`)는 제품 버전 `0.1.3`와 별개** — v1.7.2는 Adaptive Profile Engine 설계(§16.12)를, 0.1.3는 제품 릴리즈 번호를 의미한다.
 - **기준 아키텍처:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine MVP 구현 완료(코드·운영 DB migration·CP router mount·Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인, distributed/external/live RAG 미검증) — 상세 §16.12
 
 ---
@@ -216,7 +216,7 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 ### 9a. 릴리즈 v0.1.3 — 제품 `0.1.3` (아키텍처 `v1.7.2`와 별개)
 
-**태그/커밋:** `v0.1.3` 후보 `9ac4b8de86` on `release/v0.1.3-remediation` (미태깅; 이전 `v0.1.2`는 `34f0981e71` on `origin/main`). 제품 버전 `0.1.3`는 `admin-console/package.json`에서 읽는다(env `OAOS_VERSION`이 우선); 아키텍처 `v1.7.2`는 설계 문서 버전으로 별개 — 혼동 금지.
+**태그/커밋:** `v0.1.3` 후보 `cb445fd7cb` on `release/v0.1.3-remediation` (미태깅; 이전 `v0.1.2`는 `34f0981e71` on `origin/main`). 제품 버전 `0.1.3`는 `admin-console/package.json`에서 읽는다(env `OAOS_VERSION`이 우선); 아키텍처 `v1.7.2`는 설계 문서 버전으로 별개 — 혼동 금지.
 
 **이번 태그 포함 내역 (11 files, 647 insertions):**
 - **Admin Web UI 수정**
