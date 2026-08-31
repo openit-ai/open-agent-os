@@ -42,6 +42,7 @@ from .engine import (
 )
 from .hook import default_hook
 from .cache import get_cached_policy, set_cached_policy, invalidate_user_cache
+from .projection import project_behavior
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,22 @@ class EvidencePost(BaseModel):
     message_id: str | None = None
     observed_at: str | None = None  # ISO8601; defaults to now
     content_hash: str | None = None  # optional idempotency key; if omitted, computed deterministically
+
+
+# ── GET /projection ──────────────────────────────────────────────────────
+
+@router.get("/projection")
+async def get_profile_projection(auth=Depends(_require_self)):
+    """Return non-diagnostic behavior projection for the authenticated user."""
+    tenant_id, user_id = auth
+    maker = get_sessionmaker()
+    async with maker() as session:
+        from sqlalchemy import select
+        profile = await session.get(UserProfileORM, {"user_id": user_id, "tenant_id": tenant_id})
+        res = await session.execute(select(TraitScoreORM).where(TraitScoreORM.user_id == user_id, TraitScoreORM.tenant_id == tenant_id))
+        traits = {r.trait_name: {"score": r.global_score, "confidence": r.confidence, "sample_count": r.sample_count} for r in res.scalars().all()}
+    result = project_behavior(traits)
+    return {"tenant_id": tenant_id, "user_id": user_id, "profile_version": profile.profile_version if profile else 0, **result}
 
 
 # ── GET /me ──────────────────────────────────────────────────────────────

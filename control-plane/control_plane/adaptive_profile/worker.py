@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .extractor import extract_evidence
+from .features import extract_features
 from .engine import content_hash as engine_content_hash, validate_task_type, weighted_update, compute_confidence
 
 logger = logging.getLogger(__name__)
@@ -154,8 +155,24 @@ async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any
         observed_at = event.get("observed_at") or datetime.now(timezone.utc).isoformat()
 
         items = extract_evidence(text, task_type=task_type)
+        # Behavioral features are intentionally extracted here, off the request
+        # path. Only features backed by the existing trait contract are promoted
+        # to evidence; the full feature aggregate is a later persistence phase.
+        features = extract_features(text, observed_at=observed_at)
+        supported_traits = {"conclusion_first", "verbosity", "evidence_requirement", "agent_autonomy", "confirmation_requirement", "planning_orientation", "completion_orientation", "critical_challenge"}
+        for feature in features:
+            if feature.name not in supported_traits:
+                continue
+            items.append({"trait": feature.name, "direction": 1 if feature.value >= 0 else -1, "strength": abs(feature.value), "confidence": feature.confidence, "source_type": feature.source_type, "task_type": task_type})
         if not items:
-            return {"processed": True, "reason": "no explicit feedback detected", "evidence_count": 0, "deduplicated": False}
+            return {"processed": True, "reason": "no behavioral evidence detected", "evidence_count": 0, "deduplicated": False}
+
+        # Validate generated evidence before opening the database session.
+        for item in items:
+            if item["trait"] not in {"conclusion_first", "verbosity", "evidence_requirement", "agent_autonomy", "confirmation_requirement", "planning_orientation", "completion_orientation", "critical_challenge"}:
+                continue
+            item["source_type"] = item.get("source_type") or "general_expression"
+            item["task_type"] = task_type
 
         # Use get_sessionmaker that tests can patch; fallback to router's maker if DB configured differently
         maker = None

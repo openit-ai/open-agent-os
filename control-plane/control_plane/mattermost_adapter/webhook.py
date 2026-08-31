@@ -715,7 +715,13 @@ async def _handle_core_logic(
         _fid = [r.get("attachment_id") or r.get("vault_path") or r.get("file_id") for r in _arefs if isinstance(r, dict)]
         _fid = [x for x in _fid if x]
     session_store.append_prompt(session_id, user_id, text, rid, file_ids=_fid or None, attachment_refs=_arefs or None, runtime_context=_rctx or None)
-    _archive_conversation_turn(tenant_id, mapping.agent_principal, mapping.human_principal, session_id, rid, text)
+    try:
+        from ..adaptive_profile.queue import enqueue as _enqueue
+        queued = _enqueue(_archive_conversation_turn, tenant_id, mapping.agent_principal, mapping.human_principal, session_id, rid, text)
+        if not queued:
+            log.warning("personal wiki archive queue full session=%s request=%s", session_id, rid)
+    except Exception as exc:
+        log.warning("personal wiki archive enqueue failed session=%s request=%s: %s", session_id, rid, exc)
     # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
     try:
         from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
