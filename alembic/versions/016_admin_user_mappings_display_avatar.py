@@ -1,6 +1,6 @@
 """Add display_name/avatar_url to admin_user_mappings (ORM drift fix).
 
-Revision ID: 016_admin_user_mappings_display_avatar
+Revision ID: 016_user_map_avatar
 Revises: 015_runtime_config_snapshots
 Create Date: 2026-08-31
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-revision = "016_admin_user_mappings_display_avatar"
+revision = "016_user_map_avatar"
 down_revision = "015_runtime_config_snapshots"
 branch_labels = None
 depends_on = None

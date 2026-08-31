@@ -100,7 +100,7 @@ def test_003_table_missing_columns_then_016_adds_and_preserves_data():
 
 def test_migration_module_idempotent_helpers():
     mod = _load_migration()
-    assert mod.revision == "016_admin_user_mappings_display_avatar"
+    assert mod.revision == "016_user_map_avatar"
     assert mod.down_revision == "015_runtime_config_snapshots"
     assert hasattr(mod, "upgrade")
     assert hasattr(mod, "downgrade")
