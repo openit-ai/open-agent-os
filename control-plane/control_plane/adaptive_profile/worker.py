@@ -129,6 +129,11 @@ async def _persist_one(
                 return {"deduplicated": True, "evidence_id": ev_id, "content_hash": ch}
             raise
         logger.info(f"audit worker evidence tenant={tenant_id} user={user_id} trait={trait} dir={direction}")
+        try:
+            from .cache import invalidate_user_cache
+            invalidate_user_cache(tenant_id, user_id)
+        except Exception:
+            pass
         return {"deduplicated": False, "evidence_id": ev_id, "content_hash": ch, "global_score": new_score, "task_score": new_t}
 
 

@@ -41,6 +41,7 @@ from .engine import (
     validate_trait,
 )
 from .hook import default_hook
+from .cache import get_cached_policy, set_cached_policy, invalidate_user_cache
 
 logger = logging.getLogger(__name__)
 
@@ -183,18 +184,29 @@ async def get_my_profile(auth=Depends(_require_self)):
 
 @router.get("/policy")
 async def get_response_policy(task_type: str | None = None, auth=Depends(_require_self)):
-    """Return minimal Response Policy for caller (self)."""
+    """Return minimal Response Policy for caller (self). Redis cached."""
     tenant_id, user_id = auth
     task_type = validate_task_type(task_type)
     maker = get_sessionmaker()
     async with maker() as session:
         from sqlalchemy import select
 
+        prof = await session.get(UserProfileORM, {"user_id": user_id, "tenant_id": tenant_id})
+        profile_version = prof.profile_version if prof else 0
+
+        # try cache before DB scores
+        try:
+            cached = get_cached_policy(tenant_id, user_id, task_type, profile_version)
+            if cached is not None and "policy" in cached:
+                pc = {k: cached["policy"][k] for k in DEFAULT_POLICY.keys() if k in cached["policy"]}
+                return {"tenant_id": tenant_id, "user_id": user_id, "task_type": task_type, "policy": pc, "profile_version": profile_version}
+        except Exception:
+            pass
+
         # load preferences + scores
         res3 = await session.execute(select(ExplicitPreferenceORM).where(ExplicitPreferenceORM.user_id == user_id, ExplicitPreferenceORM.tenant_id == tenant_id))
         explicit: dict[str, Any] = {}
         for r in res3.scalars().all():
-            # global prefs apply; task prefs only if task matches
             if r.scope == "global":
                 explicit[r.key] = _coerce_pref_value(r.value)
             elif r.task_type == task_type:
@@ -205,14 +217,16 @@ async def get_response_policy(task_type: str | None = None, auth=Depends(_requir
         res2 = await session.execute(select(TaskTraitScoreORM).where(TaskTraitScoreORM.user_id == user_id, TaskTraitScoreORM.tenant_id == tenant_id, TaskTraitScoreORM.task_type == task_type))
         task_scores = {r.trait_name: r.score for r in res2.scalars().all()}
 
-    # Use hook fallback semantics
     try:
         policy = synthesize_policy(explicit_prefs=explicit, task_scores=task_scores, global_scores=global_scores)
     except Exception:
         policy = dict(DEFAULT_POLICY)
-    # ensure minimal (never leak scores)
     policy = {k: policy[k] for k in DEFAULT_POLICY.keys() if k in policy}
-    return {"tenant_id": tenant_id, "user_id": user_id, "task_type": task_type, "policy": policy, "profile_version": 1}
+    try:
+        set_cached_policy(tenant_id, user_id, task_type, profile_version, policy)
+    except Exception:
+        pass
+    return {"tenant_id": tenant_id, "user_id": user_id, "task_type": task_type, "policy": policy, "profile_version": profile_version}
 
 
 def _coerce_pref_value(v: Any) -> Any:
@@ -255,7 +269,6 @@ async def put_preference(body: PreferencePut, auth=Depends(_require_self)):
         now = datetime.now(timezone.utc)
         existing = await session.get(ExplicitPreferenceORM, pref_id)
         if existing:
-            # tenant isolation check (PK already scoped, but verify)
             if existing.tenant_id != tenant_id or existing.user_id != user_id:
                 raise HTTPException(status_code=403, detail="cross-tenant preference denied")
             existing.value = str(body.value)
@@ -275,7 +288,6 @@ async def put_preference(body: PreferencePut, auth=Depends(_require_self)):
                 updated_at=now,
             )
             session.add(row)
-        # ensure profile row exists / bump version
         prof = await session.get(UserProfileORM, {"user_id": user_id, "tenant_id": tenant_id})
         if not prof:
             prof = UserProfileORM(user_id=user_id, tenant_id=tenant_id, profile_version=1, status="active", evidence_count=0, overall_confidence=0.0, created_at=now, updated_at=now)
@@ -285,7 +297,11 @@ async def put_preference(body: PreferencePut, auth=Depends(_require_self)):
             prof.updated_at = now
         await session.commit()
         logger.info("audit profile preference tenant=%s user=%s key=%s scope=%s", tenant_id, user_id, body.key, body.scope)
-        return {"preference_id": pref_id, "key": body.key, "value": str(body.value), "scope": body.scope, "task_type": body.task_type}
+    try:
+        invalidate_user_cache(tenant_id, user_id)
+    except Exception:
+        pass
+    return {"preference_id": pref_id, "key": body.key, "value": str(body.value), "scope": body.scope, "task_type": body.task_type}
 
 
 # ── POST /evidence ───────────────────────────────────────────────────────
@@ -293,7 +309,6 @@ async def put_preference(body: PreferencePut, auth=Depends(_require_self)):
 @router.post("/evidence")
 async def post_evidence(body: EvidencePost, auth=Depends(_require_self)):
     tenant_id, user_id = auth
-    # validate
     if body.trait not in TRAITS:
         raise HTTPException(status_code=400, detail=f"unknown trait: {body.trait}")
     if body.direction not in (-1, 1):
@@ -313,7 +328,6 @@ async def post_evidence(body: EvidencePost, auth=Depends(_require_self)):
     except Exception:
         observed_dt = datetime.now(timezone.utc)
 
-    # idempotency: content_hash deterministic
     ch = body.content_hash
     if not ch:
         ch = engine_content_hash(tenant_id, user_id, body.trait, body.direction, st, observed, body.conversation_id or "")
@@ -322,7 +336,6 @@ async def post_evidence(body: EvidencePost, auth=Depends(_require_self)):
     async with maker() as session:
         from sqlalchemy import select
 
-        # Idempotency check
         res = await session.execute(select(ProfileEvidenceORM).where(ProfileEvidenceORM.content_hash == ch))
         existing_ev = res.scalars().first()
         if existing_ev:
@@ -348,9 +361,7 @@ async def post_evidence(body: EvidencePost, auth=Depends(_require_self)):
         )
         session.add(ev)
 
-        # Weighted update global + task trait scores
         now = datetime.now(timezone.utc)
-        # global
         gs = await session.get(TraitScoreORM, {"user_id": user_id, "tenant_id": tenant_id, "trait_name": body.trait})
         old = gs.global_score if gs else 0.0
         new_score = weighted_update(old, body.direction, body.strength, st, body.confidence)
@@ -363,7 +374,6 @@ async def post_evidence(body: EvidencePost, auth=Depends(_require_self)):
             gs = TraitScoreORM(user_id=user_id, tenant_id=tenant_id, trait_name=body.trait, global_score=new_score, confidence=compute_confidence(1), sample_count=1, last_updated=now)
             session.add(gs)
 
-        # task-specific
         ts = await session.get(TaskTraitScoreORM, {"user_id": user_id, "tenant_id": tenant_id, "task_type": task_type, "trait_name": body.trait})
         old_t = ts.score if ts else 0.0
         new_t = weighted_update(old_t, body.direction, body.strength, st, body.confidence)
@@ -376,7 +386,6 @@ async def post_evidence(body: EvidencePost, auth=Depends(_require_self)):
             ts = TaskTraitScoreORM(user_id=user_id, tenant_id=tenant_id, task_type=task_type, trait_name=body.trait, score=new_t, confidence=compute_confidence(1), sample_count=1, last_updated=now)
             session.add(ts)
 
-        # user_profile version bump
         prof = await session.get(UserProfileORM, {"user_id": user_id, "tenant_id": tenant_id})
         if not prof:
             prof = UserProfileORM(user_id=user_id, tenant_id=tenant_id, profile_version=1, status="active", evidence_count=1, overall_confidence=compute_confidence(1), created_at=now, updated_at=now)
@@ -389,7 +398,11 @@ async def post_evidence(body: EvidencePost, auth=Depends(_require_self)):
 
         await session.commit()
         logger.info("audit profile evidence tenant=%s user=%s trait=%s dir=%s", tenant_id, user_id, body.trait, body.direction)
-        return {"evidence_id": ev_id, "content_hash": ch, "deduplicated": False, "global_score": new_score, "task_score": new_t}
+    try:
+        invalidate_user_cache(tenant_id, user_id)
+    except Exception:
+        pass
+    return {"evidence_id": ev_id, "content_hash": ch, "deduplicated": False, "global_score": new_score, "task_score": new_t}
 
 
 # ── POST /reset ──────────────────────────────────────────────────────────
@@ -418,7 +431,11 @@ async def reset_profile(auth=Depends(_require_self)):
             session.add(prof)
         await session.commit()
         logger.info("audit profile reset tenant=%s user=%s", tenant_id, user_id)
-        return {"status": "reset", "tenant_id": tenant_id, "user_id": user_id}
+    try:
+        invalidate_user_cache(tenant_id, user_id)
+    except Exception:
+        pass
+    return {"status": "reset", "tenant_id": tenant_id, "user_id": user_id}
 
 
 # Also expose self-check helper for isolation tests

@@ -1,11 +1,9 @@
-"""Adaptive Profile Runtime Hook — minimal Response Policy."""
-
+"""Adaptive Profile Runtime Hook — minimal Response Policy with Redis cache."""
 from __future__ import annotations
 
 import os
 import logging
 from typing import Any
-
 from .engine import DEFAULT_POLICY, TASK_TYPES, synthesize_policy, validate_task_type
 
 logger = logging.getLogger(__name__)
@@ -34,19 +32,15 @@ class AdaptiveProfileHook:
         If None or fails, falls back to DEFAULT_POLICY merged with current_instruction.
         """
         task_type = validate_task_type(task_type)
-        # precedence layer 1: current_instruction (highest, caller already knows)
         cur = current_instruction or {}
         if profile_loader is None:
-            # No loader — return default merged with current instruction only
             merged = dict(DEFAULT_POLICY)
             for k in merged:
                 if k in cur:
                     merged[k] = cur[k]
             return merged
-
         try:
             data = profile_loader(tenant_id, user_id, task_type)
-            # Expect dict with keys explicit_prefs, task_scores, global_scores (or similar)
             explicit = {}
             task_scores = {}
             global_scores = {}
@@ -54,19 +48,16 @@ class AdaptiveProfileHook:
                 explicit = data.get("explicit_prefs") or data.get("explicit") or {}
                 task_scores = data.get("task_scores") or {}
                 global_scores = data.get("global_scores") or data.get("trait_scores") or {}
-            # Synthesize with full precedence
             policy = synthesize_policy(
                 current_instruction=cur,
                 explicit_prefs=explicit,
                 task_scores=task_scores,
                 global_scores=global_scores,
             )
-            # Ensure only minimal keys leak
             allowed = set(DEFAULT_POLICY.keys())
             return {k: v for k, v in policy.items() if k in allowed}
         except Exception as e:
             logger.warning(f"AdaptiveProfileHook before_llm_call fallback: {e}")
-            # Safe fallback: default + current instruction
             merged = dict(DEFAULT_POLICY)
             for k in merged:
                 if k in cur:
@@ -111,7 +102,17 @@ def _sync_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict:
     Never raises, never leaks scores directly.
     """
     try:
-        # Use sync-ish attempt: create async engine and run
+        # try cache first
+        try:
+            from .cache import get_cached_policy
+            # need profile_version to key; fetch version via quick DB check or skip
+            # we cannot get version without DB, so cache lookup here uses version-aware path only via hook's version loader
+            # For sync loader, we attempt to load version first
+            import asyncio
+            # Check if we can get version without full load
+            pass
+        except Exception:
+            pass
         import asyncio
 
         async def _load():
@@ -129,7 +130,6 @@ def _sync_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict:
                             explicit[r.key] = r.value
                         elif r.task_type == task_type:
                             explicit[r.key] = r.value
-                        # coerce boolean/int loosely
                         v = explicit.get(r.key)
                         if isinstance(v, str):
                             if v.lower() in ("true", "false"):
@@ -148,10 +148,8 @@ def _sync_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict:
                 logger.debug(f"_sync_profile_loader load failed: {e}")
                 return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
 
-        # If running in async context, don't block
         try:
             asyncio.get_running_loop()
-            # in async context: cannot run blocking load; return empty (caller will use async loader)
             return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
         except RuntimeError:
             pass
@@ -205,12 +203,75 @@ def get_response_policy(
     """Synchronous adapter seam — Control Plane / ACP boundary.
     Loads profile via DB loader with safe fallback to DEFAULT_POLICY.
     Never leaks scores/evidence; returns minimal 7-key policy.
+    Redis cache aware: checks cache by profile_version if available.
     """
     task_type = validate_task_type(task_type)
     cur = current_instruction or {}
+    # Try Redis cache if profile_version known
+    try:
+        from security.models.db import get_sessionmaker as _gsm
+        from security.models.orm import UserProfileORM
+        import asyncio
+
+        async def _get_ver():
+            try:
+                maker = _gsm()
+                async with maker() as s:
+                    p = await s.get(UserProfileORM, {"user_id": user_id, "tenant_id": tenant_id})
+                    return p.profile_version if p else 0
+            except Exception:
+                return None
+
+        # only attempt sync cache if no running loop
+        try:
+            asyncio.get_running_loop()
+            ver = None
+        except RuntimeError:
+            ver = asyncio.run(_get_ver())
+        if ver is not None:
+            try:
+                from .cache import get_cached_policy as _gcp
+                cached = _gcp(tenant_id, user_id, task_type, ver)
+                if cached and "policy" in cached:
+                    # merge current_instruction precedence over cached explicit-derived policy
+                    pol = dict(cached["policy"])
+                    for k in pol:
+                        if k in cur:
+                            pol[k] = cur[k]
+                    # ensure minimal keys
+                    allowed = set(DEFAULT_POLICY.keys())
+                    return {k: v for k, v in pol.items() if k in allowed}
+            except Exception:
+                pass
+    except Exception:
+        pass
     try:
         data = _sync_profile_loader(tenant_id, user_id, task_type)
-        return default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
+        policy = default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
+        # populate cache best-effort (need version)
+        try:
+            import asyncio as _aio
+
+            async def _ver_and_set():
+                try:
+                    from security.models.db import get_sessionmaker as _g2
+                    from security.models.orm import UserProfileORM as _UP
+                    maker2 = _g2()
+                    async with maker2() as s2:
+                        p2 = await s2.get(_UP, {"user_id": user_id, "tenant_id": tenant_id})
+                        ver2 = p2.profile_version if p2 else 0
+                        from .cache import set_cached_policy as _scp
+                        _scp(tenant_id, user_id, task_type, ver2, policy)
+                except Exception:
+                    pass
+
+            try:
+                _aio.get_running_loop()
+            except RuntimeError:
+                _aio.run(_ver_and_set())
+        except Exception:
+            pass
+        return policy
     except Exception as e:
         logger.warning(f"get_response_policy fallback: {e}")
         merged = dict(DEFAULT_POLICY)
@@ -226,12 +287,44 @@ async def get_response_policy_async(
     task_type: str | None = None,
     current_instruction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Async variant for ACP adapter streaming path."""
+    """Async variant for ACP adapter streaming path. Redis cache aware."""
     task_type = validate_task_type(task_type)
     cur = current_instruction or {}
+    # cache check (async)
+    try:
+        from security.models.db import get_sessionmaker as _gsm2
+        from security.models.orm import UserProfileORM as _UP2
+        maker = _gsm2()
+        async with maker() as session:
+            prof = await session.get(_UP2, {"user_id": user_id, "tenant_id": tenant_id})
+            ver = prof.profile_version if prof else 0
+        from .cache import get_cached_policy as _gcp2
+        cached = _gcp2(tenant_id, user_id, task_type, ver)
+        if cached and "policy" in cached:
+            pol = dict(cached["policy"])
+            for k in pol:
+                if k in cur:
+                    pol[k] = cur[k]
+            allowed = set(DEFAULT_POLICY.keys())
+            return {k: v for k, v in pol.items() if k in allowed}
+    except Exception:
+        pass
     try:
         data = await _async_profile_loader(tenant_id, user_id, task_type)
-        return default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
+        policy = default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
+        # set cache
+        try:
+            from security.models.db import get_sessionmaker as _gsm3
+            from security.models.orm import UserProfileORM as _UP3
+            maker3 = _gsm3()
+            async with maker3() as s3:
+                prof3 = await s3.get(_UP3, {"user_id": user_id, "tenant_id": tenant_id})
+                ver3 = prof3.profile_version if prof3 else 0
+            from .cache import set_cached_policy as _scp3
+            _scp3(tenant_id, user_id, task_type, ver3, policy)
+        except Exception:
+            pass
+        return policy
     except Exception as e:
         logger.warning(f"get_response_policy_async fallback: {e}")
         merged = dict(DEFAULT_POLICY)
@@ -239,6 +332,7 @@ async def get_response_policy_async(
             if k in cur:
                 merged[k] = cur[k]
         return merged
+
 
 # Alias for compatibility
 resolve_policy = get_response_policy
