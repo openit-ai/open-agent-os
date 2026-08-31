@@ -61,6 +61,9 @@ from security.models.orm import (  # noqa: F401,E402
     TraitScoreORM,
     TaskTraitScoreORM,
     ProfileEvidenceORM,
+    RuntimeConfigSnapshotORM,
+    RuntimeConfigPublishedORM,
+    RuntimeConfigAppliedORM,
     ExplicitPreferenceORM,
 )
 

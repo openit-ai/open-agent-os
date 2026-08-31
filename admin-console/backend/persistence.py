@@ -88,6 +88,8 @@ _ADMIN_DDL = [
         mm_username TEXT,
         employee_principal TEXT NOT NULL,
         agent_id TEXT NOT NULL,
+        display_name TEXT,
+        avatar_url TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         created_by TEXT NOT NULL
@@ -135,6 +137,45 @@ _ADMIN_DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS ix_policy_tenant_status ON admin_policy_versions (tenant_id, status)",
     "CREATE INDEX IF NOT EXISTS ix_policy_bundle ON admin_policy_versions (bundle_id, version)",
+    """
+    CREATE TABLE IF NOT EXISTS admin_runtime_config_snapshots (
+        tenant_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        config_hash TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        parent_version INTEGER,
+        rollback_from INTEGER,
+        extra JSONB,
+        PRIMARY KEY (tenant_id, version)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_rc_snapshots_tenant_created ON admin_runtime_config_snapshots (tenant_id, created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS admin_runtime_config_published (
+        tenant_id TEXT PRIMARY KEY,
+        published_version INTEGER NOT NULL,
+        config_hash TEXT,
+        updated_at TIMESTAMPTZ NOT NULL,
+        updated_by TEXT NOT NULL,
+        extra JSONB
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_runtime_config_applied (
+        tenant_id TEXT PRIMARY KEY,
+        applied_version INTEGER,
+        config_hash TEXT,
+        applied_at TIMESTAMPTZ,
+        applied_by TEXT,
+        process_identity TEXT,
+        error TEXT,
+        updated_at TIMESTAMPTZ NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_rc_applied_updated ON admin_runtime_config_applied (updated_at)",
 ]
 
 # SQLite-compatible DDL (no TIMESTAMPTZ, NOW())
@@ -170,6 +211,8 @@ _ADMIN_DDL_SQLITE = [
         mm_username TEXT,
         employee_principal TEXT NOT NULL,
         agent_id TEXT NOT NULL,
+        display_name TEXT,
+        avatar_url TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL,
         created_by TEXT NOT NULL
@@ -217,6 +260,45 @@ _ADMIN_DDL_SQLITE = [
     """,
     "CREATE INDEX IF NOT EXISTS ix_policy_tenant_status ON admin_policy_versions (tenant_id, status)",
     "CREATE INDEX IF NOT EXISTS ix_policy_bundle ON admin_policy_versions (bundle_id, version)",
+    """
+    CREATE TABLE IF NOT EXISTS admin_runtime_config_snapshots (
+        tenant_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        config_hash TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        parent_version INTEGER,
+        rollback_from INTEGER,
+        extra TEXT,
+        PRIMARY KEY (tenant_id, version)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_rc_snapshots_tenant_created ON admin_runtime_config_snapshots (tenant_id, created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS admin_runtime_config_published (
+        tenant_id TEXT PRIMARY KEY,
+        published_version INTEGER NOT NULL,
+        config_hash TEXT,
+        updated_at TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        extra TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_runtime_config_applied (
+        tenant_id TEXT PRIMARY KEY,
+        applied_version INTEGER,
+        config_hash TEXT,
+        applied_at TEXT,
+        applied_by TEXT,
+        process_identity TEXT,
+        error TEXT,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_rc_applied_updated ON admin_runtime_config_applied (updated_at)",
 ]
 
 
@@ -272,6 +354,15 @@ async def ensure_admin_tables() -> None:
         async with engine.begin() as conn:
             for ddl in ddl_list:
                 await conn.execute(text(ddl))
+            # Migration: add display_name / avatar_url if missing (A안 개인별 호칭)
+            for col, typ in [("display_name", "TEXT"), ("avatar_url", "TEXT")]:
+                try:
+                    if is_sqlite:
+                        await conn.execute(text(f"ALTER TABLE admin_user_mappings ADD COLUMN {col} {typ}"))
+                    else:
+                        await conn.execute(text(f"ALTER TABLE admin_user_mappings ADD COLUMN IF NOT EXISTS {col} {typ}"))
+                except Exception:
+                    pass
         logger.info("Admin persistence: oaos ready")
     except Exception as e:
         if is_prod:

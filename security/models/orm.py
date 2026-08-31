@@ -561,6 +561,52 @@ class ProfileEvidenceORM(Base):
     )
 
 
+# ── Stage-2 Runtime Configuration Plane (tenant-scoped durable) ───────────────
+
+class RuntimeConfigSnapshotORM(Base):
+    """Canonical signed snapshot — tenant+version PK, HMAC signature, config_hash."""
+    __tablename__ = "admin_runtime_config_snapshots"
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    config_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    parent_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rollback_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+    __table_args__ = (
+        Index("ix_rc_snapshots_tenant_created", "tenant_id", "created_at"),
+        Index("ix_rc_snapshots_signature", "signature"),
+    )
+
+
+class RuntimeConfigPublishedORM(Base):
+    """Per-tenant published pointer — durable, unique per tenant."""
+    __tablename__ = "admin_runtime_config_published"
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    published_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str] = mapped_column(Text, nullable=False)
+    extra: Mapped[dict | None] = mapped_column(GenericJSON, nullable=True)
+
+
+class RuntimeConfigAppliedORM(Base):
+    """Per-tenant applied state — Control Plane durable marker."""
+    __tablename__ = "admin_runtime_config_applied"
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    applied_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    config_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    process_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (Index("ix_rc_applied_updated", "updated_at"),)
+
+
 class ExplicitPreferenceORM(Base):
     """Explicit preference — highest precedence after current instruction."""
 
