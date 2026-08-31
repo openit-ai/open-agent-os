@@ -1,4 +1,8 @@
-"""Notion source adapter fixture (no live API)."""
+"""Notion source adapters.
+
+- NotionSourceAdapter: in-memory fixture (no live API) for tests — preserved.
+- HttpNotionSourceAdapter: real read-only Notion HTTP adapter (see http_notion.py).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,18 @@ from datetime import datetime, timezone
 from ..chunking import content_hash
 from ..models import SourceDocument
 from .base import InMemorySourceAdapter
+
+# Re-export real HTTP adapter
+try:
+    from .http_notion import (
+        HttpNotionSourceAdapter,
+        NotionAPIError,
+        NotionSourceConfig,
+    )
+except Exception:  # pragma: no cover - http_notion missing on minimal installs
+    HttpNotionSourceAdapter = None  # type: ignore
+    NotionAPIError = RuntimeError  # type: ignore
+    NotionSourceConfig = None  # type: ignore
 
 
 def _iso_now() -> str:
