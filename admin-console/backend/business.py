@@ -151,7 +151,7 @@ _SECURITY_UPDATES = [
     },
     {
         "version": "0.1.2",
-        "available": True,
+        "available": False,
         "severity": "medium",
         "release_date": "2026-07-15",
         "cves": [
@@ -232,7 +232,7 @@ def backup_trigger(admin: AdminUser = Depends(require_l5)):
 # Upgrade status
 # ---------------------------------------------------------------------------
 _UPGRADE_STATE: dict = {
-    "current_version": "0.1.1",
+    "current_version": "0.1.3",
     "available_version": "0.2.0",
     "status": "idle",  # idle | in_progress | completed | failed
     "last_check": datetime.now(timezone.utc).isoformat(),
