@@ -1,0 +1,91 @@
+{
+  "alembic_version": [
+    "016_user_map_avatar"
+  ],
+  "tables": {
+    "admin_user_mappings": {
+      "exists": true,
+      "count": 0,
+      "columns": [
+        "id",
+        "mm_user_id",
+        "mm_username",
+        "employee_id",
+        "employee_principal",
+        "agent_id",
+        "status",
+        "created_at",
+        "created_by",
+        "extra",
+        "display_name",
+        "avatar_url"
+      ]
+    },
+    "admin_runtime_config_snapshots": {
+      "exists": true,
+      "count": 10,
+      "columns": [
+        "tenant_id",
+        "version",
+        "snapshot_json",
+        "signature",
+        "config_hash",
+        "created_by",
+        "created_at",
+        "parent_version",
+        "rollback_from",
+        "extra"
+      ]
+    },
+    "admin_runtime_config_published": {
+      "exists": true,
+      "count": 1,
+      "columns": [
+        "tenant_id",
+        "published_version",
+        "config_hash",
+        "updated_at",
+        "updated_by",
+        "extra"
+      ]
+    },
+    "admin_runtime_config_applied": {
+      "exists": true,
+      "count": 1,
+      "columns": [
+        "tenant_id",
+        "applied_version",
+        "config_hash",
+        "applied_at",
+        "applied_by",
+        "process_identity",
+        "error",
+        "updated_at"
+      ]
+    },
+    "knowledge_index": {
+      "exists": true,
+      "count": 5464,
+      "columns": [
+        "index_id",
+        "source_system",
+        "source_resource_id",
+        "source_uri",
+        "tenant_id",
+        "group_id",
+        "agent_id",
+        "chunk_id",
+        "chunk_text",
+        "embedding",
+        "content_hash",
+        "source_updated_at",
+        "indexed_at",
+        "acl_version",
+        "classification",
+        "retention_policy",
+        "provenance"
+      ]
+    }
+  },
+  "created_at": "2026-08-31T10:43:33.078537+00:00"
+}

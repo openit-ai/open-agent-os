@@ -1,0 +1,17 @@
+{
+  "timestamp": "20260831-103909",
+  "backup_dir": "/home/openitsvc/open-agent-os/.release-v0.1.3-backup",
+  "postgres_file": "oaos-20260831-103909-oaos.sql.gz",
+  "postgres_size": 84,
+  "postgres_dbs": [{"db":"oaos","file":"oaos-20260831-103909-oaos.sql.gz","size":84,"status":"ok","pgvector":false}],
+  "redis_file": "oaos-20260831-103909-redis.rdb",
+  "redis_size": 41,
+  "audit_checkpoint_file": "oaos-20260831-103909-audit-checkpoint.json",
+  "audit_checkpoint_size": 243,
+  "audit_checkpoint_src": "/var/lib/oaos/audit-checkpoint.json",
+  "pgvector_verified": false,
+  "encrypted": false,
+  "dry_run": false,
+  "retention_daily_days": 7,
+  "retention_weekly_days": 30
+}

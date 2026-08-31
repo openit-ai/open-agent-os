@@ -1,0 +1,618 @@
+{
+  "database_identity": [
+    {
+      "database": "oaos",
+      "user_name": "oaos",
+      "server_addr": "172.18.0.2/32",
+      "server_port": 5432
+    }
+  ],
+  "alembic_version": [
+    {
+      "version_num": "015_runtime_config_snapshots"
+    }
+  ],
+  "tables": {
+    "admin_policy_versions": {
+      "exists": true,
+      "count": 5,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "bundle_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "version",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "rules_json",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "created_by",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "approved_by",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "approved_at",
+          "type": "timestamp with time zone",
+          "nullable": "YES"
+        },
+        {
+          "name": "published_at",
+          "type": "timestamp with time zone",
+          "nullable": "YES"
+        },
+        {
+          "name": "parent_version",
+          "type": "text",
+          "nullable": "YES"
+        }
+      ]
+    },
+    "admin_runtime_config_snapshots": {
+      "exists": true,
+      "count": 10,
+      "columns": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "nullable": "NO"
+        },
+        {
+          "name": "snapshot_json",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "signature",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "config_hash",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "created_by",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "parent_version",
+          "type": "integer",
+          "nullable": "YES"
+        },
+        {
+          "name": "rollback_from",
+          "type": "integer",
+          "nullable": "YES"
+        },
+        {
+          "name": "extra",
+          "type": "json",
+          "nullable": "YES"
+        }
+      ]
+    },
+    "admin_runtime_config_published": {
+      "exists": true,
+      "count": 1,
+      "columns": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "published_version",
+          "type": "integer",
+          "nullable": "NO"
+        },
+        {
+          "name": "config_hash",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "updated_by",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "extra",
+          "type": "json",
+          "nullable": "YES"
+        }
+      ]
+    },
+    "admin_runtime_config_applied": {
+      "exists": true,
+      "count": 1,
+      "columns": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "applied_version",
+          "type": "integer",
+          "nullable": "YES"
+        },
+        {
+          "name": "config_hash",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "applied_at",
+          "type": "timestamp with time zone",
+          "nullable": "YES"
+        },
+        {
+          "name": "applied_by",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "process_identity",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        }
+      ]
+    },
+    "admin_user_mappings": {
+      "exists": true,
+      "count": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "mm_user_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "mm_username",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "employee_id",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "employee_principal",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "agent_id",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "created_by",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "extra",
+          "type": "json",
+          "nullable": "YES"
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text",
+          "nullable": "YES"
+        }
+      ]
+    },
+    "vault_credentials": {
+      "exists": true,
+      "count": 0,
+      "columns": [
+        {
+          "name": "secret_ref",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "user_id",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "owner_agent_id",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "provider",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "scope",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "encrypted_token",
+          "type": "bytea",
+          "nullable": "YES"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "vault_backend",
+          "type": "character varying",
+          "nullable": "YES"
+        },
+        {
+          "name": "vault_path",
+          "type": "character varying",
+          "nullable": "YES"
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "nullable": "YES"
+        }
+      ]
+    },
+    "user_profiles": {
+      "exists": true,
+      "count": 0,
+      "columns": [
+        {
+          "name": "user_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "profile_version",
+          "type": "integer",
+          "nullable": "NO"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "evidence_count",
+          "type": "integer",
+          "nullable": "NO"
+        },
+        {
+          "name": "overall_confidence",
+          "type": "double precision",
+          "nullable": "NO"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "extra",
+          "type": "json",
+          "nullable": "YES"
+        }
+      ]
+    },
+    "profile_evidence": {
+      "exists": true,
+      "count": 0,
+      "columns": [
+        {
+          "name": "evidence_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "user_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "conversation_id",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "message_id",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "task_type",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "trait",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "direction",
+          "type": "integer",
+          "nullable": "NO"
+        },
+        {
+          "name": "strength",
+          "type": "double precision",
+          "nullable": "NO"
+        },
+        {
+          "name": "source_type",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "confidence",
+          "type": "double precision",
+          "nullable": "NO"
+        },
+        {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "content_hash",
+          "type": "text",
+          "nullable": "NO"
+        }
+      ]
+    },
+    "explicit_preferences": {
+      "exists": true,
+      "count": 0,
+      "columns": [
+        {
+          "name": "preference_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "user_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "scope",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "task_type",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "value",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "priority",
+          "type": "integer",
+          "nullable": "NO"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        }
+      ]
+    },
+    "knowledge_index": {
+      "exists": true,
+      "count": 5464,
+      "columns": [
+        {
+          "name": "index_id",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "source_system",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "source_resource_id",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "source_uri",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "tenant_id",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "group_id",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "agent_id",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "chunk_id",
+          "type": "character varying",
+          "nullable": "NO"
+        },
+        {
+          "name": "chunk_text",
+          "type": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "embedding",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "content_hash",
+          "type": "character varying",
+          "nullable": "YES"
+        },
+        {
+          "name": "source_updated_at",
+          "type": "timestamp with time zone",
+          "nullable": "YES"
+        },
+        {
+          "name": "indexed_at",
+          "type": "timestamp with time zone",
+          "nullable": "NO"
+        },
+        {
+          "name": "acl_version",
+          "type": "character varying",
+          "nullable": "YES"
+        },
+        {
+          "name": "classification",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "retention_policy",
+          "type": "text",
+          "nullable": "YES"
+        },
+        {
+          "name": "provenance",
+          "type": "json",
+          "nullable": "YES"
+        }
+      ]
+    }
+  },
+  "created_at": "2026-08-31T10:40:07.296406+00:00"
+}
