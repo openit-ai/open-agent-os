@@ -228,7 +228,25 @@ PY
         do_rotate=1
         reason="rotation requested via --rotate-secrets"
       else
-        # preserve
+        # preserve — but ensure fail-closed non-secret defaults are present
+        # (OAOS_SESSION_BACKEND=redis required by check-production-config.sh §14 H5)
+        python3 - "${canonical}" <<'PY'
+import pathlib
+p = pathlib.Path(__import__("sys").argv[1])
+text = p.read_text(encoding="utf-8", errors="ignore")
+has_backend = any(l.strip().startswith("OAOS_SESSION_BACKEND=") or l.strip() == "export OAOS_SESSION_BACKEND=redis" or l.strip().startswith("export OAOS_SESSION_BACKEND=") for l in text.splitlines())
+has_redis = any(l.strip().startswith("REDIS_URL=") or l.strip().startswith("export REDIS_URL=") for l in text.splitlines())
+out = text
+if not has_backend:
+    if not out.endswith("\n"): out += "\n"
+    out += "OAOS_SESSION_BACKEND=redis\n"
+if not has_redis:
+    if not out.endswith("\n"): out += "\n"
+    out += "REDIS_URL=redis://localhost:6379/0\n"
+if out != text:
+    p.write_text(out, encoding="utf-8")
+    import os; os.chmod(p, 0o600)
+PY
         info "Existing env ${canonical} has strong secrets — preserving (no rotation)."
         # ensure canonical not overwritten by source file later
         ENV_FILE="${canonical}"
@@ -406,6 +424,13 @@ for i, line in enumerate(out):
         break
 if not has_env:
     out.append("OAOS_ENV=production")
+# Ensure fail-closed defaults for production preflight (H5 §14) — non-secret
+has_backend = any(l.strip().startswith("OAOS_SESSION_BACKEND=") or l.strip().startswith("export OAOS_SESSION_BACKEND=") for l in out)
+if not has_backend:
+    out.append("OAOS_SESSION_BACKEND=redis")
+has_redis = any(l.strip().startswith("REDIS_URL=") or l.strip().startswith("export REDIS_URL=") for l in out)
+if not has_redis:
+    out.append("REDIS_URL=redis://localhost:6379/0")
 pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
 pathlib.Path(dest).write_text("\n".join(out)+"\n", encoding="utf-8")
 PY
@@ -465,6 +490,17 @@ for raw in lines:
 for k,v in keys.items():
     if not found[k]:
         out.append(f"{k}={v}")
+# Ensure fail-closed defaults even after rotation
+has_backend = any(l.strip().startswith("OAOS_SESSION_BACKEND=") or l.strip().startswith("export OAOS_SESSION_BACKEND=") for l in out)
+if not has_backend:
+    out.append("OAOS_SESSION_BACKEND=redis")
+has_redis = any(l.strip().startswith("REDIS_URL=") or l.strip().startswith("export REDIS_URL=") for l in out)
+if not has_redis:
+    out.append("REDIS_URL=redis://localhost:6379/0")
+# Ensure OAOS_ENV=production
+has_env = any(l.strip().startswith("OAOS_ENV=") or l.strip().startswith("export OAOS_ENV=") for l in out)
+if not has_env:
+    out.append("OAOS_ENV=production")
 pathlib.Path(path).write_text("\n".join(out)+"\n", encoding="utf-8")
 PY
     chmod 600 "${canonical}" || true

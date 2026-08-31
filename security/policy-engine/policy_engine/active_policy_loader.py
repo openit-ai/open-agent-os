@@ -63,6 +63,36 @@ def _db_sync_url() -> Optional[str]:
     return u
 
 def _get_db_active_dict(tenant_id: str = "default") -> Optional[dict]:
+    # In non-prod, respect admin persistence's get_database_url (env-only, not .env) so
+    # loader and admin policy agree on DB vs in-memory store. If admin will write to
+    # mem (because env has no DATABASE_URL), loader must read from mem, not stale DB
+    # found via repo .env fallback.
+    if not _is_prod():
+        try:
+            # try canonical persistence helper if available
+            for mod_name in ("persistence", "admin_console.backend.persistence"):
+                m = sys.modules.get(mod_name)
+                if m is not None and hasattr(m, "get_database_url"):
+                    try:
+                        if not m.get_database_url():  # type: ignore
+                            # also allow OAOS_CP_DATABASE_URL (control-plane systemd) as authoritative DB URL
+                            if not os.environ.get("OAOS_CP_DATABASE_URL"):
+                                return None
+                    except Exception:
+                        pass
+                    break
+            else:
+                # Fallback direct env check. OAOS_CP_DATABASE_URL is a
+                # control-plane-owned database and must be honored even when
+                # the admin persistence module is not imported yet.
+                if not (
+                    os.environ.get("OAOS_DATABASE_URL")
+                    or os.environ.get("OAOS_CP_DATABASE_URL")
+                    or os.environ.get("DATABASE_URL")
+                ):
+                    return None
+        except Exception:
+            pass
     url = _db_sync_url()
     if not url:
         return None
@@ -130,7 +160,7 @@ def _get_db_active_dict(tenant_id: str = "default") -> Optional[dict]:
 
 def _get_mem_active_dict(tenant_id: str = "default") -> Optional[dict]:
     """Try to read from admin in-memory fallback (non-prod tests). Read-only."""
-    # Try multiple import paths: admin_console.backend.policy (canonical), policy (bare alias), admin policy file directly
+    # Try explicit import paths first (canonical)
     for mod_name in ("admin_console.backend.policy", "policy"):
         mod = sys.modules.get(mod_name)
         if mod is not None and hasattr(mod, "get_active_published_bundle"):
@@ -138,6 +168,42 @@ def _get_mem_active_dict(tenant_id: str = "default") -> Optional[dict]:
                 rec = mod.get_active_published_bundle(tenant_id)  # type: ignore
                 if rec is not None:
                     return rec
+            except Exception:
+                pass
+    # Robust scan: tests load admin policy via importlib spec with ad-hoc names
+    # e.g. admin_policy_mod, admin_app_policy, admin_policy_mod etc.
+    # Any module exposing _mem_versions / _db_get_active_published holds the published state.
+    for mod in list(sys.modules.values()):
+        if mod is None:
+            continue
+        # 1) direct get_active_published_bundle wrapper
+        if hasattr(mod, "get_active_published_bundle") and hasattr(mod, "_mem_versions"):
+            try:
+                rec = mod.get_active_published_bundle(tenant_id)  # type: ignore
+                if rec is not None:
+                    return rec
+            except Exception:
+                pass
+        # 2) legacy internal helper _db_get_active_published
+        if hasattr(mod, "_db_get_active_published"):
+            try:
+                rec = mod._db_get_active_published(tenant_id)  # type: ignore
+                if rec is not None:
+                    return rec
+            except Exception:
+                pass
+        # 3) raw _mem_versions list scan (process-local in-memory fallback)
+        if hasattr(mod, "_mem_versions"):
+            try:
+                versions = getattr(mod, "_mem_versions")
+                if isinstance(versions, list) and versions:
+                    # filter published for this tenant
+                    published = [v for v in versions if isinstance(v, dict) and v.get("tenant_id") == tenant_id and v.get("status") == "published"]
+                    if published:
+                        def _key(v):
+                            return (v.get("published_at") or v.get("created_at") or "", v.get("version", ""))
+                        published.sort(key=_key)
+                        return published[-1]
             except Exception:
                 pass
     # Try lazy file load if not yet imported but file exists

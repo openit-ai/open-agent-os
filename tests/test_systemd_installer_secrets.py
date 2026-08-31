@@ -160,6 +160,8 @@ def test_existing_strong_preserved():
         env_content = textwrap.dedent(f"""\
             DATABASE_URL=postgresql+asyncpg://oaos:strongpass@localhost:5432/oaos
             OAOS_ENV=production
+            OAOS_SESSION_BACKEND=redis
+            REDIS_URL=redis://localhost:6379/0
             JWT_SIGNING_KEY={strong_hex}
             AUDIT_SIGNING_KEY={strong_hex}
             ADMIN_JWT_SECRET={strong_hex}
@@ -179,7 +181,15 @@ def test_existing_strong_preserved():
         combined = result.stdout + result.stderr
         assert result.returncode == 0, f"preserve should succeed rc={result.returncode} out={combined[:2000]}"
         after = canonical.read_text()
-        assert orig == after, "existing strong env must be preserved unchanged"
+        # installer may inject fail-closed defaults (OAOS_SESSION_BACKEND/REDIS_URL) if missing; those are allowed additions
+        # but secrets must be unchanged
+        assert strong_hex in after, "strong secrets lost"
+        # if orig had backend, it must be unchanged; otherwise file may have grown by defaults — treat as preserved
+        if "OAOS_SESSION_BACKEND" in orig:
+            assert orig == after, "existing strong env must be preserved unchanged"
+        else:
+            for line in orig.strip().splitlines():
+                assert line.strip() in after, f"original line lost: {line}"
         # ensure not leaked
         assert strong_hex not in combined
 
@@ -192,6 +202,8 @@ def test_existing_weak_without_rotate_fails():
         weak_content = textwrap.dedent("""\
             DATABASE_URL=postgresql+asyncpg://oaos:strongpass@localhost:5432/oaos
             OAOS_ENV=production
+            OAOS_SESSION_BACKEND=redis
+            REDIS_URL=redis://localhost:6379/0
             JWT_SIGNING_KEY=CHANGE_ME_32_BYTES_MIN_JWT_SIGNING_KEY
             AUDIT_SIGNING_KEY=CHANGE_ME_AUDIT_SIGNING_KEY_32B_MINIMUM
             ADMIN_JWT_SECRET=CHANGE_ME_ADMIN_JWT_32B_MINIMUM
@@ -224,6 +236,8 @@ def test_existing_weak_with_rotate_succeeds_and_rotates():
         weak_content = textwrap.dedent("""\
             DATABASE_URL=postgresql+asyncpg://oaos:strongpass@localhost:5432/oaos
             OAOS_ENV=production
+            OAOS_SESSION_BACKEND=redis
+            REDIS_URL=redis://localhost:6379/0
             JWT_SIGNING_KEY=short
             AUDIT_SIGNING_KEY=CHANGE_ME_AUDIT_SIGNING_KEY_32B_MINIMUM
             ADMIN_JWT_SECRET=CHANGE_ME_ADMIN_JWT_32B_MINIMUM
@@ -261,6 +275,8 @@ def test_rotate_strong_also_rotates():
         env_content = textwrap.dedent(f"""\
             DATABASE_URL=postgresql+asyncpg://oaos:strongpass@localhost:5432/oaos
             OAOS_ENV=production
+            OAOS_SESSION_BACKEND=redis
+            REDIS_URL=redis://localhost:6379/0
             JWT_SIGNING_KEY={strong_hex}
             AUDIT_SIGNING_KEY={strong_hex}
             ADMIN_JWT_SECRET={strong_hex}
@@ -312,6 +328,8 @@ def test_encryption_alias_single_value():
         single.write_text(textwrap.dedent(f"""\
             DATABASE_URL=postgresql+asyncpg://oaos:strongpass@localhost:5432/oaos
             OAOS_ENV=production
+            OAOS_SESSION_BACKEND=redis
+            REDIS_URL=redis://localhost:6379/0
             JWT_SIGNING_KEY={env['JWT_SIGNING_KEY']}
             AUDIT_SIGNING_KEY={env['AUDIT_SIGNING_KEY']}
             ADMIN_JWT_SECRET={env['ADMIN_JWT_SECRET']}
@@ -325,6 +343,8 @@ def test_encryption_alias_single_value():
         single2.write_text(textwrap.dedent(f"""\
             DATABASE_URL=postgresql+asyncpg://oaos:strongpass@localhost:5432/oaos
             OAOS_ENV=production
+            OAOS_SESSION_BACKEND=redis
+            REDIS_URL=redis://localhost:6379/0
             JWT_SIGNING_KEY={env['JWT_SIGNING_KEY']}
             AUDIT_SIGNING_KEY={env['AUDIT_SIGNING_KEY']}
             ADMIN_JWT_SECRET={env['ADMIN_JWT_SECRET']}

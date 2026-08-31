@@ -109,18 +109,18 @@ def test_upgrade_downgrade_isolated_sqlite():
                 "VALUES ('test-id-1', 'default', 'default-bundle-v1', 'Default', 'v1', 'published', '[]', '2026-01-01T00:00:00+00:00')"
             ))
 
-        # Downgrade 013 -> 012 (drop table)
+        # Downgrade to 012 (drop 013 table) — head is now 016 so -1 would only drop 016
         result = subprocess.run(
-            [sys.executable, "-m", "alembic", "downgrade", "-1"],
+            [sys.executable, "-m", "alembic", "downgrade", "012_knowledge_index"],
             cwd=ROOT,
             capture_output=True,
             text=True,
             timeout=30,
             env=env,
         )
-        assert result.returncode == 0, f"downgrade failed: {result.stdout}\n{result.stderr}"
+        assert result.returncode == 0, f"downgrade failed: {result.stdout}\\n{result.stderr}"
         insp2 = inspect(eng)
-        assert "admin_policy_versions" not in insp2.get_table_names(), "downgrade should drop table"
+        assert "admin_policy_versions" not in insp2.get_table_names(), "downgrade to 012 should drop admin_policy_versions table"
 
         # Upgrade again to head (re-create)
         result = subprocess.run(
@@ -208,9 +208,12 @@ def test_existing_table_preservation():
             rows = conn.execute(text("SELECT id, rules_json FROM admin_policy_versions WHERE id='preserve-id'")).fetchall()
             assert len(rows) == 1, "preserved row lost after upgrade (destructive)"
             assert rows[0][1] == "[]"
-            # Verify version advanced to 013
+            # Verify version advanced to head (now 016 after 015/016 additions)
             ver = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
-            assert ver is not None and ver[0] == "013_admin_policy_versions"
+            assert ver is not None, "alembic_version missing"
+            expected_heads = {"016_admin_user_mappings_display_avatar", "015_runtime_config_snapshots", "014_adaptive_profile", "013_admin_policy_versions"}
+            assert ver[0] in expected_heads, f"unexpected head {ver[0]} not in {expected_heads}"
+            assert ver[0] == "016_admin_user_mappings_display_avatar", f"expected head 016, got {ver[0]}"
         eng2.dispose()
 
 

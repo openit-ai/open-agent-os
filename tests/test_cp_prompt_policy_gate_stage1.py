@@ -155,7 +155,7 @@ def test_allow_forwards_and_audits_before_acp_order():
     from unittest.mock import patch
 
     sentinel = MagicMock()
-    async def _send_prompt(rec, prompt, rid):
+    async def _send_prompt(rec, prompt, rid, **kw):
         call_order.append("acp")
         assert call_order.index("gate") < call_order.index("acp"), "audit/gate must be before ACP"
         return {"status": "ok", "request_id": rid}
