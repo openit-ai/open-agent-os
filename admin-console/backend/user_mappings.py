@@ -43,13 +43,52 @@ class MattermostMapping(BaseModel):
     mm_username: Optional[str] = None
     employee_principal: str
     agent_id: str
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
     status: str = "active"
     created_at: datetime
     created_by: str
 
+MAX_DISPLAY_NAME_LENGTH = 64
+MAX_AVATAR_URL_LENGTH = 2048
+_ALLOWED_AVATAR_SCHEMES = {"http", "https"}
+
+def _validate_avatar_url(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    if len(s) > MAX_AVATAR_URL_LENGTH:
+        raise HTTPException(status_code=400, detail=f"avatar_url too long (max {MAX_AVATAR_URL_LENGTH})")
+    # strict https/http only, bounded length, must have netloc
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(s)
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in _ALLOWED_AVATAR_SCHEMES:
+            raise HTTPException(status_code=400, detail="avatar_url must use http or https")
+        if not parsed.netloc:
+            raise HTTPException(status_code=400, detail="avatar_url must be absolute http(s) URL")
+        # reject URLs with whitespace/control chars
+        if any(c in s for c in (" ", "\n", "\r", "\t")):
+            raise HTTPException(status_code=400, detail="avatar_url must not contain whitespace")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid avatar_url")
+    return s
+
 class CreateMappingRequest(BaseModel):
     mm_user_id: Optional[str] = Field(default=None)
     mm_username: Optional[str] = None
+    employee_principal: Optional[str] = None
+    display_name: Optional[str] = Field(default=None, max_length=MAX_DISPLAY_NAME_LENGTH)
+    avatar_url: Optional[str] = Field(default=None, max_length=MAX_AVATAR_URL_LENGTH)
+
+class UpdateMappingRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=MAX_DISPLAY_NAME_LENGTH)
+    avatar_url: Optional[str] = Field(default=None, max_length=MAX_AVATAR_URL_LENGTH)
     employee_principal: Optional[str] = None
 
 class SyncRequest(BaseModel):
@@ -148,6 +187,8 @@ def _orm_to_mapping(row) -> MattermostMapping:
         mm_username=row.mm_username,
         employee_principal=principal,
         agent_id=row.agent_id or "",
+        display_name=getattr(row, "display_name", None),
+        avatar_url=getattr(row, "avatar_url", None),
         status=row.status or "active",
         created_at=row.created_at,
         created_by=row.created_by or "",
@@ -235,6 +276,8 @@ def _db_create_mapping(m: MattermostMapping) -> bool:
                 employee_principal=m.employee_principal,
                 employee_id=m.employee_principal,  # compat column
                 agent_id=m.agent_id,
+                display_name=m.display_name,
+                avatar_url=m.avatar_url,
                 status=m.status,
                 created_at=m.created_at,
                 created_by=m.created_by,
@@ -250,6 +293,36 @@ def _db_create_mapping(m: MattermostMapping) -> bool:
             pass
         return False
 
+
+def _db_update_mapping(mid: str, display_name: str | None, avatar_url: str | None, employee_principal: str | None = None) -> MattermostMapping | None:
+    if not _is_db_enabled():
+        return None
+    # validate avatar_url early even for DB path (strict https/http, bounded)
+    if avatar_url is not None:
+        avatar_url = _validate_avatar_url(avatar_url)
+    factory = _get_session_factory()
+    if factory is None:
+        return None
+    try:
+        from security.models.orm import AdminUserMappingORM  # type: ignore
+        with factory() as s:
+            row = s.query(AdminUserMappingORM).filter(AdminUserMappingORM.id == mid).first()
+            if row is None:
+                return None
+            if display_name is not None:
+                row.display_name = display_name.strip() or None  # type: ignore
+            if avatar_url is not None:
+                row.avatar_url = avatar_url.strip() if avatar_url else None  # type: ignore
+            if employee_principal is not None:
+                row.employee_principal = employee_principal  # type: ignore
+                row.employee_id = employee_principal  # type: ignore
+                # derive new agent_id if principal changed
+                suffix = employee_principal.split(":", 1)[1] if ":" in employee_principal else employee_principal
+                row.agent_id = f"agent:assistant:{suffix}"  # type: ignore
+            s.commit()
+            return _orm_to_mapping(row)
+    except Exception:
+        return None
 
 def _db_delete_mapping(mid: str) -> bool | None:
     if not _is_db_enabled():
@@ -437,6 +510,11 @@ def create_user_mapping(req: CreateMappingRequest, admin: AdminUser = Depends(re
         principal = _derive_employee_principal(mm_user_id, mm_username)
 
     agent_id = _derive_agent_id(principal)
+    display_name = (req.display_name or "").strip() or None
+    # sanitize display_name length 64 already validated; empty -> None (fallback to username)
+    if display_name and len(display_name) > MAX_DISPLAY_NAME_LENGTH:
+        display_name = display_name[:MAX_DISPLAY_NAME_LENGTH]
+    avatar_url = _validate_avatar_url(req.avatar_url)
 
     # optional: prevent duplicate mm_user_id — check DB if enabled, else dict
     if _is_db_enabled():
@@ -466,6 +544,8 @@ def create_user_mapping(req: CreateMappingRequest, admin: AdminUser = Depends(re
         mm_username=mm_username,
         employee_principal=principal,
         agent_id=agent_id,
+        display_name=display_name,
+        avatar_url=avatar_url,
         status="active",
         created_at=now,
         created_by=admin.email,
@@ -503,6 +583,47 @@ def delete_user_mapping(mapping_id: str, admin: AdminUser = Depends(require_l5))
         raise HTTPException(status_code=404, detail="mapping not found")
     del _mappings[mapping_id]
     return {"status": "deleted", "id": mapping_id}
+
+@router.patch("/{mapping_id}", response_model=None)
+def update_user_mapping(mapping_id: str, req: UpdateMappingRequest, admin: AdminUser = Depends(require_l5)):
+    """PATCH /v1/user-mappings/{id} — update display_name / avatar_url (A안 개인별 호칭). L5 only."""
+    # validate display_name if provided
+    if req.display_name is not None:
+        dn = req.display_name.strip()
+        if dn == "":
+            dn = None
+        elif len(dn) > MAX_DISPLAY_NAME_LENGTH:
+            raise HTTPException(status_code=400, detail="display_name too long (max 64)")
+        req.display_name = dn
+    # validate avatar_url if provided (https/http only, bounded 2048)
+    if req.avatar_url is not None:
+        req.avatar_url = _validate_avatar_url(req.avatar_url)
+    # try DB first
+    if _is_db_enabled():
+        updated = _db_update_mapping(mapping_id, req.display_name, req.avatar_url, req.employee_principal)
+        if updated is not None:
+            _mappings[mapping_id] = updated
+            return updated.model_dump(mode="json")
+        # if DB enabled but not found via DB, check dict fallback
+        existing = _db_get_mapping(mapping_id)
+        if existing is None and mapping_id not in _mappings:
+            raise HTTPException(status_code=404, detail="mapping not found")
+    if mapping_id not in _mappings:
+        raise HTTPException(status_code=404, detail="mapping not found")
+    rec = _mappings[mapping_id]
+    # apply in-memory
+    data = rec.model_dump()
+    if req.display_name is not None:
+        data["display_name"] = req.display_name
+    if req.avatar_url is not None:
+        data["avatar_url"] = req.avatar_url.strip() or None
+    if req.employee_principal is not None:
+        _validate_principal(req.employee_principal.strip())
+        data["employee_principal"] = req.employee_principal.strip()
+        data["agent_id"] = _derive_agent_id(data["employee_principal"])
+    updated_rec = MattermostMapping(**data)
+    _mappings[mapping_id] = updated_rec
+    return updated_rec.model_dump(mode="json")
 
 @router.post("/sync", response_model=None)
 def sync_preview(body: Optional[SyncRequest] = None, admin: AdminUser = Depends(require_l5)):
