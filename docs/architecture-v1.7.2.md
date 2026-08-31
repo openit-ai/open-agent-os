@@ -1,4 +1,4 @@
-# Open Agent OS 최종 아키텍처 및 구현 설계서 v1.7.1
+# Open Agent OS 최종 아키텍처 및 구현 설계서 v1.7.2
 
 > Repository: `openit-ai/open-agent-os`  
 > Product: **Open Agent OS**  
@@ -6,7 +6,7 @@
 > 배포 모델: **고객사 서버 또는 고객사 전용 클라우드/VPS에 설치되는 Source-Available Enterprise Agent Platform**  
 > Version: **v1.7.2** — 2026-08-30 (v1.7.1 → v1.7.2 Adaptive Profile Engine architecture design)
 > Base: `docs/architecture-v1.7.2-design.md` v1.7.1-design (2026-08-29) — design source; this document is the implementation architecture (verified facts vs residual plan)
-> Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete, Personal Wiki module implemented and tested, Adaptive Profile v1.7.2 MVP implemented (Profile API/persistence/policy synthesis/Runtime Hook) · Secrets lifecycle implemented via systemd installer · Evidence tiers verified (unit: 927 passed, distributed: 0, external: 0)**
+> Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete, Personal Wiki module implemented and tested, Adaptive Profile v1.7.2 MVP implemented (Profile API/persistence/policy synthesis/Runtime Hook) · Secrets lifecycle implemented via systemd installer · Evidence tiers verified via `scripts/verify-evidence-tiers.py` (unit/distributed/external counted per run; historical v1.7.1 snapshot was unit: 927 passed — rerun on v0.1.3 candidate instead of reusing that number)**
 > Deployment: **Docker (`deploy/docker-compose.*.yml` + `.env`) and systemd (`deploy/systemd/` + `/etc/oaos/oaos.env` or `config/oaos.env` 0600) are parallel, separate paths sharing code — neither modifies the other**
 
 ---
@@ -1701,7 +1701,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 > H8은 **implemented**다. `scripts/verify-evidence-tiers.py`가 `unit`·`distributed`·`external` 등급을 분리 검증하고, `docs/deployment-verification-v1.7.1.md` + `docs/evidence-report-v1.7.1.json`에 `command`·`timestamp`·`commit`·`counts`·`unavailable prerequisites`를 기록한다. Unit 테스트를 distributed/external로 오표기하지 않으며, 지원되지 않는 주장 시 `exit 1`로 실패한다.
 
-- **등급 분리**: `unit: 927 passed, 1 skipped` (2026-08-29 `pytest -q`, fakeredis/SQLite/file mocks 포함 — live multi-replica 아님), `distributed: 0 passed`, `external: 0 passed`. Single `648`/`927` 집계는 `unit`으로만 표기.
+- **등급 분리**: `unit`/`distributed`/`external`은 `scripts/verify-evidence-tiers.py`가 분리 검증한다. 역사적 스냅샷 하나는 `unit: 927 passed, 1 skipped` (2026-08-29 `pytest -q`, fakeredis/SQLite/file mocks 포함 — live multi-replica 아님), `distributed: 0 passed`, `external: 0 passed`를 기록했다. Single `648`/`927` 집계는 `unit`으로만 표기하며, v0.1.3 후보에서는 재실행 결과로 갱신해야 하고 역사적 수치를 현재 증거로 재사용하지 않는다.
 - **Prerequisites**: `redis`/`kind`/`kubectl`/`helm`/`hubble`/`cni_enforcement` 및 `outline`/`notion`/`mattermost`/`slack`/`llm_gateway` 모두 `unavailable`로 기록 — live Redis/CNI/Outline 증거를 발명하지 않음.
 - **RAG 구분**: Knowledge Index schema/repository/retrieval/chunking/embedding boundary/Outline-Notion adapter/idempotent sync/ACL revalidation은 **implemented + unit-tested**이며, live 외부 자격증명·네트워크·corpus backfill은 **운영 통합 범위**로 분리 표기.
 - **재현**: `python scripts/verify-evidence-tiers.py` (full `pytest -q` + report), `python scripts/verify-evidence-tiers.py --check-only` (문서 과장 시 실패), `python scripts/verify-evidence-tiers.py --skip-pytest` (빠른 검증). CI에서는 `verify-evidence-tiers --check-only`로 문서 과장 방지.
@@ -1711,7 +1711,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 ### 16.11 잔여 로드맵 (v1.7.2+) — live distributed/external integration
 
-- **H8 증거 등급**: `unit: 927 passed` 검증 완료 (`scripts/verify-evidence-tiers.py` + `tests/test_evidence_tiers.py`). `distributed`/`external`은 live `kind`+Redis+CNI 및 Outline/Notion/Mattermost/Slack/LLM gateway 연동 시 별도 카운트 — 현재 0으로 명시.
+- **H8 증거 등급**: `scripts/verify-evidence-tiers.py` + `tests/test_evidence_tiers.py`로 검증한다. 역사적 v1.7.1 스냅샷은 `unit: 927 passed`를 기록했으나, v0.1.3 후보에서는 재실행 결과로 갱신해야 한다. `distributed`/`external`은 live `kind`+Redis+CNI 및 Outline/Notion/Mattermost/Slack/LLM gateway 연동 시 별도 카운트 — 현재 0으로 명시하되 재검증 필요.
 - **Live RAG 통합**: Knowledge Index는 unit-tested이나, 운영 corpus backfill 및 live Outline/Notion 자격증명 연동은 v1.7.2+ 운영 검증 범위.
 - **분산 일관성**: kind 2-replica + Redis Lua `k6` 병렬 검증, `hubble --verdict DROPPED` 캡처는 v1.7.2+에서 `distributed: N passed`로 승격.
 

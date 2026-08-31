@@ -36,7 +36,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.1")
+app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.3")
 
 # -- HA health helpers — liveness vs readiness (H4 strict) --
 # /health & /healthz = liveness (always 200). /readyz = readiness with bounded real checks: prod 503 on degraded/draining.

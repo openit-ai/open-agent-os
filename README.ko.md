@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.2 — Personal AX Business Platform
+# Open Agent OS v0.1.3 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.2` — 단일 진실 `admin-console/package.json` `0.1.2` (커밋 `34f0981e71`, 태그 `v0.1.2`). **아키텍처 문서 버전 `v1.7.2`(`docs/architecture-v1.7.2.md`)는 제품 버전 `0.1.2`와 별개** — v1.7.2는 Adaptive Profile Engine 설계(§16.12)를, 0.1.2는 제품 릴리즈 번호를 의미한다.
+- **제품 버전:** `0.1.3` — 단일 진실 `admin-console/package.json` `0.1.3` (후보 브랜치 `release/v0.1.3-remediation` at `9ac4b8de86`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.2`(`docs/architecture-v1.7.2.md`)는 제품 버전 `0.1.3`와 별개** — v1.7.2는 Adaptive Profile Engine 설계(§16.12)를, 0.1.3는 제품 릴리즈 번호를 의미한다.
 - **기준 아키텍처:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine MVP 구현 완료(코드·운영 DB migration·CP router mount·Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인, distributed/external/live RAG 미검증) — 상세 §16.12
 
 ---
@@ -214,9 +214,9 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Liveness / readiness (production fail-closed):** `GET /healthz`는 항상 `200`, `GET /readyz`는 production에서 DB/Redis 체크 실패 시 `503`을 반환해 pod을 트래픽에서 제외한다(non-prod에서는 `checks` 상세를 담은 `200 degraded`일 수 있음). `SIGTERM` 드레이닝 중에도 `terminationGracePeriodSeconds: 30` 동안 `503 draining`으로 트래픽을 차단한다. K8s는 `readinessProbe` 실패 시 Endpoints에서 제외한다.
 - **Audit chain:** `verify_chain`으로 변조를 탐지하고 `checkpoint`는 HMAC으로 서명된다.
 
-### 9a. 릴리즈 v0.1.2 — 제품 `0.1.2` (아키텍처 `v1.7.2`와 별개)
+### 9a. 릴리즈 v0.1.3 — 제품 `0.1.3` (아키텍처 `v1.7.2`와 별개)
 
-**태그/커밋:** `v0.1.2` → `34f0981e71` (원격 `origin/main` HEAD). 제품 버전 `0.1.2`는 `admin-console/package.json`에서 읽는다(env `OAOS_VERSION`이 우선); 아키텍처 `v1.7.2`는 설계 문서 버전으로 별개 — 혼동 금지.
+**태그/커밋:** `v0.1.3` 후보 `9ac4b8de86` on `release/v0.1.3-remediation` (미태깅; 이전 `v0.1.2`는 `34f0981e71` on `origin/main`). 제품 버전 `0.1.3`는 `admin-console/package.json`에서 읽는다(env `OAOS_VERSION`이 우선); 아키텍처 `v1.7.2`는 설계 문서 버전으로 별개 — 혼동 금지.
 
 **이번 태그 포함 내역 (11 files, 647 insertions):**
 - **Admin Web UI 수정**
@@ -224,8 +224,8 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
   - `admin-console/app/(dashboard)/llm-usage/page.tsx`: 관대한 `formatNumber`/`formatCost`/`formatTime`, `safeNum`, 방어적 `items` 정규화 (`timestamp`/`created_at`, `tenant`/`tenant_id`, `total_tokens` fallback), `total = total ?? count ?? length`.
   - `admin-console/backend/llm_providers.py`: `_admin_usage_history`에 `tenant`/`timestamp` 별칭 + `total` 응답 추가, `_admin_usage_summary`에 `daily_tokens`/`daily_quota`/`daily_usage_ratio`/`per_minute_tokens`/`per_minute_limit`/`success_rate`/`p50`/`p99`/`hourly_*`/`updated_at` 확장 (기존 키 유지, 하위 호환).
 - **Version UI**
-  - `admin-console/components/VersionDisplay.tsx` (신규): `GET /version` (4s abort, no-store)로 설치 버전 조회, `t("header.version")` `Open Agent OS v{version}` 치환, `updateAvailable=false|null`이면 설치 버전만 표시, 아니면 `v0.1.2 -> vX.Y.Z`로 최신을 빨강으로 표시.
-  - `admin-console/app/version/route.ts` (신규, primary) + `admin-console/app/api/version/route.ts` (호환): `getInstalledVersion()` env/package.json/fallback `0.1.2`, `normalizeTag`/`compareSemver`, `fetchLatestGithubVersion()` → `GET /repos/openit-ai/open-agent-os/releases/latest` → fallback `GET /tags`, 3s bounded, `Cache-Control: public, s-maxage=3600, stale-while-revalidate=600`.
+  - `admin-console/components/VersionDisplay.tsx` (신규): `GET /version` (4s abort, no-store)로 설치 버전 조회, `t("header.version")` `Open Agent OS v{version}` 치환, `updateAvailable=false|null`이면 설치 버전만 표시, 아니면 `v0.1.3 -> vX.Y.Z`로 최신을 빨강으로 표시.
+  - `admin-console/app/version/route.ts` (신규, primary) + `admin-console/app/api/version/route.ts` (호환): `getInstalledVersion()` env/package.json/fallback `0.1.3`, `normalizeTag`/`compareSemver`, `fetchLatestGithubVersion()` → `GET /repos/openit-ai/open-agent-os/releases/latest` → fallback `GET /tags`, 3s bounded, `Cache-Control: public, s-maxage=3600, stale-while-revalidate=600`.
   - `admin-console/app/(dashboard)/layout.tsx`: footer `VersionDisplay`가 정적 텍스트 대체.
   - `admin-console/next.config.js` + `admin-console/lib/i18n/en.json,ko.json`: `version: "Open Agent OS v{version}"` 플레이스홀더 치환, `latestAvailable`, env 전파.
 - **P0 / P1 (이미 main에 포함, HEAD에 존재 확인 — 재커밋 아님)**
@@ -272,5 +272,5 @@ docs/architecture-v1.7.2.md  # 최신 정본 — v1.7.2 Adaptive Profile Engine 
 
 - **Licensor:** OpenIT Co., Ltd. / **Licensed Work:** Open Agent OS
 - **Additional Use Grant:** Developer Edition 평가·개발·테스트 목적의 production 외 사용 허용, 그 외 production/호스팅/재배포는 Business/Managed 별도 상업 라이선스 필요
-- **Change Date:** `2030-08-27`(`v0.1.2` 기준, 이후 버전은 각 릴리즈일로부터 4년) — **Change License:** Apache 2.0 자동 전환 — 제품 버전 `0.1.2`는 아키텍처 `v1.7.2`와 별개
+- **Change Date:** `2030-08-27`(`v0.1.3` 기준, 이후 버전은 각 릴리즈일로부터 4년) — **Change License:** Apache 2.0 자동 전환 — 제품 버전 `0.1.3`는 아키텍처 `v1.7.2`와 별개
 - BSL 원문: https://mariadb.com/bsl11/ · Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0

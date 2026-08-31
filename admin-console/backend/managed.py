@@ -82,7 +82,7 @@ def list_tickets() -> list[SupportTicket]:
 def managed_status(admin: AdminUser = Depends(get_current_admin)):
     """Managed edition status — edition, version, uptime, SLO summary."""
     # Try to read version from pyproject or env
-    version = os.environ.get("OAOS_VERSION", "0.1.1")
+    version = os.environ.get("OAOS_VERSION", "0.1.3")
     edition = os.environ.get("OAOS_EDITION", "managed")
     uptime_seconds = int(time.monotonic() - _started_at)
     # SLO hints from env (central may override)

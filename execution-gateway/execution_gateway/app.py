@@ -49,7 +49,7 @@ except Exception:
     except Exception:
         parse_and_verify_context = None  # type: ignore  # fallback defined below
 
-app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.1")
+app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.3")
 
 # -- Graceful shutdown + queue draining (SIGTERM 30s) --
 _active_requests: int = 0
@@ -440,7 +440,7 @@ class ExecuteRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "execution-gateway", "version": "0.1.1"}
+    return {"status": "ok", "service": "execution-gateway", "version": "0.1.3"}
 
 @app.get("/healthz")
 def healthz():

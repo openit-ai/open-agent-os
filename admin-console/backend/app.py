@@ -79,7 +79,7 @@ runtime_mode_router = _runtime_mode_mod.router
 _fallback_mod = _load_admin_sibling("fallback")
 fallback_router = _fallback_mod.router
 
-app = FastAPI(title="Open Agent OS Admin API", version="0.1.1")
+app = FastAPI(title="Open Agent OS Admin API", version="0.1.3")
 
 # ── CORS — whitelist via OAOS_CORS_ORIGINS, deny * when credentials true ─
 _DEFAULT_CORS_ORIGINS = [

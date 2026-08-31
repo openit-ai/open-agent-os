@@ -147,7 +147,7 @@ _SECURITY_UPDATES = [
             {"id": "CVE-2026-1002", "severity": "medium", "summary": "Medium severity patch in policy-engine fnmatch"},
         ],
         "changelog": "Security hardening: egress proxy, tool policy rate-limit",
-        "current_version": "0.1.1",
+        "current_version": "0.1.3",
     },
     {
         "version": "0.1.2",
@@ -158,7 +158,7 @@ _SECURITY_UPDATES = [
             {"id": "CVE-2026-0901", "severity": "medium", "summary": "Fix audit hash-chain checkpoint race"},
         ],
         "changelog": "Audit checkpoint race fix",
-        "current_version": "0.1.1",
+        "current_version": "0.1.3",
     },
 ]
 
@@ -166,7 +166,7 @@ _SECURITY_UPDATES = [
 def security_updates(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/security/updates — available versions, CVEs. Viewer read allowed."""
     return {
-        "current_version": "0.1.1",
+        "current_version": "0.1.3",
         "updates": _SECURITY_UPDATES,
         "count": len(_SECURITY_UPDATES),
     }

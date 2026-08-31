@@ -1,6 +1,6 @@
 [project]
 name = "open-agent-os-personal-wiki"
-version = "0.1.1"
+version = "0.1.3"
 description = "Personal Wiki vault, attachment extraction, and Obsidian import for Open Agent OS"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.7"]
