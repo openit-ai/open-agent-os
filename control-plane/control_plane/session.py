@@ -113,6 +113,9 @@ class BaseSessionStore(ABC):
     def get_any(self, session_id: str) -> SessionRecord | None: ...
 
     @abstractmethod
+    def find_latest_for_owner(self, tenant_id: str, user_id: str) -> SessionRecord | None: ...
+
+    @abstractmethod
     def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None, runtime_context: dict | None = None) -> None: ...
 
     @abstractmethod
@@ -155,6 +158,15 @@ class InMemorySessionStore(BaseSessionStore):
 
     def get_any(self, session_id: str) -> SessionRecord | None:
         return self._store.get(session_id)
+
+    def find_latest_for_owner(self, tenant_id: str, user_id: str) -> SessionRecord | None:
+        matches = [r for r in self._store.values() if r.tenant_id == tenant_id and r.user_id == user_id]
+        if not matches:
+            return None
+        latest = max(matches, key=lambda r: r.updated_at)
+        merged = {item.get("request_id"): item for record in matches for item in record.prompt_history if item.get("request_id")}
+        latest.prompt_history = sorted(merged.values(), key=lambda item: item.get("at", ""))[-100:]
+        return latest
 
     def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None, runtime_context: dict | None = None) -> None:
         rec = self.get(session_id, caller_user_id)
@@ -287,6 +299,40 @@ class RedisSessionStore(BaseSessionStore):
 
     def get_any(self, session_id: str) -> SessionRecord | None:
         return self._load(session_id)
+
+    def find_latest_for_owner(self, tenant_id: str, user_id: str) -> SessionRecord | None:
+        # Redis has no owner index; scan only the bounded session namespace.
+        # Invalid/corrupt entries are ignored, while caller ownership remains authoritative.
+        try:
+            client = self._client
+            keys = client.keys(f"{self._prefix}*") if client is not None else []
+            matches = []
+            for key in keys:
+                raw = client.get(key) if client is not None else None
+                if not raw:
+                    continue
+                try:
+                    rec = SessionRecord.from_dict(json.loads(raw))
+                except Exception:
+                    continue
+                if rec.tenant_id == tenant_id and rec.user_id == user_id:
+                    matches.append(rec)
+            if not matches:
+                return None
+            latest = max(matches, key=lambda r: r.updated_at)
+            merged = {
+                item.get("request_id"): item
+                for record in matches
+                for item in record.prompt_history
+                if item.get("request_id")
+            }
+            latest.prompt_history = sorted(merged.values(), key=lambda item: item.get("at", ""))[-100:]
+            self._save(latest)
+            return latest
+        except Exception:
+            if self._fallback_store is not None:
+                return self._fallback_store.find_latest_for_owner(tenant_id, user_id)
+            raise
 
     def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None, runtime_context: dict | None = None) -> None:
         rec = self.get(session_id, caller_user_id)

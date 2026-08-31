@@ -459,8 +459,10 @@ class TestWebhookDuplicateNoNewSession:
         from control_plane.idempotency import set_idempotency_redis_client
         set_idempotency_redis_client(r)
         from unittest.mock import patch
-        import control_plane.mattermost_adapter.webhook as wh
-        from control_plane.session import session_store as ss
+        from control_plane.mattermost_adapter import webhook as wh
+        ss = wh.session_store
+        if hasattr(ss, "_store"):
+            ss._store.clear()
 
         call_count = {"n": 0, "sessions_before": 0, "sessions_after": 0}
         async def fake_send_prompt(self, rec, text, rid, **kwargs):

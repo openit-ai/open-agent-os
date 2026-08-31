@@ -434,7 +434,7 @@ class ACPAdapter:
         except Exception:
             pass
         # -- Hermes Gateway fallback (standard path — same LLM as @openit) --
-        # Retrieve last user prompt from session_store
+        # Retrieve the current prompt plus bounded durable conversation history.
         prompt_text = ""
         _last_file_ids: list[str] | None = None
         _last_arefs: list[dict] | None = None
@@ -446,6 +446,15 @@ class ACPAdapter:
                 prompt_text = last.get("prompt", "") or ""
                 _last_file_ids = last.get("file_ids")
                 _last_arefs = last.get("attachment_refs")
+                # The Gateway is stateless per request. Rehydrate prior turns
+                # from the durable session so a new request can remember them.
+                prior = rec.prompt_history[:-1][-12:]
+                if prior:
+                    history = "\n".join(
+                        f"사용자 이전 발화: {item.get('prompt', '')}" for item in prior if item.get("prompt")
+                    )
+                    if history:
+                        prompt_text = f"[DURABLE CONVERSATION HISTORY]\n{history}\n[/DURABLE CONVERSATION HISTORY]\n\n현재 사용자 발화: {prompt_text}"
         except Exception:
             pass
         if prompt_text:

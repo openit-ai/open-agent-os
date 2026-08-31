@@ -43,6 +43,35 @@ from ..router import route_session
 from ..session import new_request_id, session_store
 
 router = APIRouter()
+
+
+def _archive_conversation_turn(tenant_id: str, agent_id: str, user_id: str, session_id: str, request_id: str, text: str) -> None:
+    """Append a user turn to the owner-scoped Personal Wiki journal.
+
+    This is deliberately local and deterministic: no LLM/OCR/provider is
+    involved. Failure is logged but never changes the conversational response.
+    """
+    try:
+        import sys
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[3]
+        package_root = repo_root / "packages" / "personal-wiki"
+        if str(package_root) not in sys.path:
+            sys.path.insert(0, str(package_root))
+        from personal_wiki.vault import append_journal, vault_path_for_tenant_agent
+        owner_root = vault_path_for_tenant_agent(tenant_id, agent_id)
+        append_journal(
+            trace_id=request_id,
+            tool_name="mattermost_conversation",
+            result={"user_id": user_id, "session_id": session_id, "text": text},
+            # tenant/agent are already derived from the verified server-side
+            # Mattermost identity and owner_root is the isolated target.
+            extra={"tenant_id": tenant_id, "agent_id": agent_id, "source": "mattermost"},
+            vault_root=owner_root,
+        )
+    except Exception as exc:
+        log.warning("personal wiki conversation archive failed session=%s request=%s: %s", session_id, request_id, exc)
+
 log = logging.getLogger(__name__)
 
 # ── Small-business Mattermost -> ACP -> Policy Engine gate ─────────────
@@ -523,7 +552,17 @@ async def _handle_core_logic(
             _lg.getLogger(__name__).warning("idempotency early claim failed non-prod fallback: %s", _idem_exc)
             # fall through to normal flow (non-prod fallback will proceed)
 
-    # Session: resume or create (only for non-duplicate; duplicates already returned above)
+    # Session: resume the owner's latest durable session when the bridge does
+    # not provide one. This is the Mattermost conversation continuity boundary.
+    if not session_id:
+        try:
+            prior = session_store.find_latest_for_owner(tenant_id, mapping.human_principal)
+            if prior is not None and prior.status == "active":
+                session_id = prior.session_id
+        except Exception as exc:
+            if os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod"):
+                raise HTTPException(status_code=503, detail="durable session lookup unavailable") from exc
+            log.warning("latest session lookup failed: %s", exc)
     if session_id:
         try:
             rec = session_store.get(session_id, user_id)
@@ -676,6 +715,7 @@ async def _handle_core_logic(
         _fid = [r.get("attachment_id") or r.get("vault_path") or r.get("file_id") for r in _arefs if isinstance(r, dict)]
         _fid = [x for x in _fid if x]
     session_store.append_prompt(session_id, user_id, text, rid, file_ids=_fid or None, attachment_refs=_arefs or None, runtime_context=_rctx or None)
+    _archive_conversation_turn(tenant_id, mapping.agent_principal, mapping.human_principal, session_id, rid, text)
     # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
     try:
         from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
