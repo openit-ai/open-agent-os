@@ -200,7 +200,7 @@ Admin Console 화면(11+ routes: login / dashboard / infra / users / policy / ap
 
 ```bash
 pytest -q
-# 기대값 (2026-08-29, main): 813 passed, 1 skipped, 74 warnings — LLM 6-Provider, Fernet Vault,
+# 과거 스냅샷 (2026-08-29, main): 927 passed, 1 skipped, 74 warnings — 현재 v0.1.3 증거가 아님. 현재 후보 증거는 docs/deployment-verification-v0.1.3.md 및 docs/evidence-report-v0.1.3.json에 기록. LLM 6-Provider, Fernet Vault,
 # opencode 바이너리 체인, wiki/pgvector, production hardening(fail-closed runtime/deploy/audit/approval/token/rate + secrets) 포함.
 # 필터 예시:
 pytest tests/test_workstream_a.py tests/test_control_plane_api.py -v  # isolation / SSE

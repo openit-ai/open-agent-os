@@ -186,7 +186,7 @@ Mattermost → OAOS → Hermes/LLM → Execution Gateway
 - `README.md`, `README.ko.md`, `SECURITY.md`
 - `docs/architecture-v1.7.2.md`
 - `docs/evidence-report-v1.7.1.json`
-- `docs/deployment-verification-v1.7.1.md`
+- `docs/deployment-verification-v0.1.3.md`
 
 제품 버전 `0.1.3`, 아키텍처 `v1.7.2`, 검증 대상 commit을 혼동하지 않는다.
 문서의 테스트 수·timestamp·commit은 v0.1.3 후보에서 재생성한다.
