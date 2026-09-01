@@ -15,7 +15,7 @@
 - **Repository:** `openit-ai/open-agent-os`
 - **Product version:** `0.1.3` — single source of truth `admin-console/package.json` `0.1.3` (candidate branch `release/v0.1.3-remediation` at `0af1e91f07`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.2` (`docs/architecture-v1.7.2.md`) is distinct from product version `0.1.3`** — v1.7.2 describes the Adaptive Profile Engine design (§16.12), not the release number.
 - **Canonical architecture:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine design included (see §16.12)
-
+- **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
 ---
 
