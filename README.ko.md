@@ -120,7 +120,7 @@ Mattermost mykim → oaos-mm-bridge → OAOS Control Plane :8100
                  → Hermes Gateway API :8642
 ```
 
-2026-08-30 검증: OAOS 서비스와 health/readiness endpoint는 active/HTTP 200, Control Plane 운영 환경은 `OAOS_SESSION_BACKEND=redis`와 `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`, 브리지는 `state.db`/`sessions.json` 직접 참조 없음, 대상 OAOS 회귀 테스트는 `117 passed`였다. 이는 구조·프로세스 증거이다. 검증 probe는 `u5yq38w4d3gii8zdi48r6p39zw` 채널에 source post `xjmo488frbdafnkwwutft49qeh`를 생성했지만, source 작성자가 `mykim`이 아니라 브리지 봇이었다. 브리지가 bot-origin post를 정상적으로 건너뛰어 응답이 생성되지 않았으므로, 사용자 인증 기반 Mattermost 외부 E2E는 **통과하지 않았으며** 완료로 주장하지 않는다.
+2026-08-30 검증: OAOS 서비스와 health/readiness endpoint는 active/HTTP 200, Control Plane 운영 환경은 `OAOS_SESSION_BACKEND=redis`와 `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`, 브리지는 `state.db`/`sessions.json` 직접 참조 없음, 대상 OAOS 회귀 테스트는 `117 passed`였다. 이는 구조·프로세스 증거이다. 실제 `mykim` source post `jazr64zt6p8m8qendcpqnnur1h`를 `u5yq38w4d3gii8zdi48r6p39zw` 채널에서 read-back했고, 동일 thread(`root_id=jazr64zt6p8m8qendcpqnnur1h`)의 이후 봇 응답 `c8gawge517837j3o3zoo44swgc`를 확인했다. 관찰된 사용자 Mattermost 외부 E2E는 **통과**했다. 별도 probe post `xjmo488frbdafnkwwutft49qeh`는 브리지 봇 작성 글이어서 정상적으로 skip됐다.
 
 ## 5. 핵심 가치 5가지
 

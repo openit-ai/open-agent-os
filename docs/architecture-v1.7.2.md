@@ -1870,7 +1870,7 @@ Mattermost mykim
 - 실제 Control Plane 환경: `OAOS_ENV=production`, `OAOS_SESSION_BACKEND=redis`, `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`
 - OAOS source guard: `oaos-mm-bridge.py`에 Hermes `state.db` 직접 참조 없음
 - 관련 OAOS 회귀 테스트: `117 passed, 1 warning`
-- **External E2E status: NOT PASSED** — 구조·프로세스 검증은 통과했지만, 검증 probe의 source post `xjmo488frbdafnkwwutft49qeh`는 `mykim` 사용자가 아닌 브리지 봇이 작성한 것으로 판정되었다. 브리지가 bot-origin post를 정상적으로 skip하여 응답 post가 생성되지 않았으므로, 실제 사용자 인증 Mattermost `mykim` 왕복은 아직 증명되지 않았다. 이 시도는 운영 데이터 변경 없이 수행되었으며, 정상 판정에는 `mykim`이 작성한 새 source post와 동일 thread의 새 bot response read-back이 필요하다.
+- **External E2E status: PASS (observed turn)** — `u5yq38w4d3gii8zdi48r6p39zw` 채널에서 실제 `mykim` source post `jazr64zt6p8m8qendcpqnnur1h`와 동일 thread(`root_id=jazr64zt6p8m8qendcpqnnur1h`)의 이후 봇 응답 `c8gawge517837j3o3zoo44swgc`를 Mattermost API로 read-back했다. source author·bot author·root ID·생성 시각을 대조해 사용자 경로 왕복을 확인했다. 별도 probe post `xjmo488frbdafnkwwutft49qeh`는 봇 작성 post라 브리지가 정상 skip했다.
 
 
 Hermes Runtime은 고복잡·고자율 작업을 위한 Advanced Runtime이다.
