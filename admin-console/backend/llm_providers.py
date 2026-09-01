@@ -384,6 +384,11 @@ def _get_session_factory():
 
 
 def _db_ensure_table(engine) -> None:
+    if os.environ.get("OAOS_ENV", "").strip().lower() in {"production", "prod"}:
+        from sqlalchemy import inspect
+        if not inspect(engine).has_table("admin_llm_providers"):
+            raise RuntimeError("admin_llm_providers schema is missing; apply Alembic migrations first")
+        return
     try:
         from security.models.orm import AdminLLMProviderORM  # type: ignore
 
@@ -394,6 +399,7 @@ def _db_ensure_table(engine) -> None:
         from security.models.orm import AdminLLMProviderORM  # type: ignore
         from security.models.db import Base  # type: ignore
 
+        # Non-production fixture compatibility only; production returns above.
         Base.metadata.create_all(bind=engine)
         # ensure indexes exist (sqlite IF NOT EXISTS already in metadata; explicit for legacy)
         try:
