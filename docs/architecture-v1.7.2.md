@@ -1759,7 +1759,18 @@ Control Plane 응답
 
 오류 계약 검증은 각 코드별 메시지·재시도·LLM 호출 차단을 독립적으로 확인한다. 최소 회귀 범위는 `tests/test_bridge_error_classification.py`의 영구/일시 분류, 등록 필요·권한 거부 메시지 차등, 내부 원문 비노출, 안내 Post payload 검증이다. 단위 테스트 통과는 실제 외부 Mattermost 사용자 경로의 external PASS를 의미하지 않으며, 운영에서는 실제 Post ID·thread·trace read-back을 별도로 기록한다.
 
-### 16.12 잔여 로드맵 (v1.7.2+) — live distributed/external integration
+### 16.12 Mattermost Personal/Enterprise Context Routing — implemented
+
+Mattermost 일반 대화는 사용자 질문의 결정론적 route 힌트를 기준으로 owner-scoped Personal Wiki 또는 tenant-scoped Enterprise Knowledge Index를 먼저 조회한 뒤, 검색 결과와 출처를 단일 LLM prompt에 주입한다. 검색은 LLM이 수행하지 않으며, 검색 실패·무결과는 원문 질문을 안전하게 유지한다.
+
+- 개인 질문(`내 일정`, `내 업무`, `내 기록`, `내 위키`, `내 성향`, `개인` 등) → `Personal Wiki` owner scope
+- 회사 질문(`회사`, `전사`, `정책`, `규정`, `프로젝트`, `사업`, `조직`, `매뉴얼`, `현황` 등) → `Knowledge Index` tenant/agent ACL pre-filter
+- 검색 context에는 `source_uri` 또는 owner-scoped path를 포함하며, 근거 부족 시 모른다고 답변하도록 지시한다.
+- 검색은 응답 경로에서 수행되므로 별도 LLM 호출을 만들지 않는다. 전체 route는 `Mattermost → identity/session/policy → context retrieval → ACP/Hermes → thread reply` 순서다.
+- 구현: `control-plane/control_plane/context_retrieval.py`, Mattermost webhook `_handle_core_logic`; 회귀: `tests/test_context_retrieval.py`.
+- 실제 Personal Wiki 운영 파일·다중 사용자 external E2E는 별도 read-back 대상이며, 단위 테스트와 health 200만으로 완료를 주장하지 않는다.
+
+### 16.13 잔여 로드맵 (v1.7.2+) — live distributed/external integration
 
 - **오류 계약 적용 상태:** Control Plane 오류 분류·안전 메시지·영구 오류 종료·LLM 미호출·bounded retry 계약은 Bridge 구현 및 `tests/test_bridge_error_classification.py`로 검증됨. 운영 적용 커밋은 `8b2d744463494f43b191d41af6f2b2219083fc0a`이며, 상세는 §16.11을 따른다.
 - **P0 보완 상태:** Knowledge Index ACL metadata/deletion propagation, migration-managed tenant/source checkpoint, Microsoft Graph real transport boundary, owner-scoped session claim, credential isolation, and canonical environment gate were implemented and locally verified. Production checkpoint table and `alembic_version=018_knowledge_sync_checkpoints` were read back after approved controlled SQL application; formal `alembic upgrade`/full backup tooling remains pending because `pg_dump` is unavailable. Production Admin Console now rejects implicit `create_all()`.
