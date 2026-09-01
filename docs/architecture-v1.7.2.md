@@ -1762,7 +1762,7 @@ Control Plane 응답
 ### 16.12 잔여 로드맵 (v1.7.2+) — live distributed/external integration
 
 - **오류 계약 적용 상태:** Control Plane 오류 분류·안전 메시지·영구 오류 종료·LLM 미호출·bounded retry 계약은 Bridge 구현 및 `tests/test_bridge_error_classification.py`로 검증됨. 운영 적용 커밋은 `8b2d744463494f43b191d41af6f2b2219083fc0a`이며, 상세는 §16.11을 따른다.
-- **P0 보완 상태:** Knowledge Index ACL metadata/deletion propagation, Microsoft Graph real transport boundary, owner-scoped session claim, credential isolation, and canonical environment gate were implemented and locally verified. Durable sync checkpoint, Alembic-only runtime schema, and live external/provider verification remain residuals.
+- **P0 보완 상태:** Knowledge Index ACL metadata/deletion propagation, migration-managed tenant/source checkpoint, Microsoft Graph real transport boundary, owner-scoped session claim, credential isolation, and canonical environment gate were implemented and locally verified. Live PostgreSQL migration/read-back and live external/provider verification remain residuals.
 
 - **H8 증거 등급**: `scripts/verify-evidence-tiers.py` + `tests/test_evidence_tiers.py`로 검증한다. 역사적 v1.7.1 스냅샷은 `unit: 927 passed`를 기록했으나, v0.1.3 후보에서는 재실행 결과로 갱신해야 한다. `distributed`/`external`은 live `kind`+Redis+CNI 및 Outline/Notion/Mattermost/Slack/LLM gateway 연동 시 별도 카운트 — 현재 0으로 명시하되 재검증 필요.
 - **Live RAG 통합**: Knowledge Index는 unit-tested이나, 운영 corpus backfill 및 live Outline/Notion 자격증명 연동은 v1.7.2+ 운영 검증 범위.
