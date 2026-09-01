@@ -17,7 +17,6 @@ import json
 import uuid
 import logging
 import os
-from pathlib import Path
 from typing import AsyncGenerator, Any
 import httpx
 from .session import SessionRecord
@@ -327,14 +326,8 @@ class ACPAdapter:
         k = os.getenv("OAOS_CP_HERMES_API_KEY", "") or os.getenv("API_SERVER_KEY", "") or ""
         if k:
             return k
-        # last resort: read from ~/.hermes/.env
-        try:
-            p = Path.home() / ".hermes" / ".env"
-            for line in p.read_text().splitlines():
-                if line.startswith("API_SERVER_KEY="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-        except Exception:
-            pass
+        # Never read Hermes global files: same-OS-account sessions share Unix permissions.
+        # OAOS must use only its explicit, owner-scoped EnvironmentFile/configuration.
         return ""
 
     def _hermes_model(self) -> str:
