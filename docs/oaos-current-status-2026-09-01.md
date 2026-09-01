@@ -9,9 +9,17 @@
 ## P0 — Implemented and locally verified
 
 - Adaptive Profile Evidence Worker now serializes persistence operations per verified `(tenant_id, user_id)` while allowing different owners to proceed concurrently.
-- Knowledge Index `sync_to_persistent()` explicit-context delegation and fail-closed missing-context behavior are covered by tests. The real persistent path remains dependent on a real embedding provider, database, and source connector for operational verification.
+- Knowledge Index persistent sync now preserves source ACL metadata in the chunk boundary, writes tenant-scoped entries, propagates explicit source deletion IDs to the persistent repository, and fails closed for missing production credentials/providers. The persistent checkpoint store is still an explicit follow-up boundary; live source/embedding/database verification remains unclaimed.
+- Microsoft Graph connector now performs real `httpx` transport for planned Graph operations when an owner token is supplied and fails closed on missing production tokens. Live Microsoft tenant/OAuth verification remains unclaimed.
 - Personal credential leakage placeholders were replaced with deterministic test coverage for Vault owner isolation, cross-user Gmail access, delegation revoke cascade, explicit export denial, and prompt-injection resistance.
+- Control Plane and Execution Gateway environment gates now import the single canonical `agent_runtime.env_gate` implementation.
 - Knowledge Index source and package mirror files remain identical.
+
+### P0 residuals — not complete
+
+- Persistent sync checkpoint storage is still `InMemoryCheckpointStore`; it must be replaced or backed by a durable tenant/source checkpoint before P0 can be called complete.
+- Production admin persistence still contains `Base.metadata.create_all()` compatibility paths; Alembic-only runtime schema enforcement and production read-back remain pending.
+- Live external connector, embedding provider, ACL corpus, and multi-user OAuth verification remain pending.
 
 ### P0 evidence
 
