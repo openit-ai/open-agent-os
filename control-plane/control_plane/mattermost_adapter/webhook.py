@@ -267,16 +267,8 @@ def _get_mattermost_adapter():
         base_url = getattr(settings, "mattermost_url", "") or os.getenv("MATTERMOST_URL", "")
         bot_token = getattr(settings, "mattermost_bot_token", "") or os.getenv("MATTERMOST_BOT_TOKEN", "")
         webhook_secret = getattr(settings, "mattermost_webhook_secret", "") or os.getenv("MATTERMOST_WEBHOOK_SECRET", "")
-        if not bot_token:
-            try:
-                for line in (Path.home() / ".hermes" / ".env").read_text(encoding="utf-8").splitlines():
-                    key, sep, value = line.partition("=")
-                    if sep and key == "MATTERMOST_BOT_TOKEN":
-                        bot_token = value.strip().strip('"').strip("'")
-                    elif sep and key == "MATTERMOST_URL" and not base_url:
-                        base_url = value.strip().strip('"').strip("'")
-            except OSError:
-                pass
+        # Do not read Hermes global files here. Same-OS-account sessions share
+        # Unix permissions; OAOS must use its explicit service configuration.
         return MattermostAdapter(
             base_url=base_url,
             bot_token=bot_token,

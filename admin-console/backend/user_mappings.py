@@ -393,18 +393,8 @@ def _load_mm_config() -> tuple[str | None, str | None]:
     token = os.getenv("MATTERMOST_TOKEN")
     if url and token:
         return url, token
-    # fallback: read from known env files
-    for env_path in ["/home/openitsvc/.hermes/.env", "/root/.hermes/.env", os.path.expanduser("~/.hermes/.env")]:
-        try:
-            if os.path.exists(env_path):
-                txt = open(env_path).read()
-                for line in txt.splitlines():
-                    if line.startswith("MATTERMOST_URL=") and not url:
-                        url = line.split("=",1)[1].strip().strip('"')
-                    if line.startswith("MATTERMOST_TOKEN=") and not token:
-                        token = line.split("=",1)[1].strip().strip('"').strip()
-        except Exception:
-            pass
+    # Never scan Hermes global env files. OAOS uses explicit service configuration;
+    # same-OS-account sessions are not isolated by Unix file permissions.
     return url, token
 
 def _is_mm_id(s: str) -> bool:
