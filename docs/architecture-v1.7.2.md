@@ -1882,7 +1882,7 @@ Mattermost mykim
 - `HERMES_HOME`/profile 분리는 설정·세션 충돌 방지용 보조 경계이며, 같은 OS 계정 세션의 강한 개인정보 보안 경계로 단독 사용하지 않는다.
 - 구현 검증은 직접 파일 접근 grep, 전역 credential fallback 회귀 테스트, owner-scoped context/namespace 테스트를 포함한다.
 
-- 구현 상태 (2026-09-01 보완): OAOS ACP adapter는 Hermes 전역 `.env` fallback을 사용하지 않고 명시적 OAOS 설정/EnvironmentFile의 key만 사용하도록 보강한다. Telegram direct Hermes의 `state.db`·메모리와 OAOS Redis/PostgreSQL 세션은 서로 다른 소유권으로 유지한다.
+**구현 상태 (2026-09-01 보완)**: OAOS ACP adapter는 Hermes 전역 `.env` fallback을 사용하지 않고 명시적 OAOS 설정/EnvironmentFile의 key만 사용하도록 보강한다. Telegram direct Hermes의 `state.db`·메모리와 OAOS Redis/PostgreSQL 세션은 서로 다른 소유권으로 유지한다.
 
 #### 16.2.1.2 개인 Google Workspace 브리핑 데이터 경계
 
