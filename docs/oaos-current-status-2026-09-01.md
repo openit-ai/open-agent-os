@@ -17,8 +17,8 @@
 
 ### P0 residuals — not complete
 
-- Persistent checkpoint uses migration `018_knowledge_sync_checkpoints` in production; live PostgreSQL migration/read-back remains pending.
-- Production admin persistence still contains `Base.metadata.create_all()` compatibility paths; Alembic-only runtime schema enforcement and production read-back remain pending.
+- Persistent checkpoint code and migration `018_knowledge_sync_checkpoints` are present. Production database table and `alembic_version=018_knowledge_sync_checkpoints` were read back after an approved controlled SQL application; formal `alembic upgrade` execution and full backup tooling remain pending because `pg_dump` is unavailable.
+- Production admin persistence now refuses implicit `Base.metadata.create_all()` when `OAOS_ENV=production`; non-production compatibility remains. Full production Alembic-only schema audit and backup/restore read-back remain pending.
 - Live external connector, embedding provider, ACL corpus, and multi-user OAuth verification remain pending.
 
 ### P0 evidence
