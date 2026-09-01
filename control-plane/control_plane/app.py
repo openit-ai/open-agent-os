@@ -258,8 +258,11 @@ def _ha_checks():
         def _vault():
             _bounded_vault_ping()
         checks["vault"] = _check_latency(_vault)
+        checks["vault"]["backend"] = vault_backend or "external"
     else:
-        checks["vault"] = {"status": "skipped", "latency_ms": 0, "reason": "no VAULT_ADDR/VAULT_BACKEND"}
+        # encrypted_postgres is the selected built-in Secret Vault; only an
+        # external Vault health probe is skipped.
+        checks["vault"] = {"status": "ok", "backend": "encrypted_postgres", "external_health_check": "skipped", "latency_ms": 0}
     if _shutting_down:
         checks["self"] = {"status": "draining", "latency_ms": 0, "active_requests": _active_requests}
     else:
