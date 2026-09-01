@@ -437,6 +437,8 @@ async def send_prompt(session_id: str, req: SendPromptRequest, authorization: st
     if req.session_id and req.session_id != session_id:
         raise HTTPException(status_code=400, detail="session_id mismatch: path vs body")
     rec = session_store.get(session_id, caller)
+    if rec.status != "active":
+        raise HTTPException(status_code=409, detail="session is not active")
     # tenant integrity: if JWT present, token tenant must match session tenant
     if authorization and authorization.strip().lower().startswith("bearer "):
         token = authorization.strip()[7:].strip()
