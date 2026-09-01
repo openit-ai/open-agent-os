@@ -127,6 +127,18 @@ Enterprise Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/N
 
 **Runtime:** LLM Runtime canonical (`llm`, `safe` is deprecated alias) + Hermes Runtime advanced — Registry YAML (LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker (§16G), tool policy (§16H), data access (§16I), and Adaptive Profile Engine MVP implemented (§16.12 — code/DB migration/CP router/Mattermost ingress/ACP hook/image active-runtime E2E confirmed; distributed/external/live RAG unverified). See [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.12.
 
+### Runtime ownership and Mattermost isolation (v1.7.2)
+
+OAOS does not reuse a user’s direct Hermes/Telegram session. The Mattermost path is owner-scoped and uses the OAOS production Redis session store before calling the Hermes Gateway API. A Telegram `/model` override such as `custom/gpt-5.6-luna` remains a direct Hermes session concern and must never be inherited by OAOS.
+
+```text
+Mattermost mykim → oaos-mm-bridge → OAOS Control Plane :8100
+                 → Redis session (`oaos:mattermost:<tenant>:<verified-user>`)
+                 → Hermes Gateway API :8642
+```
+
+Verified on 2026-08-30: OAOS services and health/readiness endpoints were active/HTTP 200; production Control Plane used `OAOS_SESSION_BACKEND=redis` and `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`; the bridge had no direct `state.db`/`sessions.json` reference; targeted OAOS regression tests passed `117`. This is structural/process evidence. The actual Mattermost external request/reply read-back remains a separate external E2E gate and is not claimed here as completed.
+
 ## 5. Core Values
 
 1. **Personal-First, Enterprise-Safe** — Calendar / Gmail delegated by the employee (§9); Production / ERP / customer DB governed by company policy + approval (§11). Natural UX and safety together (§13).

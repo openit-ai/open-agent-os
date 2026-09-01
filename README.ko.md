@@ -110,6 +110,18 @@ Personal Wiki (Vault FS + memory_service pgvector) ◄── Execution Gateway a
 
 **런타임:** LLM Runtime이 canonical(`llm`, `safe`는 deprecated alias)이고 Hermes Runtime이 advanced — Registry YAML(LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker(§16G), tool policy(§16H), data access(§16I). 상세: `docs/architecture-v1.7.2.md` §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.8.
 
+### 런타임 소유권과 Mattermost 세션 격리 (v1.7.2)
+
+OAOS는 사용자의 직접 Hermes/Telegram 세션을 재사용하지 않는다. Mattermost 경로는 사용자별 소유권으로 분리하고, OAOS 운영 Redis 세션 저장소를 거친 뒤 Hermes Gateway API를 호출한다. Telegram의 `/model` override(예: `custom/gpt-5.6-luna`)는 직접 Hermes 세션의 설정이며 OAOS가 상속해서는 안 된다.
+
+```text
+Mattermost mykim → oaos-mm-bridge → OAOS Control Plane :8100
+                 → Redis 세션(`oaos:mattermost:<tenant>:<verified-user>`)
+                 → Hermes Gateway API :8642
+```
+
+2026-08-30 검증: OAOS 서비스와 health/readiness endpoint는 active/HTTP 200, Control Plane 운영 환경은 `OAOS_SESSION_BACKEND=redis`와 `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`, 브리지는 `state.db`/`sessions.json` 직접 참조 없음, 대상 OAOS 회귀 테스트는 `117 passed`였다. 이는 구조·프로세스 증거이며, 실제 Mattermost 외부 요청/응답 게시물 read-back은 별도 external E2E 게이트로 남겨 두고 완료로 주장하지 않는다.
+
 ## 5. 핵심 가치 5가지
 
 1. **Personal-First, Enterprise-Safe** — 내 Calendar/Gmail은 내가 위임(§9), Production/ERP/고객DB는 회사 정책+승인(§11). UX와 보안이 함께 자연스럽다(§13).

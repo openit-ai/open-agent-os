@@ -1836,6 +1836,42 @@ Runtime에는 다음과 같은 최소 정책만 전달한다.
 
 ## 16.2 Hermes Runtime
 ## 16.2 Hermes Runtime
+## 16.2.1 Runtime Ownership — OAOS Mattermost vs direct Hermes sessions (v1.7.2 verified)
+
+OAOS와 Hermes가 동일 호스트에서 운영되더라도 **세션·모델·상태 저장소의 소유권은 분리**한다. Telegram에서 사용자가 직접 운영하는 Hermes 세션은 Hermes의 `state.db`와 해당 세션의 persisted model override를 사용한다. 이 override(`custom/gpt-5.6-luna` 포함)는 OAOS Mattermost 세션에 전파되거나 삭제 대상이 되지 않는다.
+
+```text
+Telegram direct Hermes
+  → Hermes Gateway
+  → Hermes state.db
+  → 사용자 세션별 모델/provider override
+
+Mattermost mykim
+  → oaos-mm-bridge
+  → OAOS Control Plane :8100
+  → OAOS Redis session store
+  → Hermes Gateway API :8642
+  → OAOS runtime binding
+```
+
+**불변식**
+
+- `oaos-mm-bridge.py`는 Hermes `state.db`와 `sessions.json`을 직접 읽거나 쓰지 않는다.
+- OAOS Mattermost 세션 namespace는 `oaos:mattermost:<tenant>:<verified-user>`로 소유자별 분리한다.
+- OAOS 운영 세션은 production에서 `RedisSessionStore(fallback=False)`를 사용하며, Redis 장애 시 fail-closed한다.
+- OAOS 세션의 runtime binding은 `runtime_provider`와 `runtime_model`로 명시하고 Telegram의 `/model` override를 상속하지 않는다.
+- OAOS의 Hermes 호출 endpoint·model은 운영 EnvironmentFile과 실제 프로세스 환경으로 검증한다.
+
+**OpenIT 운영 검증 (2026-08-30)**
+
+- `oaos-control-plane.service`, `oaos-mm-bridge.service`: active
+- OAOS `/health`, `/readyz`, `/v1/mattermost/health`: HTTP 200
+- `/readyz`: PostgreSQL·Redis checks ok
+- 실제 Control Plane 환경: `OAOS_ENV=production`, `OAOS_SESSION_BACKEND=redis`, `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`
+- OAOS source guard: `oaos-mm-bridge.py`에 Hermes `state.db` 직접 참조 없음
+- 관련 OAOS 회귀 테스트: `117 passed, 1 warning`
+- **Residual**: 실제 Mattermost `mykim` 메시지의 외부 왕복(post read-back)은 별도 검증이 필요하며, 위 결과만으로 external E2E 완료를 주장하지 않는다.
+
 
 Hermes Runtime은 고복잡·고자율 작업을 위한 Advanced Runtime이다.
 
