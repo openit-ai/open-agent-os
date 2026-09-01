@@ -5,10 +5,11 @@
 - Architecture baseline: v1.7.2
 - Repository branch: `release/v0.1.3-remediation`
 - Latest implementation/test commit: `b5050075106f5738e16a687f7f901f44ec9b6741`
-- Latest documentation/status commit: pending after this status update (README candidate refs now point to `6d91f3b710`)
+- Latest full-suite commit: `6d91f3b71030cf9b074fcfb926821af3c32eaddd` (`1299 passed, 5 skipped, 0 failed, 88 warnings in 358.45s`)
+- Latest documentation/status commit: pending after this status update
 - Status: **PARTIAL — P0 code/runtime gates applied; live external/distributed evidence and full production schema backup remain**
 - Runtime read-back before latest test-gate commit: `oaos-control-plane.service` active/running, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200, Alembic `018_knowledge_sync_checkpoints` applied.
-- Fresh full-suite result at commit `b5050075106f5738e16a687f7f901f44ec9b6741`: `1298 passed, 5 skipped, 0 failed, 88 warnings in 357.51s (0:05:57)`.
+- Fresh full-suite result at commit `6d91f3b71030cf9b074fcfb926821af3c32eaddd`: `1299 passed, 5 skipped, 0 failed, 88 warnings in 358.45s (0:05:58)`.
 
 ## P0 — Implemented and locally verified
 
