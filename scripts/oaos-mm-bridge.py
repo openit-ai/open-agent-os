@@ -410,17 +410,59 @@ def _is_permanent_cp_error(exc):
     return _http_error_status(exc) in {400, 401, 403, 404, 405, 409, 422}
 
 
-def _post_registration_notice(channel_id, root_id):
-    """Post one non-LLM notice for permanent registration/policy rejection."""
+def _cp_error_detail(exc):
+    """Read a bounded, non-secret Control Plane detail for classification only."""
+    try:
+        raw = exc.read(4096).decode("utf-8", errors="replace")
+        try:
+            value = json.loads(raw)
+            detail = value.get("detail", value.get("message", "")) if isinstance(value, dict) else ""
+        except json.JSONDecodeError:
+            detail = raw
+        return re.sub(r"[\\r\\n]+", " ", str(detail)).strip()[:240]
+    except Exception:
+        return ""
+
+
+def _cp_user_message(status, detail):
+    """Map CP errors to safe Korean UX text; never expose internal error bodies."""
+    normalized = (detail or "").lower()
+    if status == 403 and any(token in normalized for token in ("registration", "registered", "onboarding", "mapping")):
+        return "현재 OAOS 사용자 등록이 되어 있지 않습니다. 웹관리자 콘솔에서 등록 상태를 확인한 뒤 다시 시도해 주세요."
+    if status == 400:
+        return "요청 형식을 확인해 주세요. 문제가 계속되면 관리자에게 문의해 주세요."
+    if status == 401:
+        return "OAOS 인증 확인에 실패했습니다. 관리자에게 문의해 주세요."
+    if status == 403:
+        return "현재 계정에는 이 작업을 수행할 권한이 없습니다."
+    if status == 404:
+        return "요청한 세션 또는 리소스를 찾을 수 없습니다. 새 대화로 다시 시도해 주세요."
+    if status == 405:
+        return "지원되지 않는 요청입니다. 관리자에게 문의해 주세요."
+    if status == 409:
+        return "이미 처리 중이거나 처리된 요청입니다. 잠시 후 확인해 주세요."
+    if status == 422:
+        return "입력값을 확인해 주세요."
+    if status == 408:
+        return "처리 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요."
+    if status == 429:
+        return "현재 요청이 많습니다. 잠시 후 다시 시도해 주세요."
+    if status in {500, 502, 503, 504}:
+        return "OAOS 연동 서비스가 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해 주세요."
+    return "OAOS 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요."
+
+
+def _post_registration_notice(channel_id, root_id, message):
+    """Post one non-LLM notice for a permanent rejection."""
     try:
         api_post("/api/v4/posts", {
             "channel_id": channel_id,
             "root_id": root_id,
-            "message": "현재 OAOS 사용자 등록 또는 권한 확인이 필요합니다. 웹관리자 콘솔에서 등록 상태를 확인한 뒤 다시 시도해 주세요.",
+            "message": message,
         })
-        print(f"[registration] notice posted root={root_id[:6]}", flush=True)
+        print(f"[cp] user notice posted root={root_id[:6]}", flush=True)
     except Exception as exc:
-        print(f"[registration] notice failed root={root_id[:6]} err={str(exc)[:120]}", flush=True)
+        print(f"[cp] user notice failed root={root_id[:6]} err={str(exc)[:120]}", flush=True)
 
 
 def _typing_loop(channel_id, stop_event):
@@ -600,8 +642,10 @@ def poll_once(seen):
                     # Permanent policy/registration errors must not be retried or
                     # forwarded to any LLM. Mark seen and issue at most one notice.
                     new_seen.add(pid)
-                    _post_registration_notice(cid, thread_root)
-                    print(f"[cp] permanent rejection status={status} post={pid[:6]} — no retry/no LLM", flush=True)
+                    detail = _cp_error_detail(e)
+                    user_message = _cp_user_message(status, detail)
+                    _post_registration_notice(cid, thread_root, user_message)
+                    print(f"[cp] permanent rejection status={status} post={pid[:6]} detail={detail[:120]!r} — no retry/no LLM", flush=True)
                 else:
                     print(f"[cp] transient failure status={status} err={e} — retry eligible", flush=True)
                 typing_stop.set()
