@@ -157,9 +157,29 @@ class MicrosoftAdapter:
                 if owner != ctx_user:
                     raise PermissionError(f"owner mismatch: {owner} != {ctx_user}")
         if access_token is None:
+            if os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"}:
+                raise RuntimeError("Microsoft Graph access token required in production")
             return {"tool": tool_name, "status": "requires_token", "scope": self.required_scope(tool_name), "resource": resource, "planned": self._planned(tool_name, args)}
-        # real call would use httpx + Graph
-        return {"tool": tool_name, "resource": resource, "planned": self._planned(tool_name, args), "auth_header_present": True}
+        if httpx is None:
+            raise RuntimeError("httpx not installed")
+        planned = self._planned(tool_name, args)
+        method = str(planned.get("method", "GET")).upper()
+        path = str(planned.get("path", "/"))
+        url = f"{MS_GRAPH_BASE}{path}"
+        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+        request_kwargs: dict[str, Any] = {"headers": headers, "timeout": 15.0}
+        if planned.get("params"):
+            request_kwargs["params"] = planned["params"]
+        if planned.get("json") is not None:
+            request_kwargs["json"] = planned["json"]
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.request(method, url, **request_kwargs)
+            response.raise_for_status()
+            try:
+                data = response.json()
+            except ValueError:
+                data = {"text": response.text}
+        return {"tool": tool_name, "resource": resource, "transport": "real", "status_code": response.status_code, "data": data, "scope": self.required_scope(tool_name)}
 
     def _planned(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         m = {

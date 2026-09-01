@@ -341,7 +341,6 @@ async def sync_outline_to_index(
         max_retries=max_retries,
         retry_backoff_s=retry_backoff_s,
     )
-
     # SyncOrchestrator.sync is synchronous (blocks on time.sleep for retries, stdlib HTTP + Ollama /api/embed urllib)
     # P1 availability fix: offload to thread to avoid starving event loop when single worker.
     # Bounded concurrency is enforced at HTTP layer (memory_service semaphore); here we ensure non-blocking.
@@ -406,19 +405,18 @@ async def sync_outline_to_index(
     #
     # Future: extend SyncOrchestrator to return created docs metadata.
 
-    # Try to build doc_map from adapter if it exposes _docs or last fetch
+    # Metadata is captured into StoredChunks by SyncOrchestrator. The adapter
+    # private store is used only as a backwards-compatible test fixture path.
     doc_map: dict[str, SourceDocument] = {}
     try:
-        # InMemory adapter
         if hasattr(outline_adapter, "_docs"):
             docs_dict = getattr(outline_adapter, "_docs", {})
             if isinstance(docs_dict, dict):
                 for rid, doc in docs_dict.items():
                     if isinstance(doc, SourceDocument):
                         doc_map[rid] = doc
-        # Http adapter: no in-memory docs; fallback: we already have stored chunks but not acl — use empty
-    except Exception:
-        pass
+    except Exception as exc:
+        sync_result.errors.append(f"source metadata inspection failed: {type(exc).__name__}")
 
     # Also attempt to get docs from FetchResult if we could replay fetch without advancing checkpoint?
     # For incremental skipped docs, they still exist in chunk_store from prior sync, so we should have them already persisted earlier.
@@ -458,20 +456,22 @@ async def sync_outline_to_index(
             continue
         # Resolve doc for this rid
         doc = doc_map.get(rid)
-        acl_groups: list[str] = []
-        acl_users: list[str] = []
-        classification: str | None = None
-        source_uri: str | None = None
-        tenant_from_doc = tenant_id
+        # Prefer metadata captured at fetch time; never publish a restricted
+        # document as public merely because the HTTP adapter has no private _docs.
+        acl_groups: list[str] = list(getattr(stored, "acl_groups", []) or [])
+        acl_users: list[str] = list(getattr(stored, "acl_users", []) or [])
+        classification: str | None = getattr(stored, "classification", None)
+        source_uri: str | None = getattr(stored, "source_uri", None)
+        tenant_from_doc = getattr(stored, "tenant_id", None) or tenant_id
         if doc is not None:
-            acl_groups = list((doc.acl or {}).get("groups") or (doc.acl or {}).get("allowedGroups") or [])
-            acl_users = list((doc.acl or {}).get("users") or (doc.acl or {}).get("allowedUsers") or [])
-            classification = getattr(doc, "classification", None)
-            source_uri = getattr(doc, "source_uri", None)
-            tenant_from_doc = getattr(doc, "tenant_id", None) or tenant_id
-            # if doc tenant differs, prefer caller tenant for isolation
-            if tenant_from_doc != tenant_id:
-                tenant_from_doc = tenant_id
+            acl_groups = list((doc.acl or {}).get("groups") or (doc.acl or {}).get("allowedGroups") or acl_groups)
+            acl_users = list((doc.acl or {}).get("users") or (doc.acl or {}).get("allowedUsers") or acl_users)
+            classification = getattr(doc, "classification", None) or classification
+            source_uri = getattr(doc, "source_uri", None) or source_uri
+            tenant_from_doc = getattr(doc, "tenant_id", None) or tenant_from_doc
+        # If doc tenant differs, prefer caller tenant for isolation.
+        if tenant_from_doc != tenant_id:
+            tenant_from_doc = tenant_id
         # For each chunk + embedding, create entries
         for idx, (chunk, emb) in enumerate(zip(stored.chunks, stored.embeddings)):
             base_index_id = _short_index_id(rid, chunk.chunk_id)
@@ -592,19 +592,14 @@ async def sync_outline_to_index(
             sync_result.failed = 1
             persisted = 0
 
-    # Handle deletions for resources that SyncOrchestrator marked deleted
-    if sync_result.deleted and sync_result.deleted > 0:
-        # Determine deleted resource ids: checkpoint previous vs new states difference
-        # SyncOrchestrator handles chunk_store.delete; we also need to delete from DB
-        # We know sync_result.checkpoint contains remaining states; previous checkpoint had deleted ids
-        # Approximate by checking which resources are no longer in chunk_store but were before? We don't have before snapshot.
-        # Instead we can delete DB entries for resource ids that are no longer in chunk_store but whose index entries exist
-        # This requires listing DB; simpler: we already cleared empty-content deletions above.
-        # For sync deletions, SyncOrchestrator removed from chunk_store, and we can delete those rids from DB by querying.
-        # We don't have list of deleted rids here without capturing prior checkpoint.
-        # Best effort: pass through sync_result.deleted as persisted deletions count (not DB verified)
-        pass
-
+    # Propagate only explicit source deletion IDs. Never infer deletion from an
+    # incomplete/paginated chunk store.
+    for rid in getattr(sync_result, "deleted_resource_ids", []):
+        try:
+            await repository.delete_by_resource(tenant_id, rid)
+        except Exception as exc:
+            sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
+            sync_result.failed = max(1, sync_result.failed)
     return OutlineSyncResult(
         source_system=sync_result.source_system,
         fetched=sync_result.fetched,

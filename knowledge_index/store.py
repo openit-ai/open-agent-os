@@ -17,6 +17,11 @@ class StoredChunks:
     content_hash: str = ""
     acl_version: str = ""
     source_updated_at: str = ""
+    acl_groups: list[str] = field(default_factory=list)
+    acl_users: list[str] = field(default_factory=list)
+    source_uri: str = ""
+    classification: str = "INTERNAL"
+    tenant_id: str = "default"
 
 
 class InMemoryChunkStore:
@@ -33,6 +38,11 @@ class InMemoryChunkStore:
         content_hash: str = "",
         acl_version: str = "",
         source_updated_at: str = "",
+        acl_groups: list[str] | None = None,
+        acl_users: list[str] | None = None,
+        source_uri: str = "",
+        classification: str = "INTERNAL",
+        tenant_id: str = "default",
     ) -> None:
         self._store[resource_id] = StoredChunks(
             resource_id=resource_id,
@@ -41,6 +51,11 @@ class InMemoryChunkStore:
             content_hash=content_hash,
             acl_version=acl_version,
             source_updated_at=source_updated_at,
+            acl_groups=list(acl_groups or []),
+            acl_users=list(acl_users or []),
+            source_uri=source_uri,
+            classification=classification,
+            tenant_id=tenant_id,
         )
 
     def get(self, resource_id: str) -> StoredChunks | None:

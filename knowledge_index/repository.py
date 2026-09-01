@@ -123,6 +123,22 @@ class KnowledgeIndexRepository:
             await session.commit()
             return True
 
+    async def delete_by_resource(self, tenant_id: str, source_resource_id: str) -> int:
+        """Delete all derived chunks for one tenant-scoped source resource."""
+        if not tenant_id or not tenant_id.strip():
+            raise ValueError("tenant_id required")
+        if not source_resource_id or not source_resource_id.strip():
+            raise ValueError("source_resource_id required")
+        async with self._maker() as session:
+            result = await session.execute(
+                delete(KnowledgeIndexORM).where(
+                    KnowledgeIndexORM.tenant_id == tenant_id.strip(),
+                    KnowledgeIndexORM.source_resource_id == source_resource_id.strip(),
+                )
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
+
     async def list_by_tenant(self, tenant_id: str, limit: int = 100) -> list[KnowledgeIndexEntry]:
         if not tenant_id or not tenant_id.strip():
             raise ValueError("tenant_id required")
