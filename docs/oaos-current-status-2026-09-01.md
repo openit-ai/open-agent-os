@@ -4,13 +4,14 @@
 - Product: Open Agent OS
 - Architecture baseline: v1.7.2
 - Repository branch: `release/v0.1.3-remediation`
-- Latest implementation/test commit: `b5050075106f5738e16a687f7f901f44ec9b6741`
+- Latest implementation commit: `af1496c38f4c6e3ded428fa5f20eac8dbee8d75f`
 - Latest full-suite commit: `6d91f3b71030cf9b074fcfb926821af3c32eaddd` (`1299 passed, 5 skipped, 0 failed, 88 warnings in 358.45s`)
-- Latest documentation/status commit: pending after this status update
+- Latest documentation/status commit: pending after this status update (backup evidence update)
 - Status: **PARTIAL — P0 code/runtime gates applied; live external/distributed evidence remains**
 - Runtime read-back: `oaos-control-plane.service` active/running, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200, Alembic `018_knowledge_sync_checkpoints` applied.
 - Fresh full-suite result at commit `6d91f3b71030cf9b074fcfb926821af3c32eaddd`: `1299 passed, 5 skipped, 0 failed, 88 warnings in 358.45s (0:05:58)`.
 - PostgreSQL 16 custom dump: `/home/openitsvc/.hermes/backups/oaos-db-pg16-20260902_014504.dump`, 32,666,632 bytes, SHA-256 `6d418c28882525a58ad6a3203a132aee4f6de8015de639d27dbc4be16d4c6200`; `pg_restore --list` via PostgreSQL 16 container: 210 lines, checkpoint 4 entries, Alembic 3 entries, user mapping 6 entries.
+- PostgreSQL 16 plain SQL dump: `/home/openitsvc/.hermes/backups/oaos-db-latest.sql`, 88,589,755 bytes, SHA-256 `ed79aa3a4467c8a1c025bb33f140c6ca60841c6e91a215033c4ec0a23015b049`; custom dump restore-list verification used PostgreSQL 16 container tools.
 
 ## P0 — Implemented and locally verified
 
