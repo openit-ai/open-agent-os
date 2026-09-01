@@ -63,60 +63,45 @@ Google OAuth는 첫 대화에서 바로 시작하지 않는다. **웹관리자 �
 4. `employee_principal`과 `agent_id`를 생성하고 `status=active`인지 확인한다.
 5. 사용자 목록·플랫폼 ID·직원 매핑이 확정되기 전에는 @agent가 먼저 연락하거나 OAuth URL을 발급하지 않는다.
 
-### 3.2 1단계 — 직원 리스트와 본인 계정 확인
+> 이 단계는 관리자 콘솔의 영속 `admin_user_mappings`가 발송 대상의 source of truth가 되도록 하는 선행 등록이다. 자동화된 @agent 대화 등록은 이 매핑과 활성 상태를 전제로 한다.
 
-1. @agent가 관리자 콘솔의 영속 `admin_user_mappings`에서 발송 대상을 조회한다.
-2. 표시명만으로 신원을 확정하지 않고, 플랫폼의 안정적인 user ID와 등록된 직원 매핑을 대조한다.
-3. 내부 `employee:{user_id}`와 `agent:assistant:{user_id}`를 결정한다.
-4. 매핑이 없거나 직원 정보가 불일치하면 OAuth를 시작하지 않고 관리자 확인으로 보낸다.
 
-### 3.2 2단계 — 인사말·호칭 정의·최초 성향 파악
+### 3.2 1단계 — 직원 확인·인사말·기초 대화
 
-여기서 말하는 **기초 데이터**는 인사정보를 대량 수집하는 것이 아닙니다. 다음 두 범위의 최소 대화 데이터만 수집합니다.
+1. @agent가 관리자 콘솔의 활성 `admin_user_mappings`에서 대상을 조회한다.
+2. Mattermost/Slack 안정 ID와 등록 매핑을 대조하고 `employee_principal`·`agent_id`를 확정한다.
+3. @agent가 본인 DM으로 인사말을 보낸다.
+4. 원하는 상호 호칭과 답변 길이·말투·결론 우선 여부 등 최초 성향 질문 1~3개만 확인한다.
+5. 확인된 호칭·선호만 해당 사용자의 Profile/Preferences에 저장한다. 비밀번호·OTP·토큰·민감정보는 수집하지 않는다.
+6. 회신 Post의 실제 작성자·시각을 확인한다. 거부·중단 시 이후 단계로 진행하지 않는다.
 
-- **상호 호칭 정의:** 직원이 원하는 호칭과 @agent가 사용할 호칭
-- **최초 성향 파악:** 답변 길이·말투·업무 응답 방식 등을 파악하기 위한 간단한 대화 질문
+### 3.3 2단계 — 세션 분리 확인
 
-진행 예시:
-
-1. @agent가 본인 Mattermost DM으로 정중한 인사말을 보낸다.
-2. “어떻게 불러드리면 될까요?”라고 질문해 원하는 호칭을 확인한다.
-3. “답변은 간단하게 드릴까요, 자세히 드릴까요?” 또는 “업무 요청 시 결론부터 드릴까요?”처럼 짧은 선택형 질문을 1~3개 진행한다.
-4. 확인된 호칭·응답 선호만 해당 사용자의 Profile/Preferences에 저장한다.
-5. 비밀번호·OTP·Google token·민감 개인정보·불필요한 인사정보는 수집하지 않는다.
-6. 직원의 회신이 실제 직원 계정에서 온 것인지 확인하고, 회신 Post·작성자·시각을 기록한다.
-7. 직원이 답변을 원하지 않거나 중단을 요청하면 즉시 중단하고, OAuth 단계로 진행하지 않는다.
-
-### 3.3 3단계 — 세션 분리 확인
-
-1. 직원의 회신이 `@agent` DM에 도착하는지 확인한다.
-2. `employee:{user_id}`에 귀속된 OAOS 세션이 생성되는지 확인한다.
-3. 세션 namespace·prompt history·response thread가 다른 사용자와 다른지 확인한다.
+1. 직원 회신이 `@agent` 개인 DM에 도착하는지 확인한다.
+2. `employee:{user_id}`에 귀속된 OAOS 세션을 생성·복원한다.
+3. 세션 namespace·prompt history·response thread가 다른 사용자와 분리됐는지 확인한다.
 4. 이 단계에서는 Google API를 호출하지 않는다.
-5. 세션 분리가 확인되지 않으면 OAuth URL을 발급하지 않는다.
 
-### 3.4 4단계 — Google OAuth 시작
+### 3.4 3단계 — 직원 요청 시 Google OAuth
 
-세션 분리 확인 후 직원이 다음 문구를 보내면 OAuth를 시작한다.
+직원이 다음 문구를 직접 보내고 `SESSION_OK`가 확인된 경우에만 OAuth를 시작한다.
 
 ```text
 구글 워크스페이스 연동 시작
 ```
 
-1. @agent가 현재 검증된 사용자에만 바인딩된 OAuth state와 승인 URL을 생성한다.
-2. 직원이 본인의 회사 Google Workspace 계정으로 로그인·승인한다.
-3. `localhost:1` 또는 연결 실패 화면이 나타나도 정상일 수 있다.
-4. 브라우저 주소창의 **전체 callback URL**을 같은 @agent DM에 회신한다.
-5. @agent가 state, Mattermost 사용자, 내부 user_id, Google profile email, scope를 검증한다.
-6. `Google profile email == Mattermost/사내 공식 이메일`일 때만 사용자 전용 credential을 저장한다.
-7. 검증 통과 안내를 받은 후에만 Calendar·Gmail·Drive 기능을 사용한다.
+1. 검증된 사용자·세션에 바인딩된 OAuth state와 승인 URL을 발급한다.
+2. 직원이 본인 Google 계정으로 인증한다.
+3. callback URL을 같은 `@agent` DM으로 회신한다.
+4. state·Mattermost 사용자·내부 user_id·Google profile email·scope를 검증한다.
+5. `Google profile email == Mattermost/사내 공식 이메일`인 경우에만 전용 credential을 저장한다.
 
 ### 3.5 등록 상태
 
 ```text
-DISCOVERED   직원 매핑 확인
+DISCOVERED   관리자 매핑·플랫폼 ID 확인
 GREETED      인사말 전송
-BASIC_READY  기초 대화·최소 정보 확인
+BASIC_READY  호칭·최초 성향 대화 확인
 SESSION_OK   사용자별 OAOS 세션 분리 확인
 OAUTH_PENDING OAuth URL 발급·승인 대기
 VERIFIED     Google profile email·scope 검증 완료
@@ -124,6 +109,38 @@ CONNECTED    전용 credential 저장 및 기능 연결
 ```
 
 `SESSION_OK` 이전에는 `OAUTH_PENDING`으로 이동할 수 없다.
+
+### 3.6 등록 게이트 판정
+
+```text
+admin_user_mappings.status == active
+AND platform user ID == registered mapping
+AND employee_principal/agent_id == resolved mapping
+AND registration_state == SESSION_OK
+```
+
+조건을 만족하지 않으면 OAuth·Google API·기업 데이터 조회를 진행하지 않고 관리자 확인 안내만 보낸다.
+
+### 3.7 플랫폼별 발송 원칙
+
+- Mattermost와 Slack 모두 **관리자 콘솔에 등록된 활성 사용자만** 발송 대상이다.
+- Mattermost 발송은 `@agent → 대상 @username` 개인 DM이어야 한다.
+- Slack 발송은 전용 Slack user/workspace ID와 consumer가 구현된 경우에만 허용한다.
+- `@openit` 발신은 OAOS Bridge의 bot-origin skip 대상이므로 OAOS 사용자 등록·테스트 근거로 사용하지 않는다.
+
+### 3.8 Mattermost 사용자 등록 상태와 발송 게이트
+
+현재 운영에서 자동 게이트를 적용할 때 다음 조건을 만족하는 사용자만 정식 등록 흐름으로 진행한다.
+
+```text
+admin_user_mappings.status == active
+AND Mattermost user_id/username == registered mapping
+AND employee_principal == resolved principal
+AND agent_id == agent:assistant:{canonical_user_id}
+```
+
+조건을 충족하지 않으면 @agent는 OAuth URL·Google API 호출·기업 데이터 조회를 진행하지 않고 관리자 확인 안내만 보낸다. 인사말·호칭·최초 성향 질문·SESSION_OK는 Mattermost 대화에서 확인하되, 현재 등록 상태 저장과 자동 전환은 후속 구현 범위로 명시한다.
+
 ## 4. 금지 입력
 
 다음 값은 절대 Mattermost에 보내지 않는다.
