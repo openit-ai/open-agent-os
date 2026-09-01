@@ -13,7 +13,7 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.3` — single source of truth `admin-console/package.json` `0.1.3` (candidate branch `release/v0.1.3-remediation` at `ecf71e4447`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.2` (`docs/architecture-v1.7.2.md`) is distinct from product version `0.1.3`** — v1.7.2 describes the Adaptive Profile Engine design (§16.12), not the release number.
+- **Product version:** `0.1.3` — single source of truth `admin-console/package.json` `0.1.3` (candidate branch `release/v0.1.3-remediation` at `6d91f3b710`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.2` (`docs/architecture-v1.7.2.md`) is distinct from product version `0.1.3`** — v1.7.2 describes the Adaptive Profile Engine design (§16.12), not the release number.
 - **Canonical architecture:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine design included (see §16.12)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
@@ -293,7 +293,7 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 ### 9a. Release v0.1.3 — product `0.1.3` (arch `v1.7.2` distinct)
 
-**Tag/commit:** `v0.1.3` candidate `ecf71e4447` on `release/v0.1.3-remediation` (not yet tagged; previous `v0.1.2` was `34f0981e71` on `origin/main`). Product version `0.1.3` is read from `admin-console/package.json` (env `OAOS_VERSION` overrides); architecture `v1.7.2` remains the design document version — do not conflate.
+**Tag/commit:** `v0.1.3` candidate `6d91f3b710` on `release/v0.1.3-remediation` (not yet tagged; previous `v0.1.2` was `34f0981e71` on `origin/main`). Product version `0.1.3` is read from `admin-console/package.json` (env `OAOS_VERSION` overrides); architecture `v1.7.2` remains the design document version — do not conflate.
 
 **Included in this tag (11 files, 647 insertions):**
 - **Admin Web UI fixes**
