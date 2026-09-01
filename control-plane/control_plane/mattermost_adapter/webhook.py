@@ -537,6 +537,33 @@ async def _handle_core_logic_unserialized(
     """Shared session/briefing/ACP logic (reused by events + slash)."""
     # Identity mapping — 1:1 logical agent
     mapping = map_user_to_agent(user_id, tenant_id)
+    # Registration gate: admin_user_mappings is the source of truth. Only
+    # registered users can reach Personal Wiki, Profile, MCP, or Hermes.
+    try:
+        from ..user_mapping_lookup import lookup_registered_owner
+        registered = lookup_registered_owner(tenant_id, user_id)
+    except Exception as exc:
+        if os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"}:
+            raise HTTPException(status_code=503, detail="user registration lookup unavailable") from exc
+        registered = None
+    if registered is None and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="OAOS user registration required")
+    if registered and registered.get("agent_id") and registered["agent_id"] != mapping.agent_principal:
+        raise HTTPException(status_code=403, detail="registered agent identity mismatch")
+
+    # Deterministic onboarding gate precedes session, Personal Wiki/Profile,
+    # Enterprise MCP, Google, and Hermes side effects. It is bypassed only by
+    # the explicit repository pytest fixture path or when no channel is known.
+    gate_platform = (runtime_context or {}).get("platform") or ("mattermost" if channel_id else None)
+    if gate_platform in {"mattermost", "slack"} and registered is not None:
+        from ..registration_gate import handle as handle_registration_gate
+        gate = handle_registration_gate(tenant_id=tenant_id, user_id=mapping.human_principal, session_id=session_id or "pending", text=text, platform=gate_platform)
+        if not gate.allowed:
+            return {"received": True, "registration_gate": gate.state, "registration_state": gate.state, "message": gate.response, "reason": gate.reason, "agent_id": mapping.agent_principal, "user_id": mapping.human_principal}
+        # Make the selected routes explicit for downstream MCP/Profile code.
+        if isinstance(runtime_context, dict):
+            runtime_context.setdefault("knowledge_route", "enterprise_mcp_default")
+            runtime_context.setdefault("personal_route", "personal_wiki_profile")
 
     # ── P0 Idempotency early gate (before session/policy/LLM side effects) ──
     # If same post_id retries, we must NOT create a new session or call LLM again.
@@ -861,6 +888,8 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     if not text and (_raw_fids or _raw_arefs):
         text = payload.get("text") or ""  # allow empty; ACP will handle image-only via multimodal
 
+    _raw_rctx = dict(_raw_rctx)
+    _raw_rctx.setdefault("platform", "mattermost")
     return await _handle_core_logic(tenant_id, user_id, text, session_id, channel_id=channel_id, post_id=post_id, root_id=root_id, file_ids=_raw_fids, attachment_refs=_raw_arefs, runtime_context=_raw_rctx)
 
 

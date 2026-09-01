@@ -240,7 +240,11 @@ Google:     mykim@openit.co.kr
 
 - Mattermost 관리자 매핑 모델·UI·목록 API: 구현됨.
 - Slack 전용 사용자 등록 필드와 @agent 발송 consumer: 미구현. 현재는 Mattermost 매핑으로 Slack을 대체하지 않는다.
-- 직원 대화형 등록 상태머신과 OAuth 발급 선행 게이트: 설계·매뉴얼 반영, 운영 자동 게이트는 후속 구현 범위.
+- 직원 대화형 등록 상태머신: Control Plane 등록 게이트 및 Mattermost Bridge의 동기 onboarding 응답 구현.
+- 관리자 매핑·상태 저장·세션 선행 확인 범위 적용됨. 운영 상태는 Redis를 사용하고, 개발/테스트는 명시적 non-production memory fallback을 사용한다.
+- OAuth 발급 선행 게이트: `SESSION_OK` 이전 차단 구현. Google OAuth callback·계정 email read-back은 별도 provider 연동 검증 범위.
+- 회사 정책·전사 문서 질문은 등록 완료 후 Enterprise Knowledge MCP/Knowledge Index 기본 경로를 사용하고, 개인 업무기억·선호는 Personal Wiki/Profile 경로를 사용한다.
+- 관리자 매핑 source 조회 실패·미등록·비활성 사용자는 OAuth·Google·Personal Wiki·Enterprise MCP·Hermes 호출을 진행하지 않고 fail-closed한다.
 
 ### 10.2 OAuth 완료 판정
 

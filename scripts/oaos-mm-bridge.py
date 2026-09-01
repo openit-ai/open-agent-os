@@ -525,6 +525,7 @@ def poll_once(seen):
             if file_ids:
                 print(f"[attach] forwarding {len(file_ids)} image(s) fid={file_ids[0][:6]}", flush=True)
             runtime_context = {
+                "platform": "mattermost",
                 "tenant_id": "default",
                 "user_id": employee,
                 "channel_id": cid,
@@ -548,7 +549,13 @@ def poll_once(seen):
                 payload["attachment_ref"] = attachment_refs[0]
             try:
                 res = cp_post("/v1/mattermost/events", payload)
-                print(f"[cp] {res.get('session_id','')[:8]} acp={res.get('acp',{}).get('status','')} routed={res.get('routed','')}", flush=True)
+                print(f"[cp] {res.get('session_id','')[:8]} acp={res.get('acp',{}).get('status','')} routed={res.get('routed','')} registration={res.get('registration_state','')}", flush=True)
+                # Onboarding responses are returned synchronously by the Control
+                # Plane and must be posted by @agent in the same DM thread.
+                # They are not forwarded to Hermes and contain no Google data.
+                registration_message = (res.get("message") or "").strip()
+                if res.get("registration_gate") and registration_message:
+                    api_post("/api/v4/posts", {"channel_id": cid, "root_id": thread_root, "message": registration_message})
                 # Mark seen immediately after successful forward to prevent duplicate storm.
                 # Transient CP failures (exception) will NOT be marked, so they retry.
                 new_seen.add(pid)

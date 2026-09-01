@@ -1934,6 +1934,29 @@ OAOS 사용자는 Mattermost DM에서 먼저 등록한다. 개인 Google Workspa
 
 **구현 상태 (2026-09-01)**: `daily_brief.py`는 전역 `google_token.json` fallback을 제거하고, verified Mattermost mapping에서 해석한 canonical user ID의 전용 token만 사용하도록 보강했다. 전용 토큰이 없으면 Google 호출 전에 중단한다. 단, Google provider의 실제 계정 email read-back과 다른 사용자의 실외부 브리핑 왕복은 별도 external 검증 범위다. 브리핑 경로의 모든 Google 호출은 동일한 verified owner ID를 전달한다.
 
+### 16.2.1.4 전사 지식 접근 기본 경로
+
+회사 정책·전사 문서·조직 공용 지식 질문은 **Enterprise Knowledge MCP/Knowledge Index를 기본 경로**로 사용한다. Personal Wiki·Profile은 사용자 개인 업무기억과 응답 성향에만 사용한다.
+
+```text
+회사 정책·전사 문서 질문
+  → verified tenant/user/group/collection context
+  → ACL pre-filter
+  → Enterprise Knowledge MCP / Knowledge Index
+  → provenance·source URI 포함 응답
+
+개인 업무기억·내 선호 질문
+  → owner-scoped Personal Wiki / Profile
+```
+
+- Outline·Notion 등 원본과 ACL은 원 시스템이 소유하며 OAOS Index는 파생 검색 인덱스다.
+- 전사 지식 MCP의 기본 허용 작업은 `SEARCH`/`READ`; `CREATE`/`MODIFY`는 별도 승인 없이는 실행하지 않는다.
+- 실제 MCP/connector가 운영 환경에서 연결되지 않으면 mock 결과를 production 응답으로 사용하지 않고 fail-closed 또는 미연결 상태를 명시한다.
+- 개인 Google credential은 전사 지식 경로에 사용하지 않는다.
+- 관리자 콘솔에 등록된 활성 사용자와 verified owner context 없이 전사 지식 MCP를 호출하지 않는다.
+
+**구현 상태 (2026-09-01)**: OAOS Execution Gateway의 `outline` MCP 등록과 Knowledge Index ACL/retrieval 코드·단위 테스트는 존재한다. 운영 MCP의 실제 활성 목록과 Endpoint는 관리자가 추가한 정본 설정과 실제 프로세스 환경에서 확인하며, 저장소 기본값이나 mock 등록만으로 운영 MCP가 없다고 판단하지 않는다. 운영에서 관리자가 추가한 MCP는 정본 설정에 등록된 활성 MCP로 취급하고, 회사 정책·전사 문서 질문의 기본 경로에 포함한다.
+
 **OpenIT 운영 검증 (2026-08-30)**
 
 - `oaos-control-plane.service`, `oaos-mm-bridge.service`: active
