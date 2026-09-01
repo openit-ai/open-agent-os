@@ -316,19 +316,10 @@ class ACPAdapter:
         return headers
 
     def _hermes_api_key(self) -> str:
-        try:
-            from .config import settings
-            k = getattr(settings, "hermes_api_key", "") or ""
-            if k:
-                return k
-        except Exception:
-            pass
-        k = os.getenv("OAOS_CP_HERMES_API_KEY", "") or os.getenv("API_SERVER_KEY", "") or ""
-        if k:
-            return k
-        # Never read Hermes global files: same-OS-account sessions share Unix permissions.
-        # OAOS must use only its explicit, owner-scoped EnvironmentFile/configuration.
-        return ""
+        # Resolve the live OAOS-owned environment on every request. Do not retain
+        # an import-time settings value after the explicit key is removed.
+        # Never use Hermes-global files or another user's credential.
+        return os.getenv("OAOS_CP_HERMES_API_KEY", "") or os.getenv("API_SERVER_KEY", "") or ""
 
     def _hermes_model(self) -> str:
         try:

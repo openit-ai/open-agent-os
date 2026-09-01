@@ -392,7 +392,7 @@ async def create_session(req: CreateSessionRequest, authorization: str | None = 
     # If router selected a runtime, optionally refine pool: hermes->hermes pool, llm/safe->hermes-general still valid
     # For now keep pool from route_session to avoid breaking tests; selected_runtime is for capability enforcement.
     # Future: map selected_runtime to pool (e.g. llm -> separate pool) when multi-pool infra exists.
-    rec = session_store.create(
+    rec = session_store.get_or_create_for_owner(
         tenant_id=req.tenant_id,
         user_id=mapping.human_principal,
         agent_id=mapping.agent_principal,

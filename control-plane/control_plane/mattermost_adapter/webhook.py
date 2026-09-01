@@ -646,7 +646,7 @@ async def _handle_core_logic_unserialized(
         # A안: resolve display_name/avatar_url for this agent before session create
         _dn, _av = _get_personal_display_name(mapping.agent_principal)
         # also try personal_agent display_name from mapping if available via make_profile? fallback to mapped agent_id suffix
-        rec = session_store.create(
+        rec = session_store.get_or_create_for_owner(
             tenant_id=tenant_id,
             user_id=mapping.human_principal,
             agent_id=mapping.agent_principal,

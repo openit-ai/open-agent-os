@@ -130,6 +130,9 @@ class BaseSessionStore(ABC):
     def append_stream_event(self, session_id: str, event: dict) -> None: ...
 
     @abstractmethod
+    def get_or_create_for_owner(self, tenant_id: str, user_id: str, agent_id: str, security_domain: str = "general", hermes_worker: str | None = None, display_name: str | None = None, avatar_url: str | None = None) -> SessionRecord: ...
+
+    @abstractmethod
     def cancel(self, session_id: str, caller_user_id: str) -> None: ...
 
 
@@ -168,13 +171,20 @@ class InMemorySessionStore(BaseSessionStore):
         return self._store.get(session_id)
 
     def find_latest_for_owner(self, tenant_id: str, user_id: str) -> SessionRecord | None:
-        matches = [r for r in self._store.values() if r.tenant_id == tenant_id and r.user_id == user_id]
+        matches = [r for r in self._store.values() if r.tenant_id == tenant_id and r.user_id == user_id and r.status == "active"]
         if not matches:
             return None
         latest = max(matches, key=lambda r: r.updated_at)
         merged = {item.get("request_id"): item for record in matches for item in record.prompt_history if item.get("request_id")}
         latest.prompt_history = sorted(merged.values(), key=lambda item: item.get("at", ""))[-100:]
         return latest
+
+    def get_or_create_for_owner(self, tenant_id: str, user_id: str, agent_id: str, security_domain: str = "general", hermes_worker: str | None = None, display_name: str | None = None, avatar_url: str | None = None) -> SessionRecord:
+        """Return the owner's active session or create exactly one in this store."""
+        existing = self.find_latest_for_owner(tenant_id, user_id)
+        if existing is not None:
+            return existing
+        return self.create(tenant_id, user_id, agent_id, security_domain, hermes_worker, display_name, avatar_url)
 
     def append_prompt(self, session_id: str, caller_user_id: str, prompt: str, request_id: str, file_ids: list[str] | None = None, attachment_refs: list[dict] | None = None, runtime_context: dict | None = None) -> None:
         rec = self.get(session_id, caller_user_id)
@@ -252,6 +262,10 @@ class RedisSessionStore(BaseSessionStore):
 
     def _key(self, session_id: str) -> str:
         return f"{self._prefix}{session_id}"
+
+    def _owner_key(self, tenant_id: str, user_id: str) -> str:
+        safe = lambda value: "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(value))[:96] or "unknown"
+        return f"{self._prefix}owner:{safe(tenant_id)}:{safe(user_id)}"
 
     def _load(self, session_id: str) -> SessionRecord | None:
         if self._client is None:
@@ -368,6 +382,39 @@ class RedisSessionStore(BaseSessionStore):
         rec = self.get(session_id, caller_user_id)
         rec.status = "cancelled"
         self._save(rec)
+        if self._client is not None:
+            owner_key = self._owner_key(rec.tenant_id, rec.user_id)
+            if self._client.get(owner_key) == rec.session_id:
+                self._client.delete(owner_key)
+
+    def get_or_create_for_owner(self, tenant_id: str, user_id: str, agent_id: str, security_domain: str = "general", hermes_worker: str | None = None, display_name: str | None = None, avatar_url: str | None = None) -> SessionRecord:
+        """Atomically resolve the active owner session through a Redis owner index."""
+        owner_key = self._owner_key(tenant_id, user_id)
+        if self._client is not None:
+            current_id = self._client.get(owner_key)
+            if current_id:
+                existing = self._load(str(current_id))
+                if existing is not None and existing.status == "active":
+                    return existing
+                self._client.delete(owner_key)
+        else:
+            existing = self.find_latest_for_owner(tenant_id, user_id)
+            if existing is not None:
+                return existing
+        rec = self.create(tenant_id, user_id, agent_id, security_domain, hermes_worker, display_name, avatar_url)
+        if self._client is None:
+            return rec
+        claimed = self._client.set(owner_key, rec.session_id, ex=self._ttl, nx=True)
+        if claimed:
+            return rec
+        winner_id = self._client.get(owner_key)
+        winner = self._load(str(winner_id)) if winner_id else None
+        if winner is not None and winner.status == "active":
+            self._client.delete(self._key(rec.session_id))
+            return winner
+        self._client.delete(self._key(rec.session_id))
+        self._client.delete(owner_key)
+        return self.get_or_create_for_owner(tenant_id, user_id, agent_id, security_domain, hermes_worker, display_name, avatar_url)
 
 
 # ── Back-compat alias ────────────────────────────────────────────────
