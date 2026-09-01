@@ -1,10 +1,33 @@
 # OAOS 사용자 등록 표준 가이드 v1.0
 
-> 부제: Mattermost 기반 직원 확인·개인화·세션 분리·Google Workspace 연동 절차
+> 부제: 웹관리자 콘솔 기반 플랫폼 사용자 등록·기초 대화·세션 분리·Google Workspace 선택 연동 절차
 
 ## 1. 목적
 
-Mattermost의 본인 계정을 OAOS Personal Agent에 등록하고, 직원 확인·상호 호칭 정의·최초 성향 파악·세션 분리를 거친 뒤 본인 Google Workspace 계정을 선택적으로 연결한다. 연결된 Calendar·Gmail·Drive는 사용자별로 분리하며, 다른 직원의 계정·토큰·업무 데이터로 fallback하지 않는다.
+웹관리자 콘솔에 Mattermost·Slack 사용자를 먼저 등록하고, @agent가 해당 사용자의 계정 확인·인사말·상호 호칭 정의·최초 성향 파악·세션 분리를 진행한 뒤, 사용자가 원할 때만 본인 Google Workspace 계정을 연결한다. 연결된 Calendar·Gmail·Drive는 사용자별로 분리하며, 다른 직원의 계정·토큰·업무 데이터로 fallback하지 않는다.
+
+## 1.1 역할 구분
+
+- **웹관리자:** 승인된 Mattermost·Slack 사용자 ID와 username, 직원 principal, agent ID를 등록·관리한다.
+- **@agent:** 관리자 등록 목록에서 대상을 확인하고, 대상 직원의 본인 DM으로만 인사말·기초 질문·OAuth 안내를 보낸다.
+- **직원:** 본인 계정으로 회신하고, 원할 때만 Google OAuth를 시작한다.
+- **Source of truth:** 사용자 발송 대상은 관리자 콘솔의 영속 `admin_user_mappings` 목록이다. 임의 표시명·대화 발신자·로컬 파일만으로 신규 직원을 자동 등록하지 않는다.
+
+## 1.2 플랫폼 등록 필드
+
+현재 관리자 매핑 모델의 확정 필드:
+
+```text
+mm_user_id
+mm_username
+employee_principal
+agent_id
+status
+created_at
+created_by
+```
+
+Mattermost는 현재 관리자 등록·조회 경로를 사용한다. Slack은 동일한 등록 원칙을 적용하되 `slack_user_id`·`slack_username`·`slack_workspace_id` 필드를 별도 확장하기 전까지는 발송 대상으로 자동 포함하지 않는다. Mattermost와 Slack ID를 서로 대체하거나 username만으로 동일 사용자를 추정하지 않는다.
 
 ## 2. 표준 원칙
 
@@ -30,14 +53,22 @@ Mattermost의 본인 계정을 OAOS Personal Agent에 등록하고, 직원 확�
 
 ## 3. 직원 등록 표준 순서
 
-Google OAuth는 첫 대화에서 바로 시작하지 않는다. **직원 확인 → 인사말·기초 대화 → 세션 분리 확인 → Google OAuth** 순서를 반드시 지킨다.
+Google OAuth는 첫 대화에서 바로 시작하지 않는다. **웹관리자 최초 등록 → 직원 확인 → 인사말·기초 대화 → 세션 분리 확인 → 직원 요청 시 Google OAuth** 순서를 반드시 지킨다.
 
-### 3.1 1단계 — 직원 리스트와 본인 계정 확인
+### 3.1 0단계 — 웹관리자 콘솔 최초 등록
 
-1. @agent가 서버의 승인된 직원 매핑에서 Mattermost username/user_id를 조회한다.
-2. 표시명만으로 신원을 확정하지 않고, Mattermost의 안정적인 user ID와 등록된 직원 프로필을 대조한다.
+1. 관리자가 웹관리자 콘솔의 사용자 관리 화면에서 승인된 플랫폼 사용자를 등록한다.
+2. Mattermost는 `mm_user_id`와 `mm_username`을 필수로 확인·저장한다.
+3. Slack은 `slack_user_id`, `slack_username`, `slack_workspace_id`를 별도 필드로 저장하는 구현이 완료된 경우에만 사용한다. 현재 Mattermost 매핑 모델만으로 Slack 사용자를 대체 등록하지 않는다.
+4. `employee_principal`과 `agent_id`를 생성하고 `status=active`인지 확인한다.
+5. 사용자 목록·플랫폼 ID·직원 매핑이 확정되기 전에는 @agent가 먼저 연락하거나 OAuth URL을 발급하지 않는다.
+
+### 3.2 1단계 — 직원 리스트와 본인 계정 확인
+
+1. @agent가 관리자 콘솔의 영속 `admin_user_mappings`에서 발송 대상을 조회한다.
+2. 표시명만으로 신원을 확정하지 않고, 플랫폼의 안정적인 user ID와 등록된 직원 매핑을 대조한다.
 3. 내부 `employee:{user_id}`와 `agent:assistant:{user_id}`를 결정한다.
-4. 매핑이 없거나 직원 정보가 불일치하면 OAuth를 시작하지 않고 운영자 확인으로 보낸다.
+4. 매핑이 없거나 직원 정보가 불일치하면 OAuth를 시작하지 않고 관리자 확인으로 보낸다.
 
 ### 3.2 2단계 — 인사말·호칭 정의·최초 성향 파악
 
@@ -175,6 +206,25 @@ Google:     mykim@openit.co.kr
 - 발신자: `@agent` (`bmhbteup4p8bmb8rfh151y6w1e`)
 - 두 DM 모두 Mattermost API read-back 완료
 
-## 9. 상태와 한계
+## 9. 관리자 등록 절차 요약
 
-이 매뉴얼은 사용자별 OAuth 등록·검증 기준을 정의한다. 실제 Google provider의 계정 email read-back과 각 직원의 외부 Google 연동 완료 여부는 직원별 OAuth 절차가 끝난 뒤 개별 확인한다. 테스트·설계·운영 적용 증거를 혼합하지 않는다.
+1. 웹관리자 콘솔에서 사용자 관리 화면을 연다.
+2. Mattermost 사용자는 `mm_user_id`와 `mm_username`을 조회·확정해 등록한다.
+3. Slack 사용자는 전용 `slack_user_id`, `slack_username`, `slack_workspace_id` 지원이 배포된 경우에만 등록한다.
+4. `employee_principal`, `agent_id`, `status=active`를 확인한다.
+5. @agent는 관리자 콘솔의 활성 사용자 목록에서만 대상을 가져온다.
+6. 직원 확인·인사말·호칭·최초 성향 대화·세션 분리 확인 후에만 OAuth를 진행한다.
+
+## 10. 상태와 한계
+
+이 가이드의 파일명·섹션 번호는 기존 참조 호환을 위해 유지한다.
+
+### 10.1 현재 구현 범위
+
+- Mattermost 관리자 매핑 모델·UI·목록 API: 구현됨.
+- Slack 전용 사용자 등록 필드와 @agent 발송 consumer: 미구현. 현재는 Mattermost 매핑으로 Slack을 대체하지 않는다.
+- 직원 대화형 등록 상태머신과 OAuth 발급 선행 게이트: 설계·매뉴얼 반영, 운영 자동 게이트는 후속 구현 범위.
+
+### 10.2 OAuth 완료 판정
+
+실제 Google provider의 계정 email read-back과 각 직원의 외부 Google 연동 완료 여부는 직원별 OAuth 절차가 끝난 뒤 개별 확인한다. 테스트·설계·운영 적용 증거를 혼합하지 않는다.

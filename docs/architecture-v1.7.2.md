@@ -1909,7 +1909,11 @@ Mattermost channel/user ID
 
 #### 16.2.1.3 OAOS 사용자 등록 선행 게이트
 
-OAOS 사용자는 Mattermost DM에서 먼저 등록한다. 개인 Google Workspace 연동은 OAOS 사용자 등록과 세션 확인 뒤의 선택 단계이며, Mattermost DM에서 바로 시작하지 않는다. 먼저 `@agent`가 직원의 등록된 계정과 `user_id`를 확인하고, 정중한 인사말을 보낸 뒤 다음 최소 기초 대화를 진행한다.
+OAOS 사용자는 Mattermost DM에서 먼저 등록한다. 개인 Google Workspace 연동은 OAOS 사용자 등록과 세션 확인 뒤의 선택 단계이며, Mattermost DM에서 바로 시작하지 않는다. **웹관리자 콘솔의 승인된 사용자 매핑이 발송 대상의 source of truth**다. 먼저 관리자가 Mattermost/Slack 안정 사용자 ID와 username, 직원 principal, agent ID를 등록·활성화하고, 그 다음 `@agent`가 직원의 등록된 계정과 `user_id`를 확인하고, 정중한 인사말을 보낸 뒤 다음 최소 기초 대화를 진행한다.
+
+- Mattermost 등록 필드: `mm_user_id`, `mm_username`
+- Slack 등록 필드: `slack_user_id`, `slack_username`, `slack_workspace_id` — 전용 필드·consumer가 구현되기 전에는 Mattermost 매핑으로 대체하지 않는다.
+- 플랫폼 안정 ID·직원 매핑이 확정되기 전에는 @agent의 선제 연락과 OAuth URL 발급을 허용하지 않는다.
 
 - 직원이 원하는 호칭과 @agent가 사용할 상호 호칭을 확인한다.
 - 답변 길이·말투·결론 우선 여부 등 최초 업무 응답 성향을 파악하는 간단한 질문을 1~3개 진행한다.
