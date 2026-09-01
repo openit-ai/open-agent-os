@@ -137,7 +137,7 @@ Mattermost mykim → oaos-mm-bridge → OAOS Control Plane :8100
                  → Hermes Gateway API :8642
 ```
 
-Verified on 2026-08-30: OAOS services and health/readiness endpoints were active/HTTP 200; production Control Plane used `OAOS_SESSION_BACKEND=redis` and `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`; the bridge had no direct `state.db`/`sessions.json` reference; targeted OAOS regression tests passed `117`. This is structural/process evidence. The actual Mattermost external request/reply read-back remains a separate external E2E gate and is not claimed here as completed.
+Verified on 2026-08-30: OAOS services and health/readiness endpoints were active/HTTP 200; production Control Plane used `OAOS_SESSION_BACKEND=redis` and `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`; the bridge had no direct `state.db`/`sessions.json` reference; targeted OAOS regression tests passed `117`. This is structural/process evidence. A verification probe created source post `xjmo488frbdafnkwwutft49qeh` in channel `u5yq38w4d3gii8zdi48r6p39zw`, but the source author was the bridge bot rather than `mykim`; the bridge correctly skipped bot-originated posts, so no reply was generated. External user-authenticated Mattermost E2E therefore remains **not passed** and is not claimed as complete.
 
 ## 5. Core Values
 
