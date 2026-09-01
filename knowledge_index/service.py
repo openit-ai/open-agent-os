@@ -267,6 +267,7 @@ class OutlineSyncResult:
     upserted: int = 0
     skipped: int = 0
     deleted: int = 0
+    deleted_resource_ids: list[str] = field(default_factory=list)
     failed: int = 0
     chunks_written: int = 0
     persisted: int = 0  # entries written to persistent repository
@@ -606,6 +607,7 @@ async def sync_outline_to_index(
         upserted=sync_result.upserted,
         skipped=sync_result.skipped,
         deleted=sync_result.deleted,
+        deleted_resource_ids=list(getattr(sync_result, "deleted_resource_ids", []) or []),
         failed=sync_result.failed,
         chunks_written=sync_result.chunks_written,
         persisted=persisted,

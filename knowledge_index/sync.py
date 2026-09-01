@@ -34,6 +34,7 @@ class SyncResult:
             "upserted": self.upserted,
             "skipped": self.skipped,
             "deleted": self.deleted,
+            "deleted_resource_ids": self.deleted_resource_ids,
             "failed": self.failed,
             "chunks_written": self.chunks_written,
             "errors": self.errors,
