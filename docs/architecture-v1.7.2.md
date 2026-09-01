@@ -1882,7 +1882,32 @@ Mattermost mykim
 - `HERMES_HOME`/profile 분리는 설정·세션 충돌 방지용 보조 경계이며, 같은 OS 계정 세션의 강한 개인정보 보안 경계로 단독 사용하지 않는다.
 - 구현 검증은 직접 파일 접근 grep, 전역 credential fallback 회귀 테스트, owner-scoped context/namespace 테스트를 포함한다.
 
-**구현 상태 (2026-09-01 보완)**: OAOS ACP adapter는 Hermes 전역 `.env` fallback을 사용하지 않고 명시적 OAOS 설정/EnvironmentFile의 key만 사용하도록 보강한다. Telegram direct Hermes의 `state.db`·메모리와 OAOS Redis/PostgreSQL 세션은 서로 다른 소유권으로 유지한다.
+- 구현 상태 (2026-09-01 보완): OAOS ACP adapter는 Hermes 전역 `.env` fallback을 사용하지 않고 명시적 OAOS 설정/EnvironmentFile의 key만 사용하도록 보강한다. Telegram direct Hermes의 `state.db`·메모리와 OAOS Redis/PostgreSQL 세션은 서로 다른 소유권으로 유지한다.
+
+#### 16.2.1.2 개인 Google Workspace 브리핑 데이터 경계
+
+개인 브리핑(Calendar·Gmail·Drive)은 권한 판정만으로 사용자 격리를 완료한 것으로 간주하지 않는다. Google credential 선택도 반드시 검증된 요청자 소유권에 묶는다.
+
+```text
+Mattermost channel/user ID
+  → verified internal user_id
+  → user-channel-map.json canonical token directory
+  → ~/.hermes/google-tokens/{user_id}/google_token.json
+  → Google API (calendar/gmail/drive)
+```
+
+불변식:
+
+- 사용자 토큰이 없거나 channel→user 매핑이 없으면 **fail-closed**한다.
+- `~/.hermes/google_token.json` 같은 전역 토큰으로 fallback하지 않는다.
+- `mykim` 등 특정 사용자의 토큰 경로를 Google 브리핑 공통 코드에 하드코딩하지 않는다.
+- Calendar·Gmail·Drive 호출은 하나의 동일한 검증 `user_id`를 전달하고, 중간에 다른 token owner로 바꾸지 않는다.
+- `permission_check.py`의 회사 정보 읽기 권한과 Google credential owner 검증은 별도 게이트로 모두 통과해야 한다.
+- 토큰 directory ID는 Mattermost 표시명이나 임의 alias가 아니라 `user-channel-map.json`의 canonical 내부 ID를 우선한다.
+- 계정 식별 metadata가 없는 토큰은 최소한 소유자 매핑·파일 존재·scope·API 호출 주체를 검증하고, 다른 사용자 토큰으로 대체하지 않는다.
+- 브리핑 결과 파일과 stdout의 출력 대상도 동일한 검증 user_id로 결정한다.
+
+**구현 상태 (2026-09-01)**: `daily_brief.py`는 전역 `google_token.json` fallback을 제거하고, verified Mattermost mapping에서 해석한 canonical user ID의 전용 token만 사용하도록 보강했다. 전용 토큰이 없으면 Google 호출 전에 중단한다. 단, Google provider의 실제 계정 email read-back과 다른 사용자의 실외부 브리핑 왕복은 별도 external 검증 범위다. 브리핑 경로의 모든 Google 호출은 동일한 verified owner ID를 전달한다.
 
 **OpenIT 운영 검증 (2026-08-30)**
 
