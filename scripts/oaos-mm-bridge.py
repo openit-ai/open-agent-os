@@ -401,6 +401,28 @@ def cp_post(path, body):
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode())
 
+
+def _http_error_status(exc):
+    return getattr(exc, "code", None)
+
+
+def _is_permanent_cp_error(exc):
+    return _http_error_status(exc) in {400, 401, 403, 404, 405, 409, 422}
+
+
+def _post_registration_notice(channel_id, root_id):
+    """Post one non-LLM notice for permanent registration/policy rejection."""
+    try:
+        api_post("/api/v4/posts", {
+            "channel_id": channel_id,
+            "root_id": root_id,
+            "message": "현재 OAOS 사용자 등록 또는 권한 확인이 필요합니다. 웹관리자 콘솔에서 등록 상태를 확인한 뒤 다시 시도해 주세요.",
+        })
+        print(f"[registration] notice posted root={root_id[:6]}", flush=True)
+    except Exception as exc:
+        print(f"[registration] notice failed root={root_id[:6]} err={str(exc)[:120]}", flush=True)
+
+
 def _typing_loop(channel_id, stop_event):
     """Keep Mattermost's native status indicator alive while processing."""
     while not stop_event.is_set():
@@ -573,7 +595,15 @@ def poll_once(seen):
                     daemon=True,
                 ).start()
             except Exception as e:
-                print(f"[cp] failed {e} — agent runtime will handle (no Ollama fallback)", flush=True)
+                status = _http_error_status(e)
+                if _is_permanent_cp_error(e):
+                    # Permanent policy/registration errors must not be retried or
+                    # forwarded to any LLM. Mark seen and issue at most one notice.
+                    new_seen.add(pid)
+                    _post_registration_notice(cid, thread_root)
+                    print(f"[cp] permanent rejection status={status} post={pid[:6]} — no retry/no LLM", flush=True)
+                else:
+                    print(f"[cp] transient failure status={status} err={e} — retry eligible", flush=True)
                 typing_stop.set()
             finally:
                 # The typing loop is independently bounded and stopped by the
