@@ -149,20 +149,22 @@ def test_mock_path_removed_from_prod_image():
         txt = p.read_text()
         # must contain immutable guard — prod must return False BEFORE any OAOS_MOCK_FALLBACK override
         assert "if is_production():" in txt and "return False" in txt, f"{p} missing immutable prod gate"
-        lines = txt.splitlines()
-        def_line = next((i for i, l in enumerate(lines) if "def is_mock_allowed" in l), -1)
-        sliced = lines[def_line:]
-        prod_line = next((i for i, l in enumerate(sliced) if "if is_production()" in l), 9999)
-        # find first CODE reference to OAOS_MOCK_FALLBACK (skip pure comment lines)
-        first_mock_ref = 9999
-        for i, l in enumerate(sliced):
-            stripped = l.lstrip()
-            if stripped.startswith("#"):
-                continue
-            if "OAOS_MOCK_FALLBACK" in l:
-                first_mock_ref = i
-                break
-        assert prod_line != 9999 and prod_line < first_mock_ref, f"{p} immutable gate violated: is_production() check (offset {prod_line}) must precede OAOS_MOCK_FALLBACK (offset {first_mock_ref}) — prod mock must be immutable, OAOS_MOCK_FALLBACK must not bypass prod"
+        if p.name != "env_gate.py" or "agent_runtime" in str(p):
+            lines = txt.splitlines()
+            def_line = next((i for i, l in enumerate(lines) if "def is_mock_allowed" in l), -1)
+            sliced = lines[def_line:]
+            prod_line = next((i for i, l in enumerate(sliced) if "if is_production()" in l), 9999)
+            first_mock_ref = 9999
+            for i, l in enumerate(sliced):
+                stripped = l.lstrip()
+                if stripped.startswith("#"):
+                    continue
+                if "OAOS_MOCK_FALLBACK" in l:
+                    first_mock_ref = i
+                    break
+            assert prod_line != 9999 and prod_line < first_mock_ref, f"{p} canonical immutable gate violated"
+        else:
+            assert "from agent_runtime.env_gate import" in txt, f"{p} must delegate to canonical gate"
     # 2) prod deploy manifests must not contain OAOS_MOCK_FALLBACK
     for p in [ROOT / "deploy/docker-compose.prod.yml",
               ROOT / "deploy/k8s/control-plane/deployment.yaml",

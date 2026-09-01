@@ -211,9 +211,9 @@ def test_existing_table_preservation():
             # Verify version advanced to head (now 016 after 015/016 additions)
             ver = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
             assert ver is not None, "alembic_version missing"
-            expected_heads = {"017_profile_behavioral", "016_user_map_avatar", "015_runtime_config_snapshots", "014_adaptive_profile", "013_admin_policy_versions"}
+            expected_heads = {"018_knowledge_sync_checkpoints", "017_profile_behavioral", "016_user_map_avatar", "015_runtime_config_snapshots", "014_adaptive_profile", "013_admin_policy_versions"}
             assert ver[0] in expected_heads, f"unexpected head {ver[0]} not in {expected_heads}"
-            assert ver[0] == "017_profile_behavioral", f"expected head 017, got {ver[0]}"
+            assert ver[0] == "018_knowledge_sync_checkpoints", f"expected head 018, got {ver[0]}"
         eng2.dispose()
 
 
