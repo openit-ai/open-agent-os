@@ -278,8 +278,10 @@ def main() -> None:
         # are retained only for non-production rehearsals.
         from knowledge_index.embedding import get_default_provider
         embed = get_default_provider(dim=1024 if "bge" in os.environ.get("OAOS_EMBED_MODEL", "bge-m3").lower() else 1536)
+        # One Outline page per transaction: each batch embeds, upserts, and
+        # commits its durable cursor before the next page starts.
         page_limit = min(limit, 25) if limit else 25
-        adapter = HttpOutlineSourceAdapter(page_limit=page_limit, timeout_s=10)
+        adapter = HttpOutlineSourceAdapter(page_limit=page_limit, max_pages=1, timeout_s=10)
         # We need repository — try to create from DATABASE_URL
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
         from knowledge_index.repository import KnowledgeIndexRepository
@@ -295,7 +297,6 @@ def main() -> None:
         async def _run():
             engine = create_async_engine(db_url, echo=False)
             maker = async_sessionmaker(engine, expire_on_commit=False)
-            from knowledge_index.orm import Base as KBase  # import models only
             from sqlalchemy import inspect as sync_inspect
             # Production schema is migration-owned; never create tables implicitly.
             async with engine.connect() as conn:
@@ -305,8 +306,20 @@ def main() -> None:
             repo = KnowledgeIndexRepository(maker)
             from knowledge_index.service import sync_outline_to_index
 
-            res = await sync_outline_to_index(tenant_id=args.tenant, repository=repo, embedding_provider=embed, outline_adapter=adapter, checkpoint_store=checkpoint_store)
-            print(json.dumps({"fetched": res.fetched, "upserted": res.upserted, "skipped": res.skipped, "deleted": res.deleted, "failed": res.failed, "chunks_written": res.chunks_written, "persisted": res.persisted, "errors": res.errors}, indent=2))
+            totals = {"fetched": 0, "upserted": 0, "skipped": 0, "deleted": 0, "failed": 0, "chunks_written": 0, "persisted": 0, "errors": []}
+            batches = 0
+            while batches < 500:
+                res = await sync_outline_to_index(tenant_id=args.tenant, repository=repo, embedding_provider=embed, outline_adapter=adapter, checkpoint_store=checkpoint_store)
+                batches += 1
+                for key in ("fetched", "upserted", "skipped", "deleted", "failed", "chunks_written", "persisted"):
+                    totals[key] += int(getattr(res, key, 0) or 0)
+                totals["errors"].extend(list(res.errors or []))
+                print(json.dumps({"batch": batches, "fetched": res.fetched, "upserted": res.upserted, "skipped": res.skipped, "failed": res.failed, "persisted": res.persisted, "cursor": getattr(res.checkpoint, "cursor", None)}, ensure_ascii=False), flush=True)
+                if res.failed or res.fetched < page_limit:
+                    break
+            else:
+                raise RuntimeError("backfill exceeded 500 page batches; possible non-advancing Outline cursor")
+            print(json.dumps(totals, indent=2, ensure_ascii=False))
             await engine.dispose()
 
         asyncio.run(_run())
