@@ -10,6 +10,27 @@ import logging
 import threading
 import uuid
 from datetime import datetime, timezone
+
+# The profile worker is scheduled asynchronously and may receive several turns
+# for the same owner at once. Serialize one owner's DB upsert sequence while
+# allowing different owners to progress concurrently.
+_owner_locks: dict[tuple[str, str], asyncio.Lock] = {}
+_owner_locks_guard = threading.Lock()
+
+
+def _owner_lock(tenant_id: str, user_id: str) -> asyncio.Lock:
+    key = (tenant_id, user_id)
+    with _owner_locks_guard:
+        lock = _owner_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _owner_locks[key] = lock
+        return lock
+
+
+async def run_owner_serialized(tenant_id: str, user_id: str, operation, *args, **kwargs):
+    async with _owner_lock(tenant_id, user_id):
+        return await operation(*args, **kwargs)
 from typing import Any
 
 from .extractor import extract_evidence
@@ -196,8 +217,8 @@ async def _persist_one(
         return {"deduplicated": False, "evidence_id": ev_id, "content_hash": ch, "global_score": new_score, "task_score": new_t}
 
 
-async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any]:
-    """Async worker entry — safe, never raises to caller."""
+async def _handle_interaction_event_unserialized(event: dict[str, Any]) -> dict[str, Any]:
+    """Unserialized profile worker implementation."""
     try:
         tenant_id = str(event.get("tenant_id") or "").strip()
         user_id = str(event.get("user_id") or "").strip()
@@ -302,6 +323,17 @@ async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any
     except Exception as e:
         logger.warning(f"worker handle_interaction_event_async error: {e}")
         return {"processed": False, "reason": str(e), "evidence_count": 0, "deduplicated": False}
+async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any]:
+    """Serialize profile persistence for each verified tenant/user owner."""
+    tenant_id = str(event.get("tenant_id") or "").strip()
+    user_id = str(event.get("user_id") or "").strip()
+    return await run_owner_serialized(
+        tenant_id,
+        user_id,
+        _handle_interaction_event_unserialized,
+        event,
+    )
+
 
 def handle_interaction_event(event: dict[str, Any]) -> dict[str, Any]:
     """Sync non-blocking wrapper — never blocks response path, never raises."""

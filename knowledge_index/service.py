@@ -1190,7 +1190,8 @@ class KnowledgeSyncService:
     async def sync_to_persistent(self, *args: Any, **kwargs: Any) -> SyncResult:  # type: ignore[no-untyped-def]
         """Delegates to sync_outline_to_index when persistent context is provided, else fail-closed."""
         # If caller provides persistent context, delegate (covers compat validator that expects this)
-        tenant_id = kwargs.get("tenant_id") or getattr(self, "_tenant_id", None)
+        _tenant_raw = kwargs.get("tenant_id") if "tenant_id" in kwargs else getattr(self, "_tenant_id", None)
+        tenant_id = str(_tenant_raw).strip() if _tenant_raw is not None else ""
         repo = kwargs.get("repository") or getattr(self, "_repo", None)
         provider = kwargs.get("embedding_provider") or getattr(self, "_provider", None)
         adapter = kwargs.get("outline_adapter") or kwargs.get("adapter") or getattr(self, "adapter", None)
