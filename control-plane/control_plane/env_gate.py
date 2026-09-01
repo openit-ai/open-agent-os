@@ -1,41 +1,12 @@
-"""Control-plane environment gate — production fail-closed semantics.
+"""Control-plane environment gate — canonical import shim.
 
-Mirrored from agent_runtime/env_gate.py — keep in sync.
-H7 immutable: is_mock_allowed() returns False in production regardless of OAOS_MOCK_FALLBACK.
+The single source of truth is ``agent_runtime.env_gate``. Keeping this module
+as a shim prevents policy drift between Control Plane and package consumers.
 """
-from __future__ import annotations
-import logging
-import os
-
-logger = logging.getLogger(__name__)
-
-def is_production() -> bool:
-    for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
-        v = os.getenv(k, "").strip().lower()
-        if v in ("production", "prod"):
-            return True
-    return False
-
-def is_mock_allowed() -> bool:
-    if is_production():
-        return False
-    mf = os.getenv("OAOS_MOCK_FALLBACK", "").strip().lower()
-    if mf in ("0", "false", "no", "off"):
-        return False
-    return True
-
-def assert_production_mock_gate() -> None:
-    if is_production() and is_mock_allowed():
-        raise RuntimeError("H7 immutable gate violated: mock fallback must be disabled in production")
-
-enforce_prod_gate = assert_production_mock_gate
-
-def fail_open_telemetry(component: str, reason: str, **fields) -> None:
-    extra = " ".join(f"{k}={v}" for k, v in fields.items())
-    msg = f"[fail-open] component={component} reason={reason} {extra}".strip()
-    logger.warning(msg)
-    try:
-        import sys
-        print(msg, file=sys.stderr)
-    except Exception:
-        pass
+from agent_runtime.env_gate import (  # type: ignore
+    assert_production_mock_gate,
+    enforce_prod_gate,
+    fail_open_telemetry,
+    is_mock_allowed,
+    is_production,
+)
