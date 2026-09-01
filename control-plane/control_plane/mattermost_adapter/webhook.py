@@ -771,6 +771,19 @@ async def _handle_core_logic_unserialized(
                 "acp": {"status": "routed_to_briefing"},
             }
 
+    # Route explicit personal/company questions to owner-scoped context retrieval.
+    # Retrieval is deterministic and runs before the single bounded LLM call.
+    route = None
+    context_text = ""
+    try:
+        from ..context_retrieval import classify_context_route, format_context, retrieve_enterprise_context, retrieve_personal_context
+        route = classify_context_route(text)
+        if route == "personal":
+            context_text = format_context(route, await retrieve_personal_context(mapping.human_principal, text))
+        elif route == "enterprise":
+            context_text = format_context(route, await retrieve_enterprise_context(tenant_id, mapping.agent_principal, text))
+    except Exception as exc:
+        log.warning("context retrieval unavailable session=%s: %s", session_id, type(exc).__name__)
     # Forward prompt (non-briefing path)
     rid = new_request_id()
     # multimodal: normalize runtime_context from caller (bridge) + canonical ids
@@ -810,8 +823,12 @@ async def _handle_core_logic_unserialized(
     except Exception:
         pass
     acp = ACPAdapter(settings.hermes_base_url)
+    prompt_for_llm = f"{context_text}\n\n[사용자 질문]\n{text}" if context_text else text
+    if route:
+        _rctx["knowledge_route"] = route
+        _rctx["retrieval_used"] = bool(context_text)
     try:
-        acp_result = await acp.send_prompt(rec, text, rid, attachment_refs=_arefs or None, file_ids=_fid or None, runtime_context=_rctx or None)
+        acp_result = await acp.send_prompt(rec, prompt_for_llm, rid, attachment_refs=_arefs or None, file_ids=_fid or None, runtime_context=_rctx or None)
     except Exception as _acp_exc:
         if _idem_key:
             try:
