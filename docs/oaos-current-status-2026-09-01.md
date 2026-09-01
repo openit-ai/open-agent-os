@@ -7,9 +7,10 @@
 - Latest implementation/test commit: `b5050075106f5738e16a687f7f901f44ec9b6741`
 - Latest full-suite commit: `6d91f3b71030cf9b074fcfb926821af3c32eaddd` (`1299 passed, 5 skipped, 0 failed, 88 warnings in 358.45s`)
 - Latest documentation/status commit: pending after this status update
-- Status: **PARTIAL — P0 code/runtime gates applied; live external/distributed evidence and full production schema backup remain**
-- Runtime read-back before latest test-gate commit: `oaos-control-plane.service` active/running, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200, Alembic `018_knowledge_sync_checkpoints` applied.
+- Status: **PARTIAL — P0 code/runtime gates applied; live external/distributed evidence remains**
+- Runtime read-back: `oaos-control-plane.service` active/running, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200, Alembic `018_knowledge_sync_checkpoints` applied.
 - Fresh full-suite result at commit `6d91f3b71030cf9b074fcfb926821af3c32eaddd`: `1299 passed, 5 skipped, 0 failed, 88 warnings in 358.45s (0:05:58)`.
+- PostgreSQL 16 custom dump: `/home/openitsvc/.hermes/backups/oaos-db-pg16-20260902_014504.dump`, 32,666,632 bytes, SHA-256 `6d418c28882525a58ad6a3203a132aee4f6de8015de639d27dbc4be16d4c6200`; `pg_restore --list` via PostgreSQL 16 container: 210 lines, checkpoint 4 entries, Alembic 3 entries, user mapping 6 entries.
 
 ## P0 — Implemented and locally verified
 
@@ -22,7 +23,7 @@
 
 ### P0 residuals — not complete
 
-- Persistent checkpoint code and migration `018_knowledge_sync_checkpoints` are present. Production database table and `alembic_version=018_knowledge_sync_checkpoints` were read back after an approved controlled SQL application; formal `alembic upgrade` execution and full backup tooling remain pending because `pg_dump` is unavailable.
+- Persistent checkpoint code and migration `018_knowledge_sync_checkpoints` are present. Production database table and `alembic_version=018_knowledge_sync_checkpoints` were read back; PostgreSQL 16 custom dump and `pg_restore --list` verification are complete.
 - Production admin persistence now refuses implicit `Base.metadata.create_all()` when `OAOS_ENV=production`; non-production compatibility remains. Full production Alembic-only schema audit and backup/restore read-back remain pending.
 - Live external connector, embedding provider, ACL corpus, and multi-user OAuth verification remain pending.
 
@@ -47,7 +48,7 @@
 
 - **Secret Vault policy:** `encrypted_postgres` remains the selected default backend; `/readyz` now reports `backend=encrypted_postgres` and `external_health_check=skipped`. External Vault migration is optional.
 - `env_gate` is now a canonical `agent_runtime.env_gate` implementation with Control Plane/Execution Gateway import shims.
-- Fresh full-suite verification: `1298 passed, 5 skipped, 0 failed, 88 warnings in 357.51s`; H7 and migration-head regression tests were updated for the canonical gate and revision 018.
+- Fresh full-suite verification: `1299 passed, 5 skipped, 0 failed, 88 warnings in 358.45s`; H7 and migration-head regression tests were updated for the canonical gate and revision 018.
 - Profile UI and complete operational Profile E2E remain pending.
 - Production readiness policy, full backup/restore evidence, and live distributed/external evidence remain pending.
 - Repository version/documentation cleanup and clean-checkout release verification remain pending.
