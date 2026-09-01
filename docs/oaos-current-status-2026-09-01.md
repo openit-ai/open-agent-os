@@ -38,6 +38,18 @@
 - Profile UI and complete operational Profile E2E remain pending.
 - Production readiness policy and live distributed/external evidence remain pending.
 
+## Latest Mattermost E2E read-back (2026-09-01 13:47 KST)
+
+- Source post: `4r4i5mapu7ykzmtick3pefugyw`
+- Source author: Mattermost user `c4m5yxidpinxtewrzefq7x19rr` (`mykim`)
+- Source create time: `1788238030515`
+- Bot reply: `fhw16au5tpy95xii67pyr9jnwo`
+- Bot author: `bmhbteup4p8bmb8rfh151y6w1e`
+- Reply root: `4r4i5mapu7ykzmtick3pefugyw`
+- Reply create time: `1788238044151`
+- Observed result: `oaos-mm-bridge` received the user message, Control Plane created `sess_20e`, and posted one bot reply to the same Mattermost thread. The source→reply elapsed time was approximately 13.6 seconds based on Mattermost `create_at` values.
+- This verifies the observed Mattermost user round trip after the credential/configuration fix. It does not by itself prove cross-user Google Calendar/Gmail external verification.
+
 ## Release and deployment boundaries
 
 - This document records repository evidence only. It does not claim production deployment, distributed PASS, or external PASS.

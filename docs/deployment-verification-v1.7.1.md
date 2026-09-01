@@ -2,7 +2,8 @@
 
 > **Commit:** `candidate run on a5ca5b3bc2` · **Timestamp (UTC):** `2026-09-01T01:19:55Z–01:25:58Z` · **Command:** `python -m pytest -q`
 > **pytest:** `1276 passed, 5 skipped, 0 failed, 88 warnings in 361.17s (0:06:01)`
-> **Runtime read-back (2026-09-01 10:57 KST):** OAOS Control Plane `systemctl --user` active/running, PID `1259175`, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200; selected Secret Vault policy is `encrypted_postgres` by default; external Secret Vault health is not required for this deployment.
+> **Runtime read-back (2026-09-01 13:46 KST):** OAOS Control Plane and Mattermost Bridge active/running after approved restart; PIDs `1297150`/`1297153`, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200; selected Secret Vault policy is `encrypted_postgres` by default; external Secret Vault health is not required for this deployment.
+> **Mattermost user E2E read-back (2026-09-01 13:47 KST):** Source `4r4i5mapu7ykzmtick3pefugyw` by verified `mykim` user `c4m5yxidpinxtewrzefq7x19rr` → bot reply `fhw16au5tpy95xii67pyr9jnwo`, same `root_id`, bot `bmhbteup4p8bmb8rfh151y6w1e`, elapsed approximately 13.6s. Session log: `sess_20e`.
 
 ## 1. Evidence Tiers (H8)
 
