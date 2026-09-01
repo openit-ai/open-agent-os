@@ -1709,7 +1709,59 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 ---
 
-### 16.11 잔여 로드맵 (v1.7.2+) — live distributed/external integration
+### 16.11 Control Plane 오류 계약 및 Mattermost 사용자 메시지 정책 — v1.7.2 운영 불변식
+
+Control Plane과 Mattermost Bridge 사이의 오류 처리는 HTTP 상태 코드만 전달하는 구현 세부가 아니라, 재시도·LLM 호출·세션 종료·사용자 안내를 결정하는 운영 계약이다. 오류 응답은 내부 원문을 사용자에게 노출하지 않고, Bridge가 안전한 사유 코드와 사용자 메시지로 정규화한다.
+
+#### 16.11.1 처리 순서
+
+```text
+Control Plane 응답
+  → HTTP status + 제한된 detail 분류
+  → 안전한 사용자 메시지 선택
+  → 영구/일시 오류 판정
+  → seen/idempotency 기록
+  → typing·등록/처리 세션 종료
+  → 영구 오류는 LLM 미호출, 일시 오류만 bounded retry
+  → trace/post/session 기준 운영 로그·감사
+```
+
+#### 16.11.2 오류 분류·사용자 메시지 매핑
+
+| HTTP | 안전한 분류 | 사용자 안내 요지 | 재시도 | LLM |
+|---:|---|---|---|---|
+| 400 | `INVALID_REQUEST` | 요청 형식을 확인해 주세요 | 아니오 | 아니오 |
+| 401 | `AUTHENTICATION_FAILED` | OAOS 인증 확인에 실패했습니다 | 아니오 | 아니오 |
+| 403 + 등록/매핑 | `USER_REGISTRATION_REQUIRED` | 웹관리자 콘솔 등록 후 다시 시도해 주세요 | 아니오 | 아니오 |
+| 403 + 권한 | `PERMISSION_DENIED` | 현재 계정의 작업 권한이 없습니다 | 아니오 | 아니오 |
+| 403 + 세션 소유권 | `SESSION_OWNERSHIP_DENIED` | 현재 세션을 확인할 수 없습니다 | 아니오 | 아니오 |
+| 404 | `SESSION_OR_RESOURCE_NOT_FOUND` | 세션 또는 리소스를 찾을 수 없습니다 | 아니오 | 아니오 |
+| 405 | `METHOD_NOT_SUPPORTED` | 지원되지 않는 요청입니다 | 아니오 | 아니오 |
+| 409 | `DUPLICATE_OR_IN_PROGRESS` | 이미 처리 중이거나 처리된 요청입니다 | 아니오 | 아니오 |
+| 422 | `VALIDATION_FAILED` | 입력값을 확인해 주세요 | 아니오 | 아니오 |
+| 408 | `REQUEST_TIMEOUT` | 처리 시간이 초과되었습니다 | bounded | 경로에 따라 1회 이내 |
+| 429 | `RATE_LIMITED` | 요청이 많으니 잠시 후 다시 시도해 주세요 | bounded | 경로에 따라 1회 이내 |
+| 500/502/503/504 | `UPSTREAM_OR_SERVICE_UNAVAILABLE` | 연동 서비스가 일시적으로 응답하지 않습니다 | bounded | 경로에 따라 1회 이내 |
+
+`403`은 HTTP 코드만으로 충분하지 않으므로 Control Plane의 안전한 detail 분류를 사용한다. 내부 traceback, credential, 파일 경로, provider 원문은 사용자 메시지에 포함하지 않는다. 운영 로그에는 필요한 경우에도 secret·원문 개인정보 없이 `trace_id`, `post_id`, `session_id`, HTTP status, 정규화된 분류만 남긴다.
+
+#### 16.11.3 종료·멱등성 불변식
+
+- 영구 오류는 동일 Mattermost Post를 `seen`/idempotency 상태에 기록하고 한 번만 안내한 뒤 즉시 종료한다.
+- 안내 Post는 `@agent`가 동일 thread에 게시하며, bot-origin Post는 Bridge가 다시 수신 처리하지 않는다.
+- 영구 오류에서는 ACP/Hermes/Google/Personal Wiki/Enterprise Knowledge MCP를 호출하지 않는다.
+- typing indicator와 해당 처리 시도는 오류 안내 게시 성공 여부와 관계없이 정리한다.
+- 일시 오류는 bounded retry와 cooldown을 사용하며 무한 재시도하지 않는다.
+- 사용자 메시지와 내부 오류 상세는 분리한다. 안전 메시지 매핑이 불가능한 경우에도 내부 원문을 노출하지 않고 일반 안내를 사용한다.
+- 성공 응답이 없는 세션을 성공으로 기록하지 않으며, 응답 확인 polling은 추가 LLM 호출이 아닌 관찰 단계로 취급한다.
+
+#### 16.11.4 검증 기준
+
+오류 계약 검증은 각 코드별 메시지·재시도·LLM 호출 차단을 독립적으로 확인한다. 최소 회귀 범위는 `tests/test_bridge_error_classification.py`의 영구/일시 분류, 등록 필요·권한 거부 메시지 차등, 내부 원문 비노출, 안내 Post payload 검증이다. 단위 테스트 통과는 실제 외부 Mattermost 사용자 경로의 external PASS를 의미하지 않으며, 운영에서는 실제 Post ID·thread·trace read-back을 별도로 기록한다.
+
+### 16.12 잔여 로드맵 (v1.7.2+) — live distributed/external integration
+
+- **오류 계약 적용 상태:** Control Plane 오류 분류·안전 메시지·영구 오류 종료·LLM 미호출·bounded retry 계약은 Bridge 구현 및 `tests/test_bridge_error_classification.py`로 검증됨. 운영 적용 커밋은 `8b2d744463494f43b191d41af6f2b2219083fc0a`이며, 상세는 §16.11을 따른다.
 
 - **H8 증거 등급**: `scripts/verify-evidence-tiers.py` + `tests/test_evidence_tiers.py`로 검증한다. 역사적 v1.7.1 스냅샷은 `unit: 927 passed`를 기록했으나, v0.1.3 후보에서는 재실행 결과로 갱신해야 한다. `distributed`/`external`은 live `kind`+Redis+CNI 및 Outline/Notion/Mattermost/Slack/LLM gateway 연동 시 별도 카운트 — 현재 0으로 명시하되 재검증 필요.
 - **Live RAG 통합**: Knowledge Index는 unit-tested이나, 운영 corpus backfill 및 live Outline/Notion 자격증명 연동은 v1.7.2+ 운영 검증 범위.
