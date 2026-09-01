@@ -306,11 +306,23 @@ def _db_sync_url() -> str | None:
 
 def _db_ensure_table(engine) -> None:
     """Ensure admin_users table exists on the given sync engine (idempotent)."""
-    # Prefer ORM metadata (includes extra column) — fallback to raw DDL
+    production = os.environ.get("OAOS_ENV", "").strip().lower() in {"production", "prod"}
+    if production:
+        from sqlalchemy import inspect
+        if not inspect(engine).has_table("admin_users"):
+            raise RuntimeError("admin_users schema is missing; apply Alembic migrations before starting production")
+        return
+    # Prefer ORM metadata — compatibility is allowed only outside production.
     try:
         from security.models.orm import AdminUserORM  # type: ignore  # noqa: F401
         from security.models.db import Base  # type: ignore
-        # create all tables (idempotent, includes admin_users with extra)
+        # Production schema is migration-owned; never mutate it implicitly at runtime.
+        if os.environ.get("OAOS_ENV", "").strip().lower() in {"production", "prod"}:
+            from sqlalchemy import inspect
+            if not inspect(engine).has_table("admin_users"):
+                raise RuntimeError("admin_users schema is missing; apply Alembic migrations before starting production")
+            return
+        # Non-production compatibility only: create fixture tables explicitly.
         Base.metadata.create_all(bind=engine)  # type: ignore[arg-type]
         # also ensure extra column exists for legacy DBs created via raw DDL
         try:

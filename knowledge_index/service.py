@@ -42,6 +42,7 @@ from .repository import KnowledgeIndexRepository
 from .retrieval import KnowledgeIndexRetriever, RetrievalHit
 from .sync import SyncOrchestrator
 from .store import InMemoryChunkStore, InMemoryCheckpointStore
+from .checkpoint import PersistentCheckpointStore
 from .connectors.base import SourceAdapter
 from .connectors.http_outline import HttpOutlineSourceAdapter, OutlineAPIError
 
@@ -282,7 +283,7 @@ async def sync_outline_to_index(
     embedding_provider: EmbeddingProvider,
     outline_adapter: SourceAdapter | HttpOutlineSourceAdapter,
     chunk_config: ChunkConfig | None = None,
-    checkpoint_store: InMemoryCheckpointStore | None = None,
+    checkpoint_store: Any | None = None,
     max_retries: int = 3,
     retry_backoff_s: float = 0.05,
 ) -> OutlineSyncResult:
@@ -330,7 +331,19 @@ async def sync_outline_to_index(
         raise RuntimeError("HashEmbeddingProvider blocked in production sync")
 
     chunk_store = InMemoryChunkStore()
-    checkpoint_store = checkpoint_store or InMemoryCheckpointStore()
+    if checkpoint_store is None:
+        if _is_production():
+            try:
+                from sqlalchemy import create_engine
+                database_url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
+                if not database_url:
+                    raise RuntimeError("persistent checkpoint requires OAOS_DATABASE_URL or DATABASE_URL in production")
+                sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+                checkpoint_store = PersistentCheckpointStore(create_engine(sync_url, pool_pre_ping=True), tenant_id)
+            except Exception as exc:
+                raise RuntimeError(f"persistent checkpoint unavailable in production: {type(exc).__name__}") from exc
+        else:
+            checkpoint_store = InMemoryCheckpointStore()
     chunk_config = chunk_config or ChunkConfig()
 
     orchestrator = SyncOrchestrator(
