@@ -25,6 +25,9 @@ def test_acp_key_resolution_uses_explicit_oaos_environment(monkeypatch) -> None:
 def test_oaos_does_not_use_hermes_global_key_when_explicit_key_absent(monkeypatch) -> None:
     monkeypatch.delenv("OAOS_CP_HERMES_API_KEY", raising=False)
     monkeypatch.delenv("API_SERVER_KEY", raising=False)
+    # Settings may cache a key from an earlier test; explicitly clear it.
+    import control_plane.config as config
+    monkeypatch.setattr(config.settings, "hermes_api_key", "", raising=False)
     import sys
     sys.path.insert(0, "control-plane")
     from control_plane.acp_adapter import ACPAdapter
