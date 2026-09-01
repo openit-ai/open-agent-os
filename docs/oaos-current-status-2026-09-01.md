@@ -4,10 +4,11 @@
 - Product: Open Agent OS
 - Architecture baseline: v1.7.2
 - Repository branch: `release/v0.1.3-remediation`
-- Latest implementation commit: `b6f9625cafbe80753d3473d7980ea14f41abd806`
-- Latest documentation/status commit: `ecf71e44474f7417d97ba4f58b2991314351cd28`
+- Latest implementation/test commit: `b5050075106f5738e16a687f7f901f44ec9b6741`
+- Latest documentation/status commit: pending after this status update
 - Status: **PARTIAL — P0 code/runtime gates applied; live external/distributed evidence and full production schema backup remain**
-- Runtime read-back: `oaos-control-plane.service` active/running, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200, Alembic `018_knowledge_sync_checkpoints` applied.
+- Runtime read-back before latest test-gate commit: `oaos-control-plane.service` active/running, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200, Alembic `018_knowledge_sync_checkpoints` applied.
+- Fresh full-suite result at commit `b5050075106f5738e16a687f7f901f44ec9b6741`: `1298 passed, 5 skipped, 0 failed, 88 warnings in 357.51s (0:05:57)`.
 
 ## P0 — Implemented and locally verified
 
@@ -45,6 +46,7 @@
 
 - **Secret Vault policy:** `encrypted_postgres` remains the selected default backend; `/readyz` now reports `backend=encrypted_postgres` and `external_health_check=skipped`. External Vault migration is optional.
 - `env_gate` is now a canonical `agent_runtime.env_gate` implementation with Control Plane/Execution Gateway import shims.
+- Fresh full-suite verification: `1298 passed, 5 skipped, 0 failed, 88 warnings in 357.51s`; H7 and migration-head regression tests were updated for the canonical gate and revision 018.
 - Profile UI and complete operational Profile E2E remain pending.
 - Production readiness policy, full backup/restore evidence, and live distributed/external evidence remain pending.
 - Repository version/documentation cleanup and clean-checkout release verification remain pending.
