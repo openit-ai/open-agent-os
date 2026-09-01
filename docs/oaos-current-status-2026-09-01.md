@@ -41,13 +41,13 @@
 - Therefore kind two-replica, k6 concurrency, Redis multi-replica, and Cilium/Calico NetworkPolicy flow evidence remain **BLOCKED**.
 - Live Outline/Notion/Mattermost/Slack/LLM Gateway corpus and external round-trip evidence are not claimed without provider read-back.
 
-## P2 — Not complete
+## P2 — In progress / partially applied
 
-- **Secret Vault policy:** OAOS will use the existing `encrypted_postgres` backend as the default Secret Vault for the current deployment. HashiCorp Vault/AWS Secrets Manager are optional future enterprise hardening, not a required P2 completion item.
-- `/readyz` currently reports external Secret Vault health as skipped when no external backend is configured. This is not evidence that the configured `encrypted_postgres` Secret Vault is absent; the readiness wording/health check should be aligned with the selected backend in a follow-up.
-- `env_gate` still has mirrored implementations; single-source consolidation remains pending.
+- **Secret Vault policy:** `encrypted_postgres` remains the selected default backend; `/readyz` now reports `backend=encrypted_postgres` and `external_health_check=skipped`. External Vault migration is optional.
+- `env_gate` is now a canonical `agent_runtime.env_gate` implementation with Control Plane/Execution Gateway import shims.
 - Profile UI and complete operational Profile E2E remain pending.
-- Production readiness policy and live distributed/external evidence remain pending.
+- Production readiness policy, full backup/restore evidence, and live distributed/external evidence remain pending.
+- Repository version/documentation cleanup and clean-checkout release verification remain pending.
 
 ## Latest Mattermost E2E read-back (2026-09-01 13:47 KST)
 
