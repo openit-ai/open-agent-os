@@ -1,7 +1,7 @@
 # Deployment Verification — v1.7.1 (H8 Evidence Tiers)
 
-> **Commit:** `a36d236761e68c4e3e5c4ef656268048400fc336` · **Timestamp (UTC):** `2026-08-30T03:28:30.098551+00:00` · **Command:** `pytest -q`
-> **pytest:** `1031 passed, 1 skipped, 2 failed, 84 warnings`
+> **Commit:** `candidate run on a5ca5b3bc2` · **Timestamp (UTC):** `2026-09-01T01:19:55Z–01:25:58Z` · **Command:** `python -m pytest -q`
+> **pytest:** `1276 passed, 5 skipped, 0 failed, 88 warnings in 361.17s (0:06:01)`
 
 ## 1. Evidence Tiers (H8)
 

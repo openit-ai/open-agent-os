@@ -17,7 +17,7 @@
 
 - Focused P0/Profile tests: `57 passed, 7 warnings`.
 - Credential and existing security regression selection: `9 passed`.
-- Full-suite evidence from the current candidate run: `1276 passed, 5 skipped, 0 failed, 88 warnings in 375.21s`.
+- Full-suite evidence from the current candidate run: `1276 passed, 5 skipped, 0 failed, 88 warnings in 361.17s (0:06:01)`.
 - `py_compile`: passed for changed Python files.
 - `git diff --check`: passed.
 
