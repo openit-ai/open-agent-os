@@ -32,7 +32,8 @@
 
 ## P2 — Not complete
 
-- External Vault backend migration remains pending; `encrypted_postgres` is a legacy development/compatibility backend.
+- **Secret Vault policy:** OAOS will use the existing `encrypted_postgres` backend as the default Secret Vault for the current deployment. HashiCorp Vault/AWS Secrets Manager are optional future enterprise hardening, not a required P2 completion item.
+- `/readyz` currently reports external Secret Vault health as skipped when no external backend is configured. This is not evidence that the configured `encrypted_postgres` Secret Vault is absent; the readiness wording/health check should be aligned with the selected backend in a follow-up.
 - `env_gate` still has mirrored implementations; single-source consolidation remains pending.
 - Profile UI and complete operational Profile E2E remain pending.
 - Production readiness policy and live distributed/external evidence remain pending.
@@ -40,5 +41,6 @@
 ## Release and deployment boundaries
 
 - This document records repository evidence only. It does not claim production deployment, distributed PASS, or external PASS.
-- The candidate contains intentional uncommitted implementation/test changes at the time of writing. The final commit hash and deployment read-back must be recorded after commit.
-- No service restart, production database migration, tag, or GitHub Release is included in this status update.
+- The current deployment uses `encrypted_postgres` as the accepted/default Secret Vault; external Secret Vault migration is optional future hardening, not a release blocker.
+- The final commit hash and deployment read-back are recorded in Git history and the deployment verification document.
+- No production database migration, tag, or GitHub Release is included in this status update.

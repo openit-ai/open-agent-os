@@ -1560,8 +1560,8 @@ fail_open_telemetry(component, reason, **fields) → WARNING + stderr
 #### 16.7.7 잔여 제한 (Residual Limitations)
 
 - Quota TODO distributed (단일 인스턴스 DB 카운터)
-- Vault encrypted_postgres legacy (prod hashicorp_vault/aws_secrets 권장)
-- /readyz 200+degraded (strict 503 옵션 검토)
+- Secret Vault: current deployment uses `encrypted_postgres` as the default backend; HashiCorp Vault/AWS Secrets Manager are optional future enterprise hardening, not a required migration
+- `/readyz` external Secret Vault health is skipped when no external backend is configured; selected-backend-aware readiness wording/health check remains a follow-up
 - Env gate 3벌 mirror drift
 - Redis HA 필요, NetworkPolicy CNI audit 필수
 

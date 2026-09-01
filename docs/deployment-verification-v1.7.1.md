@@ -2,6 +2,7 @@
 
 > **Commit:** `candidate run on a5ca5b3bc2` · **Timestamp (UTC):** `2026-09-01T01:19:55Z–01:25:58Z` · **Command:** `python -m pytest -q`
 > **pytest:** `1276 passed, 5 skipped, 0 failed, 88 warnings in 361.17s (0:06:01)`
+> **Runtime read-back (2026-09-01 10:57 KST):** OAOS Control Plane `systemctl --user` active/running, PID `1259175`, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200; selected Secret Vault policy is `encrypted_postgres` by default; external Secret Vault health is not required for this deployment.
 
 ## 1. Evidence Tiers (H8)
 
