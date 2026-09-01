@@ -1907,6 +1907,27 @@ Mattermost channel/user ID
 - 계정 식별 metadata가 없는 토큰은 최소한 소유자 매핑·파일 존재·scope·API 호출 주체를 검증하고, 다른 사용자 토큰으로 대체하지 않는다.
 - 브리핑 결과 파일과 stdout의 출력 대상도 동일한 검증 user_id로 결정한다.
 
+#### 16.2.1.3 OAOS 사용자 등록 선행 게이트
+
+OAOS 사용자는 Mattermost DM에서 먼저 등록한다. 개인 Google Workspace 연동은 OAOS 사용자 등록과 세션 확인 뒤의 선택 단계이며, Mattermost DM에서 바로 시작하지 않는다. 먼저 `@agent`가 직원의 등록된 계정과 `user_id`를 확인하고, 정중한 인사말을 보낸 뒤 다음 최소 기초 대화를 진행한다.
+
+- 직원이 원하는 호칭과 @agent가 사용할 상호 호칭을 확인한다.
+- 답변 길이·말투·결론 우선 여부 등 최초 업무 응답 성향을 파악하는 간단한 질문을 1~3개 진행한다.
+- 확인된 호칭·응답 선호는 해당 사용자의 Profile/Preferences에만 저장한다.
+- 이 단계의 데이터는 개인정보·자격증명 수집이 아니라 대화 개인화와 세션 소유자 확인을 위한 최소 데이터다.
+- 직원 회신의 실제 Mattermost 작성자·Post ID·시각을 확인하고, 다른 계정·세션의 회신으로 대체하지 않는다.
+- `DISCOVERED → GREETED → BASIC_READY → SESSION_OK` 순서를 통과한 뒤에만 `OAUTH_PENDING`으로 전환한다.
+- 사용자가 응답하지 않거나 거부·중단하면 OAuth URL을 발급하지 않는다.
+
+```text
+직원 리스트/계정 확인
+  → 인사말
+  → 상호 호칭 정의
+  → 간단한 최초 성향 질문
+  → owner-scoped 세션·thread 확인
+  → 본인 요청 시 Google OAuth 시작
+```
+
 **구현 상태 (2026-09-01)**: `daily_brief.py`는 전역 `google_token.json` fallback을 제거하고, verified Mattermost mapping에서 해석한 canonical user ID의 전용 token만 사용하도록 보강했다. 전용 토큰이 없으면 Google 호출 전에 중단한다. 단, Google provider의 실제 계정 email read-back과 다른 사용자의 실외부 브리핑 왕복은 별도 external 검증 범위다. 브리핑 경로의 모든 Google 호출은 동일한 verified owner ID를 전달한다.
 
 **OpenIT 운영 검증 (2026-08-30)**
