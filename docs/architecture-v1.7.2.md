@@ -1862,6 +1862,28 @@ Mattermost mykim
 - OAOS 세션의 runtime binding은 `runtime_provider`와 `runtime_model`로 명시하고 Telegram의 `/model` override를 상속하지 않는다.
 - OAOS의 Hermes 호출 endpoint·model은 운영 EnvironmentFile과 실제 프로세스 환경으로 검증한다.
 
+#### 16.2.1.1 동일 OS 계정 세션의 파일시스템 경계
+
+파일 권한(`600`)은 다른 OS 계정의 직접 접근을 제한할 뿐이며, 동일한 `openitsvc` 계정으로 실행되는 Hermes 세션 사이의 개인정보 격리 경계가 아니다. 따라서 OAOS는 다음 Hermes 전역 파일을 사용자별 업무 데이터 저장소나 context source로 사용하지 않는다.
+
+```text
+~/.hermes/memories/USER.md
+~/.hermes/memories/MEMORY.md
+~/.hermes/users/*.md
+~/.hermes/auth.json
+~/.hermes/google_token.json
+~/.hermes/.env
+```
+
+- Telegram 직접 Hermes 세션의 전역 메모리·인증 상태는 해당 직접 세션 소유 영역으로만 취급한다.
+- Mattermost→OAOS 요청의 Profile·Memory·Evidence·Session·Credential은 검증된 `tenant_id + user_id + agent_id`로 OAOS PostgreSQL/Redis/API에서만 조회한다.
+- Hermes에는 현재 요청에 필요한 최소 Response Policy와 owner-scoped runtime context만 전달하며, 전역 `USER.md`·`MEMORY.md`·`auth.json`·토큰 파일을 읽는 fallback을 금지한다.
+- 사용자 매핑·토큰·권한이 없으면 다른 사용자의 전역 파일이나 credential로 fallback하지 않고 fail-closed한다.
+- `HERMES_HOME`/profile 분리는 설정·세션 충돌 방지용 보조 경계이며, 같은 OS 계정 세션의 강한 개인정보 보안 경계로 단독 사용하지 않는다.
+- 구현 검증은 직접 파일 접근 grep, 전역 credential fallback 회귀 테스트, owner-scoped context/namespace 테스트를 포함한다.
+
+**구현 상태 (2026-09-01 보완)**: OAOS ACP adapter는 Hermes 전역 `.env` fallback을 사용하지 않고 명시적 OAOS 설정/EnvironmentFile의 key만 사용하도록 보강한다. Telegram direct Hermes의 `state.db`·메모리와 OAOS Redis/PostgreSQL 세션은 서로 다른 소유권으로 유지한다.
+
 **OpenIT 운영 검증 (2026-08-30)**
 
 - `oaos-control-plane.service`, `oaos-mm-bridge.service`: active
