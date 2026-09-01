@@ -4,7 +4,10 @@
 - Product: Open Agent OS
 - Architecture baseline: v1.7.2
 - Repository branch: `release/v0.1.3-remediation`
-- Status: **PARTIAL — P0 implementation verified; P1 live infrastructure and P2 production work remain**
+- Latest implementation commit: `b6f9625cafbe80753d3473d7980ea14f41abd806`
+- Latest documentation/status commit: `ecf71e44474f7417d97ba4f58b2991314351cd28`
+- Status: **PARTIAL — P0 code/runtime gates applied; live external/distributed evidence and full production schema backup remain**
+- Runtime read-back: `oaos-control-plane.service` active/running, `/health` 200, `/readyz` 200, `/v1/mattermost/health` 200, Alembic `018_knowledge_sync_checkpoints` applied.
 
 ## P0 — Implemented and locally verified
 
