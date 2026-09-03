@@ -13,7 +13,6 @@ export function AcpSection() {
   const { t } = useI18n();
   const [cfg, setCfg] = useState<AcpConfig | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [testRes, setTestRes] = useState<AcpTestResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,7 +27,6 @@ export function AcpSection() {
       const res = await getAcpConfig();
       setCfg(res);
       setBaseUrl(res.hermes_base_url);
-      setModel(res.hermes_model);
       setEnabled(res.acp_enabled);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("acp.loadFailed"));
@@ -44,7 +42,7 @@ export function AcpSection() {
     setError(null);
     setMsg(null);
     try {
-      const res = await updateAcpConfig({ hermes_base_url: baseUrl, hermes_model: model, acp_enabled: enabled });
+      const res = await updateAcpConfig({ hermes_base_url: baseUrl, acp_enabled: enabled });
       setCfg(res);
       setMsg(t("acp.saved"));
     } catch (e) {
@@ -94,10 +92,7 @@ export function AcpSection() {
             <Label>{t("acp.baseUrl")}</Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://127.0.0.1:8001" />
           </div>
-          <div>
-            <Label>{t("acp.model")}</Label>
-            <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="qwen2.5" />
-          </div>
+          <p className="text-xs text-muted-foreground">{t("acp.modelAuto")}</p>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
             {t("acp.acpEnabled")}

@@ -158,6 +158,10 @@ def _check_db(url: str | None) -> dict:
     target = (url or "").strip() or _db_url()
     if not target:
         return {"ok": False, "error": "no DATABASE_URL configured"}
+    shown = _mask_db_url(target)
+    disp = (f"{shown['driver']}://{shown['user']}@{shown['host']}"
+            f"{':' + str(shown['port']) if shown['port'] else ''}/{shown['database']}"
+            if shown["configured"] and shown["host"] else "(unparseable, password hidden)")
     t0 = time.monotonic()
     try:
         from sqlalchemy import create_engine, text
@@ -169,21 +173,23 @@ def _check_db(url: str | None) -> dict:
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
         eng.dispose()
-        return {"ok": True, "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
+        return {"ok": True, "target": disp, "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}
+        return {"ok": False, "target": disp, "error": f"{type(e).__name__}: {str(e)[:160]}"}
 
 
 def _check_redis(url: str | None) -> dict:
     target = (url or "").strip() or os.environ.get("OAOS_REDIS_URL") or os.environ.get("REDIS_URL") or "redis://127.0.0.1:6379/0"
+    shown = _mask_redis_url(target)
+    disp = (f"{shown['host']}:{shown['port']}/{shown['db']}" if shown["host"] else "(unparseable)")
     t0 = time.monotonic()
     try:
         import redis as redis_lib
         client = redis_lib.Redis.from_url(target, socket_connect_timeout=3, socket_timeout=3)
         client.ping()
-        return {"ok": True, "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
+        return {"ok": True, "target": disp, "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}
+        return {"ok": False, "target": disp, "error": f"{type(e).__name__}: {str(e)[:160]}"}
 
 
 def _check_hermes(url: str | None) -> dict:
@@ -198,13 +204,13 @@ def _check_hermes(url: str | None) -> dict:
             try:
                 r = httpx.get(target + path, timeout=5.0)
                 if r.status_code < 500:
-                    return {"ok": r.status_code < 400, "status_code": r.status_code,
+                    return {"ok": r.status_code < 400, "target": target, "status_code": r.status_code,
                             "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
             except Exception:
                 continue
-        return {"ok": False, "error": "unreachable (/health and /v1/models failed)"}
+        return {"ok": False, "target": target, "error": "unreachable (/health and /v1/models failed)"}
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}
+        return {"ok": False, "target": target, "error": f"{type(e).__name__}: {str(e)[:160]}"}
 
 
 @router.get("/status")

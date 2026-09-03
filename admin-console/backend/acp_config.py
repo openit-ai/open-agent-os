@@ -31,7 +31,9 @@ router = APIRouter(prefix="/v1/acp", tags=["acp"])
 
 ACP_KEY = "acp_config"
 DEFAULT_BASE_URL = "http://127.0.0.1:8001"
-DEFAULT_MODEL = "qwen2.5"
+# No model default: empty means "use the Hermes Agent default model".
+# (Hermes selection must not pin a separate model override.)
+DEFAULT_MODEL = ""
 
 _db_engine = None
 _inmem: dict | None = None

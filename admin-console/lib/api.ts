@@ -924,9 +924,9 @@ export interface SetupStatus {
   has_admin: boolean;
 }
 export interface SetupChecks {
-  db: { ok: boolean; latency_ms?: number; error?: string };
-  redis: { ok: boolean; latency_ms?: number; error?: string };
-  hermes: { ok: boolean; latency_ms?: number; status_code?: number; error?: string };
+  db: { ok: boolean; target?: string; latency_ms?: number; error?: string };
+  redis: { ok: boolean; target?: string; latency_ms?: number; error?: string };
+  hermes: { ok: boolean; target?: string; latency_ms?: number; status_code?: number; error?: string };
 }
 export function getSetupStatus(): Promise<SetupStatus> {
   return apiFetch<SetupStatus>("/v1/setup/status");

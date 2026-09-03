@@ -131,6 +131,8 @@ def test_acp_config_default_and_update(client):
     r = client.get("/v1/acp/config", headers=_h(tok))
     assert r.status_code == 200
     assert "hermes_base_url" in r.json()
+    # no model default: empty means Hermes Agent default model is used
+    assert r.json()["hermes_model"] == ""
     assert "api_key" not in json.dumps(r.json()).lower().replace("api_key_set", "")
     r2 = client.put("/v1/acp/config", json={"hermes_base_url": "not-a-url"}, headers=_h(tok))
     assert r2.status_code == 422
@@ -198,3 +200,16 @@ def test_setup_effective_masks_secrets(client, monkeypatch):
 def test_setup_effective_requires_auth(client):
     r = client.get("/v1/setup/effective")
     assert r.status_code == 401
+
+
+def test_setup_checks_include_masked_targets(client, monkeypatch):
+    tok = _login(client)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://oaos:s3cr3t-pw@127.0.0.1:5432/oaos")
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6380/0")
+    r = client.post("/v1/setup/checks", json={"hermes_url": "http://127.0.0.1:9"}, headers=_h(tok))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["db"]["target"] == "postgresql+psycopg://oaos@127.0.0.1:5432/oaos"
+    assert body["redis"]["target"] == "127.0.0.1:6380/0"
+    assert body["hermes"]["target"] == "http://127.0.0.1:9"
+    assert "s3cr3t-pw" not in json.dumps(body)

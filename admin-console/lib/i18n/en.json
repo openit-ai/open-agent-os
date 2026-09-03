@@ -134,7 +134,10 @@
     "validationPort": "Port must be an integer 1–65535.",
     "deleteSuccess": "Deleted.",
     "saveFailed": "Save failed.",
-    "probeFailed": "Probe failed."
+    "probeFailed": "Probe failed.",
+    "tabServices": "Services",
+    "tabSetup": "Setup",
+    "tabMcp": "MCP"
   },
   "users": {
     "title": "Users / Agents",
@@ -621,7 +624,8 @@
     "test": "Test connection",
     "testing": "Testing...",
     "loadFailed": "Load failed",
-    "saveFailed": "Save failed"
+    "saveFailed": "Save failed",
+    "modelAuto": "Model follows the Hermes Agent default automatically (no override)."
   },
   "mcp": {
     "title": "MCP Servers",

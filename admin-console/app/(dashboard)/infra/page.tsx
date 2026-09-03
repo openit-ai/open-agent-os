@@ -8,8 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch, getToken } from "@/lib/api";
-import { RefreshCw, Trash2, Pencil, Plus } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { RefreshCw, Trash2, Pencil, Plus, Server } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { SetupTab } from "./setup-tab";
+import { McpPanel } from "./mcp-panel";
 
 interface InfraItem {
   id: string; service: string; host: string; port: number; health_path: string;
@@ -25,6 +28,27 @@ function statusVariant(s: string) {
 }
 
 export default function InfraPage() {
+  const { t } = useI18n();
+  return (
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold"><Server className="h-6 w-6" /> {t("infra.title")}</h1>
+      </div>
+      <Tabs defaultValue="services">
+        <TabsList>
+          <TabsTrigger value="services">{t("infra.tabServices")}</TabsTrigger>
+          <TabsTrigger value="setup">{t("infra.tabSetup")}</TabsTrigger>
+          <TabsTrigger value="mcp">{t("infra.tabMcp")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="services"><InfraServices /></TabsContent>
+        <TabsContent value="setup"><SetupTab /></TabsContent>
+        <TabsContent value="mcp"><McpPanel /></TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function InfraServices() {
   const router = useRouter();
   const { t } = useI18n();
   const [items, setItems] = useState<InfraItem[]>([]);

@@ -134,7 +134,10 @@
     "validationPort": "port는 1~65535 정수여야 합니다.",
     "deleteSuccess": "삭제되었습니다.",
     "saveFailed": "저장 실패",
-    "probeFailed": "probe 실패"
+    "probeFailed": "probe 실패",
+    "tabServices": "서비스 현황",
+    "tabSetup": "초기 설정",
+    "tabMcp": "MCP 설정"
   },
   "users": {
     "title": "Users / Agents",
@@ -621,7 +624,8 @@
     "test": "연결 테스트",
     "testing": "테스트 중...",
     "loadFailed": "불러오기 실패",
-    "saveFailed": "저장 실패"
+    "saveFailed": "저장 실패",
+    "modelAuto": "모델은 Hermes Agent의 기본 모델을 자동으로 사용합니다 (별도 지정 없음)."
   },
   "mcp": {
     "title": "MCP 서버",
