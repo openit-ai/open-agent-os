@@ -5,13 +5,13 @@ import path from "path";
 export const dynamic = "force-static";
 export const revalidate = 3600; // cache latest check 1h
 
-// Authoritative installed version: OAOS_VERSION env > admin-console/package.json (0.1.2) > fallback
+// Authoritative installed version: OAOS_VERSION env > admin-console/package.json (0.1.3) > fallback
 // v1.7.2 is architecture doc version, not product version.
 function getInstalledVersion(): string {
   // 1) env (set at deploy / systemd / docker)
   const env = process.env.OAOS_VERSION || process.env.NEXT_PUBLIC_OAOS_VERSION;
   if (env && /^\d+\.\d+/.test(env.trim())) return env.trim().replace(/^v/, "");
-  // 2) package.json in admin-console — single source of truth for product version (현재 0.1.2)
+  // 2) package.json in admin-console — single source of truth for product version (현재 0.1.3)
   try {
     const pkgPath = path.join(process.cwd(), "package.json");
     const raw = fs.readFileSync(pkgPath, "utf-8");
@@ -19,12 +19,12 @@ function getInstalledVersion(): string {
     if (pkg.version && /^\d+\.\d+/.test(pkg.version.trim())) return pkg.version.trim().replace(/^v/, "");
   } catch { /* ignore */ }
   // 3) fallback — product initial version
-  return "0.1.2";
+  return "0.1.3";
 }
 
 function normalizeTag(tag: string): string | null {
   const t = tag.trim().replace(/^v/i, "");
-  // accept semver like 0.1.1, 0.1.2 etc. ignore non-semver
+  // accept semver like 0.1.1, 0.1.3 etc. ignore non-semver
   if (!/^\d+\.\d+\.\d+/.test(t)) return null;
   const m = t.match(/^(\d+\.\d+\.\d+[^ ]*)/);
   return m ? m[1] : null;
@@ -109,7 +109,7 @@ export async function GET() {
   if (latestVersion && installedVersion) {
     const normInstalled = normalizeTag(installedVersion) ?? installedVersion.replace(/^v/, "");
     const cmp = compareSemver(latestVersion, normInstalled);
-    // only when latest is actually higher; scheduled 0.1.2 is NOT considered unless released
+    // only when latest is actually higher; scheduled 0.1.3 is NOT considered unless released
     updateAvailable = cmp > 0;
   }
 

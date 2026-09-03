@@ -7,9 +7,18 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { apiFetch, getToken } from "@/lib/api";
-import { RefreshCw, Trash2, Pencil, Plus, Activity, Database } from "lucide-react";
+import { apiFetch, getToken, getSetupEffective, getMmConfig, getOlConfig, getLiveInfra, getInfraRegistry, seedUnifiedInfra, type SetupEffective, type LiveInfraItem, type UnifiedInfraRow } from "@/lib/api";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { RefreshCw, Trash2, Pencil, Plus, Server, Activity, Database } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { SetupTab } from "./setup-tab";
+import { McpPanel } from "./mcp-panel";
+import { MmPanel } from "./mm-panel";
+import { OlPanel } from "./ol-panel";
+import { NotionPanel } from "./notion-panel";
+import { SlackPanel } from "./slack-panel";
+import { OAuthPanel } from "./oauth-panel";
+import { SmtpPanel } from "./smtp-panel";
 
 type ProbeType = "http" | "tcp" | string;
 interface UnifiedRow {
@@ -57,6 +66,43 @@ function sourceVariant(src?: string) {
 }
 
 export default function InfraPage() {
+  const { t } = useI18n();
+  return (
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold"><Server className="h-6 w-6" /> {t("infra.title")}</h1>
+      </div>
+      <Tabs defaultValue="services">
+        <TabsList>
+          <TabsTrigger value="services">{t("infra.tabServices")}</TabsTrigger>
+          <TabsTrigger value="live">{t("infra.tabLive")}</TabsTrigger>
+          <TabsTrigger value="unified">{t("infra.tabUnified")}</TabsTrigger>
+          <TabsTrigger value="setup">{t("infra.tabSetup")}</TabsTrigger>
+          <TabsTrigger value="mcp">{t("infra.tabMcp")}</TabsTrigger>
+          <TabsTrigger value="mm">{t("infra.tabMm")}</TabsTrigger>
+          <TabsTrigger value="ol">{t("infra.tabOl")}</TabsTrigger>
+          <TabsTrigger value="notion">{t("infra.tabNotion")}</TabsTrigger>
+          <TabsTrigger value="slack">{t("infra.tabSlack")}</TabsTrigger>
+          <TabsTrigger value="oauth">{t("infra.tabOAuth")}</TabsTrigger>
+          <TabsTrigger value="smtp">{t("infra.tabSmtp")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="services"><InfraServices /></TabsContent>
+        <TabsContent value="live"><InfraLive /></TabsContent>
+        <TabsContent value="unified"><InfraUnified /></TabsContent>
+        <TabsContent value="setup"><SetupTab /></TabsContent>
+        <TabsContent value="mcp"><McpPanel /></TabsContent>
+        <TabsContent value="mm"><MmPanel /></TabsContent>
+        <TabsContent value="ol"><OlPanel /></TabsContent>
+        <TabsContent value="notion"><NotionPanel /></TabsContent>
+        <TabsContent value="slack"><SlackPanel /></TabsContent>
+        <TabsContent value="oauth"><OAuthPanel /></TabsContent>
+        <TabsContent value="smtp"><SmtpPanel /></TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function InfraServices() {
   const router = useRouter();
   const { t } = useI18n();
   const [rows, setRows] = useState<UnifiedRow[]>([]);
@@ -96,12 +142,10 @@ export default function InfraPage() {
   }, [t]);
 
   useEffect(() => {
-    if (!getToken()) {
-      router.replace("/login");
-      return;
-    }
+    if (!getToken()) { router.replace("/login"); return; }
     fetchUnified();
-    const id = setInterval(() => fetchUnified(), 15000);
+    ensureConfigServices();
+    const id = setInterval(fetchUnified, 15000);
     return () => clearInterval(id);
   }, [fetchUnified, router]);
 
@@ -113,6 +157,75 @@ export default function InfraPage() {
     if (r.db_exists === false) return true;
     if (r.source === "live") return true;
     return false;
+  }
+
+  // Register DB/Redis/ACP from server-side effective config into the
+  // infra list (idempotent by service name) so setup results are
+  // monitored/edited in the services table instead of a separate card.
+  async function ensureConfigServices() {
+    let eff: SetupEffective | null = null;
+    try { eff = await getSetupEffective(); } catch { return; }
+    if (!eff) return;
+    const desired: { service: string; host: string; port: number; health_path: string }[] = [];
+    if (eff.db.configured && eff.db.host) {
+      desired.push({ service: "postgres", host: eff.db.host, port: eff.db.port ?? 5432, health_path: "" });
+    }
+    if (eff.redis.configured && eff.redis.host) {
+      desired.push({ service: "redis", host: eff.redis.host, port: eff.redis.port ?? 6379, health_path: "" });
+    }
+    if (eff.hermes.base_url) {
+      try {
+        const u = new URL(eff.hermes.base_url);
+        if (u.hostname) {
+          desired.push({ service: "hermes", host: u.hostname, port: u.port ? Number(u.port) : 80, health_path: "/health" });
+        }
+      } catch { /* ignore unparseable base_url */ }
+    }
+    // Mattermost / Outline: register from their config tabs so saved
+    // connections show up in the services table for monitoring/editing.
+    try {
+      const mm = await getMmConfig();
+      if (mm?.mattermost_url) {
+        try {
+          const u = new URL(mm.mattermost_url);
+          if (u.hostname) {
+            desired.push({
+              service: "mattermost", host: u.hostname,
+              port: u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80),
+              health_path: "/api/v4/system/ping",
+            });
+          }
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+    try {
+      const ol = await getOlConfig();
+      if (ol?.outline_url) {
+        try {
+          const u = new URL(ol.outline_url);
+          if (u.hostname) {
+            desired.push({
+              service: "outline", host: u.hostname,
+              port: u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80),
+              health_path: "/",
+            });
+          }
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+    if (desired.length === 0) return;
+    let changed = false;
+    try {
+      const res = await apiFetch<{ items: { service: string }[] } | { service: string }[]>("/v1/infra");
+      const list = Array.isArray(res) ? res : res.items ?? [];
+      for (const d of desired) {
+        if (!list.some((it) => it.service === d.service)) {
+          await apiFetch("/v1/infra", { method: "POST", body: JSON.stringify(d) });
+          changed = true;
+        }
+      }
+    } catch { return; }
+    if (changed) fetchUnified();
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -411,4 +524,168 @@ function langLocale(): string {
   } catch {
     return "en-US";
   }
+}
+
+/* ── Runtime Config plane merge (P0, additive): read-only live inventory ── */
+function InfraLive() {
+  const router = useRouter();
+  const { t } = useI18n();
+  const [items, setItems] = useState<LiveInfraItem[]>([]);
+  const [probedAt, setProbedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchLive = useCallback(async () => {
+    try {
+      const res = await getLiveInfra();
+      setItems(res.items ?? []);
+      setProbedAt(res.probed_at ?? null);
+      setError(null);
+    } catch (e) { setError(e instanceof Error ? e.message : t("common.error")); }
+    finally { setLoading(false); }
+  }, [t]);
+
+  useEffect(() => {
+    if (!getToken()) { router.replace("/login"); return; }
+    fetchLive();
+    const id = setInterval(fetchLive, 15000);
+    return () => clearInterval(id);
+  }, [fetchLive, router]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">{t("infra.liveTitle")}</h2>
+          <p className="text-xs text-muted-foreground">{t("infra.liveDesc")} · {t("infra.liveCount").replace("{count}", String(items.length))}{probedAt ? ` · ${t("infra.liveProbedAt")}: ${new Date(probedAt).toLocaleString(langLocale())}` : ""}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={fetchLive}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
+      </div>
+      {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("infra.service")}</TableHead>
+                <TableHead>host:port</TableHead>
+                <TableHead>{t("infra.status")}</TableHead>
+                <TableHead>{t("infra.latency")}</TableHead>
+                <TableHead>{t("infra.lastCheck")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">{t("common.loading")}</TableCell></TableRow>
+              ) : items.length === 0 ? (
+                <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">{t("infra.liveEmpty")}</TableCell></TableRow>
+              ) : items.map((it) => (
+                <TableRow key={it.id}>
+                  <TableCell className="font-medium">{it.display_name || it.service || it.name}</TableCell>
+                  <TableCell className="font-mono text-xs">{it.host}:{it.port}</TableCell>
+                  <TableCell><Badge variant={statusVariant(String(it.status))}>{String(it.status)}</Badge></TableCell>
+                  <TableCell>{it.latency_ms != null ? `${it.latency_ms}ms` : "-"}</TableCell>
+                  <TableCell className="text-xs">{it.last_check ? new Date(it.last_check).toLocaleString(langLocale()) : "-"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+      <p className="text-xs text-muted-foreground">{t("infra.liveNote")}</p>
+    </div>
+  );
+}
+
+/* ── Runtime Config plane merge (P0, additive): unified registry + seed ── */
+function InfraUnified() {
+  const router = useRouter();
+  const { t } = useI18n();
+  const [rows, setRows] = useState<UnifiedInfraRow[]>([]);
+  const [probedAt, setProbedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [seeding, setSeeding] = useState(false);
+  const [seedMsg, setSeedMsg] = useState<string | null>(null);
+
+  const fetchRegistry = useCallback(async () => {
+    try {
+      const res = await getInfraRegistry();
+      setRows(res.items ?? []);
+      setProbedAt(res.probed_at ?? null);
+      setError(null);
+    } catch (e) { setError(e instanceof Error ? e.message : t("common.error")); }
+    finally { setLoading(false); }
+  }, [t]);
+
+  useEffect(() => {
+    if (!getToken()) { router.replace("/login"); return; }
+    fetchRegistry();
+    const id = setInterval(fetchRegistry, 15000);
+    return () => clearInterval(id);
+  }, [fetchRegistry, router]);
+
+  async function handleSeed() {
+    if (!confirm(t("infra.seedConfirm"))) return;
+    setSeeding(true);
+    setSeedMsg(null);
+    try {
+      const res = await seedUnifiedInfra();
+      setSeedMsg(t("infra.seedResult").replace("{created}", String(res.created_count)).replace("{skipped}", String(res.skipped_count)));
+      await fetchRegistry();
+    } catch (e) { setSeedMsg(e instanceof Error ? e.message : t("infra.seedFailed")); }
+    finally { setSeeding(false); }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">{t("infra.unifiedTitle")}</h2>
+          <p className="text-xs text-muted-foreground">{t("infra.unifiedDesc")} · {t("infra.unifiedCount").replace("{count}", String(rows.length))}{probedAt ? ` · ${t("infra.liveProbedAt")}: ${new Date(probedAt).toLocaleString(langLocale())}` : ""}</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={fetchRegistry}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
+          <Button variant="secondary" size="sm" onClick={handleSeed} disabled={seeding} title={t("infra.seedHint")}>
+            <Plus className="mr-1 h-4 w-4" />{seeding ? t("infra.seeding") : t("infra.seedButton")}
+          </Button>
+        </div>
+      </div>
+      {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
+      {seedMsg && <p className="text-sm text-muted-foreground" role="status">{seedMsg}</p>}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("infra.service")}</TableHead>
+                <TableHead>host:port</TableHead>
+                <TableHead>{t("infra.source")}</TableHead>
+                <TableHead>{t("infra.status")}</TableHead>
+                <TableHead>{t("infra.latency")}</TableHead>
+                <TableHead>{t("infra.lastCheck")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">{t("common.loading")}</TableCell></TableRow>
+              ) : rows.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">{t("infra.noData")}</TableCell></TableRow>
+              ) : rows.map((it) => (
+                <TableRow key={it.id}>
+                  <TableCell className="font-medium">{it.display_name || it.service || it.name}</TableCell>
+                  <TableCell className="font-mono text-xs">{it.host}:{it.port}</TableCell>
+                  <TableCell className="font-mono text-xs">{it.source ?? "-"}</TableCell>
+                  <TableCell><Badge variant={statusVariant(String(it.status))}>{String(it.status)}</Badge></TableCell>
+                  <TableCell>{it.latency_ms != null ? `${it.latency_ms}ms` : "-"}</TableCell>
+                  <TableCell className="text-xs">{it.last_check ? new Date(it.last_check).toLocaleString(langLocale()) : "-"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+      <p className="text-xs text-muted-foreground">{t("infra.unifiedHint")}</p>
+    </div>
+  );
 }

@@ -25,7 +25,7 @@ class MCPMessage:
 
 # Protocol version negotiated during initialize
 MCP_PROTOCOL_VERSION = "2024-11-05"
-MCP_CLIENT_INFO = {"name": "execution-gateway", "version": "0.1.1"}
+MCP_CLIENT_INFO = {"name": "execution-gateway", "version": "0.1.3"}
 
 
 def make_request(method: str, params: dict | None = None, msg_id: Any | None = None) -> dict:

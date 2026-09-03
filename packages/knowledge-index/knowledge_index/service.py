@@ -24,6 +24,7 @@ are kept identical; the latter re-exports from ROOT for pip-install compat.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -41,6 +42,7 @@ from .repository import KnowledgeIndexRepository
 from .retrieval import KnowledgeIndexRetriever, RetrievalHit
 from .sync import SyncOrchestrator
 from .store import InMemoryChunkStore, InMemoryCheckpointStore
+from .checkpoint import PersistentCheckpointStore
 from .connectors.base import SourceAdapter
 from .connectors.http_outline import HttpOutlineSourceAdapter, OutlineAPIError
 
@@ -266,6 +268,7 @@ class OutlineSyncResult:
     upserted: int = 0
     skipped: int = 0
     deleted: int = 0
+    deleted_resource_ids: list[str] = field(default_factory=list)
     failed: int = 0
     chunks_written: int = 0
     persisted: int = 0  # entries written to persistent repository
@@ -280,7 +283,7 @@ async def sync_outline_to_index(
     embedding_provider: EmbeddingProvider,
     outline_adapter: SourceAdapter | HttpOutlineSourceAdapter,
     chunk_config: ChunkConfig | None = None,
-    checkpoint_store: InMemoryCheckpointStore | None = None,
+    checkpoint_store: Any | None = None,
     max_retries: int = 3,
     retry_backoff_s: float = 0.05,
 ) -> OutlineSyncResult:
@@ -328,7 +331,19 @@ async def sync_outline_to_index(
         raise RuntimeError("HashEmbeddingProvider blocked in production sync")
 
     chunk_store = InMemoryChunkStore()
-    checkpoint_store = checkpoint_store or InMemoryCheckpointStore()
+    if checkpoint_store is None:
+        if _is_production():
+            try:
+                from sqlalchemy import create_engine
+                database_url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
+                if not database_url:
+                    raise RuntimeError("persistent checkpoint requires OAOS_DATABASE_URL or DATABASE_URL in production")
+                sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+                checkpoint_store = PersistentCheckpointStore(create_engine(sync_url, pool_pre_ping=True), tenant_id)
+            except Exception as exc:
+                raise RuntimeError(f"persistent checkpoint unavailable in production: {type(exc).__name__}") from exc
+        else:
+            checkpoint_store = InMemoryCheckpointStore()
     chunk_config = chunk_config or ChunkConfig()
 
     orchestrator = SyncOrchestrator(
@@ -340,15 +355,20 @@ async def sync_outline_to_index(
         max_retries=max_retries,
         retry_backoff_s=retry_backoff_s,
     )
-
-    # SyncOrchestrator.sync is synchronous (blocks on time.sleep for retries, stdlib HTTP)
-    # We call it in-thread to avoid blocking event loop for long? For now direct.
-    # Wrap to allow async repository usage afterwards.
-    # Since this is I/O-bound but short in tests, direct call is acceptable.
-
+    # SyncOrchestrator.sync is synchronous (blocks on time.sleep for retries, stdlib HTTP + Ollama /api/embed urllib)
+    # P1 availability fix: offload to thread to avoid starving event loop when single worker.
+    # Bounded concurrency is enforced at HTTP layer (memory_service semaphore); here we ensure non-blocking.
     # Check: embedding dim vs index expectation
     try:
-        sync_result = orchestrator.sync()
+        try:
+            # If running inside an event loop, offload blocking sync to thread pool
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            sync_result = await asyncio.to_thread(orchestrator.sync)
+        else:
+            sync_result = orchestrator.sync()
     except RuntimeError as e:
         # production hash guard surfaces as RuntimeError — propagate
         raise
@@ -399,19 +419,18 @@ async def sync_outline_to_index(
     #
     # Future: extend SyncOrchestrator to return created docs metadata.
 
-    # Try to build doc_map from adapter if it exposes _docs or last fetch
+    # Metadata is captured into StoredChunks by SyncOrchestrator. The adapter
+    # private store is used only as a backwards-compatible test fixture path.
     doc_map: dict[str, SourceDocument] = {}
     try:
-        # InMemory adapter
         if hasattr(outline_adapter, "_docs"):
             docs_dict = getattr(outline_adapter, "_docs", {})
             if isinstance(docs_dict, dict):
                 for rid, doc in docs_dict.items():
                     if isinstance(doc, SourceDocument):
                         doc_map[rid] = doc
-        # Http adapter: no in-memory docs; fallback: we already have stored chunks but not acl — use empty
-    except Exception:
-        pass
+    except Exception as exc:
+        sync_result.errors.append(f"source metadata inspection failed: {type(exc).__name__}")
 
     # Also attempt to get docs from FetchResult if we could replay fetch without advancing checkpoint?
     # For incremental skipped docs, they still exist in chunk_store from prior sync, so we should have them already persisted earlier.
@@ -439,7 +458,6 @@ async def sync_outline_to_index(
                             )
                         )
                         await session.commit()
-                import asyncio
                 try:
                     # if running in async context, await
                     await _delete_resource()
@@ -452,20 +470,22 @@ async def sync_outline_to_index(
             continue
         # Resolve doc for this rid
         doc = doc_map.get(rid)
-        acl_groups: list[str] = []
-        acl_users: list[str] = []
-        classification: str | None = None
-        source_uri: str | None = None
-        tenant_from_doc = tenant_id
+        # Prefer metadata captured at fetch time; never publish a restricted
+        # document as public merely because the HTTP adapter has no private _docs.
+        acl_groups: list[str] = list(getattr(stored, "acl_groups", []) or [])
+        acl_users: list[str] = list(getattr(stored, "acl_users", []) or [])
+        classification: str | None = getattr(stored, "classification", None)
+        source_uri: str | None = getattr(stored, "source_uri", None)
+        tenant_from_doc = getattr(stored, "tenant_id", None) or tenant_id
         if doc is not None:
-            acl_groups = list((doc.acl or {}).get("groups") or (doc.acl or {}).get("allowedGroups") or [])
-            acl_users = list((doc.acl or {}).get("users") or (doc.acl or {}).get("allowedUsers") or [])
-            classification = getattr(doc, "classification", None)
-            source_uri = getattr(doc, "source_uri", None)
-            tenant_from_doc = getattr(doc, "tenant_id", None) or tenant_id
-            # if doc tenant differs, prefer caller tenant for isolation
-            if tenant_from_doc != tenant_id:
-                tenant_from_doc = tenant_id
+            acl_groups = list((doc.acl or {}).get("groups") or (doc.acl or {}).get("allowedGroups") or acl_groups)
+            acl_users = list((doc.acl or {}).get("users") or (doc.acl or {}).get("allowedUsers") or acl_users)
+            classification = getattr(doc, "classification", None) or classification
+            source_uri = getattr(doc, "source_uri", None) or source_uri
+            tenant_from_doc = getattr(doc, "tenant_id", None) or tenant_from_doc
+        # If doc tenant differs, prefer caller tenant for isolation.
+        if tenant_from_doc != tenant_id:
+            tenant_from_doc = tenant_id
         # For each chunk + embedding, create entries
         for idx, (chunk, emb) in enumerate(zip(stored.chunks, stored.embeddings)):
             base_index_id = _short_index_id(rid, chunk.chunk_id)
@@ -586,25 +606,21 @@ async def sync_outline_to_index(
             sync_result.failed = 1
             persisted = 0
 
-    # Handle deletions for resources that SyncOrchestrator marked deleted
-    if sync_result.deleted and sync_result.deleted > 0:
-        # Determine deleted resource ids: checkpoint previous vs new states difference
-        # SyncOrchestrator handles chunk_store.delete; we also need to delete from DB
-        # We know sync_result.checkpoint contains remaining states; previous checkpoint had deleted ids
-        # Approximate by checking which resources are no longer in chunk_store but were before? We don't have before snapshot.
-        # Instead we can delete DB entries for resource ids that are no longer in chunk_store but whose index entries exist
-        # This requires listing DB; simpler: we already cleared empty-content deletions above.
-        # For sync deletions, SyncOrchestrator removed from chunk_store, and we can delete those rids from DB by querying.
-        # We don't have list of deleted rids here without capturing prior checkpoint.
-        # Best effort: pass through sync_result.deleted as persisted deletions count (not DB verified)
-        pass
-
+    # Propagate only explicit source deletion IDs. Never infer deletion from an
+    # incomplete/paginated chunk store.
+    for rid in getattr(sync_result, "deleted_resource_ids", []):
+        try:
+            await repository.delete_by_resource(tenant_id, rid)
+        except Exception as exc:
+            sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
+            sync_result.failed = max(1, sync_result.failed)
     return OutlineSyncResult(
         source_system=sync_result.source_system,
         fetched=sync_result.fetched,
         upserted=sync_result.upserted,
         skipped=sync_result.skipped,
         deleted=sync_result.deleted,
+        deleted_resource_ids=list(getattr(sync_result, "deleted_resource_ids", []) or []),
         failed=sync_result.failed,
         chunks_written=sync_result.chunks_written,
         persisted=persisted,
@@ -1184,7 +1200,8 @@ class KnowledgeSyncService:
     async def sync_to_persistent(self, *args: Any, **kwargs: Any) -> SyncResult:  # type: ignore[no-untyped-def]
         """Delegates to sync_outline_to_index when persistent context is provided, else fail-closed."""
         # If caller provides persistent context, delegate (covers compat validator that expects this)
-        tenant_id = kwargs.get("tenant_id") or getattr(self, "_tenant_id", None)
+        _tenant_raw = kwargs.get("tenant_id") if "tenant_id" in kwargs else getattr(self, "_tenant_id", None)
+        tenant_id = str(_tenant_raw).strip() if _tenant_raw is not None else ""
         repo = kwargs.get("repository") or getattr(self, "_repo", None)
         provider = kwargs.get("embedding_provider") or getattr(self, "_provider", None)
         adapter = kwargs.get("outline_adapter") or kwargs.get("adapter") or getattr(self, "adapter", None)

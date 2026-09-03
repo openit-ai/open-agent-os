@@ -1,9 +1,10 @@
 # Vault Externalization Design — Phase A
 
-> Status: **Design Only (no code changes)**  
-> Scope: Phase A — eliminate `encrypted_token` ciphertext from `oaos` DB per `docs/architecture-v1.6.md` §10 / §27.3  
+> Status: **Optional future hardening — not required for the current OAOS deployment**
+> Current policy: the existing `encrypted_postgres` backend is the default Secret Vault for the current deployment.
+> Scope: preserve an optional migration path to an external backend when customer security, KMS/HSM, or multi-service requirements justify it.
 > Depends on: `security/credential-vault/vault/vault.py` (`EncryptedPostgresVault`), `security/models/orm.py` (`VaultCredentialORM`), `alembic/versions/001_initial_persistence.py`, `docs/architecture-v1.6.md` §10.2 + §27.3 + §44  
-> Last updated: 2026-08-28
+> Last updated: 2026-09-01
 
 ---
 
@@ -20,6 +21,8 @@ Phase A is the design and the migration contract. Code changes land in Phase B.
 ---
 
 ## 2. Current State & Gap
+
+> **Current decision (2026-09-01):** For the current OAOS deployment, `encrypted_postgres` is the accepted and default Secret Vault. The external-backend design below is retained as an optional future hardening path, not as a release blocker.
 
 ### 2.1 What exists today
 
@@ -92,7 +95,7 @@ The `CredentialVault` interface is unchanged for callers (`security/credential-v
 
 | `VAULT_BACKEND` value | Backend | Secret-at-rest | Key management | When to use |
 |------------------------|---------|----------------|----------------|-------------|
-| `encrypted_postgres` (legacy, deprecated after migration) | `oaos.vault_credentials.encrypted_token` via Fernet | Fernet key in `VAULT_ENCRYPTION_KEY` | App-managed | Compatibility / CI without external vault |
+| `encrypted_postgres` (current default for OAOS; optional external migration later) | `oaos.vault_credentials.encrypted_token` via Fernet | Fernet key in `VAULT_ENCRYPTION_KEY` | App-managed | Current deployment default |
 | `hashicorp_vault` | HashiCorp Vault KV v2 at `VAULT_ADDR` | Vault transit + storage backend | Vault-managed (auto-rotation, HSM optional) | Enterprise default — aligns with §10 "encrypted secret store" |
 | `aws_secrets` (alias: `aws_secrets_manager`) | AWS Secrets Manager (or `aws_kms` + `VAULT_KMS_KEY_ID`) | KMS envelope encryption | AWS KMS / CloudHSM | Customer AWS footprint |
 
@@ -174,7 +177,7 @@ Factory lives in `security/credential-vault/vault/__init__.py` (currently empty 
 
 | Variable | Required for | Default | Example |
 |----------|--------------|---------|---------|
-| `VAULT_BACKEND` | all | `encrypted_postgres` (Phase A) → `hashicorp_vault` (Phase B+) | `hashicorp_vault` |
+| `VAULT_BACKEND` | all | `encrypted_postgres` (current default) | `hashicorp_vault` or `aws_secrets` only when separately approved |
 | `VAULT_ENCRYPTION_KEY` | `encrypted_postgres` only | — | `change-me-32-byte-base64==` (32 bytes raw → sha256 → Fernet) |
 | `VAULT_ADDR` | `hashicorp_vault` | — | `https://vault.customer.internal:8200` |
 | `VAULT_TOKEN` | `hashicorp_vault` (token auth) | — | `hvs.xxx` — prefer AppRole / K8s auth in prod |

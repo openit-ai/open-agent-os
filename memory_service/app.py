@@ -19,6 +19,7 @@ All DB imports are lazy (no DB at import time).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -176,12 +177,55 @@ def _verify_agent_binding(payload: dict, requested_agent: str | None) -> None:
     if str(jwt_agent).strip() != str(requested_agent).strip():
         raise HTTPException(status_code=403, detail=f"agent mismatch: token agent {jwt_agent} != requested {requested_agent}")
 
-app = FastAPI(title="Open Agent OS — Memory Service", version="0.1.1")
+app = FastAPI(title="Open Agent OS — Memory Service", version="0.1.3")
 
 
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "memory-service"}
+
+
+async def _bounded_dependency_check() -> dict[str, Any]:
+    """Probe configured dependencies without turning liveness into readiness."""
+    checks: dict[str, Any] = {}
+    timeout = float(os.environ.get("OAOS_HEALTHCHECK_TIMEOUT_SECONDS", "1.5"))
+    if not _is_db_configured():
+        checks["database"] = {"status": "missing"}
+    else:
+        try:
+            maker = await asyncio.wait_for(_get_db_maker(), timeout=timeout)
+            if maker is None:
+                raise RuntimeError("database sessionmaker unavailable")
+            from sqlalchemy import text  # type: ignore
+            async with maker() as session:
+                await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=timeout)
+            checks["database"] = {"status": "ok"}
+        except Exception as exc:
+            checks["database"] = {"status": "failed", "error": type(exc).__name__}
+    redis_url = os.environ.get("REDIS_URL") or os.environ.get("OAOS_REDIS_URL")
+    if redis_url:
+        try:
+            import redis.asyncio as redis  # type: ignore
+            client = redis.from_url(redis_url, socket_connect_timeout=timeout, socket_timeout=timeout)
+            await asyncio.wait_for(client.ping(), timeout=timeout)
+            await client.aclose()
+            checks["redis"] = {"status": "ok"}
+        except Exception as exc:
+            checks["redis"] = {"status": "failed", "error": type(exc).__name__}
+    else:
+        checks["redis"] = {"status": "not_configured"}
+    return checks
+
+
+@app.get("/readyz")
+async def readyz():
+    checks = await _bounded_dependency_check()
+    failed = [name for name, result in checks.items() if result.get("status") in {"missing", "failed"}]
+    body = {"status": "ready" if not failed else "not_ready", "service": "memory-service", "checks": checks}
+    if failed:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 # Alias for control-plane style health checks
@@ -192,7 +236,7 @@ def memory_health():
 
 @app.get("/")
 def root():
-    return {"service": "memory-service", "version": "0.1.1", "docs": "/docs"}
+    return {"service": "memory-service", "version": "0.1.3", "docs": "/docs"}
 
 
 # ---------------------------------------------------------------------------
@@ -804,6 +848,18 @@ except Exception:  # pragma: no cover
     InvalidateRequest = object  # type: ignore
     DeleteRequest = object  # type: ignore
 
+async def _require_production_db() -> Any:
+    """Production memory operations never use the process-local store."""
+    if not _is_production():
+        return None
+    if not _is_db_configured():
+        raise HTTPException(status_code=503, detail="memory database is not configured")
+    maker = await _get_db_maker()
+    if maker is None:
+        raise HTTPException(status_code=503, detail="memory database is unavailable")
+    return maker
+
+
 # ---------------------------------------------------------------------------
 # Write — POST /v1/memory/write
 # ---------------------------------------------------------------------------
@@ -891,6 +947,9 @@ async def memory_write(payload: dict, request: Request):
             raise HTTPException(status_code=422, detail="embedding must be list of floats")
         if len(embedding) != 1536:
             raise HTTPException(status_code=422, detail="embedding must have length 1536")
+
+    # Production must establish a live DB before mutating the process-local store.
+    await _require_production_db()
 
     # ---- Governance validation via MemoryStore.write (includes scope/classification/retention/TTL logic) ----
     store = _get_store()
@@ -1114,6 +1173,8 @@ async def memory_search(payload: dict, request: Request):
         "agent_id": auth.get("agent_id"),
     }
 
+    # Production search is DB-backed only; never read process-local fallback.
+    await _require_production_db()
     store = _get_store()
 
     # If DB not configured, delegate to in-memory store.search (handles ACL, expires, invalidated)
@@ -1134,6 +1195,8 @@ async def memory_search(payload: dict, request: Request):
     # DB path — lazy load
     maker = await _get_db_maker()
     if maker is None:
+        if _is_production():
+            raise HTTPException(status_code=503, detail="memory database is unavailable")
         # fallback to in-memory
         results = store.search(
             query=query,
@@ -1340,8 +1403,9 @@ async def memory_search(payload: dict, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        # On DB error, fallback to in-memory search (do not leak 500 to tests)
-        logger.warning(f"memory_service DB search failed, fallback to in-memory: {e}")
+        logger.warning(f"memory_service DB search failed: {e}")
+        if _is_production():
+            raise HTTPException(status_code=503, detail="memory database query failed") from e
         results = store.search(query=query, scope=scope, owner=owner, classification=classification, requester=requester, tenant_id=effective_tenant, include_invalidated=include_invalidated)  # type: ignore
         results = results[:limit]
         return {"results": [r.to_dict() for r in results], "count": len(results), "tenant_id": effective_tenant}
@@ -1698,6 +1762,23 @@ async def memory_delete_by_delegation(payload: dict, request: Request):
 _knowledge_db_maker = None  # type: ignore
 _knowledge_db_engine = None  # type: ignore
 
+# P1 availability: bounded non-blocking sync (single worker starvation fix)
+# Bounded concurrency via semaphore + offload blocking sync work via asyncio.to_thread.
+# External API semantics unchanged; health never acquires semaphore.
+try:
+    _KN_SYNC_CONC = int((os.environ.get("OAOS_KNOWLEDGE_SYNC_CONCURRENCY") or "2").strip() or "2")
+except Exception:
+    _KN_SYNC_CONC = 2
+_KNOWLEDGE_SYNC_CONCURRENCY = max(1, min(_KN_SYNC_CONC, 4))
+_KNOWLEDGE_SYNC_SEMAPHORE: asyncio.Semaphore | None = None  # lazy
+
+
+def _get_knowledge_sync_semaphore() -> asyncio.Semaphore:
+    global _KNOWLEDGE_SYNC_SEMAPHORE
+    if _KNOWLEDGE_SYNC_SEMAPHORE is None:
+        _KNOWLEDGE_SYNC_SEMAPHORE = asyncio.Semaphore(_KNOWLEDGE_SYNC_CONCURRENCY)
+    return _KNOWLEDGE_SYNC_SEMAPHORE
+
 
 async def _get_knowledge_maker():
     """Reuse memory_service DB maker but ensure knowledge_index table exists."""
@@ -2053,9 +2134,10 @@ async def knowledge_sync(payload: dict, request: Request):
                 elif isinstance(d, str):
                     docs.append(SourceDocument(resource_id=f"outline/{collection_id or 'team'}/{d}", source_system="outline", title=d, content=d, tenant_id=tenant_id))
             adapter = InMemorySourceAdapter(documents=docs)  # type: ignore
-            # Run sync via library (it accepts InMemory in non-prod)
+            # Bounded non-blocking: semaphore + to_thread inside service; outer bound here
             repo = KnowledgeIndexRepository(maker)
-            result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter, chunk_config=None)
+            async with _get_knowledge_sync_semaphore():
+                result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter, chunk_config=None)
             try:
                 out = result.to_dict()  # type: ignore
             except Exception:
@@ -2086,7 +2168,8 @@ async def knowledge_sync(payload: dict, request: Request):
 
     repo = KnowledgeIndexRepository(maker)
     try:
-        result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter)
+        async with _get_knowledge_sync_semaphore():
+            result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:

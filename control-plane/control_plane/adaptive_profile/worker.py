@@ -10,9 +10,31 @@ import logging
 import threading
 import uuid
 from datetime import datetime, timezone
+
+# The profile worker is scheduled asynchronously and may receive several turns
+# for the same owner at once. Serialize one owner's DB upsert sequence while
+# allowing different owners to progress concurrently.
+_owner_locks: dict[tuple[str, str], asyncio.Lock] = {}
+_owner_locks_guard = threading.Lock()
+
+
+def _owner_lock(tenant_id: str, user_id: str) -> asyncio.Lock:
+    key = (tenant_id, user_id)
+    with _owner_locks_guard:
+        lock = _owner_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _owner_locks[key] = lock
+        return lock
+
+
+async def run_owner_serialized(tenant_id: str, user_id: str, operation, *args, **kwargs):
+    async with _owner_lock(tenant_id, user_id):
+        return await operation(*args, **kwargs)
 from typing import Any
 
 from .extractor import extract_evidence
+from .features import extract_features
 from .engine import content_hash as engine_content_hash, validate_task_type, weighted_update, compute_confidence
 
 logger = logging.getLogger(__name__)
@@ -27,6 +49,64 @@ def get_sessionmaker(url: str | None = None):
     except Exception as e:
         logger.warning(f"worker get_sessionmaker fallback: {e}")
         raise
+
+async def _persist_feature_observation(
+    maker,
+    tenant_id: str,
+    user_id: str,
+    agent_id: str | None,
+    session_id: str | None,
+    conversation_id: str | None,
+    message_id: str | None,
+    task_type: str,
+    feature: Any,
+) -> dict[str, Any]:
+    """Persist one privacy-minimized feature and its rolling aggregate."""
+    from sqlalchemy import select
+    from security.models.orm import ProfileObservationORM, ProfileFeatureAggregateORM, ProfileSettingsORM
+
+    observed_dt = datetime.fromisoformat(feature.observed_at.replace("Z", "+00:00"))
+    source_ref_hash = engine_content_hash(
+        tenant_id, user_id, feature.name, 1 if feature.value >= 0 else -1,
+        feature.source_type, feature.observed_at, message_id or conversation_id or "",
+    )
+    async with maker() as session:
+        settings = await session.get(ProfileSettingsORM, {"tenant_id": tenant_id, "user_id": user_id})
+        if settings is not None and not settings.learning_enabled:
+            return {"skipped": True, "reason": "learning disabled", "feature": feature.name}
+        existing = await session.execute(select(ProfileObservationORM).where(ProfileObservationORM.source_ref_hash == source_ref_hash))
+        if existing.scalars().first() is not None:
+            return {"deduplicated": True, "feature": feature.name, "source_ref_hash": source_ref_hash}
+        observation = ProfileObservationORM(
+            observation_id=f"obs_{uuid.uuid4().hex[:16]}", tenant_id=tenant_id, user_id=user_id,
+            agent_id=agent_id, session_id=session_id, conversation_id=conversation_id,
+            message_id=message_id, task_type=task_type, feature_name=feature.name,
+            normalized_value=feature.value, source_type=feature.source_type,
+            confidence=feature.confidence, source_ref_hash=source_ref_hash, observed_at=observed_dt,
+        )
+        session.add(observation)
+        window = "30d"
+        aggregate_id = engine_content_hash(tenant_id, user_id, feature.name, 1, "aggregate", window, task_type)
+        aggregate = await session.get(ProfileFeatureAggregateORM, aggregate_id)
+        if aggregate is None:
+            aggregate = ProfileFeatureAggregateORM(
+                aggregate_id=aggregate_id, tenant_id=tenant_id, user_id=user_id,
+                task_type=task_type, feature_name=feature.name, window=window,
+                count=0, mean=0.0, variance=0.0, last_observed_at=observed_dt,
+            )
+            session.add(aggregate)
+        old_mean = float(aggregate.mean or 0.0)
+        old_count = int(aggregate.count or 0)
+        new_count = old_count + 1
+        delta = feature.value - old_mean
+        new_mean = old_mean + delta / new_count
+        aggregate.variance = ((old_count * float(aggregate.variance or 0.0)) + delta * (feature.value - new_mean)) / new_count
+        aggregate.count = new_count
+        aggregate.mean = new_mean
+        aggregate.last_observed_at = max(aggregate.last_observed_at or observed_dt, observed_dt)
+        await session.commit()
+        return {"deduplicated": False, "feature": feature.name, "source_ref_hash": source_ref_hash, "aggregate_count": new_count}
+
 
 async def _persist_one(
     maker,
@@ -129,11 +209,16 @@ async def _persist_one(
                 return {"deduplicated": True, "evidence_id": ev_id, "content_hash": ch}
             raise
         logger.info(f"audit worker evidence tenant={tenant_id} user={user_id} trait={trait} dir={direction}")
+        try:
+            from .cache import invalidate_user_cache
+            invalidate_user_cache(tenant_id, user_id)
+        except Exception:
+            pass
         return {"deduplicated": False, "evidence_id": ev_id, "content_hash": ch, "global_score": new_score, "task_score": new_t}
 
 
-async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any]:
-    """Async worker entry — safe, never raises to caller."""
+async def _handle_interaction_event_unserialized(event: dict[str, Any]) -> dict[str, Any]:
+    """Unserialized profile worker implementation."""
     try:
         tenant_id = str(event.get("tenant_id") or "").strip()
         user_id = str(event.get("user_id") or "").strip()
@@ -149,8 +234,31 @@ async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any
         observed_at = event.get("observed_at") or datetime.now(timezone.utc).isoformat()
 
         items = extract_evidence(text, task_type=task_type)
-        if not items:
-            return {"processed": True, "reason": "no explicit feedback detected", "evidence_count": 0, "deduplicated": False}
+        # Behavioral features are intentionally extracted here, off the request
+        # path. Only features backed by the existing trait contract are promoted
+        # to evidence; the full feature aggregate is a later persistence phase.
+        features = extract_features(text, observed_at=observed_at)
+        supported_traits = {"conclusion_first", "verbosity", "evidence_requirement", "agent_autonomy", "confirmation_requirement", "planning_orientation", "completion_orientation", "critical_challenge"}
+        for feature in features:
+            if feature.name not in supported_traits:
+                continue
+            items.append({"trait": feature.name, "direction": 1 if feature.value >= 0 else -1, "strength": abs(feature.value), "confidence": feature.confidence, "source_type": feature.source_type, "task_type": task_type})
+
+        # Persist all low-level features separately from trait evidence. This
+        # enables frequency/style analysis without pretending each feature is a
+        # personality judgment. The DB table is added by migration 017.
+        feature_items = features[:]
+        feature_items = [feature for feature in feature_items if feature.name not in supported_traits] + [feature for feature in feature_items if feature.name in supported_traits]
+
+        if not items and not feature_items:
+            return {"processed": True, "reason": "no behavioral evidence detected", "evidence_count": 0, "feature_count": 0, "deduplicated": False}
+
+        # Validate generated evidence before opening the database session.
+        for item in items:
+            if item["trait"] not in {"conclusion_first", "verbosity", "evidence_requirement", "agent_autonomy", "confirmation_requirement", "planning_orientation", "completion_orientation", "critical_challenge"}:
+                continue
+            item["source_type"] = item.get("source_type") or "general_expression"
+            item["task_type"] = task_type
 
         # Use get_sessionmaker that tests can patch; fallback to router's maker if DB configured differently
         maker = None
@@ -174,6 +282,17 @@ async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any
         # In tests, get_sessionmaker returns async_sessionmaker instance; we treat maker as that instance
         # _persist_one expects maker() to give async session context manager. So if maker is async_sessionmaker, maker() is correct.
         # If maker is already a function returning maker, we already called it.
+
+        feature_results: list[dict[str, Any]] = []
+        for feature in features:
+            try:
+                feature_results.append(await _persist_feature_observation(
+                    maker, tenant_id, user_id,
+                    event.get("agent_id"), event.get("session_id"), conversation_id,
+                    message_id, task_type, feature,
+                ))
+            except Exception as exc:
+                logger.warning("feature observation persist failed feature=%s: %s", feature.name, exc)
 
         results: list[dict] = []
         any_new = False
@@ -200,10 +319,21 @@ async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any
 
         # Overall deduplicated flag: True only if all items were deduplicated and at least one item existed
         dedup_flag = dedup_all and len(results) > 0 and not any_new
-        return {"processed": True, "evidence_count": len(results), "results": results, "deduplicated": dedup_flag}
+        return {"processed": True, "evidence_count": len(results), "feature_count": len(feature_results), "feature_results": feature_results, "results": results, "deduplicated": dedup_flag}
     except Exception as e:
         logger.warning(f"worker handle_interaction_event_async error: {e}")
         return {"processed": False, "reason": str(e), "evidence_count": 0, "deduplicated": False}
+async def handle_interaction_event_async(event: dict[str, Any]) -> dict[str, Any]:
+    """Serialize profile persistence for each verified tenant/user owner."""
+    tenant_id = str(event.get("tenant_id") or "").strip()
+    user_id = str(event.get("user_id") or "").strip()
+    return await run_owner_serialized(
+        tenant_id,
+        user_id,
+        _handle_interaction_event_unserialized,
+        event,
+    )
+
 
 def handle_interaction_event(event: dict[str, Any]) -> dict[str, Any]:
     """Sync non-blocking wrapper — never blocks response path, never raises."""

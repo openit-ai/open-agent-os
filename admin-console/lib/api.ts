@@ -172,7 +172,6 @@ export function deleteInfra(id: string) {
 export function probeInfra(id: string) {
   return apiFetch<InfraService>(`/v1/infra/${id}/probe`, { method: "POST" });
 }
-
 // ---- infra live inventory (read-only, no DB mutation) - legacy compat ----
 export interface LiveInfraItem extends InfraService {
   display_name: string;
@@ -344,7 +343,6 @@ export function createMapping(payload: UserMappingCreatePayload): Promise<UserMa
     body: JSON.stringify(payload),
   });
 }
-
 
 export function updateMapping(id: string, payload: { display_name?: string | null; avatar_url?: string | null; employee_principal?: string }): Promise<UserMapping> {
   return apiFetch<UserMapping>(`/v1/user-mappings/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -975,6 +973,195 @@ export function updateFallbackConfig(payload: FallbackUpdateRequest): Promise<Fa
   return apiFetch<FallbackConfig>("/v1/llm/fallback", { method: "PUT", body: JSON.stringify(payload) });
 }
 
+// ---- Setup wizard (matches backend/setup.py) ----
+export interface SetupStatus {
+  first_run: boolean;
+  setup_completed: boolean;
+  has_admin: boolean;
+}
+export interface SetupChecks {
+  db: { ok: boolean; target?: string; latency_ms?: number; error?: string };
+  redis: { ok: boolean; target?: string; latency_ms?: number; error?: string };
+  hermes: { ok: boolean; target?: string; latency_ms?: number; status_code?: number; error?: string };
+}
+export function getSetupStatus(): Promise<SetupStatus> {
+  return apiFetch<SetupStatus>("/v1/setup/status");
+}
+export interface SetupEffective {
+  db: { configured: boolean; driver: string | null; user: string | null; host: string | null; port: number | null; database: string | null };
+  redis: { configured: boolean; host: string | null; port: number | null; db: number | null };
+  hermes: { base_url: string; model: string; acp_enabled: boolean };
+}
+export function getSetupEffective(): Promise<SetupEffective> {
+  return apiFetch<SetupEffective>("/v1/setup/effective");
+}
+export function postSetupChecks(payload?: { db_url?: string; redis_url?: string; hermes_url?: string }): Promise<SetupChecks> {
+  return apiFetch<SetupChecks>("/v1/setup/checks", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+export function postSetupComplete(): Promise<{ setup_completed: boolean; persisted: string }> {
+  return apiFetch("/v1/setup/complete", { method: "POST" });
+}
+
+// ---- ACP settings (matches backend/acp_config.py) ----
+export interface AcpConfig {
+  hermes_base_url: string;
+  hermes_model: string;
+  acp_enabled: boolean;
+  api_key_set: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface AcpUpdateRequest {
+  hermes_base_url?: string;
+  hermes_model?: string;
+  acp_enabled?: boolean;
+}
+export interface AcpTestResult {
+  ok: boolean;
+  target?: string;
+  path?: string;
+  status_code?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getAcpConfig(): Promise<AcpConfig> {
+  return apiFetch<AcpConfig>("/v1/acp/config");
+}
+export function updateAcpConfig(payload: AcpUpdateRequest): Promise<AcpConfig> {
+  return apiFetch<AcpConfig>("/v1/acp/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testAcpConnection(payload?: { hermes_base_url?: string }): Promise<AcpTestResult> {
+  return apiFetch<AcpTestResult>("/v1/acp/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- MCP servers (matches backend/mcp_config.py) ----
+export interface McpServer {
+  name: string;
+  transport: string;
+  url?: string | null;
+  command?: string | null;
+  args?: string[];
+  headers_set?: string[];
+  updated_at?: string | null;
+}
+export interface McpServerCreatePayload {
+  name: string;
+  transport: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
+}
+export interface McpServerTestResult {
+  name: string;
+  transport: string;
+  ok: boolean | null;
+  status_code?: number;
+  tool_count?: number;
+  tools?: string[];
+  latency_ms?: number;
+  error?: string;
+  note?: string;
+}
+export async function listMcpServers(): Promise<McpServer[]> {
+  const res = await apiFetch<{ servers: McpServer[] }>("/v1/mcp/servers");
+  return res.servers ?? [];
+}
+export async function createMcpServer(payload: McpServerCreatePayload): Promise<McpServer> {
+  const res = await apiFetch<{ server: McpServer }>("/v1/mcp/servers", { method: "POST", body: JSON.stringify(payload) });
+  return res.server;
+}
+export async function updateMcpServer(name: string, payload: McpServerCreatePayload): Promise<McpServer> {
+  const res = await apiFetch<{ server: McpServer }>(`/v1/mcp/servers/${name}`, { method: "PUT", body: JSON.stringify(payload) });
+  return res.server;
+}
+export function deleteMcpServer(name: string): Promise<{ deleted: string; count: number }> {
+  return apiFetch(`/v1/mcp/servers/${name}`, { method: "DELETE" });
+}
+export function testMcpServer(name: string): Promise<McpServerTestResult> {
+  return apiFetch<McpServerTestResult>(`/v1/mcp/servers/${name}/test`, { method: "POST" });
+}
+
+// ---- Mattermost bot (matches backend/mattermost_config.py) ----
+export interface MmConfig {
+  mattermost_url: string;
+  bot_token_set: boolean;
+  bot_username: string;
+  default_display_name: string;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface MmUpdateRequest {
+  mattermost_url?: string;
+  bot_token?: string;
+  bot_username?: string;
+  default_display_name?: string;
+}
+export interface MmTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  bot_user_id?: string;
+  bot_username?: string;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getMmConfig(): Promise<MmConfig> {
+  return apiFetch<MmConfig>("/v1/mattermost/config");
+}
+export function updateMmConfig(payload: MmUpdateRequest): Promise<MmConfig> {
+  return apiFetch<MmConfig>("/v1/mattermost/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testMmConnection(payload?: { bot_token?: string }): Promise<MmTestResult> {
+  return apiFetch<MmTestResult>("/v1/mattermost/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- Outline connector (matches backend/outline_config.py) ----
+export interface OlConfig {
+  outline_url: string;
+  api_key_set: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface OlUpdateRequest {
+  outline_url?: string;
+  api_key?: string;
+}
+export interface OlTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  collection_count?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getOlConfig(): Promise<OlConfig> {
+  return apiFetch<OlConfig>("/v1/outline/config");
+}
+export function updateOlConfig(payload: OlUpdateRequest): Promise<OlConfig> {
+  return apiFetch<OlConfig>("/v1/outline/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testOlConnection(payload?: { api_key?: string }): Promise<OlTestResult> {
+  return apiFetch<OlTestResult>("/v1/outline/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+export interface MmBridgeStatus {
+  installed: boolean;
+  active: string;
+  configured: boolean;
+}
+export function getMmBridge(): Promise<MmBridgeStatus> {
+  return apiFetch<MmBridgeStatus>("/v1/mattermost/bridge");
+}
+export function mmBridgeAction(action: "start" | "stop" | "restart"): Promise<MmBridgeStatus & { action: string }> {
+  return apiFetch(`/v1/mattermost/bridge/${action}`, { method: "POST" });
+}
+
 // ---- Runtime Config Plane (versioned / signed, tenant-scoped) ----
 export interface RuntimeConfigSnapshot {
   tenant_id: string;
@@ -1110,4 +1297,342 @@ export function getRuntimeAppliedStatus(tenantId?: string): Promise<RuntimeAppli
   return apiFetch<RuntimeAppliedStatusResponse>(`/v1/runtime/config/applied-status${runtimeTenantQuery(tenantId)}`, {
     headers: runtimeTenantHeader(tenantId),
   });
+}
+
+// ---- Notion connector (matches backend/notion_config.py) ----
+export interface NotionConfig {
+  notion_api_url: string;
+  api_key_set: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface NotionUpdateRequest {
+  notion_api_url?: string;
+  api_key?: string;
+}
+export interface NotionTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  user_count?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getNotionConfig(): Promise<NotionConfig> {
+  return apiFetch<NotionConfig>("/v1/notion/config");
+}
+export function updateNotionConfig(payload: NotionUpdateRequest): Promise<NotionConfig> {
+  return apiFetch<NotionConfig>("/v1/notion/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testNotionConnection(payload?: { api_key?: string }): Promise<NotionTestResult> {
+  return apiFetch<NotionTestResult>("/v1/notion/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- Slack connector (matches backend/slack_config.py) ----
+export interface SlackConfig {
+  webhook_url_set: boolean;
+  channel: string;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface SlackUpdateRequest {
+  webhook_url?: string;
+  channel?: string;
+}
+export interface SlackTestResult {
+  ok: boolean;
+  status_code?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getSlackConfig(): Promise<SlackConfig> {
+  return apiFetch<SlackConfig>("/v1/slack/config");
+}
+export function updateSlackConfig(payload: SlackUpdateRequest): Promise<SlackConfig> {
+  return apiFetch<SlackConfig>("/v1/slack/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testSlackConnection(payload?: { webhook_url?: string }): Promise<SlackTestResult> {
+  return apiFetch<SlackTestResult>("/v1/slack/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- OAuth connectors (matches backend/oauth_config.py; secrets env-only) ----
+export interface OAuthConfig {
+  google_client_id_set: boolean;
+  google_client_secret_set: boolean;
+  google_redirect_uri: string;
+  microsoft_client_id_set: boolean;
+  microsoft_client_secret_set: boolean;
+  microsoft_redirect_uri: string;
+  google_enabled: boolean;
+  microsoft_enabled: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface OAuthUpdateRequest {
+  google_enabled?: boolean;
+  microsoft_enabled?: boolean;
+}
+export interface OAuthProviderTestResult {
+  ok: boolean;
+  configured: boolean;
+  status_code?: number;
+  latency_ms?: number;
+  enabled?: boolean;
+  error?: string;
+}
+export interface OAuthTestResult {
+  ok: boolean;
+  providers: Record<string, OAuthProviderTestResult>;
+  redirect_uris: Record<string, string>;
+  source?: string;
+}
+export function getOAuthConfig(): Promise<OAuthConfig> {
+  return apiFetch<OAuthConfig>("/v1/oauth/config");
+}
+export function updateOAuthConfig(payload: OAuthUpdateRequest): Promise<OAuthConfig> {
+  return apiFetch<OAuthConfig>("/v1/oauth/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testOAuthConnection(payload?: { provider?: string }): Promise<OAuthTestResult> {
+  return apiFetch<OAuthTestResult>("/v1/oauth/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- SMTP connector (matches backend/smtp_config.py) ----
+export interface SmtpConfig {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_password_set: boolean;
+  use_starttls: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface SmtpUpdateRequest {
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_user?: string;
+  smtp_password?: string;
+  use_starttls?: boolean;
+}
+export interface SmtpTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  starttls?: boolean;
+  login?: boolean;
+  latency_ms?: number;
+  note?: string;
+  error?: string;
+  source?: string;
+}
+export function getSmtpConfig(): Promise<SmtpConfig> {
+  return apiFetch<SmtpConfig>("/v1/smtp/config");
+}
+export function updateSmtpConfig(payload: SmtpUpdateRequest): Promise<SmtpConfig> {
+  return apiFetch<SmtpConfig>("/v1/smtp/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testSmtpConnection(payload?: { smtp_password?: string }): Promise<SmtpTestResult> {
+  return apiFetch<SmtpTestResult>("/v1/smtp/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- P2: Quota admin (display/planned overrides; enforcement unchanged) ----
+export interface QuotaLimits {
+  tenant_id: string;
+  daily_limit: number;
+  per_minute_limit: number;
+  defaults: { daily_limit: number; per_minute_limit: number };
+  override: { daily_limit: number; per_minute_limit: number; updated_at?: string | null; updated_by?: string | null } | null;
+  overridden: boolean;
+  source?: string;
+  enforcement?: string;
+  note?: string;
+}
+export interface QuotaUpdateRequest {
+  tenant_id?: string;
+  daily_limit?: number;
+  per_minute_limit?: number;
+}
+export interface QuotaUsage {
+  tenant_id: string;
+  effective_limits: { daily_limit: number; per_minute_limit: number };
+  usage: Record<string, unknown> | null;
+  usage_source?: string;
+  enforcement?: string;
+  note?: string;
+}
+export function getQuotaLimits(tenantId = "default"): Promise<QuotaLimits> {
+  return apiFetch<QuotaLimits>(`/v1/quota/limits?tenant_id=${encodeURIComponent(tenantId)}`);
+}
+export function updateQuotaLimits(payload: QuotaUpdateRequest): Promise<QuotaLimits> {
+  return apiFetch<QuotaLimits>("/v1/quota/limits", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function getQuotaUsage(tenantId = "default"): Promise<QuotaUsage> {
+  return apiFetch<QuotaUsage>(`/v1/quota/usage?tenant_id=${encodeURIComponent(tenantId)}`);
+}
+
+// ---- P2: Embedding config (console source of truth; restart to apply) ----
+export interface EmbeddingConfig {
+  provider: string;
+  model: string;
+  dim: number;
+  api_url: string;
+  source?: string;
+  applied?: boolean;
+  restart_required?: boolean;
+  note?: string;
+}
+export interface EmbeddingUpdateRequest {
+  provider?: string;
+  model?: string;
+  dim?: number;
+  api_url?: string;
+}
+export function getEmbeddingConfig(): Promise<EmbeddingConfig> {
+  return apiFetch<EmbeddingConfig>("/v1/embedding/config");
+}
+export function updateEmbeddingConfig(payload: EmbeddingUpdateRequest): Promise<EmbeddingConfig> {
+  return apiFetch<EmbeddingConfig>("/v1/embedding/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+
+// ---- P2: Secrets status (metadata only; values never returned) ----
+export interface SecretStatusItem {
+  name: string;
+  configured: boolean;
+  length: number;
+  source_env: string | null;
+  rotation_needed: boolean;
+  reason: string;
+}
+export interface SecretsStatus {
+  checked_at: string;
+  count: number;
+  items: SecretStatusItem[];
+  rotation_needed_count: number;
+  note?: string;
+}
+export interface RotationGuideStep { order: number; title: string; detail: string }
+export interface RotationChecklistItem { id: string; label: string }
+export interface RotationGuide {
+  overview: string;
+  steps: RotationGuideStep[];
+  checklist: RotationChecklistItem[];
+  executes_rotation: boolean;
+  note?: string;
+}
+export function getSecretsStatus(): Promise<SecretsStatus> {
+  return apiFetch<SecretsStatus>("/v1/secrets/status");
+}
+export function getRotationGuide(): Promise<RotationGuide> {
+  return apiFetch<RotationGuide>("/v1/secrets/rotation-guide");
+}
+
+// ---- P2: Feature flags (console-stored only; no runtime wiring) ----
+export interface FeatureFlag {
+  name: string;
+  enabled: boolean;
+  default: boolean;
+  overridden: boolean;
+  custom: boolean;
+  description: string;
+}
+export interface FeatureFlagsResponse {
+  count: number;
+  flags: FeatureFlag[];
+  source?: string;
+  runtime_wired?: boolean;
+  note?: string;
+}
+export interface FeatureFlagToggleResult extends FeatureFlag {
+  source?: string;
+  runtime_wired?: boolean;
+  note?: string;
+}
+export function getFeatureFlags(): Promise<FeatureFlagsResponse> {
+  return apiFetch<FeatureFlagsResponse>("/v1/feature-flags");
+}
+export function toggleFeatureFlag(name: string, enabled: boolean): Promise<FeatureFlagToggleResult> {
+  return apiFetch<FeatureFlagToggleResult>("/v1/feature-flags", { method: "PUT", body: JSON.stringify({ name, enabled }) });
+}
+
+// ---- P3: Profile ops (read-only status + worker backfill + reset delegation) ----
+export interface ProfileOpsStatus {
+  tenant_id?: string | null;
+  user_id?: string | null;
+  profile_exists: boolean;
+  profile_count: number;
+  trait_count: number;
+  evidence_count: number;
+  worker_queue_depth: number;
+  source?: string;
+  checked_at?: string;
+  note?: string;
+}
+export interface ProfileBackfillResult {
+  enqueued: boolean;
+  job_id: string;
+  via: string;
+  payload?: Record<string, unknown>;
+}
+export interface ProfileResetResult {
+  status?: string;
+  tenant_id?: string;
+  user_id?: string;
+  delegated?: boolean;
+  via?: string;
+  note?: string;
+}
+export function getProfileOpsStatus(tenantId?: string, userId?: string): Promise<ProfileOpsStatus> {
+  const q = new URLSearchParams();
+  if (tenantId) q.set("tenant_id", tenantId);
+  if (userId) q.set("user_id", userId);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiFetch<ProfileOpsStatus>(`/v1/profile-ops/status${suffix}`);
+}
+export function postProfileBackfill(payload: { tenant_id: string; user_id: string; reason?: string }): Promise<ProfileBackfillResult> {
+  return apiFetch<ProfileBackfillResult>("/v1/profile-ops/backfill", { method: "POST", body: JSON.stringify(payload) });
+}
+export function postProfileReset(payload: { tenant_id: string; user_id: string; confirm: string }): Promise<ProfileResetResult> {
+  return apiFetch<ProfileResetResult>("/v1/profile-ops/reset", { method: "POST", body: JSON.stringify(payload) });
+}
+
+// ---- P3: Knowledge ops (checkpoint status + connector sync + dry-run) ----
+export interface KnowledgeCheckpoint {
+  tenant_id: string;
+  source_system: string;
+  cursor?: string | null;
+  last_sync_at?: string | null;
+  updated_at?: string | null;
+}
+export interface KnowledgeOpsStatus {
+  tenant_id?: string | null;
+  checkpoints: KnowledgeCheckpoint[];
+  checkpoint_count: number;
+  document_count: number;
+  known_connectors: string[];
+  synced_connectors: string[];
+  pending_connectors: string[];
+  source?: string;
+  checked_at?: string;
+  note?: string;
+}
+export interface KnowledgeSyncResult {
+  dry_run: boolean;
+  enqueued: boolean;
+  job_id?: string;
+  via?: string;
+  planned?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+  note?: string;
+}
+export function getKnowledgeOpsStatus(tenantId?: string): Promise<KnowledgeOpsStatus> {
+  const suffix = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : "";
+  return apiFetch<KnowledgeOpsStatus>(`/v1/knowledge-ops/status${suffix}`);
+}
+export function postKnowledgeSync(payload: { connector: string; tenant_id?: string; dry_run?: boolean }): Promise<KnowledgeSyncResult> {
+  return apiFetch<KnowledgeSyncResult>("/v1/knowledge-ops/sync", { method: "POST", body: JSON.stringify(payload) });
 }

@@ -11,6 +11,8 @@
 | `v1.6.2` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.6.2.md` (4526 lines, SHA `4456bd4c`) |
 | `v1.5.1` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.1.md` (3615 lines, SHA `4c2c1b85`) |
 | `v1.5` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), `docs/architecture-v1.5.md` (3417 lines, SHA `b19f54ab`) |
+| `v0.1.3` | ✅ | Current product — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), product version `0.1.3` (arch `v1.7.2` distinct), candidate branch `release/v0.1.3-remediation` |
+| `v0.1.2` | ✅ | Previous product — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0), tag `v0.1.2` (`34f0981e71`) |
 | `v0.1.1` | ✅ | Previous — Source-Available (BSL 1.1, Change Date 2030-08-27 → Apache 2.0) |
 
 Earlier pre-release tags are not supported. Security fixes are applied to `main`.

@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,35 @@ from ..router import route_session
 from ..session import new_request_id, session_store
 
 router = APIRouter()
+
+
+def _archive_conversation_turn(tenant_id: str, agent_id: str, user_id: str, session_id: str, request_id: str, text: str) -> None:
+    """Append a user turn to the owner-scoped Personal Wiki journal.
+
+    This is deliberately local and deterministic: no LLM/OCR/provider is
+    involved. Failure is logged but never changes the conversational response.
+    """
+    try:
+        import sys
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[3]
+        package_root = repo_root / "packages" / "personal-wiki"
+        if str(package_root) not in sys.path:
+            sys.path.insert(0, str(package_root))
+        from personal_wiki.vault import append_journal, vault_path_for_tenant_agent
+        owner_root = vault_path_for_tenant_agent(tenant_id, agent_id)
+        append_journal(
+            trace_id=request_id,
+            tool_name="mattermost_conversation",
+            result={"user_id": user_id, "session_id": session_id, "text": text},
+            # tenant/agent are already derived from the verified server-side
+            # Mattermost identity and owner_root is the isolated target.
+            extra={"tenant_id": tenant_id, "agent_id": agent_id, "source": "mattermost"},
+            vault_root=owner_root,
+        )
+    except Exception as exc:
+        log.warning("personal wiki conversation archive failed session=%s request=%s: %s", session_id, request_id, exc)
+
 log = logging.getLogger(__name__)
 
 # ── Small-business Mattermost -> ACP -> Policy Engine gate ─────────────
@@ -98,6 +128,29 @@ async def _evaluate_ingress_policy(
     except Exception as e:
         # Fallback direct (should not happen) — fail-closed
         raise HTTPException(status_code=403, detail=f"policy denied: gate error: {e}")
+
+# Per-owner async serialization: preserve prompt order within one session while
+# allowing different users to continue concurrently. Locks are process-local;
+# durable idempotency remains the cross-process duplicate guard.
+_owner_locks: dict[tuple[str, str], asyncio.Lock] = {}
+_owner_locks_guard = threading.Lock()
+
+
+def _owner_lock(tenant_id: str, user_id: str) -> asyncio.Lock:
+    key = (tenant_id, user_id)
+    with _owner_locks_guard:
+        lock = _owner_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _owner_locks[key] = lock
+        return lock
+
+
+async def run_owner_serialized(tenant_id: str, user_id: str, operation, *args, **kwargs):
+    """Run one owner operation in FIFO acquisition order for this process."""
+    async with _owner_lock(tenant_id, user_id):
+        return await operation(*args, **kwargs)
+
 
 # Lazy import for orchestrator (avoid circular at import time)
 def _load_orchestrator():
@@ -214,16 +267,8 @@ def _get_mattermost_adapter():
         base_url = getattr(settings, "mattermost_url", "") or os.getenv("MATTERMOST_URL", "")
         bot_token = getattr(settings, "mattermost_bot_token", "") or os.getenv("MATTERMOST_BOT_TOKEN", "")
         webhook_secret = getattr(settings, "mattermost_webhook_secret", "") or os.getenv("MATTERMOST_WEBHOOK_SECRET", "")
-        if not bot_token:
-            try:
-                for line in (Path.home() / ".hermes" / ".env").read_text(encoding="utf-8").splitlines():
-                    key, sep, value = line.partition("=")
-                    if sep and key == "MATTERMOST_BOT_TOKEN":
-                        bot_token = value.strip().strip('"').strip("'")
-                    elif sep and key == "MATTERMOST_URL" and not base_url:
-                        base_url = value.strip().strip('"').strip("'")
-            except OSError:
-                pass
+        # Do not read Hermes global files here. Same-OS-account sessions share
+        # Unix permissions; OAOS must use its explicit service configuration.
         return MattermostAdapter(
             base_url=base_url,
             bot_token=bot_token,
@@ -459,9 +504,66 @@ async def _handle_core_logic(
     attachment_refs: list[dict] | None = None,
     runtime_context: dict | None = None,
 ) -> dict[str, Any]:
+    """Serialize all side effects for one verified owner."""
+    return await run_owner_serialized(
+        tenant_id,
+        user_id,
+        _handle_core_logic_unserialized,
+        tenant_id,
+        user_id,
+        text,
+        session_id,
+        channel_id,
+        post_id,
+        root_id,
+        file_ids,
+        attachment_refs,
+        runtime_context,
+    )
+
+
+async def _handle_core_logic_unserialized(
+    tenant_id: str,
+    user_id: str,
+    text: str,
+    session_id: str | None,
+    channel_id: str | None = None,
+    post_id: str | None = None,
+    root_id: str | None = None,
+    file_ids: list[str] | None = None,
+    attachment_refs: list[dict] | None = None,
+    runtime_context: dict | None = None,
+) -> dict[str, Any]:
     """Shared session/briefing/ACP logic (reused by events + slash)."""
     # Identity mapping — 1:1 logical agent
     mapping = map_user_to_agent(user_id, tenant_id)
+    # Registration gate: admin_user_mappings is the source of truth. Only
+    # registered users can reach Personal Wiki, Profile, MCP, or Hermes.
+    try:
+        from ..user_mapping_lookup import lookup_registered_owner
+        registered = lookup_registered_owner(tenant_id, user_id)
+    except Exception as exc:
+        if os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"}:
+            raise HTTPException(status_code=503, detail="user registration lookup unavailable") from exc
+        registered = None
+    if registered is None and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="OAOS user registration required")
+    if registered and registered.get("agent_id") and registered["agent_id"] != mapping.agent_principal:
+        raise HTTPException(status_code=403, detail="registered agent identity mismatch")
+
+    # Deterministic onboarding gate precedes session, Personal Wiki/Profile,
+    # Enterprise MCP, Google, and Hermes side effects. It is bypassed only by
+    # the explicit repository pytest fixture path or when no channel is known.
+    gate_platform = (runtime_context or {}).get("platform") or ("mattermost" if channel_id else None)
+    if gate_platform in {"mattermost", "slack"} and registered is not None:
+        from ..registration_gate import handle as handle_registration_gate
+        gate = handle_registration_gate(tenant_id=tenant_id, user_id=mapping.human_principal, session_id=session_id or "pending", text=text, platform=gate_platform)
+        if not gate.allowed:
+            return {"received": True, "registration_gate": gate.state, "registration_state": gate.state, "message": gate.response, "reason": gate.reason, "agent_id": mapping.agent_principal, "user_id": mapping.human_principal}
+        # Make the selected routes explicit for downstream MCP/Profile code.
+        if isinstance(runtime_context, dict):
+            runtime_context.setdefault("knowledge_route", "enterprise_mcp_default")
+            runtime_context.setdefault("personal_route", "personal_wiki_profile")
 
     # ── P0 Idempotency early gate (before session/policy/LLM side effects) ──
     # If same post_id retries, we must NOT create a new session or call LLM again.
@@ -523,7 +625,17 @@ async def _handle_core_logic(
             _lg.getLogger(__name__).warning("idempotency early claim failed non-prod fallback: %s", _idem_exc)
             # fall through to normal flow (non-prod fallback will proceed)
 
-    # Session: resume or create (only for non-duplicate; duplicates already returned above)
+    # Session: resume the owner's latest durable session when the bridge does
+    # not provide one. This is the Mattermost conversation continuity boundary.
+    if not session_id:
+        try:
+            prior = session_store.find_latest_for_owner(tenant_id, mapping.human_principal)
+            if prior is not None and prior.status == "active":
+                session_id = prior.session_id
+        except Exception as exc:
+            if os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod"):
+                raise HTTPException(status_code=503, detail="durable session lookup unavailable") from exc
+            log.warning("latest session lookup failed: %s", exc)
     if session_id:
         try:
             rec = session_store.get(session_id, user_id)
@@ -534,7 +646,7 @@ async def _handle_core_logic(
         # A안: resolve display_name/avatar_url for this agent before session create
         _dn, _av = _get_personal_display_name(mapping.agent_principal)
         # also try personal_agent display_name from mapping if available via make_profile? fallback to mapped agent_id suffix
-        rec = session_store.create(
+        rec = session_store.get_or_create_for_owner(
             tenant_id=tenant_id,
             user_id=mapping.human_principal,
             agent_id=mapping.agent_principal,
@@ -659,6 +771,19 @@ async def _handle_core_logic(
                 "acp": {"status": "routed_to_briefing"},
             }
 
+    # Route explicit personal/company questions to owner-scoped context retrieval.
+    # Retrieval is deterministic and runs before the single bounded LLM call.
+    route = None
+    context_text = ""
+    try:
+        from ..context_retrieval import classify_context_route, format_context, retrieve_enterprise_context, retrieve_personal_context
+        route = classify_context_route(text)
+        if route == "personal":
+            context_text = format_context(route, await retrieve_personal_context(mapping.human_principal, text))
+        elif route == "enterprise":
+            context_text = format_context(route, await retrieve_enterprise_context(tenant_id, mapping.agent_principal, text))
+    except Exception as exc:
+        log.warning("context retrieval unavailable session=%s: %s", session_id, type(exc).__name__)
     # Forward prompt (non-briefing path)
     rid = new_request_id()
     # multimodal: normalize runtime_context from caller (bridge) + canonical ids
@@ -676,6 +801,13 @@ async def _handle_core_logic(
         _fid = [r.get("attachment_id") or r.get("vault_path") or r.get("file_id") for r in _arefs if isinstance(r, dict)]
         _fid = [x for x in _fid if x]
     session_store.append_prompt(session_id, user_id, text, rid, file_ids=_fid or None, attachment_refs=_arefs or None, runtime_context=_rctx or None)
+    try:
+        from ..adaptive_profile.queue import enqueue as _enqueue
+        queued = _enqueue(_archive_conversation_turn, tenant_id, mapping.agent_principal, mapping.human_principal, session_id, rid, text)
+        if not queued:
+            log.warning("personal wiki archive queue full session=%s request=%s", session_id, rid)
+    except Exception as exc:
+        log.warning("personal wiki archive enqueue failed session=%s request=%s: %s", session_id, rid, exc)
     # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
     try:
         from control_plane.adaptive_profile.worker import handle_interaction_event as _ap_handle
@@ -691,8 +823,12 @@ async def _handle_core_logic(
     except Exception:
         pass
     acp = ACPAdapter(settings.hermes_base_url)
+    prompt_for_llm = f"{context_text}\n\n[사용자 질문]\n{text}" if context_text else text
+    if route:
+        _rctx["knowledge_route"] = route
+        _rctx["retrieval_used"] = bool(context_text)
     try:
-        acp_result = await acp.send_prompt(rec, text, rid, attachment_refs=_arefs or None, file_ids=_fid or None, runtime_context=_rctx or None)
+        acp_result = await acp.send_prompt(rec, prompt_for_llm, rid, attachment_refs=_arefs or None, file_ids=_fid or None, runtime_context=_rctx or None)
     except Exception as _acp_exc:
         if _idem_key:
             try:
@@ -769,6 +905,8 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     if not text and (_raw_fids or _raw_arefs):
         text = payload.get("text") or ""  # allow empty; ACP will handle image-only via multimodal
 
+    _raw_rctx = dict(_raw_rctx)
+    _raw_rctx.setdefault("platform", "mattermost")
     return await _handle_core_logic(tenant_id, user_id, text, session_id, channel_id=channel_id, post_id=post_id, root_id=root_id, file_ids=_raw_fids, attachment_refs=_raw_arefs, runtime_context=_raw_rctx)
 
 

@@ -190,7 +190,27 @@ def test_session_namespace_model_persisted_across_reload():
     assert len(got2.prompt_history) == 1
     assert got2.prompt_history[0]["prompt"] == "hello world"
 
-# --- Test 4: non-prod compatibility ---
+# --- Test 4: owner-scoped namespaces ---
+def test_each_user_gets_an_independent_session_namespace():
+    from control_plane.session import InMemorySessionStore, session_namespace_for_owner
+
+    store = InMemorySessionStore()
+    kim = store.create(tenant_id="acme", user_id="employee:kim", agent_id="agent:assistant:kim")
+    lee = store.create(tenant_id="acme", user_id="employee:lee", agent_id="agent:assistant:lee")
+
+    assert kim.session_id != lee.session_id
+    assert kim.session_namespace == session_namespace_for_owner("acme", "employee:kim")
+    assert lee.session_namespace == session_namespace_for_owner("acme", "employee:lee")
+    assert kim.session_namespace != lee.session_namespace
+    assert kim.to_agent_context()["session_namespace"] != lee.to_agent_context()["session_namespace"]
+
+    store.append_prompt(kim.session_id, "employee:kim", "kim-only", "req-kim")
+    store.append_prompt(lee.session_id, "employee:lee", "lee-only", "req-lee")
+    assert [p["prompt"] for p in store.get(kim.session_id, "employee:kim").prompt_history] == ["kim-only"]
+    assert [p["prompt"] for p in store.get(lee.session_id, "employee:lee").prompt_history] == ["lee-only"]
+
+
+# --- Test 5: non-prod compatibility ---
 def test_non_prod_compatibility_memory_or_fallback():
     """Non-prod should allow InMemory or Redis with fallback."""
     # ensure non-prod env

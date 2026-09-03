@@ -9,10 +9,10 @@ interface VersionInfo {
   updateAvailable: boolean;
 }
 
-// Fallback product version — single source of truth is admin-console/package.json (0.1.2)
+// Fallback product version — single source of truth is admin-console/package.json (0.1.3)
 // Used before API resolves so UI never shows placeholder {version}
 const FALLBACK_VERSION =
-  (typeof process !== "undefined" && (process.env.OAOS_VERSION || process.env.NEXT_PUBLIC_OAOS_VERSION)?.trim().replace(/^v/i, "")) || "0.1.2";
+  (typeof process !== "undefined" && (process.env.OAOS_VERSION || process.env.NEXT_PUBLIC_OAOS_VERSION)?.trim().replace(/^v/i, "")) || "0.1.3";
 
 export function VersionDisplay() {
   const { t } = useI18n();
@@ -41,8 +41,8 @@ export function VersionDisplay() {
   const baseText = t("header.version", { version: installed });
 
   // Only when GitHub confirmed a higher semver release/tag; otherwise show only installed
-  // Planned 0.1.2 is NOT shown as latest until it is actually released on GitHub
-  // No "업데이트 가능" text — format strictly `Open Agent OS v0.1.2 -> vX.Y.Z` with latest in red
+  // Planned 0.1.3 is NOT shown as latest until it is actually released on GitHub
+  // No "업데이트 가능" text — format strictly `Open Agent OS v0.1.3 -> vX.Y.Z` with latest in red
   if (info?.updateAvailable && info.latestVersion) {
     return (
       <div className="space-y-0.5">

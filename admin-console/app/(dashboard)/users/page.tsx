@@ -16,6 +16,7 @@ import {
   type AdminUserPublic,
   listMappings,
   createMapping,
+  updateMapping,
   deleteMapping,
   resolveMmUser,
   syncPreview,
@@ -47,6 +48,19 @@ function fmtDate(iso?: string | null) {
   }
 }
 
+const MAX_AVATAR_URL_LENGTH = 2048;
+function isSafeAvatarUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  const s = url.trim();
+  if (!s || s.length > MAX_AVATAR_URL_LENGTH) return false;
+  try {
+    const u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export default function UsersPage() {
   const router = useRouter();
   const { t } = useI18n();
@@ -75,6 +89,11 @@ export default function UsersPage() {
   const [mapFormError, setMapFormError] = useState<string | null>(null);
   const [mapFormLoading, setMapFormLoading] = useState(false);
   const [deletingMap, setDeletingMap] = useState<string | null>(null);
+  const [editingMap, setEditingMap] = useState<string | null>(null);
+  const [editDisplayName, setEditDisplayName] = useState<string>("");
+  const [editLoading, setEditLoading] = useState(false);
+  const [mappingDisplayName, setMappingDisplayName] = useState("");
+  const [mappingAvatarUrl, setMappingAvatarUrl] = useState("");
   const [resolving, setResolving] = useState(false);
   const [resolveMsg, setResolveMsg] = useState<string | null>(null);
   const [preview, setPreview] = useState<SyncPreviewItem[] | null>(null);
@@ -220,6 +239,24 @@ export default function UsersPage() {
       setMapFormError(t("users.validationMmUsername"));
       return;
     }
+    // frontend avatar_url strict validation (https/http only, bounded 2048) — mirrors backend _validate_avatar_url
+    const avatarTrimmed = mappingAvatarUrl.trim();
+    if (avatarTrimmed) {
+      if (avatarTrimmed.length > MAX_AVATAR_URL_LENGTH) {
+        setMapFormError(`avatar_url too long (max ${MAX_AVATAR_URL_LENGTH})`);
+        return;
+      }
+      try {
+        const u = new URL(avatarTrimmed);
+        if (u.protocol !== "http:" && u.protocol !== "https:") {
+          setMapFormError("avatar_url must use http or https");
+          return;
+        }
+      } catch {
+        setMapFormError("invalid avatar_url");
+        return;
+      }
+    }
     let finalId = mmUserId.trim();
     let finalUsername: string | undefined = mmUsername.trim() || undefined;
     // Username만 입력한 경우 백엔드가 자동 조회하므로 ID 없이도 제출 가능하나, UX상 미리 조회하여 즉시 피드백
@@ -249,16 +286,35 @@ export default function UsersPage() {
         mm_user_id: finalId,
         mm_username: finalUsername,
         employee_principal: employeePrincipal.trim() || undefined,
+        display_name: mappingDisplayName.trim() || undefined,
+        avatar_url: avatarTrimmed || undefined,
       });
       setMmUserId("");
       setMmUsername("");
       setEmployeePrincipal("");
+      setMappingDisplayName("");
+      setMappingAvatarUrl("");
       setPreview(null);
       await fetchMappings();
     } catch (err) {
       setMapFormError(err instanceof Error ? err.message : t("common.error"));
     } finally {
       setMapFormLoading(false);
+    }
+  }
+
+  async function handleUpdateDisplayName(id: string) {
+    if (!editDisplayName.trim()) { alert(t("users.validationDisplayName") || "호칭을 입력하세요"); return; }
+    setEditLoading(true);
+    try {
+      await updateMapping(id, { display_name: editDisplayName.trim() });
+      setEditingMap(null);
+      setEditDisplayName("");
+      await fetchMappings();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : t("common.error"));
+    } finally {
+      setEditLoading(false);
     }
   }
 
@@ -493,6 +549,14 @@ export default function UsersPage() {
                   {resolveMsg && <p className="text-xs text-muted-foreground">{resolveMsg}</p>}
                 </div>
                 <div className="space-y-1">
+                  <Label htmlFor="mappingDisplayName">호칭 (아이콘 옆 표시, A안)</Label>
+                  <Input id="mappingDisplayName" placeholder="예: 코코 (개인별, 비우면 username)" maxLength={64} value={mappingDisplayName} onChange={(e) => setMappingDisplayName(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="mappingAvatarUrl">아바타 URL (https만)</Label>
+                  <Input id="mappingAvatarUrl" placeholder="https://example.com/avatar.png" value={mappingAvatarUrl} onChange={(e) => setMappingAvatarUrl(e.target.value)} maxLength={2048} />
+                </div>
+                <div className="space-y-1">
                   <Label htmlFor="employee_principal">{t("users.employeePrincipal")}</Label>
                   <Input id="employee_principal" placeholder={t("users.employeePrincipalPlaceholder")} value={employeePrincipal} onChange={(e) => setEmployeePrincipal(e.target.value)} />
                 </div>
@@ -595,33 +659,48 @@ export default function UsersPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="min-w-[140px]">호칭 (아이콘 옆)</TableHead>
                       <TableHead className="min-w-[110px]">Username</TableHead>
                       <TableHead className="min-w-[120px]">MM User ID</TableHead>
                       <TableHead className="min-w-[150px]">Employee Principal</TableHead>
                       <TableHead className="min-w-[150px]">Agent ID</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="min-w-[140px]">Created</TableHead>
-                      <TableHead className="text-right">Delete</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {mapLoading ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                        <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
                           {t("common.loading")}
                         </TableCell>
                       </TableRow>
                     ) : mappings.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                        <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
                           {t("users.noMappings")}
                         </TableCell>
                       </TableRow>
                     ) : (
                       mappings.map((m) => {
                         const uname = m.mm_username ?? m.username ?? "-";
+                        const isEditing = editingMap === m.id;
+                        const iconLetter = (m.display_name || uname || "?").trim().charAt(0).toUpperCase() || "?";
                         return (
                           <TableRow key={m.id}>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground" title={m.display_name || uname}>
+                                  {m.avatar_url && isSafeAvatarUrl(m.avatar_url) ? <img src={m.avatar_url} alt="" className="h-7 w-7 rounded-full object-cover" /> : iconLetter}
+                                </span>
+                                {isEditing ? (
+                                  <Input value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} placeholder="예: 코코" className="h-7 w-[120px] text-xs" maxLength={64} />
+                                ) : (
+                                  <span className="text-sm font-medium">{m.display_name || <span className="text-muted-foreground italic">(미설정)</span>}</span>
+                                )}
+                              </div>
+                            </TableCell>
                             <TableCell className="text-xs">{uname || "-"}</TableCell>
                             <TableCell className="font-mono text-xs" title={m.mm_user_id}>
                               {m.mm_user_id}
@@ -633,17 +712,19 @@ export default function UsersPage() {
                             </TableCell>
                             <TableCell className="text-xs text-muted-foreground">{fmtDate(m.created_at)}</TableCell>
                             <TableCell className="text-right">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                disabled={deletingMap === m.id || !isL5}
-                                onClick={() => handleDeleteMapping(m.id)}
-                                title={!isL5 ? t("users.l5Only") : t("users.tableDelete")}
-                                aria-label={`${t("users.tableDelete")} ${m.mm_user_id}`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                                {deletingMap === m.id ? "..." : t("users.tableDelete")}
-                              </Button>
+                              <div className="flex items-center justify-end gap-1">
+                                {isEditing ? (
+                                  <>
+                                    <Button variant="default" size="sm" disabled={editLoading} onClick={() => handleUpdateDisplayName(m.id)} className="h-7 px-2 text-xs">{editLoading ? <Loader2 className="h-3 w-3 animate-spin"/> : "저장"}</Button>
+                                    <Button variant="ghost" size="sm" onClick={() => { setEditingMap(null); setEditDisplayName(""); }} className="h-7 px-2 text-xs">취소</Button>
+                                  </>
+                                ) : (
+                                  <Button variant="ghost" size="sm" disabled={!isL5} onClick={() => { setEditingMap(m.id); setEditDisplayName(m.display_name || ""); }} title={!isL5 ? t("users.l5Only") : "호칭 수정"} className="h-7 px-2 text-xs">호칭 수정</Button>
+                                )}
+                                <Button variant="ghost" size="sm" disabled={deletingMap === m.id || !isL5} onClick={() => handleDeleteMapping(m.id)} title={!isL5 ? t("users.l5Only") : t("users.tableDelete")} aria-label={`${t("users.tableDelete")} ${m.mm_user_id}`}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                         );

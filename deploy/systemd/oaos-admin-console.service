@@ -1,0 +1,29 @@
+[Unit]
+Description=OAOS Admin Console — Next.js UI :3012 (systemd production)
+Documentation=https://github.com/openit-ai/open-agent-os
+After=network.target oaos-admin-api.service
+Wants=oaos-admin-api.service
+
+[Service]
+Type=simple
+User=oaos
+Group=oaos
+WorkingDirectory=/home/openit/apps/oaos/admin-console
+EnvironmentFile=-/etc/oaos/oaos.env
+Environment=NODE_ENV=production
+Environment=NEXT_PUBLIC_API_URL=/api
+Environment=PORT=3012
+Environment=npm_config_cache=/tmp/npm-cache
+ExecStart=/usr/bin/npm run start -- --port 3012
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/openit/apps/oaos/admin-console/.next /tmp
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -324,6 +324,7 @@ class HttpOutlineSourceAdapter(SourceAdapter):
         retry_backoff_s: float = 0.2,
         collection_id: str | None = None,
         http_client: Any | None = None,
+        max_pages: int | None = None,
         write_enabled: bool = False,
         allow_writes: bool | None = None,
         write_permission_checker: Any | None = None,
@@ -334,6 +335,7 @@ class HttpOutlineSourceAdapter(SourceAdapter):
         self.max_retries = int(max_retries)
         self.page_limit = int(page_limit)
         self.retry_backoff_s = float(retry_backoff_s)
+        self.max_pages = max_pages if max_pages is None else max(1, int(max_pages))
         self.collection_id = collection_id
         self._http_client = http_client
         # write gate: allow_writes alias, explicit write_enabled wins if set
@@ -451,8 +453,8 @@ class HttpOutlineSourceAdapter(SourceAdapter):
                 "(set OUTLINE_API_URL + OUTLINE_API_TOKEN / OUTLINE_API_KEY or "
                 "OAOS_OUTLINE_TOKEN). Refusing to return mock data."
             )
-        # Bounded pagination loop guard
-        max_pages = 500  # hard cap to avoid infinite loop even if API misbehaves
+        # Bounded pagination loop guard; callers may use a smaller batch window.
+        max_pages = self.max_pages or 500
         offset = 0
         # If checkpoint has cursor offset, resume from it (opaque cursor is offset string)
         if checkpoint is not None:

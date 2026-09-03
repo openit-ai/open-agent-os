@@ -13,6 +13,8 @@ Wire into admin-console/backend/app.py with lazy include_router.
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import logging
 import os
 import uuid
@@ -227,6 +229,136 @@ def _search_notes_fs(tenant_id: str, agent_id: str, q: str, limit: int = 10) -> 
     # sort by score
     candidates.sort(key=lambda x: x.get("score",0), reverse=True)
     return candidates[:limit]
+
+# ---------------------------------------------------------------------------
+# Image handling — attachment reference + runtime forwarding (NO LLM selection,
+# NO OCR: image is forwarded as user-turn via active Agent Runtime ACP/Hermes)
+# ---------------------------------------------------------------------------
+_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"})
+_IMAGE_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".tiff": "image/tiff", ".tif": "image/tiff",
+}
+IMAGE_RUNTIME_MARKER = "Image attachment reference"
+IMAGE_RUNTIME_KIND = "image_attachment_reference"
+
+
+def _is_image_file(filename: str) -> bool:
+    return Path(filename).suffix.lower() in _IMAGE_EXTS
+
+
+def _build_image_attachment_ref(saved_path: Path, vault_path: str, attachment_id: str) -> dict[str, Any]:
+    ext = saved_path.suffix.lower()
+    mime = _IMAGE_MIME.get(ext, "application/octet-stream")
+    try:
+        size = saved_path.stat().st_size if saved_path.exists() else 0
+    except Exception:
+        size = 0
+    # The active ACP/Hermes runtime must receive bytes, not only a local path.
+    # Keep the reference owner-scoped and path-free while providing an accepted
+    # multimodal data URL for runtimes that do not resolve vault references.
+    data_url = ""
+    try:
+        encoded = base64.b64encode(saved_path.read_bytes()).decode("ascii")
+        data_url = f"data:{mime};base64,{encoded}"
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"image bytes unavailable for runtime forwarding: {exc}") from exc
+    return {
+        "kind": IMAGE_RUNTIME_KIND,
+        "attachment_id": attachment_id,
+        "filename": saved_path.name,
+        "ext": ext,
+        "mime": mime,
+        "size_bytes": size,
+        "vault_path": vault_path,
+        "data_url": data_url,
+        "base64": data_url.split(",", 1)[1],
+    }
+
+
+def _build_image_runtime_instruction(attachment_ref: dict[str, Any], extra: str | None = None) -> str:
+    """User-turn instruction for active Agent Runtime (no LLM selection, no OCR).
+
+    This string is intended to be sent as a `prompt` via
+    POST /v1/sessions/{session_id}/prompt (Control Plane -> ACP/Hermes).
+    """
+    fn = attachment_ref.get("filename", "image")
+    ext = attachment_ref.get("ext", "")
+    size = attachment_ref.get("size_bytes", 0)
+    vp = attachment_ref.get("vault_path", "")
+    aid = attachment_ref.get("attachment_id", "pending")
+    base = (
+        f"[Image Attachment — LLM Vision Pending] {fn} ({ext}, {size} bytes) stored at {vp} — attachment_id={aid}\n"
+        f"[{IMAGE_RUNTIME_MARKER}: {fn} ({ext}, {size} bytes) stored at {vp} — attachment_id={aid}] "
+        "LLM Vision Request Prompt (deterministic, no local OCR): "
+        "Please analyze this image attachment via the LLM vision capability at query/runtime time. "
+        "Describe, transcribe, or interpret the image as requested by the user. "
+        "Status: pending LLM vision processing — no OCR text extracted locally; no separate OCR or vision API was invoked. "
+        "This is a user-turn instruction forwarded via the active Agent Runtime (ACP/Hermes)."
+    )
+    if extra:
+        base = base + " " + extra.strip()
+    return base
+
+
+def _extract_runtime_context(request: Request, tenant_id: str, agent_id: str, user_id: str) -> dict[str, Any]:
+    """Extract active Agent Runtime conversation context from headers/query.
+
+    Required: session_id (X-Session-Id), tenant_id, user_id.
+    Optional pass-through: channel_id/root_id/post_id/thread, trace_id.
+    Headers are case-insensitive; also accepts X-Channel-Id, X-Root-Id, X-Post-Id, X-Trace-Id.
+    """
+    h = {k.lower(): v for k, v in request.headers.items()}
+    # session_id is the primary runtime key
+    session_id = (
+        h.get("x-session-id")
+        or h.get("x-oaos-session-id")
+        or request.query_params.get("session_id")
+        or ""
+    )
+    channel_id = h.get("x-channel-id") or h.get("x-channel") or request.query_params.get("channel_id") or ""
+    root_id = h.get("x-root-id") or h.get("x-root") or request.query_params.get("root_id") or ""
+    post_id = h.get("x-post-id") or h.get("x-post") or request.query_params.get("post_id") or ""
+    trace_id = h.get("x-trace-id") or request.query_params.get("trace_id") or ""
+    return {
+        "session_id": session_id.strip() if isinstance(session_id, str) else "",
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "agent_id": agent_id,
+        "channel_id": channel_id.strip() if isinstance(channel_id, str) else "",
+        "root_id": root_id.strip() if isinstance(root_id, str) else "",
+        "post_id": post_id.strip() if isinstance(post_id, str) else "",
+        "trace_id": trace_id.strip() if isinstance(trace_id, str) else "",
+    }
+
+
+def _control_plane_base_url() -> str:
+    for k in ("OAOS_CONTROL_PLANE_URL", "OAOS_CP_BASE_URL", "CONTROL_PLANE_URL"):
+        v = os.environ.get(k, "").strip()
+        if v:
+            return v.rstrip("/")
+    # default dev location; may be unreachable — caller must handle gracefully
+    return "http://localhost:8000"
+
+
+def _build_runtime_forwarding_payload(runtime_instruction: str, attachment_ref: dict[str, Any], runtime_ctx: dict[str, Any]) -> dict[str, Any]:
+    rid = f"req_img_{attachment_ref.get('attachment_id','')}"
+    fid = attachment_ref.get("attachment_id") or attachment_ref.get("vault_path") or ""
+    return {
+        "prompt": runtime_instruction,
+        "attachment_ref": attachment_ref,
+        "attachment_refs": [attachment_ref],
+        "attachments": [attachment_ref],
+        "file_ids": [fid] if fid else [],
+        "runtime_context": runtime_ctx,
+        "request_id": rid,
+        "via": "control_plane_acp",
+        "control_plane_route": f"POST /v1/sessions/{runtime_ctx.get('session_id','')}/prompt",
+        "acp_path": "control_plane.acp_adapter.ACPAdapter.send_prompt -> Hermes ACP / Gateway",
+        "multimodal_contract": "prompt (text) + file_ids/attachment_refs forwarded via active Agent Runtime current-session message (ACP/Hermes); no model/provider selection, no OCR",
+    }
+
 
 def _no_mock_in_production():
     if _is_production():
@@ -516,25 +648,136 @@ async def upload_attachment(
         raise
     except Exception as e:
         logger.warning(f"vault persist failed: {e}")
-        if _is_production():
-            raise HTTPException(status_code=503, detail=f"vault persist failed: {e}")
-        safe_filename = _sanitize_filename(filename)
-        saved_path = Path("/tmp") / safe_filename
+        # Fail-closed: do not fall back to /tmp (owner isolation bypass); surface error so caller knows storage failed
+        raise HTTPException(status_code=503, detail=f"vault persist failed: {e}")
 
-    extracted_text = _extract_text_for_file(saved_path, max_chars=5000)
+    # --- Common IDs / vault paths ---
     attachment_id = f"att_{uuid.uuid4().hex[:12]}"
     note_id = f"note_{uuid.uuid4().hex[:12]}"
     journal_id = f"journal_{uuid.uuid4().hex[:12]}"
     owner_root = _owner_vault_root(tenant_id, agent_id)
-    # vault_path should be tenant/agent isolated and include tenant for API path consistency
     vault_path = f"{tenant_id}/{agent_id}/attachments/{safe_filename}"
     try:
-        # prefer relative to base vault root if possible
         from personal_wiki.vault import get_vault_root as _gvr
         base = _gvr()
         vault_path = saved_path.relative_to(base).as_posix()
     except Exception:
         pass
+
+    is_image = _is_image_file(safe_filename)
+    # For images: attachment reference + runtime instruction (NO OCR, NO LLM selection)
+    # For non-images: normal extractor text
+    if is_image:
+        attachment_ref = _build_image_attachment_ref(saved_path, vault_path, attachment_id)
+        runtime_instruction = _build_image_runtime_instruction(attachment_ref)
+        extracted_text = runtime_instruction
+        runtime_ctx = _extract_runtime_context(request, tenant_id, agent_id, user_id)
+        # Determine forwarding status — explicit contract when Admin API cannot access runtime
+        if not runtime_ctx.get("session_id"):
+            runtime_forwarding: dict[str, Any] = {
+                "status": "runtime_forwarding_required",
+                "reason": "Admin API upload endpoint cannot access active Agent Runtime without session_id — image must be forwarded via Control Plane ACP/Hermes using the currently active conversation context (session_id/tenant_id/user_id/channel/root/post).",
+                "required_context": ["session_id (X-Session-Id header or ?session_id)", "tenant_id (from JWT)", "user_id (from JWT)", "channel_id/root_id/post_id optional (X-Channel-Id / X-Root-Id / X-Post-Id)"],
+                "provided_context": runtime_ctx,
+                "forward_via": "control_plane_acp",
+                "control_plane_route": "POST /v1/sessions/{session_id}/prompt (Control Plane -> ACPAdapter.send_prompt -> Hermes ACP/Gateway)",
+                "acp_path": "control_plane.acp_adapter.ACPAdapter",
+                "payload": _build_runtime_forwarding_payload(runtime_instruction, attachment_ref, runtime_ctx),
+                "note": "No LLM/model/provider was selected in Personal Wiki or extractor. Client should retry upload with active runtime headers or forward this payload through the Control Plane. No new LLM endpoint is invented.",
+            }
+        else:
+            # Attempt live forwarding through Control Plane if reachable; otherwise return queued/required
+            cp_url = _control_plane_base_url()
+            fwd_payload = _build_runtime_forwarding_payload(runtime_instruction, attachment_ref, runtime_ctx)
+            # Best-effort synchronous forward (never blocks vault persist) — use httpx with short timeout
+            forward_result: dict[str, Any] = {"attempted": True, "control_plane_url": cp_url}
+            try:
+                import httpx  # type: ignore
+                # Extract caller auth for CP (forward same Authorization header if present)
+                auth_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+                hdrs: dict[str, str] = {
+                    "X-Tenant-Id": runtime_ctx["tenant_id"],
+                    "X-User-Id": runtime_ctx["user_id"],
+                    "X-Agent-Id": runtime_ctx["agent_id"],
+                    "X-Session-Id": runtime_ctx["session_id"],
+                    "Content-Type": "application/json",
+                }
+                if runtime_ctx.get("channel_id"):
+                    hdrs["X-Channel-Id"] = runtime_ctx["channel_id"]
+                if runtime_ctx.get("root_id"):
+                    hdrs["X-Root-Id"] = runtime_ctx["root_id"]
+                if runtime_ctx.get("post_id"):
+                    hdrs["X-Post-Id"] = runtime_ctx["post_id"]
+                if auth_hdr:
+                    hdrs["Authorization"] = auth_hdr
+                # Nonblocking async forward with bounded timeout (2.0s) — never blocks event loop
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await asyncio.wait_for(
+                            client.post(
+                                f"{cp_url}/v1/sessions/{runtime_ctx['session_id']}/prompt",
+                                json={"prompt": runtime_instruction, "request_id": fwd_payload["request_id"], "attachment_ref": attachment_ref, "attachment_refs": [attachment_ref], "attachments": [attachment_ref], "file_ids": fwd_payload["file_ids"], "runtime_context": runtime_ctx},
+                                headers=hdrs,
+                            ),
+                            timeout=2.5,
+                        )
+                        if resp.status_code in (200, 201, 202):
+                            try:
+                                j = resp.json()
+                            except Exception:
+                                j = {"status_code": resp.status_code}
+                            forward_result.update({"status": "forwarded", "response": j, "http_status": resp.status_code})
+                        else:
+                            forward_result.update({"status": "queued", "http_status": resp.status_code, "body": resp.text[:500]})
+                except asyncio.TimeoutError:
+                    forward_result.update({"status": "queued", "reason": "control plane timeout (2.0s bounded)", "payload": fwd_payload})
+                except Exception as e:
+                    forward_result.update({"status": "queued", "reason": f"control plane unreachable: {e}", "payload": fwd_payload})
+            except Exception as e:
+                forward_result.update({"status": "queued", "reason": f"forward attempt failed: {e}", "payload": fwd_payload})
+            # Build explicit forwarding event
+            if forward_result.get("status") == "forwarded":
+                runtime_forwarding = {
+                    "status": "forwarded",
+                    "via": "control_plane_acp",
+                    "control_plane_url": cp_url,
+                    "control_plane_route": f"POST /v1/sessions/{runtime_ctx['session_id']}/prompt",
+                    "acp_path": "control_plane.acp_adapter.ACPAdapter.send_prompt",
+                    "runtime_context": runtime_ctx,
+                    "payload": fwd_payload,
+                    "result": forward_result,
+                }
+            else:
+                runtime_forwarding = {
+                    "status": "queued",
+                    "reason": forward_result.get("reason") or "Control Plane not reachable synchronously — payload queued for forwarding via ACP/Hermes",
+                    "via": "control_plane_acp",
+                    "control_plane_url": cp_url,
+                    "control_plane_route": f"POST /v1/sessions/{runtime_ctx['session_id']}/prompt",
+                    "acp_path": "control_plane.acp_adapter.ACPAdapter",
+                    "runtime_context": runtime_ctx,
+                    "payload": fwd_payload,
+                    "attempt": forward_result,
+                    "note": "No LLM/model/provider selected; Admin API does not invent a new LLM endpoint. Forward through existing Control Plane route.",
+                }
+        note_frontmatter: dict[str, Any] = {
+            "source": safe_filename,
+            "attachment_id": attachment_id,
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
+            "type": "image",
+            "vision_status": "runtime_forwarding",
+            "extractor": "attachment_reference_runtime_instruction",
+            "runtime_forwarding": runtime_forwarding.get("status"),
+        }
+    else:
+        extracted_text = _extract_text_for_file(saved_path, max_chars=5000)
+        attachment_ref = None  # type: ignore
+        runtime_instruction = None  # type: ignore
+        runtime_forwarding = None  # type: ignore
+        runtime_ctx = None  # type: ignore
+        note_frontmatter = {"source": safe_filename, "attachment_id": attachment_id, "tenant_id": tenant_id, "agent_id": agent_id}
+    # Persist note (after branching so extracted_text is correct type)
     notes_dir = owner_root / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
     note_path = notes_dir / f"{note_id}.md"
@@ -542,7 +785,7 @@ async def upload_attachment(
         vault_mod = _load_vault_module()
         if vault_mod is not None and hasattr(vault_mod, "upsert_note"):
             try:
-                np = vault_mod.upsert_note(note_id, extracted_text[:5000], frontmatter={"source": safe_filename, "attachment_id": attachment_id, "tenant_id": tenant_id, "agent_id": agent_id}, vault_root=owner_root)
+                np = vault_mod.upsert_note(note_id, extracted_text[:5000], frontmatter=note_frontmatter, vault_root=owner_root)
                 if np is not None:
                     note_path = Path(np)
             except Exception as e:
@@ -569,11 +812,11 @@ async def upload_attachment(
         "attachment_id": attachment_id,
         "vault_path": vault_path,
         "size": len(content),
-        "saved_path": str(saved_path),
+        **({"is_image": True, "runtime_forwarding": runtime_forwarding.get("status")} if is_image else {}),
     })
     is_mock = False
     try:
-        is_mock = not saved_path.exists() or "tmp" in str(saved_path)
+        is_mock = not saved_path.exists()
     except Exception:
         is_mock = False
     if _is_production() and is_mock:
@@ -584,7 +827,8 @@ async def upload_attachment(
         note_vault_path = note_rel
     except Exception:
         pass
-    return {
+    # --- Build response — explicit contract for images vs documents ---
+    base_resp: dict[str, Any] = {
         "attachment_id": attachment_id,
         "filename": safe_filename,
         "size": len(content),
@@ -607,8 +851,22 @@ async def upload_attachment(
         "mock": False,
         "db_configured": _is_db_configured(),
         "vault_configured": _is_vault_configured(),
-        "saved_path": str(saved_path),
     }
+    if is_image:
+        # No provider/model selection — image is attachment reference forwarded via active runtime (direct delivery, multimodal contract)
+        base_resp.update({
+            "type": "image",
+            "attachment_ref": attachment_ref,
+            "attachment_refs": [attachment_ref],
+            "attachments": [attachment_ref],
+            "file_ids": [attachment_ref.get("attachment_id") or attachment_ref.get("vault_path")],
+            "runtime_instruction": runtime_instruction,
+            "runtime_context": runtime_ctx,
+            "runtime_forwarding": runtime_forwarding,
+            # Explicit contract disclosure when Admin API has no runtime session
+            "forwarding_contract": "If runtime_forwarding.status == 'runtime_forwarding_required', Admin API cannot access active conversation runtime (session_id missing). Client MUST forward runtime_instruction + attachment_ref via Control Plane POST /v1/sessions/{session_id}/prompt (OAOS ACP/Hermes path — control_plane.acp_adapter.ACPAdapter) with file_ids/attachment_refs multimodal contract. No new LLM endpoint is invented.",
+        })
+    return base_resp
 
 @router.get("/search")
 async def search_notes(

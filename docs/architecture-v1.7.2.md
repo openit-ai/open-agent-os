@@ -1,4 +1,4 @@
-# Open Agent OS 최종 아키텍처 및 구현 설계서 v1.7.1
+# Open Agent OS 최종 아키텍처 및 구현 설계서 v1.7.2
 
 > Repository: `openit-ai/open-agent-os`  
 > Product: **Open Agent OS**  
@@ -6,7 +6,7 @@
 > 배포 모델: **고객사 서버 또는 고객사 전용 클라우드/VPS에 설치되는 Source-Available Enterprise Agent Platform**  
 > Version: **v1.7.2** — 2026-08-30 (v1.7.1 → v1.7.2 Adaptive Profile Engine architecture design)
 > Base: `docs/architecture-v1.7.2-design.md` v1.7.1-design (2026-08-29) — design source; this document is the implementation architecture (verified facts vs residual plan)
-> Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete, Personal Wiki module implemented and tested, Adaptive Profile v1.7.2 MVP implemented (Profile API/persistence/policy synthesis/Runtime Hook) · Secrets lifecycle implemented via systemd installer · Evidence tiers verified (unit: 927 passed, distributed: 0, external: 0)**
+> Status: **H4/H5/H6/H7/H8 implemented (verified by git/tests) · RAG architecture and implementation complete, Personal Wiki module implemented and tested, Adaptive Profile v1.7.2 MVP implemented (Profile API/persistence/policy synthesis/Runtime Hook) · Secrets lifecycle implemented via systemd installer · Evidence tiers verified via `scripts/verify-evidence-tiers.py` (unit/distributed/external counted per run; historical v1.7.1 snapshot was unit: 927 passed — rerun on v0.1.3 candidate instead of reusing that number)**
 > Deployment: **Docker (`deploy/docker-compose.*.yml` + `.env`) and systemd (`deploy/systemd/` + `/etc/oaos/oaos.env` or `config/oaos.env` 0600) are parallel, separate paths sharing code — neither modifies the other**
 
 ---
@@ -1550,18 +1550,18 @@ fail_open_telemetry(component, reason, **fields) → WARNING + stderr
 
 - `.env.example` CHANGE_ME + OAOS_ADMIN_BOOTSTRAP_PASSWORD/EMAIL + prod fail-closed 주석, README bootstrap L5 안내
 
-#### 16.7.6 검증 현황 — pytest 648 passed
+#### 16.7.6 검증 현황 — historical snapshot (pytest 648 passed)
 
 ```
-648 passed, 65 warnings (2026-08-29)
+648 passed, 65 warnings (2026-08-29; historical snapshot — rerun `python scripts/verify-evidence-tiers.py` on the v0.1.3 candidate; do not reuse as current evidence)
 신규: test_runtime_hardening + test_auth_production_hardening 9 + test_deploy_hardening 15 = +36 (612→648)
 ```
 
 #### 16.7.7 잔여 제한 (Residual Limitations)
 
 - Quota TODO distributed (단일 인스턴스 DB 카운터)
-- Vault encrypted_postgres legacy (prod hashicorp_vault/aws_secrets 권장)
-- /readyz 200+degraded (strict 503 옵션 검토)
+- Secret Vault: current deployment uses `encrypted_postgres` as the default backend; HashiCorp Vault/AWS Secrets Manager are optional future enterprise hardening, not a required migration
+- `/readyz` external Secret Vault health is skipped when no external backend is configured; selected-backend-aware readiness wording/health check remains a follow-up
 - Env gate 3벌 mirror drift
 - Redis HA 필요, NetworkPolicy CNI audit 필수
 
@@ -1701,7 +1701,7 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 > H8은 **implemented**다. `scripts/verify-evidence-tiers.py`가 `unit`·`distributed`·`external` 등급을 분리 검증하고, `docs/deployment-verification-v1.7.1.md` + `docs/evidence-report-v1.7.1.json`에 `command`·`timestamp`·`commit`·`counts`·`unavailable prerequisites`를 기록한다. Unit 테스트를 distributed/external로 오표기하지 않으며, 지원되지 않는 주장 시 `exit 1`로 실패한다.
 
-- **등급 분리**: `unit: 927 passed, 1 skipped` (2026-08-29 `pytest -q`, fakeredis/SQLite/file mocks 포함 — live multi-replica 아님), `distributed: 0 passed`, `external: 0 passed`. Single `648`/`927` 집계는 `unit`으로만 표기.
+- **등급 분리**: `unit`/`distributed`/`external`은 `scripts/verify-evidence-tiers.py`가 분리 검증한다. 역사적 스냅샷 하나는 `unit: 927 passed, 1 skipped` (2026-08-29 `pytest -q`, fakeredis/SQLite/file mocks 포함 — live multi-replica 아님), `distributed: 0 passed`, `external: 0 passed`를 기록했다. Single `648`/`927` 집계는 `unit`으로만 표기하며, v0.1.3 후보에서는 재실행 결과로 갱신해야 하고 역사적 수치를 현재 증거로 재사용하지 않는다.
 - **Prerequisites**: `redis`/`kind`/`kubectl`/`helm`/`hubble`/`cni_enforcement` 및 `outline`/`notion`/`mattermost`/`slack`/`llm_gateway` 모두 `unavailable`로 기록 — live Redis/CNI/Outline 증거를 발명하지 않음.
 - **RAG 구분**: Knowledge Index schema/repository/retrieval/chunking/embedding boundary/Outline-Notion adapter/idempotent sync/ACL revalidation은 **implemented + unit-tested**이며, live 외부 자격증명·네트워크·corpus backfill은 **운영 통합 범위**로 분리 표기.
 - **재현**: `python scripts/verify-evidence-tiers.py` (full `pytest -q` + report), `python scripts/verify-evidence-tiers.py --check-only` (문서 과장 시 실패), `python scripts/verify-evidence-tiers.py --skip-pytest` (빠른 검증). CI에서는 `verify-evidence-tiers --check-only`로 문서 과장 방지.
@@ -1709,9 +1709,73 @@ docker compose up                      bash deploy/systemd/install-systemd.sh --
 
 ---
 
-### 16.11 잔여 로드맵 (v1.7.2+) — live distributed/external integration
+### 16.11 Control Plane 오류 계약 및 Mattermost 사용자 메시지 정책 — v1.7.2 운영 불변식
 
-- **H8 증거 등급**: `unit: 927 passed` 검증 완료 (`scripts/verify-evidence-tiers.py` + `tests/test_evidence_tiers.py`). `distributed`/`external`은 live `kind`+Redis+CNI 및 Outline/Notion/Mattermost/Slack/LLM gateway 연동 시 별도 카운트 — 현재 0으로 명시.
+Control Plane과 Mattermost Bridge 사이의 오류 처리는 HTTP 상태 코드만 전달하는 구현 세부가 아니라, 재시도·LLM 호출·세션 종료·사용자 안내를 결정하는 운영 계약이다. 오류 응답은 내부 원문을 사용자에게 노출하지 않고, Bridge가 안전한 사유 코드와 사용자 메시지로 정규화한다.
+
+#### 16.11.1 처리 순서
+
+```text
+Control Plane 응답
+  → HTTP status + 제한된 detail 분류
+  → 안전한 사용자 메시지 선택
+  → 영구/일시 오류 판정
+  → seen/idempotency 기록
+  → typing·등록/처리 세션 종료
+  → 영구 오류는 LLM 미호출, 일시 오류만 bounded retry
+  → trace/post/session 기준 운영 로그·감사
+```
+
+#### 16.11.2 오류 분류·사용자 메시지 매핑
+
+| HTTP | 안전한 분류 | 사용자 안내 요지 | 재시도 | LLM |
+|---:|---|---|---|---|
+| 400 | `INVALID_REQUEST` | 요청 형식을 확인해 주세요 | 아니오 | 아니오 |
+| 401 | `AUTHENTICATION_FAILED` | OAOS 인증 확인에 실패했습니다 | 아니오 | 아니오 |
+| 403 + 등록/매핑 | `USER_REGISTRATION_REQUIRED` | 웹관리자 콘솔 등록 후 다시 시도해 주세요 | 아니오 | 아니오 |
+| 403 + 권한 | `PERMISSION_DENIED` | 현재 계정의 작업 권한이 없습니다 | 아니오 | 아니오 |
+| 403 + 세션 소유권 | `SESSION_OWNERSHIP_DENIED` | 현재 세션을 확인할 수 없습니다 | 아니오 | 아니오 |
+| 404 | `SESSION_OR_RESOURCE_NOT_FOUND` | 세션 또는 리소스를 찾을 수 없습니다 | 아니오 | 아니오 |
+| 405 | `METHOD_NOT_SUPPORTED` | 지원되지 않는 요청입니다 | 아니오 | 아니오 |
+| 409 | `DUPLICATE_OR_IN_PROGRESS` | 이미 처리 중이거나 처리된 요청입니다 | 아니오 | 아니오 |
+| 422 | `VALIDATION_FAILED` | 입력값을 확인해 주세요 | 아니오 | 아니오 |
+| 408 | `REQUEST_TIMEOUT` | 처리 시간이 초과되었습니다 | bounded | 경로에 따라 1회 이내 |
+| 429 | `RATE_LIMITED` | 요청이 많으니 잠시 후 다시 시도해 주세요 | bounded | 경로에 따라 1회 이내 |
+| 500/502/503/504 | `UPSTREAM_OR_SERVICE_UNAVAILABLE` | 연동 서비스가 일시적으로 응답하지 않습니다 | bounded | 경로에 따라 1회 이내 |
+
+`403`은 HTTP 코드만으로 충분하지 않으므로 Control Plane의 안전한 detail 분류를 사용한다. 내부 traceback, credential, 파일 경로, provider 원문은 사용자 메시지에 포함하지 않는다. 운영 로그에는 필요한 경우에도 secret·원문 개인정보 없이 `trace_id`, `post_id`, `session_id`, HTTP status, 정규화된 분류만 남긴다.
+
+#### 16.11.3 종료·멱등성 불변식
+
+- 영구 오류는 동일 Mattermost Post를 `seen`/idempotency 상태에 기록하고 한 번만 안내한 뒤 즉시 종료한다.
+- 안내 Post는 `@agent`가 동일 thread에 게시하며, bot-origin Post는 Bridge가 다시 수신 처리하지 않는다.
+- 영구 오류에서는 ACP/Hermes/Google/Personal Wiki/Enterprise Knowledge MCP를 호출하지 않는다.
+- typing indicator와 해당 처리 시도는 오류 안내 게시 성공 여부와 관계없이 정리한다.
+- 일시 오류는 bounded retry와 cooldown을 사용하며 무한 재시도하지 않는다.
+- 사용자 메시지와 내부 오류 상세는 분리한다. 안전 메시지 매핑이 불가능한 경우에도 내부 원문을 노출하지 않고 일반 안내를 사용한다.
+- 성공 응답이 없는 세션을 성공으로 기록하지 않으며, 응답 확인 polling은 추가 LLM 호출이 아닌 관찰 단계로 취급한다.
+
+#### 16.11.4 검증 기준
+
+오류 계약 검증은 각 코드별 메시지·재시도·LLM 호출 차단을 독립적으로 확인한다. 최소 회귀 범위는 `tests/test_bridge_error_classification.py`의 영구/일시 분류, 등록 필요·권한 거부 메시지 차등, 내부 원문 비노출, 안내 Post payload 검증이다. 단위 테스트 통과는 실제 외부 Mattermost 사용자 경로의 external PASS를 의미하지 않으며, 운영에서는 실제 Post ID·thread·trace read-back을 별도로 기록한다.
+
+### 16.12 Mattermost Personal/Enterprise Context Routing — implemented
+
+Mattermost 일반 대화는 사용자 질문의 결정론적 route 힌트를 기준으로 owner-scoped Personal Wiki 또는 tenant-scoped Enterprise Knowledge Index를 먼저 조회한 뒤, 검색 결과와 출처를 단일 LLM prompt에 주입한다. 검색은 LLM이 수행하지 않으며, 검색 실패·무결과는 원문 질문을 안전하게 유지한다.
+
+- 개인 질문(`내 일정`, `내 업무`, `내 기록`, `내 위키`, `내 성향`, `개인` 등) → `Personal Wiki` owner scope
+- 회사 질문(`회사`, `전사`, `정책`, `규정`, `프로젝트`, `사업`, `조직`, `매뉴얼`, `현황` 등) → `Knowledge Index` tenant/agent ACL pre-filter
+- 검색 context에는 `source_uri` 또는 owner-scoped path를 포함하며, 근거 부족 시 모른다고 답변하도록 지시한다.
+- 검색은 응답 경로에서 수행되므로 별도 LLM 호출을 만들지 않는다. 전체 route는 `Mattermost → identity/session/policy → context retrieval → ACP/Hermes → thread reply` 순서다.
+- 구현: `control-plane/control_plane/context_retrieval.py`, Mattermost webhook `_handle_core_logic`; 회귀: `tests/test_context_retrieval.py`.
+- 실제 Personal Wiki 운영 파일·다중 사용자 external E2E는 별도 read-back 대상이며, 단위 테스트와 health 200만으로 완료를 주장하지 않는다.
+
+### 16.13 잔여 로드맵 (v1.7.2+) — live distributed/external integration
+
+- **오류 계약 적용 상태:** Control Plane 오류 분류·안전 메시지·영구 오류 종료·LLM 미호출·bounded retry 계약은 Bridge 구현 및 `tests/test_bridge_error_classification.py`로 검증됨. 운영 적용 커밋은 `8b2d744463494f43b191d41af6f2b2219083fc0a`이며, 상세는 §16.11을 따른다.
+- **P0 보완 상태:** Knowledge Index ACL metadata/deletion propagation, migration-managed tenant/source checkpoint, Microsoft Graph real transport boundary, owner-scoped session claim, credential isolation, and canonical environment gate were implemented and locally verified. Production checkpoint table and `alembic_version=018_knowledge_sync_checkpoints` were read back after approved controlled SQL application; formal `alembic upgrade`/full backup tooling remains pending because `pg_dump` is unavailable. Production Admin Console now rejects implicit `create_all()`.
+
+- **H8 증거 등급**: `scripts/verify-evidence-tiers.py` + `tests/test_evidence_tiers.py`로 검증한다. 역사적 v1.7.1 스냅샷은 `unit: 927 passed`를 기록했으나, v0.1.3 후보에서는 재실행 결과로 갱신해야 한다. `distributed`/`external`은 live `kind`+Redis+CNI 및 Outline/Notion/Mattermost/Slack/LLM gateway 연동 시 별도 카운트 — 현재 0으로 명시하되 재검증 필요.
 - **Live RAG 통합**: Knowledge Index는 unit-tested이나, 운영 corpus backfill 및 live Outline/Notion 자격증명 연동은 v1.7.2+ 운영 검증 범위.
 - **분산 일관성**: kind 2-replica + Redis Lua `k6` 병렬 검증, `hubble --verdict DROPPED` 캡처는 v1.7.2+에서 `distributed: N passed`로 승격.
 
@@ -1836,6 +1900,137 @@ Runtime에는 다음과 같은 최소 정책만 전달한다.
 
 ## 16.2 Hermes Runtime
 ## 16.2 Hermes Runtime
+## 16.2.1 Runtime Ownership — OAOS Mattermost vs direct Hermes sessions (v1.7.2 verified)
+
+OAOS와 Hermes가 동일 호스트에서 운영되더라도 **세션·모델·상태 저장소의 소유권은 분리**한다. Telegram에서 사용자가 직접 운영하는 Hermes 세션은 Hermes의 `state.db`와 해당 세션의 persisted model override를 사용한다. 이 override(`custom/gpt-5.6-luna` 포함)는 OAOS Mattermost 세션에 전파되거나 삭제 대상이 되지 않는다.
+
+```text
+Telegram direct Hermes
+  → Hermes Gateway
+  → Hermes state.db
+  → 사용자 세션별 모델/provider override
+
+Mattermost mykim
+  → oaos-mm-bridge
+  → OAOS Control Plane :8100
+  → OAOS Redis session store
+  → Hermes Gateway API :8642
+  → OAOS runtime binding
+```
+
+**불변식**
+
+- `oaos-mm-bridge.py`는 Hermes `state.db`와 `sessions.json`을 직접 읽거나 쓰지 않는다.
+- OAOS Mattermost 세션 namespace는 `oaos:mattermost:<tenant>:<verified-user>`로 소유자별 분리한다.
+- OAOS 운영 세션은 production에서 `RedisSessionStore(fallback=False)`를 사용하며, Redis 장애 시 fail-closed한다.
+- OAOS 세션의 runtime binding은 `runtime_provider`와 `runtime_model`로 명시하고 Telegram의 `/model` override를 상속하지 않는다.
+- OAOS의 Hermes 호출 endpoint·model은 운영 EnvironmentFile과 실제 프로세스 환경으로 검증한다.
+
+#### 16.2.1.1 동일 OS 계정 세션의 파일시스템 경계
+
+파일 권한(`600`)은 다른 OS 계정의 직접 접근을 제한할 뿐이며, 동일한 `openitsvc` 계정으로 실행되는 Hermes 세션 사이의 개인정보 격리 경계가 아니다. 따라서 OAOS는 다음 Hermes 전역 파일을 사용자별 업무 데이터 저장소나 context source로 사용하지 않는다.
+
+```text
+~/.hermes/memories/USER.md
+~/.hermes/memories/MEMORY.md
+~/.hermes/users/*.md
+~/.hermes/auth.json
+~/.hermes/google_token.json
+~/.hermes/.env
+```
+
+- Telegram 직접 Hermes 세션의 전역 메모리·인증 상태는 해당 직접 세션 소유 영역으로만 취급한다.
+- Mattermost→OAOS 요청의 Profile·Memory·Evidence·Session·Credential은 검증된 `tenant_id + user_id + agent_id`로 OAOS PostgreSQL/Redis/API에서만 조회한다.
+- Hermes에는 현재 요청에 필요한 최소 Response Policy와 owner-scoped runtime context만 전달하며, 전역 `USER.md`·`MEMORY.md`·`auth.json`·토큰 파일을 읽는 fallback을 금지한다.
+- 사용자 매핑·토큰·권한이 없으면 다른 사용자의 전역 파일이나 credential로 fallback하지 않고 fail-closed한다.
+- `HERMES_HOME`/profile 분리는 설정·세션 충돌 방지용 보조 경계이며, 같은 OS 계정 세션의 강한 개인정보 보안 경계로 단독 사용하지 않는다.
+- 구현 검증은 직접 파일 접근 grep, 전역 credential fallback 회귀 테스트, owner-scoped context/namespace 테스트를 포함한다.
+
+**구현 상태 (2026-09-01 보완)**: OAOS ACP adapter는 Hermes 전역 `.env` fallback을 사용하지 않고 명시적 OAOS 설정/EnvironmentFile의 key만 사용하도록 보강한다. Telegram direct Hermes의 `state.db`·메모리와 OAOS Redis/PostgreSQL 세션은 서로 다른 소유권으로 유지한다.
+
+#### 16.2.1.2 개인 Google Workspace 브리핑 데이터 경계
+
+개인 브리핑(Calendar·Gmail·Drive)은 권한 판정만으로 사용자 격리를 완료한 것으로 간주하지 않는다. Google credential 선택도 반드시 검증된 요청자 소유권에 묶는다.
+
+```text
+Mattermost channel/user ID
+  → verified internal user_id
+  → user-channel-map.json canonical token directory
+  → ~/.hermes/google-tokens/{user_id}/google_token.json
+  → Google API (calendar/gmail/drive)
+```
+
+불변식:
+
+- 사용자 토큰이 없거나 channel→user 매핑이 없으면 **fail-closed**한다.
+- `~/.hermes/google_token.json` 같은 전역 토큰으로 fallback하지 않는다.
+- `mykim` 등 특정 사용자의 토큰 경로를 Google 브리핑 공통 코드에 하드코딩하지 않는다.
+- Calendar·Gmail·Drive 호출은 하나의 동일한 검증 `user_id`를 전달하고, 중간에 다른 token owner로 바꾸지 않는다.
+- `permission_check.py`의 회사 정보 읽기 권한과 Google credential owner 검증은 별도 게이트로 모두 통과해야 한다.
+- 토큰 directory ID는 Mattermost 표시명이나 임의 alias가 아니라 `user-channel-map.json`의 canonical 내부 ID를 우선한다.
+- 계정 식별 metadata가 없는 토큰은 최소한 소유자 매핑·파일 존재·scope·API 호출 주체를 검증하고, 다른 사용자 토큰으로 대체하지 않는다.
+- 브리핑 결과 파일과 stdout의 출력 대상도 동일한 검증 user_id로 결정한다.
+
+#### 16.2.1.3 OAOS 사용자 등록 선행 게이트
+
+OAOS 사용자는 Mattermost DM에서 먼저 등록한다. 개인 Google Workspace 연동은 OAOS 사용자 등록과 세션 확인 뒤의 선택 단계이며, Mattermost DM에서 바로 시작하지 않는다. **웹관리자 콘솔의 승인된 사용자 매핑이 발송 대상의 source of truth**다. 먼저 관리자가 Mattermost/Slack 안정 사용자 ID와 username, 직원 principal, agent ID를 등록·활성화하고, 그 다음 `@agent`가 직원의 등록된 계정과 `user_id`를 확인하고, 정중한 인사말을 보낸 뒤 다음 최소 기초 대화를 진행한다.
+
+- Mattermost 등록 필드: `mm_user_id`, `mm_username`
+- Slack 등록 필드: `slack_user_id`, `slack_username`, `slack_workspace_id` — 전용 필드·consumer가 구현되기 전에는 Mattermost 매핑으로 대체하지 않는다.
+- 플랫폼 안정 ID·직원 매핑이 확정되기 전에는 @agent의 선제 연락과 OAuth URL 발급을 허용하지 않는다.
+
+- 직원이 원하는 호칭과 @agent가 사용할 상호 호칭을 확인한다.
+- 답변 길이·말투·결론 우선 여부 등 최초 업무 응답 성향을 파악하는 간단한 질문을 1~3개 진행한다.
+- 확인된 호칭·응답 선호는 해당 사용자의 Profile/Preferences에만 저장한다.
+- 이 단계의 데이터는 개인정보·자격증명 수집이 아니라 대화 개인화와 세션 소유자 확인을 위한 최소 데이터다.
+- 직원 회신의 실제 Mattermost 작성자·Post ID·시각을 확인하고, 다른 계정·세션의 회신으로 대체하지 않는다.
+- `DISCOVERED → GREETED → BASIC_READY → SESSION_OK` 순서를 통과한 뒤에만 `OAUTH_PENDING`으로 전환한다.
+- 사용자가 응답하지 않거나 거부·중단하면 OAuth URL을 발급하지 않는다.
+
+```text
+직원 리스트/계정 확인
+  → 인사말
+  → 상호 호칭 정의
+  → 간단한 최초 성향 질문
+  → owner-scoped 세션·thread 확인
+  → 본인 요청 시 Google OAuth 시작
+```
+
+**구현 상태 (2026-09-01)**: `daily_brief.py`는 전역 `google_token.json` fallback을 제거하고, verified Mattermost mapping에서 해석한 canonical user ID의 전용 token만 사용하도록 보강했다. 전용 토큰이 없으면 Google 호출 전에 중단한다. 단, Google provider의 실제 계정 email read-back과 다른 사용자의 실외부 브리핑 왕복은 별도 external 검증 범위다. 브리핑 경로의 모든 Google 호출은 동일한 verified owner ID를 전달한다.
+
+### 16.2.1.4 전사 지식 접근 기본 경로
+
+회사 정책·전사 문서·조직 공용 지식 질문은 **Enterprise Knowledge MCP/Knowledge Index를 기본 경로**로 사용한다. Personal Wiki·Profile은 사용자 개인 업무기억과 응답 성향에만 사용한다.
+
+```text
+회사 정책·전사 문서 질문
+  → verified tenant/user/group/collection context
+  → ACL pre-filter
+  → Enterprise Knowledge MCP / Knowledge Index
+  → provenance·source URI 포함 응답
+
+개인 업무기억·내 선호 질문
+  → owner-scoped Personal Wiki / Profile
+```
+
+- Outline·Notion 등 원본과 ACL은 원 시스템이 소유하며 OAOS Index는 파생 검색 인덱스다.
+- 전사 지식 MCP의 기본 허용 작업은 `SEARCH`/`READ`; `CREATE`/`MODIFY`는 별도 승인 없이는 실행하지 않는다.
+- 실제 MCP/connector가 운영 환경에서 연결되지 않으면 mock 결과를 production 응답으로 사용하지 않고 fail-closed 또는 미연결 상태를 명시한다.
+- 개인 Google credential은 전사 지식 경로에 사용하지 않는다.
+- 관리자 콘솔에 등록된 활성 사용자와 verified owner context 없이 전사 지식 MCP를 호출하지 않는다.
+
+**구현 상태 (2026-09-01)**: OAOS Execution Gateway의 `outline` MCP 등록과 Knowledge Index ACL/retrieval 코드·단위 테스트는 존재한다. 운영 MCP의 실제 활성 목록과 Endpoint는 관리자가 추가한 정본 설정과 실제 프로세스 환경에서 확인하며, 저장소 기본값이나 mock 등록만으로 운영 MCP가 없다고 판단하지 않는다. 운영에서 관리자가 추가한 MCP는 정본 설정에 등록된 활성 MCP로 취급하고, 회사 정책·전사 문서 질문의 기본 경로에 포함한다.
+
+**OpenIT 운영 검증 (2026-08-30)**
+
+- `oaos-control-plane.service`, `oaos-mm-bridge.service`: active
+- OAOS `/health`, `/readyz`, `/v1/mattermost/health`: HTTP 200
+- `/readyz`: PostgreSQL·Redis checks ok
+- 실제 Control Plane 환경: `OAOS_ENV=production`, `OAOS_SESSION_BACKEND=redis`, `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`
+- OAOS source guard: `oaos-mm-bridge.py`에 Hermes `state.db` 직접 참조 없음
+- 관련 OAOS 회귀 테스트: `117 passed, 1 warning`
+- **External E2E status: PASS (observed turn)** — `u5yq38w4d3gii8zdi48r6p39zw` 채널에서 실제 `mykim` source post `jazr64zt6p8m8qendcpqnnur1h`와 동일 thread(`root_id=jazr64zt6p8m8qendcpqnnur1h`)의 이후 봇 응답 `c8gawge517837j3o3zoo44swgc`를 Mattermost API로 read-back했다. source author·bot author·root ID·생성 시각을 대조해 사용자 경로 왕복을 확인했다. 별도 probe post `xjmo488frbdafnkwwutft49qeh`는 봇 작성 post라 브리지가 정상 skip했다.
+
 
 Hermes Runtime은 고복잡·고자율 작업을 위한 Advanced Runtime이다.
 

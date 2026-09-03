@@ -147,18 +147,18 @@ _SECURITY_UPDATES = [
             {"id": "CVE-2026-1002", "severity": "medium", "summary": "Medium severity patch in policy-engine fnmatch"},
         ],
         "changelog": "Security hardening: egress proxy, tool policy rate-limit",
-        "current_version": "0.1.1",
+        "current_version": "0.1.3",
     },
     {
         "version": "0.1.2",
-        "available": True,
+        "available": False,
         "severity": "medium",
         "release_date": "2026-07-15",
         "cves": [
             {"id": "CVE-2026-0901", "severity": "medium", "summary": "Fix audit hash-chain checkpoint race"},
         ],
         "changelog": "Audit checkpoint race fix",
-        "current_version": "0.1.1",
+        "current_version": "0.1.3",
     },
 ]
 
@@ -166,7 +166,7 @@ _SECURITY_UPDATES = [
 def security_updates(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/security/updates — available versions, CVEs. Viewer read allowed."""
     return {
-        "current_version": "0.1.1",
+        "current_version": "0.1.3",
         "updates": _SECURITY_UPDATES,
         "count": len(_SECURITY_UPDATES),
     }
@@ -232,7 +232,7 @@ def backup_trigger(admin: AdminUser = Depends(require_l5)):
 # Upgrade status
 # ---------------------------------------------------------------------------
 _UPGRADE_STATE: dict = {
-    "current_version": "0.1.1",
+    "current_version": "0.1.3",
     "available_version": "0.2.0",
     "status": "idle",  # idle | in_progress | completed | failed
     "last_check": datetime.now(timezone.utc).isoformat(),

@@ -42,3 +42,5 @@ htmlcov/
 deploy/nginx/certs/tls.key
 *.key
 deploy/nginx/certs/*.key
+
+.release-*/

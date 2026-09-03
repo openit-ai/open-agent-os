@@ -23,6 +23,7 @@ class SyncResult:
     deleted: int = 0
     failed: int = 0
     chunks_written: int = 0
+    deleted_resource_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     checkpoint: SyncCheckpoint | None = None
 
@@ -33,6 +34,7 @@ class SyncResult:
             "upserted": self.upserted,
             "skipped": self.skipped,
             "deleted": self.deleted,
+            "deleted_resource_ids": self.deleted_resource_ids,
             "failed": self.failed,
             "chunks_written": self.chunks_written,
             "errors": self.errors,
@@ -169,6 +171,11 @@ class SyncOrchestrator:
                     content_hash=doc.content_hash,
                     acl_version=doc.acl_version,
                     source_updated_at=doc.source_updated_at,
+                    acl_groups=list((doc.acl or {}).get("groups") or (doc.acl or {}).get("allowedGroups") or []),
+                    acl_users=list((doc.acl or {}).get("users") or (doc.acl or {}).get("allowedUsers") or []),
+                    source_uri=doc.source_uri,
+                    classification=doc.classification,
+                    tenant_id=doc.tenant_id,
                 )
             except Exception as e:
                 result.failed += 1
@@ -182,18 +189,12 @@ class SyncOrchestrator:
             result.upserted += 1
             result.chunks_written += len(chunks)
 
-        # Deletions: resources previously checkpointed but now missing
-        # Two signals: adapter's deleted_resource_ids, plus checkpoint ids not in fetched_ids
+        # Deletions: only explicit source deletion IDs are safe. A paginated
+        # response may omit resources without deleting them.
         to_delete: set[str] = set(fetch_result.deleted_resource_ids)
-        # also consider checkpoint resources absent from current fetch as deleted
-        for rid in list(cp.resource_states.keys()):
-            if rid not in fetched_ids:
-                to_delete.add(rid)
-        # but don't delete if adapter hasn't declared deletion and we might have partial fetch?
-        # For this implementation, we require either deleted_resource_ids or absence when fetch is
-        # considered complete (no pagination). Since InMemory adapter returns complete set,
-        # absence == deletion is correct. For production adapters with pagination, deleted ids
-        # would be authoritative. Here we treat both.
+        result.deleted_resource_ids = sorted(to_delete)
+        # Do not infer deletion from absent IDs: the source may be paginated or
+        # partially fetched. Connectors must explicitly return deleted IDs.
         for rid in to_delete:
             if rid not in fetched_ids:
                 existed = self.chunk_store.delete(rid)

@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.2 — Personal AX Business Platform
+# Open Agent OS v0.1.4 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,8 +13,9 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.2` — 단일 진실 `admin-console/package.json` `0.1.2` (커밋 `34f0981e71`, 태그 `v0.1.2`). **아키텍처 문서 버전 `v1.7.2`(`docs/architecture-v1.7.2.md`)는 제품 버전 `0.1.2`와 별개** — v1.7.2는 Adaptive Profile Engine 설계(§16.12)를, 0.1.2는 제품 릴리즈 번호를 의미한다.
+- **제품 버전:** `0.1.4` — 단일 진실 `admin-console/package.json` `0.1.4` (후보 브랜치 `release/v0.1.3-remediation` at `6d91f3b710`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.2`(`docs/architecture-v1.7.2.md`)는 제품 버전 `0.1.3`와 별개** — v1.7.2는 Adaptive Profile Engine 설계(§16.12)를, 0.1.3는 제품 릴리즈 번호를 의미한다.
 - **기준 아키텍처:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine MVP 구현 완료(코드·운영 DB migration·CP router mount·Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인, distributed/external/live RAG 미검증) — 상세 §16.12
+- **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
 ---
 
@@ -110,6 +111,18 @@ Personal Wiki (Vault FS + memory_service pgvector) ◄── Execution Gateway a
 
 **런타임:** LLM Runtime이 canonical(`llm`, `safe`는 deprecated alias)이고 Hermes Runtime이 advanced — Registry YAML(LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker(§16G), tool policy(§16H), data access(§16I). 상세: `docs/architecture-v1.7.2.md` §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.8.
 
+### 런타임 소유권과 Mattermost 세션 격리 (v1.7.2)
+
+OAOS는 사용자의 직접 Hermes/Telegram 세션을 재사용하지 않는다. Mattermost 경로는 사용자별 소유권으로 분리하고, OAOS 운영 Redis 세션 저장소를 거친 뒤 Hermes Gateway API를 호출한다. Telegram의 `/model` override(예: `custom/gpt-5.6-luna`)는 직접 Hermes 세션의 설정이며 OAOS가 상속해서는 안 된다.
+
+```text
+Mattermost mykim → oaos-mm-bridge → OAOS Control Plane :8100
+                 → Redis 세션(`oaos:mattermost:<tenant>:<verified-user>`)
+                 → Hermes Gateway API :8642
+```
+
+2026-08-30 검증: OAOS 서비스와 health/readiness endpoint는 active/HTTP 200, Control Plane 운영 환경은 `OAOS_SESSION_BACKEND=redis`와 `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`, 브리지는 `state.db`/`sessions.json` 직접 참조 없음, 대상 OAOS 회귀 테스트는 `117 passed`였다. 이는 구조·프로세스 증거이다. 실제 `mykim` source post `jazr64zt6p8m8qendcpqnnur1h`를 `u5yq38w4d3gii8zdi48r6p39zw` 채널에서 read-back했고, 동일 thread(`root_id=jazr64zt6p8m8qendcpqnnur1h`)의 이후 봇 응답 `c8gawge517837j3o3zoo44swgc`를 확인했다. 관찰된 사용자 Mattermost 외부 E2E는 **통과**했다. 별도 probe post `xjmo488frbdafnkwwutft49qeh`는 브리지 봇 작성 글이어서 정상적으로 skip됐다.
+
 ## 5. 핵심 가치 5가지
 
 1. **Personal-First, Enterprise-Safe** — 내 Calendar/Gmail은 내가 위임(§9), Production/ERP/고객DB는 회사 정책+승인(§11). UX와 보안이 함께 자연스럽다(§13).
@@ -200,7 +213,7 @@ Admin Console 화면(11+ routes: login / dashboard / infra / users / policy / ap
 
 ```bash
 pytest -q
-# 기대값 (2026-08-29, main): 813 passed, 1 skipped, 74 warnings — LLM 6-Provider, Fernet Vault,
+# 과거 스냅샷 (2026-08-29, main): 927 passed, 1 skipped, 74 warnings — 현재 v0.1.3 증거가 아님. 현재 후보 증거는 docs/deployment-verification-v0.1.3.md 및 docs/evidence-report-v0.1.3.json에 기록. LLM 6-Provider, Fernet Vault,
 # opencode 바이너리 체인, wiki/pgvector, production hardening(fail-closed runtime/deploy/audit/approval/token/rate + secrets) 포함.
 # 필터 예시:
 pytest tests/test_workstream_a.py tests/test_control_plane_api.py -v  # isolation / SSE
@@ -214,9 +227,9 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Liveness / readiness (production fail-closed):** `GET /healthz`는 항상 `200`, `GET /readyz`는 production에서 DB/Redis 체크 실패 시 `503`을 반환해 pod을 트래픽에서 제외한다(non-prod에서는 `checks` 상세를 담은 `200 degraded`일 수 있음). `SIGTERM` 드레이닝 중에도 `terminationGracePeriodSeconds: 30` 동안 `503 draining`으로 트래픽을 차단한다. K8s는 `readinessProbe` 실패 시 Endpoints에서 제외한다.
 - **Audit chain:** `verify_chain`으로 변조를 탐지하고 `checkpoint`는 HMAC으로 서명된다.
 
-### 9a. 릴리즈 v0.1.2 — 제품 `0.1.2` (아키텍처 `v1.7.2`와 별개)
+### 9a. 릴리즈 v0.1.3 — 제품 `0.1.3` (아키텍처 `v1.7.2`와 별개)
 
-**태그/커밋:** `v0.1.2` → `34f0981e71` (원격 `origin/main` HEAD). 제품 버전 `0.1.2`는 `admin-console/package.json`에서 읽는다(env `OAOS_VERSION`이 우선); 아키텍처 `v1.7.2`는 설계 문서 버전으로 별개 — 혼동 금지.
+**태그/커밋:** `v0.1.3` 후보 `6d91f3b710` on `release/v0.1.3-remediation` (미태깅; 이전 `v0.1.2`는 `34f0981e71` on `origin/main`). 제품 버전 `0.1.3`는 `admin-console/package.json`에서 읽는다(env `OAOS_VERSION`이 우선); 아키텍처 `v1.7.2`는 설계 문서 버전으로 별개 — 혼동 금지.
 
 **이번 태그 포함 내역 (11 files, 647 insertions):**
 - **Admin Web UI 수정**
@@ -224,8 +237,8 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
   - `admin-console/app/(dashboard)/llm-usage/page.tsx`: 관대한 `formatNumber`/`formatCost`/`formatTime`, `safeNum`, 방어적 `items` 정규화 (`timestamp`/`created_at`, `tenant`/`tenant_id`, `total_tokens` fallback), `total = total ?? count ?? length`.
   - `admin-console/backend/llm_providers.py`: `_admin_usage_history`에 `tenant`/`timestamp` 별칭 + `total` 응답 추가, `_admin_usage_summary`에 `daily_tokens`/`daily_quota`/`daily_usage_ratio`/`per_minute_tokens`/`per_minute_limit`/`success_rate`/`p50`/`p99`/`hourly_*`/`updated_at` 확장 (기존 키 유지, 하위 호환).
 - **Version UI**
-  - `admin-console/components/VersionDisplay.tsx` (신규): `GET /version` (4s abort, no-store)로 설치 버전 조회, `t("header.version")` `Open Agent OS v{version}` 치환, `updateAvailable=false|null`이면 설치 버전만 표시, 아니면 `v0.1.2 -> vX.Y.Z`로 최신을 빨강으로 표시.
-  - `admin-console/app/version/route.ts` (신규, primary) + `admin-console/app/api/version/route.ts` (호환): `getInstalledVersion()` env/package.json/fallback `0.1.2`, `normalizeTag`/`compareSemver`, `fetchLatestGithubVersion()` → `GET /repos/openit-ai/open-agent-os/releases/latest` → fallback `GET /tags`, 3s bounded, `Cache-Control: public, s-maxage=3600, stale-while-revalidate=600`.
+  - `admin-console/components/VersionDisplay.tsx` (신규): `GET /version` (4s abort, no-store)로 설치 버전 조회, `t("header.version")` `Open Agent OS v{version}` 치환, `updateAvailable=false|null`이면 설치 버전만 표시, 아니면 `v0.1.3 -> vX.Y.Z`로 최신을 빨강으로 표시.
+  - `admin-console/app/version/route.ts` (신규, primary) + `admin-console/app/api/version/route.ts` (호환): `getInstalledVersion()` env/package.json/fallback `0.1.3`, `normalizeTag`/`compareSemver`, `fetchLatestGithubVersion()` → `GET /repos/openit-ai/open-agent-os/releases/latest` → fallback `GET /tags`, 3s bounded, `Cache-Control: public, s-maxage=3600, stale-while-revalidate=600`.
   - `admin-console/app/(dashboard)/layout.tsx`: footer `VersionDisplay`가 정적 텍스트 대체.
   - `admin-console/next.config.js` + `admin-console/lib/i18n/en.json,ko.json`: `version: "Open Agent OS v{version}"` 플레이스홀더 치환, `latestAvailable`, env 전파.
 - **P0 / P1 (이미 main에 포함, HEAD에 존재 확인 — 재커밋 아님)**
@@ -237,6 +250,16 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Outline — read-only 검증만.** 커넥터 `HttpOutlineSourceAdapter`는 read-only, bounded 단일 페이지 probe (`page_limit=1..5`), `source_reference`/`content_hash`/`acl_version` 추적. 분산/외부 전체 RAG는 **이번 릴리즈에서 주장하지 않는다**. 라이브 corpus probe는 bounded이며, 원본 저장소가 source of truth이고 전체 backfill/분산 검증은 라이브 credential + `scripts/verify-knowledge-live.py --health`가 필요하다 — P1 범위 `§0.4, §16.9-16.11` 참조. 관측된 바에 따르면 bounded paging probe는 `page_limit=1`에서 최대 약 869 페이지까지 보고한다(`health.py` 코드 주석), 이는 대량 ingestion을 주장하지 않고 corpus 규모를 나타낸다.
 - **Notion — 이번 릴리즈에서 live 연동 미완료.** `HttpNotionSourceAdapter`(`http_notion.py`)는 read-only이며 fail-closed: 모듈 부재 또는 credential 부재(`NOTION_API_KEY`/`OAOS_NOTION_TOKEN`) 시 결정적 blocker `Notion adapter missing: knowledge_index/connectors/http_notion.py not present` / `Notion credentials missing ... live Notion connector not verifiable`, `verifiable=false`, `adapter_missing=true` (해당 시), mock fallback이나 가짜 health 없음. Live Notion 검증은 `http_notion.py` + credential + network가 필요하다 — 완료로 주장하지 않는다.
 - **Distributed/external은 0으로 유지** — 라이브 검증(`kind`+`redis`+`hubble`+`Outline/Notion/Mattermost/Slack/LLM gateway` 라이브 네트워크)까지 — `scripts/verify-evidence-tiers.py` tiers 참조. `scripts/verify-knowledge-live.py`가 커넥터 운영 검증 수단이며, `scripts/verify-evidence-tiers.py --check-only`가 지원되지 않는 주장에 대해 H8을 강제한다.
+
+### 9b. 릴리즈 v0.1.4 — 제품 `0.1.4` (아키텍처 `v1.7.2`와 별개)
+
+**포함 내역 (v0.1.3 대비 관리자 콘솔 설정면, additive-only):**
+- **Setup/ACP/MCP/MM/Outline** (`/v1/setup`, `/v1/acp`, `/v1/mcp`, `/v1/mattermost`, `/v1/outline` + infra 탭) — 최초실행 마법사, effective 자동탐지, 마스킹 점검, 서비스 테이블 자동등록.
+- **Runtime Config plane (P0)** — `/v1/runtime/config` 스냅샷/발행/롤백/상태/감사 + 통합 infra `/live`·`/registry`·`/seed` 탭 (main 병합, 기존 CRUD 유지).
+- **커넥터 (P1)** — `/v1/notion`, `/v1/slack`, `/v1/oauth`, `/v1/smtp` (키 write-only, MM/Outline 독립).
+- **운영면 (P2/P3)** — `/quota`, `/embedding`, `/secrets`(메타만, 로테이션 실행 없음), `/feature-flags`, `/profile-ops`, `/knowledge-ops`(상태 + 큐 투입 + dry-run, 확인토큰 리셋).
+
+**측정 근거 (2026-09-04, 병합 커밋):** 전수 `1358 passed, 5 skipped, 6 failed` — 6건은 clean main에서도 동일 재현(기존 순서 의존, worktree 검증); 표적 admin `39 passed`; `npm run build` 성공(25+ 페이지). 원격 배포 검증: systemd 4종 active, 신규 API 30종, 신규 페이지 HTTP 200, CP/EGW/Hermes/MM/Outline 헬스 정상, alembic head `018`, Hermes/MM/Outline 코드 경로 무수정.
 
 > **Historical note (참고용):** `docs/architecture-v1.7.2.md`(`2ebeb981`, 5026 lines)는 `648 tests` 포함한 production hardening(fail-closed runtime/deploy/audit/approval/token/rate + secrets) 시점에 기록되었다. `v1.6.4` 시점은 `612`, 그 이전 마일스톤은 `590` / `180`이었다. 이 수치는 특정 시점의 스냅샷이며 현재 결과를 대체하지 않는다.
 
@@ -272,5 +295,5 @@ docs/architecture-v1.7.2.md  # 최신 정본 — v1.7.2 Adaptive Profile Engine 
 
 - **Licensor:** OpenIT Co., Ltd. / **Licensed Work:** Open Agent OS
 - **Additional Use Grant:** Developer Edition 평가·개발·테스트 목적의 production 외 사용 허용, 그 외 production/호스팅/재배포는 Business/Managed 별도 상업 라이선스 필요
-- **Change Date:** `2030-08-27`(`v0.1.2` 기준, 이후 버전은 각 릴리즈일로부터 4년) — **Change License:** Apache 2.0 자동 전환 — 제품 버전 `0.1.2`는 아키텍처 `v1.7.2`와 별개
+- **Change Date:** `2030-08-27`(`v0.1.3` 기준, 이후 버전은 각 릴리즈일로부터 4년) — **Change License:** Apache 2.0 자동 전환 — 제품 버전 `0.1.3`는 아키텍처 `v1.7.2`와 별개
 - BSL 원문: https://mariadb.com/bsl11/ · Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0

@@ -260,6 +260,103 @@ class TestSyncFactory:
         res = svc.sync_memory()
         assert res.fetched == 1
 
+    @pytest.mark.asyncio
+    async def test_sync_to_persistent_delegates_with_explicit_context(self):
+        from knowledge_index.service import KnowledgeSyncService
+        from knowledge_index.repository import KnowledgeIndexRepository
+        from knowledge_index.embedding import FakeEmbeddingProvider
+        from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter
+        maker, engine = await _sqlite_maker()
+        repo = KnowledgeIndexRepository(maker)
+        raw = _raw_doc(doc_id="doc_delegate", text="delegated persistent sync")
+        adapter = HttpOutlineSourceAdapter(
+            api_url="https://o.example.com", api_token="tok",
+            http_client=FakeTransport(responses=[{"data": [raw], "pagination": {"offset": 0, "total": 1}}]),
+            retry_backoff_s=0.001,
+        )
+        svc = KnowledgeSyncService()
+        result = await svc.sync_to_persistent(
+            tenant_id="tenant-delegate", repository=repo,
+            embedding_provider=FakeEmbeddingProvider(dim=8), outline_adapter=adapter,
+        )
+        assert result.persisted >= 1
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_sync_to_persistent_fails_closed_without_context(self):
+        from knowledge_index.service import KnowledgeSyncService
+        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+            await KnowledgeSyncService().sync_to_persistent()
+
+    @pytest.mark.asyncio
+    async def test_sync_to_persistent_fails_closed_each_missing_piece(self):
+        from knowledge_index.service import KnowledgeSyncService
+        from knowledge_index.repository import KnowledgeIndexRepository
+        from knowledge_index.embedding import FakeEmbeddingProvider
+        from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter
+        maker, engine = await _sqlite_maker()
+        repo = KnowledgeIndexRepository(maker)
+        provider = FakeEmbeddingProvider(dim=8)
+        def _adapter():
+            return HttpOutlineSourceAdapter(api_url="https://o.example.com", api_token="tok", http_client=FakeTransport(responses=[{"data": [_raw_doc()], "pagination": {"offset": 0, "total": 1}}]), retry_backoff_s=0.001)
+        svc = KnowledgeSyncService()
+        # each required piece missing => fail-closed NotImplementedError
+        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+            await svc.sync_to_persistent(repository=repo, embedding_provider=provider, outline_adapter=_adapter())
+        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+            await svc.sync_to_persistent(tenant_id="t1", embedding_provider=provider, outline_adapter=_adapter())
+        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+            await svc.sync_to_persistent(tenant_id="t1", repository=repo, outline_adapter=_adapter())
+        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+            await svc.sync_to_persistent(tenant_id="t1", repository=repo, embedding_provider=provider)
+        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+            await svc.sync_to_persistent(tenant_id="", repository=repo, embedding_provider=provider, outline_adapter=_adapter())
+        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+            await svc.sync_to_persistent(tenant_id="   ", repository=repo, embedding_provider=provider, outline_adapter=_adapter())
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_sync_to_persistent_delegates_via_constructor_context(self):
+        from knowledge_index.service import KnowledgeSyncService
+        from knowledge_index.repository import KnowledgeIndexRepository
+        from knowledge_index.embedding import FakeEmbeddingProvider
+        from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter
+        from knowledge_index.retrieval import KnowledgeIndexRetriever
+        from knowledge_index.service import KnowledgeSearchService
+        maker, engine = await _sqlite_maker()
+        repo = KnowledgeIndexRepository(maker)
+        raw = _raw_doc(doc_id="doc_ctor", text="constructor delegated sync")
+        adapter = HttpOutlineSourceAdapter(api_url="https://o.example.com", api_token="tok", http_client=FakeTransport(responses=[{"data": [raw], "pagination": {"offset": 0, "total": 1}}]), retry_backoff_s=0.001)
+        svc = KnowledgeSyncService(repository=repo, embedding_provider=FakeEmbeddingProvider(dim=8), outline_adapter=adapter, tenant_id="tenant-ctor")
+        result = await svc.sync_to_persistent()
+        assert result.persisted >= 1
+        assert result.fetched == 1
+        # verify actually persisted and searchable via tenant isolation
+        retr = KnowledgeIndexRetriever(repo)
+        search = KnowledgeSearchService(retr)
+        hits = await search.search(query="constructor", tenant_id="tenant-ctor", user_id="alice", limit=10)
+        assert any("constructor" in h.chunk_text for h in hits)
+        # cross-tenant isolation: other tenant should not see it
+        hits_other = await search.search(query="constructor", tenant_id="tenant-other", user_id="alice", limit=10)
+        assert all("constructor" not in h.chunk_text for h in hits_other)
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_sync_to_persistent_delegates_via_adapter_alias_and_persists(self):
+        from knowledge_index.service import KnowledgeSyncService
+        from knowledge_index.repository import KnowledgeIndexRepository
+        from knowledge_index.embedding import FakeEmbeddingProvider
+        from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter
+        maker, engine = await _sqlite_maker()
+        repo = KnowledgeIndexRepository(maker)
+        raw = _raw_doc(doc_id="doc_alias", text="alias adapter sync")
+        adapter = HttpOutlineSourceAdapter(api_url="https://o.example.com", api_token="tok", http_client=FakeTransport(responses=[{"data": [raw], "pagination": {"offset": 0, "total": 1}}]), retry_backoff_s=0.001)
+        svc = KnowledgeSyncService()
+        # via `adapter` alias (not outline_adapter)
+        result = await svc.sync_to_persistent(tenant_id="tenant-alias", repository=repo, embedding_provider=FakeEmbeddingProvider(dim=8), adapter=adapter)
+        assert result.persisted >= 1
+        await engine.dispose()
+
 # ---------------------------------------------------------------------------
 # 3) Materialization wrapper — explicit write gate + provenance + read-back
 # ---------------------------------------------------------------------------

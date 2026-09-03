@@ -1,12 +1,13 @@
 [project]
 name = "open-agent-os"
-version = "0.1.1"
+version = "0.1.4"
 description = "Open Agent OS — Enterprise Personal Agent Platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
+    "email-validator>=2.0",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
@@ -19,6 +20,7 @@ dependencies = [
     "alembic>=1.13",
     "bcrypt>=4.0",
     "argon2-cffi>=23.1",
+    "pgvector>=0.5",
 ]
 
 [project.optional-dependencies]

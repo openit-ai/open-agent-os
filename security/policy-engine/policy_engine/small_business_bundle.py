@@ -287,13 +287,37 @@ def small_business_bundle(tenant_id: str = "default") -> PolicyBundle:
             resource_pattern="*",
             effect=PolicyDecision.APPROVAL_REQUIRED,
         ),
-        PolicyRule(
-            id="approval-delete",
-            source=PolicySource.JIT_APPROVAL,
-            action="DELETE",
-            resource_pattern="*",
-            effect=PolicyDecision.APPROVAL_REQUIRED,
-        ),
+        # Approve deletes only for known resource domains. Unknown resources
+        # must fall through to PolicyEngine's DEFAULT_DENY.
+        *[
+            PolicyRule(
+                id=f"approval-delete-{domain.replace('/', '-')}",
+                source=PolicySource.JIT_APPROVAL,
+                action="DELETE",
+                resource_pattern=f"{domain}/*",
+                effect=PolicyDecision.APPROVAL_REQUIRED,
+            )
+            for domain in (
+                "outline",
+                "gmail",
+                "gmail/user",
+                "calendar",
+                "calendar/user",
+                "drive",
+                "drive/user",
+                "tasks",
+                "tasks/user",
+                "github",
+                "mattermost",
+                "session",
+                "crm",
+                "erp",
+                "slack",
+                "notion",
+                "iam",
+                "production",
+            )
+        ],
         PolicyRule(
             id="approval-send",
             source=PolicySource.JIT_APPROVAL,

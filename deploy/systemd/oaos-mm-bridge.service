@@ -1,0 +1,25 @@
+[Unit]
+Description=OAOS Mattermost Bridge — @agent DM/mention ingress to Control Plane
+Documentation=https://github.com/openit-ai/open-agent-os
+After=network.target oaos-control-plane.service mattermost.service
+Wants=oaos-control-plane.service
+
+[Service]
+Type=simple
+User=oaos
+Group=oaos
+WorkingDirectory=/home/openit/apps/oaos/scripts
+EnvironmentFile=-/etc/oaos/oaos.env
+ExecStart=/usr/bin/python3 /home/openit/apps/oaos/scripts/oaos-mm-bridge.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/oaos/.hermes /tmp
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

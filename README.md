@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.2 — Personal AX Business Platform
+# Open Agent OS v0.1.4 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,9 +13,9 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.2` — single source of truth `admin-console/package.json` `0.1.2` (commit `34f0981e71`, tag `v0.1.2`). **Architecture document version `v1.7.2` (`docs/architecture-v1.7.2.md`) is distinct from product version `0.1.2`** — v1.7.2 describes the Adaptive Profile Engine design (§16.12), not the release number.
+- **Product version:** `0.1.4` — single source of truth `admin-console/package.json` `0.1.4` (candidate branch `release/v0.1.3-remediation` at `6d91f3b710`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.2` (`docs/architecture-v1.7.2.md`) is distinct from product version `0.1.3`** — v1.7.2 describes the Adaptive Profile Engine design (§16.12), not the release number.
 - **Canonical architecture:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine design included (see §16.12)
-
+- **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
 ---
 
@@ -126,6 +126,18 @@ Enterprise Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/N
 **Invariants:** `Personal Delegation (my resources, delegated by me) ↔ Enterprise Authorization (company resources — policy + approval)`, `Explicit Deny > Personal`, `Agent Permission ≤ User Permission`, `Cross-user always DENY`, `Auditable (hash-chain + HMAC checkpoint)`.
 
 **Runtime:** LLM Runtime canonical (`llm`, `safe` is deprecated alias) + Hermes Runtime advanced — Registry YAML (LLM Only / Hermes Only / Both), Router 5-step, Capability `EXECUTE runtime/*`, untrusted worker (§16G), tool policy (§16H), data access (§16I), and Adaptive Profile Engine MVP implemented (§16.12 — code/DB migration/CP router/Mattermost ingress/ACP hook/image active-runtime E2E confirmed; distributed/external/live RAG unverified). See [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) §§16A–16K, §§16.1.1–16.1.2, §§16.4–16.12.
+
+### Runtime ownership and Mattermost isolation (v1.7.2)
+
+OAOS does not reuse a user’s direct Hermes/Telegram session. The Mattermost path is owner-scoped and uses the OAOS production Redis session store before calling the Hermes Gateway API. A Telegram `/model` override such as `custom/gpt-5.6-luna` remains a direct Hermes session concern and must never be inherited by OAOS.
+
+```text
+Mattermost mykim → oaos-mm-bridge → OAOS Control Plane :8100
+                 → Redis session (`oaos:mattermost:<tenant>:<verified-user>`)
+                 → Hermes Gateway API :8642
+```
+
+Verified on 2026-08-30: OAOS services and health/readiness endpoints were active/HTTP 200; production Control Plane used `OAOS_SESSION_BACKEND=redis` and `OAOS_CP_HERMES_BASE_URL=http://127.0.0.1:8642`; the bridge had no direct `state.db`/`sessions.json` reference; targeted OAOS regression tests passed `117`. This is structural/process evidence. A real `mykim` source post `jazr64zt6p8m8qendcpqnnur1h` was read back in channel `u5yq38w4d3gii8zdi48r6p39zw`, followed by bot reply `c8gawge517837j3o3zoo44swgc` with `root_id=jazr64zt6p8m8qendcpqnnur1h` and a later timestamp. The user-facing Mattermost response path therefore passed for this observed turn. The separate probe post `xjmo488frbdafnkwwutft49qeh` was correctly skipped because it was bot-originated.
 
 ## 5. Core Values
 
@@ -259,7 +271,7 @@ Run locally at any commit — no external claims required:
 
 ```bash
 pytest -q
-# Expected (2026-08-29, main): 927 passed, 1 skipped, 74 warnings — includes LLM 6-Provider, Fernet Vault,
+# Historical snapshot (2026-08-29, main): 927 passed, 1 skipped, 74 warnings — not current v0.1.3 evidence. Current v0.1.3 candidate evidence is in docs/deployment-verification-v0.1.3.md and docs/evidence-report-v0.1.3.json. Includes LLM 6-Provider, Fernet Vault,
 # opencode binary chain, wiki/pgvector, and production hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets).
 python scripts/verify-evidence-tiers.py --check-only  # H8: fails if docs claim unsupported distributed/external
 # Filtered examples:
@@ -272,16 +284,16 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 | Tier | Count (2026-08-29) | Prerequisites | Evidence |
 |------|-------------------|---------------|----------|
-| unit | 927 passed, 1 skipped | none (local) | `pytest -q` — fakeredis/SQLite/file mocks allowed, no live infra |
+| unit | historical 927 passed, 1 skipped | none (local) | historical v1.7.1 snapshot only; v0.1.3 current evidence: `docs/evidence-report-v0.1.3.json` |
 | distributed | 0 passed | Redis + kind + K8s + CNI | requires `kind` + `redis-cli ping PONG` + `hubble --verdict DROPPED` |
 | external | 0 passed | Outline/Notion/Mattermost/Slack/LLM gateway | requires live credentials + network |
-| total | 927 passed |  | unit only; distributed/external remain 0 until live verification |
+| total | see current candidate evidence |  | unit only; distributed/external remain 0 until live verification |
 
-> `distributed`/`external` are not claimed from unit tests. See `docs/deployment-verification-v1.7.1.md` and `docs/evidence-report-v1.7.1.json` generated by `scripts/verify-evidence-tiers.py` (records command, timestamp, commit, counts, unavailable prerequisites).
+> `distributed`/`external` are not claimed from unit tests. Historical v1.7.1 artifacts remain at `docs/deployment-verification-v1.7.1.md` and `docs/evidence-report-v1.7.1.json`; current v0.1.3 candidate evidence is recorded in `docs/deployment-verification-v0.1.3.md` and `docs/evidence-report-v0.1.3.json`.
 
-### 9a. Release v0.1.2 — product `0.1.2` (arch `v1.7.2` distinct)
+### 9a. Release v0.1.3 — product `0.1.3` (arch `v1.7.2` distinct)
 
-**Tag/commit:** `v0.1.2` → `34f0981e71` (remote `origin/main` HEAD). Product version `0.1.2` is read from `admin-console/package.json` (env `OAOS_VERSION` overrides); architecture `v1.7.2` remains the design document version — do not conflate.
+**Tag/commit:** `v0.1.3` candidate `6d91f3b710` on `release/v0.1.3-remediation` (not yet tagged; previous `v0.1.2` was `34f0981e71` on `origin/main`). Product version `0.1.3` is read from `admin-console/package.json` (env `OAOS_VERSION` overrides); architecture `v1.7.2` remains the design document version — do not conflate.
 
 **Included in this tag (11 files, 647 insertions):**
 - **Admin Web UI fixes**
@@ -289,8 +301,8 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
   - `admin-console/app/(dashboard)/llm-usage/page.tsx`: tolerant `formatNumber`/`formatCost`/`formatTime`, `safeNum`, defensive `items` normalization (`timestamp`/`created_at`, `tenant`/`tenant_id`, `total_tokens` fallback), `total = total ?? count ?? length`.
   - `admin-console/backend/llm_providers.py`: `_admin_usage_history` adds `tenant`/`timestamp` aliases + `total` in response, `_admin_usage_summary` extends with `daily_tokens`/`daily_quota`/`daily_usage_ratio`/`per_minute_tokens`/`per_minute_limit`/`success_rate`/`p50`/`p99`/`hourly_*`/`updated_at` (backward-compatible, original keys retained).
 - **Version UI**
-  - `admin-console/components/VersionDisplay.tsx` (new): client component `GET /version` (4s abort, no-store), interpolates `t("header.version")` `Open Agent OS v{version}`, shows only installed when `updateAvailable=false|null`, otherwise `v0.1.2 -> vX.Y.Z` with latest in red.
-  - `admin-console/app/version/route.ts` (new, primary) + `admin-console/app/api/version/route.ts` (compat): `getInstalledVersion()` env/package.json/fallback `0.1.2`, `normalizeTag`/`compareSemver`, `fetchLatestGithubVersion()` → `GET /repos/openit-ai/open-agent-os/releases/latest` → fallback `GET /tags`, 3s bounded, `Cache-Control: public, s-maxage=3600, stale-while-revalidate=600`.
+  - `admin-console/components/VersionDisplay.tsx` (new): client component `GET /version` (4s abort, no-store), interpolates `t("header.version")` `Open Agent OS v{version}`, shows only installed when `updateAvailable=false|null`, otherwise `v0.1.3 -> vX.Y.Z` with latest in red.
+  - `admin-console/app/version/route.ts` (new, primary) + `admin-console/app/api/version/route.ts` (compat): `getInstalledVersion()` env/package.json/fallback `0.1.3`, `normalizeTag`/`compareSemver`, `fetchLatestGithubVersion()` → `GET /repos/openit-ai/open-agent-os/releases/latest` → fallback `GET /tags`, 3s bounded, `Cache-Control: public, s-maxage=3600, stale-while-revalidate=600`.
   - `admin-console/app/(dashboard)/layout.tsx`: footer `VersionDisplay` replaces static text.
   - `admin-console/next.config.js` + `admin-console/lib/i18n/en.json,ko.json`: `version: "Open Agent OS v{version}"` placeholder interpolation, `latestAvailable`, env propagation.
 - **P0 / P1 (already in main before this tag, verified present at HEAD — not re-committed)**
@@ -307,6 +319,16 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Liveness / readiness (fail-closed in production):** `GET /healthz` always `200`; `GET /readyz` returns `503` when DB/Redis checks fail in production (`non-prod` may return `200 degraded` with `checks` detail), and during `SIGTERM` draining (`terminationGracePeriodSeconds: 30`). K8s `readinessProbe` removes the pod from traffic on `503`.
 - **Audit chain:** `verify_chain` detects tampering; `checkpoint` is HMAC-signed.
 - **RAG distinction:** Knowledge Index (schema/repository/retrieval/chunking/embedding/Outline-Notion adapters/sync/ACL revalidation) is implemented and unit-tested; live external connector credentials/network and production corpus backfill remain operational integration work — not claimed as external evidence. distributed/external/live RAG remains unverified.
+
+### 9b. Release v0.1.4 — product `0.1.4` (arch `v1.7.2` distinct)
+
+**Included (admin console settings planes, additive-only over v0.1.3):**
+- **Setup/ACP/MCP/MM/Outline** (`/v1/setup`, `/v1/acp`, `/v1/mcp`, `/v1/mattermost`, `/v1/outline` + infra tabs) — first-run wizard, effective-config auto-detect, masked probe targets, MM/Outline auto-register into services table.
+- **Runtime Config plane (P0)** — `/v1/runtime/config` snapshot/publish/rollback/status/audit + unified infra `/live`·`/registry`·`/seed` tabs (merged from main, existing CRUD preserved).
+- **Connectors (P1)** — `/v1/notion`, `/v1/slack`, `/v1/oauth`, `/v1/smtp` (write-only secrets, independent of MM/Outline).
+- **Ops surfaces (P2/P3)** — `/quota`, `/embedding`, `/secrets` (metadata only, no rotation execution), `/feature-flags`, `/profile-ops`, `/knowledge-ops` (status + queued backfill/sync + dry-run, confirm-token reset).
+
+**Measured evidence (2026-09-04, merge commit):** full suite `1358 passed, 5 skipped, 6 failed` — all 6 fail identically on clean main (pre-existing order-dependence, verified via worktree); targeted admin suites `39 passed`; `npm run build` success (25+ pages). Remote deploy verified: 4 systemd services active, 30 new API routes, new pages HTTP 200, CP/EGW/Hermes/MM/Outline health OK, alembic head `018`, Hermes/MM/Outline code paths unmodified.
 
 > **Historical note (for reference only):** `docs/architecture-v1.7.0.md` (`2ebeb981`, 5026 lines) was recorded at `648 tests` including production hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets). At `v1.6.4` the count was `612`; earlier milestones were `590` / `180`. Those numbers are point-in-time snapshots, not the current result.
 
@@ -344,5 +366,5 @@ docs/architecture-v1.7.2.md  # Canonical implementation architecture — v1.7.2 
 
 - **Licensor:** OpenIT Co., Ltd. / **Licensed Work:** Open Agent OS
 - **Additional Use Grant:** Non-production use for Developer Edition evaluation / development / testing; production / hosting / redistribution requires separate Business/Managed commercial license
-- **Change Date:** `2030-08-27` (for v0.1.2; each later version 4 years after its release) — **Change License:** Apache 2.0 — product version `0.1.2` distinct from architecture `v1.7.2`
+- **Change Date:** `2030-08-27` (for v0.1.3; each later version 4 years after its release) — **Change License:** Apache 2.0 — product version `0.1.3` distinct from architecture `v1.7.2`
 - BSL text: https://mariadb.com/bsl11/ · Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0

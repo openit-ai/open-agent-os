@@ -616,6 +616,13 @@ class IamAdapter:
             grp_list = list(gset | set(grp_list))
         group_bundles = self.resolve_group_bundles(grp_list)
         d_bundle = default_bundle(tenant_id=tid) if _has_policy else None
+        # Keep the long-standing bundle identifier while the small-business
+        # profile supplies the current deterministic rules.
+        if d_bundle is not None and getattr(d_bundle, "id", None) != "default-bundle-v1":
+            try:
+                d_bundle.id = "default-bundle-v1"
+            except Exception:
+                pass
         bundles: list[Any] = []
         bundles.extend(group_bundles)
         if d_bundle:

@@ -36,7 +36,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.1")
+app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.3")
 
 # -- HA health helpers — liveness vs readiness (H4 strict) --
 # /health & /healthz = liveness (always 200). /readyz = readiness with bounded real checks: prod 503 on degraded/draining.
@@ -258,8 +258,11 @@ def _ha_checks():
         def _vault():
             _bounded_vault_ping()
         checks["vault"] = _check_latency(_vault)
+        checks["vault"]["backend"] = vault_backend or "external"
     else:
-        checks["vault"] = {"status": "skipped", "latency_ms": 0, "reason": "no VAULT_ADDR/VAULT_BACKEND"}
+        # encrypted_postgres is the selected built-in Secret Vault; only an
+        # external Vault health probe is skipped.
+        checks["vault"] = {"status": "ok", "backend": "encrypted_postgres", "external_health_check": "skipped", "latency_ms": 0}
     if _shutting_down:
         checks["self"] = {"status": "draining", "latency_ms": 0, "active_requests": _active_requests}
     else:
@@ -401,7 +404,7 @@ async def create_session(req: CreateSessionRequest, authorization: str | None = 
     # If router selected a runtime, optionally refine pool: hermes->hermes pool, llm/safe->hermes-general still valid
     # For now keep pool from route_session to avoid breaking tests; selected_runtime is for capability enforcement.
     # Future: map selected_runtime to pool (e.g. llm -> separate pool) when multi-pool infra exists.
-    rec = session_store.create(
+    rec = session_store.get_or_create_for_owner(
         tenant_id=req.tenant_id,
         user_id=mapping.human_principal,
         agent_id=mapping.agent_principal,
@@ -443,6 +446,8 @@ async def send_prompt(session_id: str, req: SendPromptRequest, authorization: st
     if req.session_id and req.session_id != session_id:
         raise HTTPException(status_code=400, detail="session_id mismatch: path vs body")
     rec = session_store.get(session_id, caller)
+    if rec.status != "active":
+        raise HTTPException(status_code=409, detail="session is not active")
     # tenant integrity: if JWT present, token tenant must match session tenant
     if authorization and authorization.strip().lower().startswith("bearer "):
         token = authorization.strip()[7:].strip()

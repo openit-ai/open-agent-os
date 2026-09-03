@@ -79,7 +79,7 @@ runtime_mode_router = _runtime_mode_mod.router
 _fallback_mod = _load_admin_sibling("fallback")
 fallback_router = _fallback_mod.router
 
-app = FastAPI(title="Open Agent OS Admin API", version="0.1.1")
+app = FastAPI(title="Open Agent OS Admin API", version="0.1.3")
 
 # ── CORS — whitelist via OAOS_CORS_ORIGINS, deny * when credentials true ─
 _DEFAULT_CORS_ORIGINS = [
@@ -182,6 +182,114 @@ app.include_router(user_mappings_router)
 app.include_router(llm_providers_router)
 app.include_router(runtime_mode_router)
 app.include_router(fallback_router)
+# Setup wizard + ACP/MCP config routers (initial-install + runtime connection settings)
+try:
+    _setup_mod = _load_admin_sibling("setup")
+    setup_router = _setup_mod.router
+    app.include_router(setup_router)
+    logger.info("Setup router mounted at /v1/setup")
+except Exception as e:
+    logger.warning(f"Setup router not mounted: {e}")
+try:
+    _acp_mod = _load_admin_sibling("acp_config")
+    acp_router = _acp_mod.router
+    app.include_router(acp_router)
+    logger.info("ACP router mounted at /v1/acp")
+except Exception as e:
+    logger.warning(f"ACP router not mounted: {e}")
+try:
+    _mcp_mod = _load_admin_sibling("mcp_config")
+    mcp_router = _mcp_mod.router
+    app.include_router(mcp_router)
+    logger.info("MCP router mounted at /v1/mcp")
+except Exception as e:
+    logger.warning(f"MCP router not mounted: {e}")
+try:
+    _mm_mod = _load_admin_sibling("mattermost_config")
+    mm_router = _mm_mod.router
+    app.include_router(mm_router)
+    logger.info("Mattermost router mounted at /v1/mattermost")
+except Exception as e:
+    logger.warning(f"Mattermost router not mounted: {e}")
+try:
+    _ol_mod = _load_admin_sibling("outline_config")
+    ol_router = _ol_mod.router
+    app.include_router(ol_router)
+    logger.info("Outline router mounted at /v1/outline")
+except Exception as e:
+    logger.warning(f"Outline router not mounted: {e}")
+try:
+    _notion_mod = _load_admin_sibling("notion_config")
+    notion_router = _notion_mod.router
+    app.include_router(notion_router)
+    logger.info("Notion router mounted at /v1/notion")
+except Exception as e:
+    logger.warning(f"Notion router not mounted: {e}")
+try:
+    _slack_mod = _load_admin_sibling("slack_config")
+    slack_router = _slack_mod.router
+    app.include_router(slack_router)
+    logger.info("Slack router mounted at /v1/slack")
+except Exception as e:
+    logger.warning(f"Slack router not mounted: {e}")
+try:
+    _oauth_mod = _load_admin_sibling("oauth_config")
+    oauth_router = _oauth_mod.router
+    app.include_router(oauth_router)
+    logger.info("OAuth router mounted at /v1/oauth")
+except Exception as e:
+    logger.warning(f"OAuth router not mounted: {e}")
+try:
+    _smtp_mod = _load_admin_sibling("smtp_config")
+    smtp_router = _smtp_mod.router
+    app.include_router(smtp_router)
+    logger.info("SMTP router mounted at /v1/smtp")
+except Exception as e:
+    logger.warning(f"SMTP router not mounted: {e}")
+# P2 write surfaces — quota/embedding/secrets/feature-flags (additive; no enforcement/auth changes)
+try:
+    _quota_admin_mod = _load_admin_sibling("quota_admin")
+    quota_admin_router = _quota_admin_mod.router
+    app.include_router(quota_admin_router)
+    logger.info("Quota admin router mounted at /v1/quota")
+except Exception as e:
+    logger.warning(f"Quota admin router not mounted: {e}")
+try:
+    _embedding_mod = _load_admin_sibling("embedding_config")
+    embedding_router = _embedding_mod.router
+    app.include_router(embedding_router)
+    logger.info("Embedding router mounted at /v1/embedding")
+except Exception as e:
+    logger.warning(f"Embedding router not mounted: {e}")
+try:
+    _secrets_admin_mod = _load_admin_sibling("secrets_admin")
+    secrets_admin_router = _secrets_admin_mod.router
+    app.include_router(secrets_admin_router)
+    logger.info("Secrets admin router mounted at /v1/secrets")
+except Exception as e:
+    logger.warning(f"Secrets admin router not mounted: {e}")
+try:
+    _flags_mod = _load_admin_sibling("feature_flags")
+    flags_router = _flags_mod.router
+    app.include_router(flags_router)
+    logger.info("Feature flags router mounted at /v1/feature-flags")
+except Exception as e:
+    logger.warning(f"Feature flags router not mounted: {e}")
+# P3 ops surfaces — profile/knowledge sync operation views (additive; no pipeline logic changes)
+try:
+    _profile_ops_mod = _load_admin_sibling("profile_ops")
+    profile_ops_router = _profile_ops_mod.router
+    app.include_router(profile_ops_router)
+    logger.info("Profile ops router mounted at /v1/profile-ops")
+except Exception as e:
+    logger.warning(f"Profile ops router not mounted: {e}")
+try:
+    _knowledge_ops_mod = _load_admin_sibling("knowledge_ops")
+    knowledge_ops_router = _knowledge_ops_mod.router
+    app.include_router(knowledge_ops_router)
+    logger.info("Knowledge ops router mounted at /v1/knowledge-ops")
+except Exception as e:
+    logger.warning(f"Knowledge ops router not mounted: {e}")
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")

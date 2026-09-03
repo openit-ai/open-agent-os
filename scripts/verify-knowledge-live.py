@@ -226,8 +226,9 @@ def main() -> None:
     p.add_argument("--page-limit", type=int, default=1, help="bounded page limit for health/dry-run (1-5)")
     p.add_argument("--backfill", action="store_true", help="live corpus backfill into DB (requires --tenant and --yes)")
     p.add_argument("--tenant", type=str, default="", help="tenant_id for backfill")
-    p.add_argument("--limit", type=int, default=20, help="max docs to backfill (bounded, requires --yes)")
+    p.add_argument("--limit", type=int, default=0, help="max docs to backfill; 0 means full corpus (requires --yes)")
     p.add_argument("--yes", action="store_true", help="confirm bulk backfill execution (without this, backfill is dry-run only)")
+    p.add_argument("--full", action="store_true", help="explicitly request the complete Outline corpus; equivalent to --limit 0")
     args = p.parse_args()
 
     if not any([args.check_credentials, args.health, args.verify_acl, args.incremental_demo, args.live_dry_run, args.all, args.backfill]):
@@ -243,22 +244,44 @@ def main() -> None:
             print("DRY-RUN: --backfill without --yes only counts. Use --backfill --tenant <id> --limit 20 --yes to execute.")
             do_live_dry_run(page_limit=min(int(args.limit), 20))
             sys.exit(0)
-        # Guard: bulk without limit is blocked
-        limit = max(1, min(int(args.limit), 100))
-        if limit > 50:
-            print(f"WARNING: large backfill limit={limit} — requires approval. Proceeding with bounded {limit} docs...")
-        print(f"=== LIVE BACKFILL EXECUTION tenant={args.tenant!r} limit={limit} ===")
+        # Explicit full-corpus mode has no arbitrary document cap; --limit > 0
+        # remains available for bounded rehearsal. Caller must pass --yes.
+        requested_limit = int(args.limit)
+        if requested_limit < 0:
+            print("ERROR: --limit must be >= 0")
+            sys.exit(2)
+        limit = requested_limit
+        mode = "full-corpus" if args.full or limit == 0 else "bounded"
+        print(f"=== LIVE BACKFILL EXECUTION tenant={args.tenant!r} mode={mode} limit={limit or 'all'} ===")
+        if mode == "full-corpus":
+            print("WARNING: full Outline corpus sync will write the live Knowledge Index; proceeding under --yes.")
         # Real backfill: use service sync_outline_to_index with Fake or Ollama provider, bounded fetch
         # For safety, cap adapter page_limit to limit
         import asyncio
 
-        from knowledge_index.embedding import FakeEmbeddingProvider
-        from knowledge_index.store import InMemoryCheckpointStore
+        from knowledge_index.checkpoint import PersistentCheckpointStore
         from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter
+        from sqlalchemy import create_engine, inspect
 
-        # choose provider: if OAOS_EMBED_API_URL set use Ollama, else Fake (test)
-        embed = FakeEmbeddingProvider(dim=32)
-        adapter = HttpOutlineSourceAdapter(page_limit=min(limit, 25), timeout_s=10)
+        sync_db_url = os.environ.get("DATABASE_URL") or os.environ.get("OAOS_DATABASE_URL", "")
+        if not sync_db_url:
+            print("ERROR: DATABASE_URL not set — cannot create persistent checkpoint store")
+            sys.exit(2)
+        sync_db_url = sync_db_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+        checkpoint_engine = create_engine(sync_db_url, pool_pre_ping=True)
+        if not inspect(checkpoint_engine).has_table("knowledge_sync_checkpoints"):
+            print("ERROR: knowledge_sync_checkpoints migration is not applied")
+            sys.exit(2)
+        checkpoint_store = PersistentCheckpointStore(checkpoint_engine, args.tenant)
+
+        # Production must use the configured real embedding provider. Fake vectors
+        # are retained only for non-production rehearsals.
+        from knowledge_index.embedding import get_default_provider
+        embed = get_default_provider(dim=1024 if "bge" in os.environ.get("OAOS_EMBED_MODEL", "bge-m3").lower() else 1536)
+        # One Outline page per transaction: each batch embeds, upserts, and
+        # commits its durable cursor before the next page starts.
+        page_limit = min(limit, 25) if limit else 25
+        adapter = HttpOutlineSourceAdapter(page_limit=page_limit, max_pages=1, timeout_s=10)
         # We need repository — try to create from DATABASE_URL
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
         from knowledge_index.repository import KnowledgeIndexRepository
@@ -274,15 +297,29 @@ def main() -> None:
         async def _run():
             engine = create_async_engine(db_url, echo=False)
             maker = async_sessionmaker(engine, expire_on_commit=False)
-            from knowledge_index.orm import Base as KBase  # ensure tables
-
-            async with engine.begin() as conn:
-                await conn.run_sync(KBase.metadata.create_all)
+            from sqlalchemy import inspect as sync_inspect
+            # Production schema is migration-owned; never create tables implicitly.
+            async with engine.connect() as conn:
+                table_exists = await conn.run_sync(lambda connection: sync_inspect(connection).has_table("knowledge_index"))
+            if not table_exists:
+                raise RuntimeError("knowledge_index schema is missing; apply Alembic migrations before backfill")
             repo = KnowledgeIndexRepository(maker)
             from knowledge_index.service import sync_outline_to_index
 
-            res = await sync_outline_to_index(tenant_id=args.tenant, repository=repo, embedding_provider=embed, outline_adapter=adapter)
-            print(json.dumps({"fetched": res.fetched, "upserted": res.upserted, "skipped": res.skipped, "deleted": res.deleted, "failed": res.failed, "chunks_written": res.chunks_written, "persisted": res.persisted, "errors": res.errors}, indent=2))
+            totals = {"fetched": 0, "upserted": 0, "skipped": 0, "deleted": 0, "failed": 0, "chunks_written": 0, "persisted": 0, "errors": []}
+            batches = 0
+            while batches < 500:
+                res = await sync_outline_to_index(tenant_id=args.tenant, repository=repo, embedding_provider=embed, outline_adapter=adapter, checkpoint_store=checkpoint_store)
+                batches += 1
+                for key in ("fetched", "upserted", "skipped", "deleted", "failed", "chunks_written", "persisted"):
+                    totals[key] += int(getattr(res, key, 0) or 0)
+                totals["errors"].extend(list(res.errors or []))
+                print(json.dumps({"batch": batches, "fetched": res.fetched, "upserted": res.upserted, "skipped": res.skipped, "failed": res.failed, "persisted": res.persisted, "cursor": getattr(res.checkpoint, "cursor", None)}, ensure_ascii=False), flush=True)
+                if res.failed or res.fetched < page_limit:
+                    break
+            else:
+                raise RuntimeError("backfill exceeded 500 page batches; possible non-advancing Outline cursor")
+            print(json.dumps(totals, indent=2, ensure_ascii=False))
             await engine.dispose()
 
         asyncio.run(_run())

@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import String, Text, DateTime, Index, ForeignKey, LargeBinary, Integer, Float
+from sqlalchemy import String, Text, DateTime, Index, ForeignKey, LargeBinary, Integer, Float, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import JSON as GenericJSON
 from sqlalchemy.orm import Mapped, mapped_column
@@ -468,6 +468,63 @@ class AdminPolicyVersionORM(Base):
         Index("ix_policy_bundle", "bundle_id", "version"),
     )
 
+
+# ── v1.7.2 Adaptive Profile Engine (MVP) ──────────────────────────────────
+# Tenant+user isolated profile. All queries must include tenant_id + user_id.
+
+
+class ProfileSettingsORM(Base):
+    __tablename__ = "profile_settings"
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    learning_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=365)
+    projection_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    consent_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProfileObservationORM(Base):
+    __tablename__ = "profile_observations"
+    observation_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_type: Mapped[str] = mapped_column(Text, nullable=False)
+    feature_name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[float] = mapped_column(Float, nullable=False)
+    source_type: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    source_ref_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProfileFeatureAggregateORM(Base):
+    __tablename__ = "profile_feature_aggregates"
+    aggregate_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    task_type: Mapped[str] = mapped_column(Text, nullable=False)
+    feature_name: Mapped[str] = mapped_column(Text, nullable=False)
+    window: Mapped[str] = mapped_column(Text, nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mean: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    variance: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProfileProjectionORM(Base):
+    __tablename__ = "profile_projections"
+    projection_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    projection_version: Mapped[str] = mapped_column(Text, nullable=False)
+    result_json: Mapped[dict] = mapped_column(GenericJSON, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    input_profile_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 # ── v1.7.2 Adaptive Profile Engine (MVP) ──────────────────────────────────
 # Tenant+user isolated profile. All queries must include tenant_id + user_id.
