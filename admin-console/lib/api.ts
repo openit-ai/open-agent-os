@@ -916,3 +916,106 @@ export function getFallbackConfig(): Promise<FallbackConfig> {
 export function updateFallbackConfig(payload: FallbackUpdateRequest): Promise<FallbackConfig> {
   return apiFetch<FallbackConfig>("/v1/llm/fallback", { method: "PUT", body: JSON.stringify(payload) });
 }
+
+// ---- Setup wizard (matches backend/setup.py) ----
+export interface SetupStatus {
+  first_run: boolean;
+  setup_completed: boolean;
+  has_admin: boolean;
+}
+export interface SetupChecks {
+  db: { ok: boolean; latency_ms?: number; error?: string };
+  redis: { ok: boolean; latency_ms?: number; error?: string };
+  hermes: { ok: boolean; latency_ms?: number; status_code?: number; error?: string };
+}
+export function getSetupStatus(): Promise<SetupStatus> {
+  return apiFetch<SetupStatus>("/v1/setup/status");
+}
+export function postSetupChecks(payload?: { db_url?: string; redis_url?: string; hermes_url?: string }): Promise<SetupChecks> {
+  return apiFetch<SetupChecks>("/v1/setup/checks", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+export function postSetupComplete(): Promise<{ setup_completed: boolean; persisted: string }> {
+  return apiFetch("/v1/setup/complete", { method: "POST" });
+}
+
+// ---- ACP settings (matches backend/acp_config.py) ----
+export interface AcpConfig {
+  hermes_base_url: string;
+  hermes_model: string;
+  acp_enabled: boolean;
+  api_key_set: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface AcpUpdateRequest {
+  hermes_base_url?: string;
+  hermes_model?: string;
+  acp_enabled?: boolean;
+}
+export interface AcpTestResult {
+  ok: boolean;
+  target?: string;
+  path?: string;
+  status_code?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getAcpConfig(): Promise<AcpConfig> {
+  return apiFetch<AcpConfig>("/v1/acp/config");
+}
+export function updateAcpConfig(payload: AcpUpdateRequest): Promise<AcpConfig> {
+  return apiFetch<AcpConfig>("/v1/acp/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testAcpConnection(payload?: { hermes_base_url?: string }): Promise<AcpTestResult> {
+  return apiFetch<AcpTestResult>("/v1/acp/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- MCP servers (matches backend/mcp_config.py) ----
+export interface McpServer {
+  name: string;
+  transport: string;
+  url?: string | null;
+  command?: string | null;
+  args?: string[];
+  headers_set?: string[];
+  updated_at?: string | null;
+}
+export interface McpServerCreatePayload {
+  name: string;
+  transport: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
+}
+export interface McpServerTestResult {
+  name: string;
+  transport: string;
+  ok: boolean | null;
+  status_code?: number;
+  tool_count?: number;
+  tools?: string[];
+  latency_ms?: number;
+  error?: string;
+  note?: string;
+}
+export async function listMcpServers(): Promise<McpServer[]> {
+  const res = await apiFetch<{ servers: McpServer[] }>("/v1/mcp/servers");
+  return res.servers ?? [];
+}
+export async function createMcpServer(payload: McpServerCreatePayload): Promise<McpServer> {
+  const res = await apiFetch<{ server: McpServer }>("/v1/mcp/servers", { method: "POST", body: JSON.stringify(payload) });
+  return res.server;
+}
+export async function updateMcpServer(name: string, payload: McpServerCreatePayload): Promise<McpServer> {
+  const res = await apiFetch<{ server: McpServer }>(`/v1/mcp/servers/${name}`, { method: "PUT", body: JSON.stringify(payload) });
+  return res.server;
+}
+export function deleteMcpServer(name: string): Promise<{ deleted: string; count: number }> {
+  return apiFetch(`/v1/mcp/servers/${name}`, { method: "DELETE" });
+}
+export function testMcpServer(name: string): Promise<McpServerTestResult> {
+  return apiFetch<McpServerTestResult>(`/v1/mcp/servers/${name}/test`, { method: "POST" });
+}
