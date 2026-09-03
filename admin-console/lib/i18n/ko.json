@@ -140,7 +140,8 @@
     "tabMcp": "MCP 설정",
     "monitorTitle": "설정 연결 상태 (모니터링)",
     "monitorNoData": "감지된 설정값이 없습니다. 초기 설정 탭에서 확인하세요.",
-    "tabMm": "Mattermost"
+    "tabMm": "Mattermost",
+    "tabOl": "Outline"
   },
   "users": {
     "title": "Users / Agents",
@@ -676,5 +677,21 @@
     "bridge_start": "브리지 시작",
     "bridge_restart": "재시작",
     "bridge_stop": "중지"
+  },
+  "ol": {
+    "title": "Outline 연결",
+    "subtitle": "전사 지식(Knowledge Index)용 Outline 커넥터",
+    "url": "Outline URL",
+    "key": "API 키",
+    "keyHint": "Outline 설정 → API 토큰에서 발급. 비워두면 기존값 유지.",
+    "keySet": "API 키 등록됨",
+    "collections": "컬렉션 수",
+    "save": "저장",
+    "test": "연결 테스트",
+    "saved": "저장됐습니다",
+    "loadFailed": "불러오기 실패",
+    "saveFailed": "저장 실패",
+    "appliedYes": "실행 중 환경값 사용 중",
+    "appliedNo": "DB 저장값 — 환경 반영+재기동 필요"
   }
 }

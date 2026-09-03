@@ -1063,6 +1063,37 @@ export function updateMmConfig(payload: MmUpdateRequest): Promise<MmConfig> {
 export function testMmConnection(payload?: { bot_token?: string }): Promise<MmTestResult> {
   return apiFetch<MmTestResult>("/v1/mattermost/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
 }
+
+// ---- Outline connector (matches backend/outline_config.py) ----
+export interface OlConfig {
+  outline_url: string;
+  api_key_set: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface OlUpdateRequest {
+  outline_url?: string;
+  api_key?: string;
+}
+export interface OlTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  collection_count?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getOlConfig(): Promise<OlConfig> {
+  return apiFetch<OlConfig>("/v1/outline/config");
+}
+export function updateOlConfig(payload: OlUpdateRequest): Promise<OlConfig> {
+  return apiFetch<OlConfig>("/v1/outline/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testOlConnection(payload?: { api_key?: string }): Promise<OlTestResult> {
+  return apiFetch<OlTestResult>("/v1/outline/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
 export interface MmBridgeStatus {
   installed: boolean;
   active: string;

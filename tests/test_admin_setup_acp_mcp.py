@@ -272,3 +272,35 @@ def test_mm_bridge_control_guards(client):
 def test_mm_bridge_requires_auth(client):
     r = client.get("/v1/mattermost/bridge")
     assert r.status_code == 401
+
+
+def _load_ol(client):
+    import sys as _sys
+    mod = _sys.modules.get("admin_console.backend.outline_config")
+    assert mod is not None, "outline router not mounted"
+    return mod
+
+
+def test_ol_config_crud_and_masking(client):
+    _load_ol(client)
+    tok = _login(client)
+    r = client.get("/v1/outline/config", headers=_h(tok))
+    assert r.status_code == 200, r.text
+    assert "outline_url" in r.json()
+    assert "key" not in json.dumps(r.json()).lower().replace("api_key_set", "")
+    bad = client.put("/v1/outline/config", json={"outline_url": "ftp://x"}, headers=_h(tok))
+    assert bad.status_code == 422
+    r2 = client.put("/v1/outline/config", json={"outline_url": "https://note.oaos.cloud", "api_key": "ol_test_key"}, headers=_h(tok))
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["api_key_set"] is True
+    r3 = client.get("/v1/outline/config", headers=_h(tok))
+    assert r3.json()["outline_url"] == "https://note.oaos.cloud"
+    assert "ol_test_key" not in json.dumps(r3.json())
+
+
+def test_ol_test_unreachable(client):
+    _load_ol(client)
+    tok = _login(client)
+    r = client.post("/v1/outline/test", json={"api_key": "bad"}, headers=_h(tok))
+    assert r.status_code == 200
+    assert r.json()["ok"] is False

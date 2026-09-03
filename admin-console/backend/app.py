@@ -211,6 +211,13 @@ try:
     logger.info("Mattermost router mounted at /v1/mattermost")
 except Exception as e:
     logger.warning(f"Mattermost router not mounted: {e}")
+try:
+    _ol_mod = _load_admin_sibling("outline_config")
+    ol_router = _ol_mod.router
+    app.include_router(ol_router)
+    logger.info("Outline router mounted at /v1/outline")
+except Exception as e:
+    logger.warning(f"Outline router not mounted: {e}")
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")

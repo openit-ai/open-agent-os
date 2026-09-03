@@ -140,7 +140,8 @@
     "tabMcp": "MCP",
     "monitorTitle": "Configured connections (monitor)",
     "monitorNoData": "No detected config. Check the Setup tab.",
-    "tabMm": "Mattermost"
+    "tabMm": "Mattermost",
+    "tabOl": "Outline"
   },
   "users": {
     "title": "Users / Agents",
@@ -676,5 +677,21 @@
     "bridge_start": "Start",
     "bridge_restart": "Restart",
     "bridge_stop": "Stop"
+  },
+  "ol": {
+    "title": "Outline",
+    "subtitle": "Outline connector for enterprise Knowledge Index",
+    "url": "Outline URL",
+    "key": "API key",
+    "keyHint": "Issue in Outline Settings → API tokens. Empty keeps stored key.",
+    "keySet": "API key set",
+    "collections": "collections",
+    "save": "Save",
+    "test": "Test",
+    "saved": "Saved",
+    "loadFailed": "Load failed",
+    "saveFailed": "Save failed",
+    "appliedYes": "Live env values in effect",
+    "appliedNo": "DB values — env update + restart required"
   }
 }
