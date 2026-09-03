@@ -7,9 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { apiFetch, getToken, getSetupEffective, postSetupChecks, type SetupEffective, type SetupChecks } from "@/lib/api";
+import { apiFetch, getToken, getSetupEffective, type SetupEffective } from "@/lib/api";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { RefreshCw, Trash2, Pencil, Plus, Server, Activity, Settings2 } from "lucide-react";
+import { RefreshCw, Trash2, Pencil, Plus, Server } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { SetupTab } from "./setup-tab";
 import { McpPanel } from "./mcp-panel";
@@ -29,19 +29,18 @@ function statusVariant(s: string) {
 
 export default function InfraPage() {
   const { t } = useI18n();
-  const [tab, setTab] = useState("services");
   return (
     <div className="space-y-6 p-6">
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-semibold"><Server className="h-6 w-6" /> {t("infra.title")}</h1>
       </div>
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs defaultValue="services">
         <TabsList>
           <TabsTrigger value="services">{t("infra.tabServices")}</TabsTrigger>
           <TabsTrigger value="setup">{t("infra.tabSetup")}</TabsTrigger>
           <TabsTrigger value="mcp">{t("infra.tabMcp")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="services"><InfraServices onEdit={() => setTab("setup")} /></TabsContent>
+        <TabsContent value="services"><InfraServices /></TabsContent>
         <TabsContent value="setup"><SetupTab /></TabsContent>
         <TabsContent value="mcp"><McpPanel /></TabsContent>
       </Tabs>
@@ -49,66 +48,7 @@ export default function InfraPage() {
   );
 }
 
-function SetupMonitor({ onEdit }: { onEdit: () => void }) {
-  const { t } = useI18n();
-  const [effective, setEffective] = useState<SetupEffective | null>(null);
-  const [checks, setChecks] = useState<SetupChecks | null>(null);
-  const [probing, setProbing] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      setEffective(await getSetupEffective());
-    } catch { setEffective(null); }
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  const probe = async () => {
-    setProbing(true);
-    try {
-      setChecks(await postSetupChecks({}));
-    } catch { setChecks(null); }
-    finally { setProbing(false); }
-  };
-
-  const rows = effective ? ([
-    { key: "db", label: "DB", target: effective.db.configured ? `${effective.db.driver}://${effective.db.user}@${effective.db.host}${effective.db.port ? `:${effective.db.port}` : ""}/${effective.db.database}` : "—" },
-    { key: "redis", label: "Redis", target: effective.redis.configured ? `${effective.redis.host}:${effective.redis.port}/${effective.redis.db}` : "—" },
-    { key: "hermes", label: "ACP", target: effective.hermes.base_url || "—" },
-  ] as const) : [];
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Activity className="h-4 w-4" /> {t("infra.monitorTitle")}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {!effective && <p className="text-sm text-muted-foreground">{t("infra.monitorNoData")}</p>}
-        {rows.map((r) => {
-          const c = checks?.[r.key];
-          return (
-            <div key={r.key} className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="w-14 font-medium">{r.label}</span>
-              <span className="min-w-0 flex-1 break-all font-mono text-xs text-muted-foreground">{r.target}</span>
-              {c && (c.ok
-                ? <Badge className="bg-green-600 text-white">OK{c.latency_ms !== undefined ? ` ${c.latency_ms}ms` : ""}</Badge>
-                : <Badge className="bg-red-600 text-white">FAIL</Badge>)}
-              <Button variant="ghost" size="sm" onClick={onEdit} aria-label={t("common.edit")}><Settings2 className="h-4 w-4" /></Button>
-            </div>
-          );
-        })}
-        <div>
-          <Button variant="outline" size="sm" onClick={probe} disabled={probing || !effective}>
-            {probing ? "..." : t("infra.probe")}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function InfraServices({ onEdit }: { onEdit: () => void }) {
+function InfraServices() {
   const router = useRouter();
   const { t } = useI18n();
   const [items, setItems] = useState<InfraItem[]>([]);
@@ -138,9 +78,47 @@ function InfraServices({ onEdit }: { onEdit: () => void }) {
   useEffect(() => {
     if (!getToken()) { router.replace("/login"); return; }
     fetchList();
+    ensureConfigServices();
     const id = setInterval(fetchList, 15000);
     return () => clearInterval(id);
   }, [fetchList, router]);
+
+  // Register DB/Redis/ACP from server-side effective config into the
+  // infra list (idempotent by service name) so setup results are
+  // monitored/edited in the services table instead of a separate card.
+  async function ensureConfigServices() {
+    let eff: SetupEffective | null = null;
+    try { eff = await getSetupEffective(); } catch { return; }
+    if (!eff) return;
+    const desired: { service: string; host: string; port: number; health_path: string }[] = [];
+    if (eff.db.configured && eff.db.host) {
+      desired.push({ service: "postgres", host: eff.db.host, port: eff.db.port ?? 5432, health_path: "" });
+    }
+    if (eff.redis.configured && eff.redis.host) {
+      desired.push({ service: "redis", host: eff.redis.host, port: eff.redis.port ?? 6379, health_path: "" });
+    }
+    if (eff.hermes.base_url) {
+      try {
+        const u = new URL(eff.hermes.base_url);
+        if (u.hostname) {
+          desired.push({ service: "hermes", host: u.hostname, port: u.port ? Number(u.port) : 80, health_path: "/health" });
+        }
+      } catch { /* ignore unparseable base_url */ }
+    }
+    if (desired.length === 0) return;
+    let changed = false;
+    try {
+      const res = await apiFetch<{ items: InfraItem[] } | InfraItem[]>("/v1/infra");
+      const list: InfraItem[] = Array.isArray(res) ? res : (res as { items: InfraItem[] }).items ?? [];
+      for (const d of desired) {
+        if (!list.some((it) => it.service === d.service)) {
+          await apiFetch("/v1/infra", { method: "POST", body: JSON.stringify(d) });
+          changed = true;
+        }
+      }
+    } catch { return; }
+    if (changed) fetchList();
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -191,8 +169,6 @@ function InfraServices({ onEdit }: { onEdit: () => void }) {
       </div>
 
       {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
-
-      <SetupMonitor onEdit={onEdit} />
 
       {/* 등록/수정 폼 */}
       <Card>
