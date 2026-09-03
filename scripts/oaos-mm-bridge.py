@@ -158,7 +158,8 @@ if not BOT_TOKEN or len(BOT_TOKEN) < 20:
 
 CONTROL_PLANE = os.getenv("OAOS_CONTROL_PLANE_URL", "http://127.0.0.1:8100")
 SEEN_FILE = pathlib.Path.home() / ".hermes/cache/oaos-mm-bridge-seen.json"
-BOT_ID = "bmhbteup4p8bmb8rfh151y6w1e"
+BOT_ID = os.getenv("MATTERMOST_BOT_ID", "")
+# Never fall back to another server's bot id: resolve from /users/me at startup (fail-closed).
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 
@@ -656,6 +657,17 @@ def poll_once(seen):
     return new_seen, replied
 
 def main():
+    global BOT_ID
+    if not BOT_ID:
+        try:
+            me = api_get("/api/v4/users/me")
+            BOT_ID = str(me.get("id") or "")
+        except Exception as e:
+            print(f"[init] cannot resolve bot id: {e} — refusing to start (fail-closed)", flush=True)
+            raise SystemExit(1)
+    if not BOT_ID:
+        print("[init] empty bot id — refusing to start (fail-closed)", flush=True)
+        raise SystemExit(1)
     print(f"[oaos-mm-bridge] MATTERMOST={MATTERMOST_URL} BOT={BOT_ID[:6]} CP={CONTROL_PLANE} OLLAMA={OLLAMA_MODEL}", flush=True)
     seen = load_seen()
     if not SEEN_FILE.exists():
