@@ -137,7 +137,9 @@
     "probeFailed": "probe 실패",
     "tabServices": "서비스 현황",
     "tabSetup": "초기 설정",
-    "tabMcp": "MCP 설정"
+    "tabMcp": "MCP 설정",
+    "monitorTitle": "설정 연결 상태 (모니터링)",
+    "monitorNoData": "감지된 설정값이 없습니다. 초기 설정 탭에서 확인하세요."
   },
   "users": {
     "title": "Users / Agents",
@@ -605,7 +607,9 @@
     "tabOverview": "초기 설정",
     "tabAcp": "ACP 설정",
     "tabMcp": "MCP 설정",
-    "detected": "서버 감지값 (입력 비우면 이 값으로 점검)"
+    "detected": "서버 감지값 (입력 비우면 이 값으로 점검)",
+    "appliedValues": "실제 적용 설정값",
+    "completedState": "설정 완료 상태"
   },
   "acp": {
     "title": "ACP 설정",
@@ -625,7 +629,8 @@
     "testing": "테스트 중...",
     "loadFailed": "불러오기 실패",
     "saveFailed": "저장 실패",
-    "modelAuto": "모델은 Hermes Agent의 기본 모델을 자동으로 사용합니다 (별도 지정 없음)."
+    "modelAuto": "모델은 Hermes Agent의 기본 모델을 자동으로 사용합니다 (별도 지정 없음).",
+    "modelAutoShort": "Hermes 기본 모델 자동 사용"
   },
   "mcp": {
     "title": "MCP 서버",

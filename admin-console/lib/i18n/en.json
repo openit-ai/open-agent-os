@@ -137,7 +137,9 @@
     "probeFailed": "Probe failed.",
     "tabServices": "Services",
     "tabSetup": "Setup",
-    "tabMcp": "MCP"
+    "tabMcp": "MCP",
+    "monitorTitle": "Configured connections (monitor)",
+    "monitorNoData": "No detected config. Check the Setup tab."
   },
   "users": {
     "title": "Users / Agents",
@@ -605,7 +607,9 @@
     "tabOverview": "Setup",
     "tabAcp": "ACP",
     "tabMcp": "MCP",
-    "detected": "Detected on server (leave inputs empty to check these)"
+    "detected": "Detected on server (leave inputs empty to check these)",
+    "appliedValues": "Effective config values",
+    "completedState": "setup_completed"
   },
   "acp": {
     "title": "ACP Settings",
@@ -625,7 +629,8 @@
     "testing": "Testing...",
     "loadFailed": "Load failed",
     "saveFailed": "Save failed",
-    "modelAuto": "Model follows the Hermes Agent default automatically (no override)."
+    "modelAuto": "Model follows the Hermes Agent default automatically (no override).",
+    "modelAutoShort": "Hermes default model"
   },
   "mcp": {
     "title": "MCP Servers",

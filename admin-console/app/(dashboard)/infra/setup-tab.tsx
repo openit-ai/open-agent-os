@@ -144,7 +144,16 @@ export function SetupTab() {
 
       <Card>
         <CardHeader><CardTitle>{t("setup.step")} 2 — {t("setup.complete")}</CardTitle></CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {effective && (
+            <div className="rounded-md bg-muted p-3 text-xs">
+              <div className="mb-1 font-medium">{t("setup.appliedValues")}</div>
+              <div>DB: {effective.db.configured ? `${effective.db.driver}://${effective.db.user}@${effective.db.host}${effective.db.port ? `:${effective.db.port}` : ""}/${effective.db.database}` : "—"}</div>
+              <div>Redis: {effective.redis.configured ? `${effective.redis.host}:${effective.redis.port}/${effective.redis.db}` : "—"}</div>
+              <div>ACP: {effective.hermes.base_url || "—"}{effective.hermes.model ? ` · ${effective.hermes.model}` : ` · ${t("acp.modelAutoShort")}`} · acp_enabled={String(effective.hermes.acp_enabled)}</div>
+              <div>{t("setup.completedState")}: {String(status?.setup_completed)}</div>
+            </div>
+          )}
           <Button onClick={complete} disabled={completing || status?.setup_completed}>
             {completing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("setup.complete")}
           </Button>
