@@ -172,6 +172,64 @@ export function deleteInfra(id: string) {
 export function probeInfra(id: string) {
   return apiFetch<InfraService>(`/v1/infra/${id}/probe`, { method: "POST" });
 }
+// ---- infra live inventory (read-only, no DB mutation) - legacy compat ----
+export interface LiveInfraItem extends InfraService {
+  display_name: string;
+  name: string;
+  expected_status: number;
+  url?: string;
+  live?: boolean;
+}
+export interface LiveInfraResponse {
+  probed_at: string;
+  count: number;
+  items: LiveInfraItem[];
+  live?: LiveInfraItem[];
+}
+export function getLiveInfra(): Promise<LiveInfraResponse> {
+  return apiFetch<LiveInfraResponse>("/v1/infra/live");
+}
+
+// ---- infra unified registry (canonical single source, DB+live merged) ----
+export interface UnifiedInfraRow extends InfraService {
+  display_name: string;
+  name: string;
+  expected_status: number;
+  url?: string;
+  probe_type: "http" | "tcp" | string;
+  category: string | null;
+  source: "db" | "live" | "both";
+  db_exists?: boolean;
+  live_exists?: boolean;
+}
+export interface UnifiedInfraResponse {
+  probed_at: string;
+  count: number;
+  items: UnifiedInfraRow[];
+  registry?: UnifiedInfraRow[];
+}
+export function getUnifiedInfra(): Promise<UnifiedInfraResponse> {
+  return apiFetch<UnifiedInfraResponse>("/v1/infra/unified");
+}
+export function getInfraRegistry(): Promise<UnifiedInfraResponse> {
+  return apiFetch<UnifiedInfraResponse>("/v1/infra/registry");
+}
+export interface InfraSeedResponse {
+  status: string;
+  created_count: number;
+  skipped_count: number;
+  created: unknown[];
+  skipped: string[];
+  backup_path: string | null;
+  note: string;
+}
+export function seedUnifiedInfra(): Promise<InfraSeedResponse> {
+  return apiFetch<InfraSeedResponse>("/v1/infra/seed", { method: "POST" });
+}
+export function upsertInfra(payload: InfraCreatePayload) {
+  return apiFetch<InfraService>("/v1/infra/upsert", { method: "POST", body: JSON.stringify(payload) });
+}
+
 
 // ---- dashboard ----
 export interface DashboardStats {
@@ -1104,4 +1162,141 @@ export function getMmBridge(): Promise<MmBridgeStatus> {
 }
 export function mmBridgeAction(action: "start" | "stop" | "restart"): Promise<MmBridgeStatus & { action: string }> {
   return apiFetch(`/v1/mattermost/bridge/${action}`, { method: "POST" });
+}
+
+// ---- Runtime Config Plane (versioned / signed, tenant-scoped) ----
+export interface RuntimeConfigSnapshot {
+  tenant_id: string;
+  version: number;
+  created_at: string;
+  created_by: string;
+  parent_version: number | null;
+  config: Record<string, unknown> & {
+    runtime_mode?: string | null;
+    hermes?: Record<string, unknown> | null;
+    llm_providers?: Array<Record<string, unknown>>;
+    fallback?: Record<string, unknown> | null;
+    infra?: unknown[] | null;
+    user_mappings?: unknown[] | null;
+  };
+  config_hash: string;
+  signature: string;
+  published: boolean;
+  published_at: string | null;
+  published_by: string | null;
+  rollback_from?: number | null;
+  note?: string | null;
+}
+
+export interface RuntimeSnapshotsResponse {
+  tenant_id: string;
+  count: number;
+  items: RuntimeConfigSnapshot[];
+}
+
+export interface RuntimeStatusResponse {
+  tenant_id: string;
+  published_version: number | null;
+  has_snapshot: boolean;
+  signature_valid?: boolean | null;
+  config_hash: string | null;
+  applied?: Record<string, unknown> | null;
+  applied_version?: number | null;
+  process_identity?: string | null;
+  error?: string | null;
+}
+
+export interface RuntimeAppliedStatusResponse {
+  tenant_id: string;
+  published_version: number | null;
+  published_hash?: string | null;
+  config_hash?: string | null;
+  applied?: Record<string, unknown> | null;
+  applied_version?: number | null;
+  applied_at?: string | null;
+  process_identity?: string | null;
+  error?: string | null;
+  cp_live?: Record<string, unknown> | null;
+}
+
+export interface RuntimeSnapshotCreatePayload {
+  tenant_id?: string;
+  expected_version?: number | null;
+  note?: string | null;
+}
+
+export interface RuntimePublishPayload {
+  tenant_id?: string;
+  version: number;
+}
+
+export interface RuntimeRollbackPayload {
+  tenant_id?: string;
+  version: number;
+}
+
+function runtimeTenantQuery(tenantId?: string | null): string {
+  if (!tenantId || !tenantId.trim()) return "";
+  return `?tenant_id=${encodeURIComponent(tenantId.trim())}`;
+}
+
+function runtimeTenantHeader(tenantId?: string | null): Record<string, string> {
+  if (!tenantId || !tenantId.trim()) return {};
+  return { "X-Tenant-Id": tenantId.trim() };
+}
+
+export function getRuntimeConfig(tenantId?: string): Promise<RuntimeConfigSnapshot> {
+  const q = runtimeTenantQuery(tenantId);
+  // backend routes are GET /v1/runtime/config/ and /v1/runtime/config (both support ?tenant_id= and X-Tenant-Id)
+  return apiFetch<RuntimeConfigSnapshot>(`/v1/runtime/config/${q}`, {
+    headers: runtimeTenantHeader(tenantId),
+  });
+}
+
+export function listRuntimeSnapshots(tenantId?: string): Promise<RuntimeSnapshotsResponse> {
+  return apiFetch<RuntimeSnapshotsResponse>(`/v1/runtime/config/snapshots${runtimeTenantQuery(tenantId)}`, {
+    headers: runtimeTenantHeader(tenantId),
+  });
+}
+
+export function getRuntimeSnapshot(version: number, tenantId?: string): Promise<RuntimeConfigSnapshot> {
+  return apiFetch<RuntimeConfigSnapshot>(`/v1/runtime/config/snapshots/${version}${runtimeTenantQuery(tenantId)}`, {
+    headers: runtimeTenantHeader(tenantId),
+  });
+}
+
+export function createRuntimeSnapshot(payload: RuntimeSnapshotCreatePayload): Promise<RuntimeConfigSnapshot> {
+  return apiFetch<RuntimeConfigSnapshot>(`/v1/runtime/config/snapshot`, {
+    method: "POST",
+    headers: runtimeTenantHeader(payload.tenant_id),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function publishRuntimeSnapshot(payload: RuntimePublishPayload): Promise<{ tenant_id: string; published_version: number; previous_version?: number | null; snapshot: RuntimeConfigSnapshot; config_hash?: string; }> {
+  return apiFetch(`/v1/runtime/config/publish`, {
+    method: "POST",
+    headers: runtimeTenantHeader(payload.tenant_id),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function rollbackRuntimeSnapshot(payload: RuntimeRollbackPayload): Promise<{ tenant_id: string; published_version: number; rolled_back_from?: number | null; snapshot: RuntimeConfigSnapshot; config_hash?: string; }> {
+  return apiFetch(`/v1/runtime/config/rollback`, {
+    method: "POST",
+    headers: runtimeTenantHeader(payload.tenant_id),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getRuntimeStatus(tenantId?: string): Promise<RuntimeStatusResponse> {
+  return apiFetch<RuntimeStatusResponse>(`/v1/runtime/config/status${runtimeTenantQuery(tenantId)}`, {
+    headers: runtimeTenantHeader(tenantId),
+  });
+}
+
+export function getRuntimeAppliedStatus(tenantId?: string): Promise<RuntimeAppliedStatusResponse> {
+  return apiFetch<RuntimeAppliedStatusResponse>(`/v1/runtime/config/applied-status${runtimeTenantQuery(tenantId)}`, {
+    headers: runtimeTenantHeader(tenantId),
+  });
 }

@@ -275,6 +275,15 @@ app.include_router(demo_router, prefix="/v1", tags=["demo"])
 # Adaptive Profile MVP — profile_router already prefixed /v1/profile; NOT live until DB migration + verification
 app.include_router(profile_router)
 
+# Runtime Configuration Plane Stage-1 (fail-graceful mount)
+try:
+    from .runtime_config import router as runtime_config_router, internal_router as runtime_config_internal_router
+    app.include_router(runtime_config_router)
+    app.include_router(runtime_config_internal_router)
+except Exception as _rce:
+    import logging as _lg
+    _lg.getLogger(__name__).warning(f"Runtime Config Plane not mounted: {_rce}")
+
 # -- Lazy RuntimeRouter wiring (section 16F) --
 def _get_runtime_router():
     """Lazy RuntimeRouter — respects EXECUTE runtime/<name> capability.

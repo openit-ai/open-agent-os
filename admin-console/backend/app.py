@@ -227,6 +227,14 @@ try:
 except Exception as _pe:
     logger.warning(f"Policy router not mounted: {_pe}")
 
+# ── Runtime Configuration Plane Stage-1 (versioned/signed, fail-graceful) ──
+try:
+    _rc_mod = _load_admin_sibling("runtime_config")
+    app.include_router(_rc_mod.router)
+    logger.info("Runtime Config Plane router mounted at /v1/runtime/config")
+except Exception as _rce:
+    logger.warning(f"Runtime Config router not mounted: {_rce}")
+
 # ── Personal Wiki (skeleton, lazy, fail-graceful) ──────────────────
 try:
     _pw_mod = _load_admin_sibling("personal_wiki")

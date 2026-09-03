@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut, BadgeCheck, ShieldAlert, DatabaseBackup, Image as ImageIcon, UserCog, ChevronDown, Globe, Cpu, BarChart3, Layers } from "lucide-react";
+import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut, BadgeCheck, ShieldAlert, DatabaseBackup, Image as ImageIcon, UserCog, ChevronDown, Globe, Cpu, BarChart3, Layers, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +32,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { href: "/infra", label: t("nav.infra"), icon: Server },
     { href: "/providers", label: t("nav.providers"), icon: Cpu },
     { href: "/fallback", label: t("nav.fallback"), icon: Layers },
+    { href: "/runtime-config", label: t("nav.runtimeConfig"), icon: Settings2 },
     { href: "/llm-usage", label: t("nav.llmUsage"), icon: BarChart3 },
     { href: "/users", label: t("nav.users"), icon: Users },
     { href: "/policy", label: t("nav.policy"), icon: Shield },
