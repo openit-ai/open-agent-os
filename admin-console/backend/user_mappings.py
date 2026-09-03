@@ -16,6 +16,7 @@ DB persistence (AdminUserMappingORM) when DATABASE_URL/OAOS_DATABASE_URL set, fa
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
@@ -32,6 +33,7 @@ except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
 
 router = APIRouter(prefix="/v1/user-mappings", tags=["user-mappings"])
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Models
@@ -550,7 +552,11 @@ def create_user_mapping(req: CreateMappingRequest, admin: AdminUser = Depends(re
         # check if already exists
         if _db_exists_mm_user_id(mm_user_id) is True:
             raise HTTPException(status_code=409, detail=f"mapping for mm_user_id {mm_user_id} already exists")
-        # if DB error, fallback to dict
+        # A production mapping must never disappear into the process-local
+        # fallback: the Control Plane reads the authoritative database.
+        if os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"}:
+            logger.error("failed to persist user mapping id=%s mm_user_id=%s", mid, mm_user_id)
+            raise HTTPException(status_code=503, detail="mapping persistence unavailable")
     _mappings[mid] = mapping
     return mapping.model_dump(mode="json")
 

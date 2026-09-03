@@ -21,6 +21,9 @@ def lookup_registered_owner(tenant_id: str, user_id: str) -> dict[str, str] | No
         url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
         engine = create_engine(url, pool_pre_ping=True)
         with engine.connect() as connection:
+            # Mattermost ingress supplies the canonical employee principal.
+            # Match the persisted mapping by principal/agent/username, and keep
+            # the query independent of the optional mm_user_id column shape.
             row = connection.execute(
                 text(
                     "SELECT mm_user_id, mm_username, employee_principal, agent_id, status "

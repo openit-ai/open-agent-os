@@ -14,6 +14,7 @@ hermes @openit CoCo) — not Ollama. Uses OAOS_CP_HERMES_API_KEY.
 from __future__ import annotations
 import asyncio
 import json
+import re
 import uuid
 import logging
 import os
@@ -331,6 +332,34 @@ class ACPAdapter:
             pass
         return os.getenv("OAOS_CP_HERMES_MODEL", "") or "hermes-agent"
 
+    def _registration_preferences(self, session: SessionRecord) -> dict[str, str]:
+        """Load owner-scoped onboarding preferences from the registration store.
+
+        The registration gate persists the user's requested honorific and response
+        style in Redis. Those values are conversation policy, not an agent display
+        name, so they must be injected explicitly at the Gateway boundary.
+        """
+        key = f"oaos:registration:{session.tenant_id}:{session.user_id}"
+        try:
+            import redis as _redis
+            url = os.getenv("REDIS_URL") or os.getenv("OAOS_REDIS_URL")
+            if not url:
+                return {}
+            raw = _redis.Redis.from_url(url, decode_responses=True, socket_timeout=1.0).get(key)
+            record = json.loads(raw) if raw else {}
+            answers = record.get("answers") if isinstance(record, dict) else {}
+            if not isinstance(answers, dict):
+                return {}
+            result = {}
+            for field in ("honorific", "response_style"):
+                value = answers.get(field)
+                if isinstance(value, str) and value.strip():
+                    result[field] = value.strip()[:200]
+            return result
+        except Exception:
+            # Preference loading must never block the normal response path.
+            return {}
+
     async def create_session_remote(self, session: SessionRecord, workspace: str | None = None) -> dict[str, Any]:
         """POST /acp/sessions — create Hermes-side session. Falls back to local if Hermes unavailable (dev)."""
         url = f"{self.hermes_base_url}/acp/sessions"
@@ -460,16 +489,33 @@ class ACPAdapter:
             # Hermes gateway is at 8642, but config may point to wrong port — fixup if needed
             if ":8001" in gateway_url:
                 gateway_url = gateway_url.replace(":8001", ":8642")
-            # A안: personal display_name injection
-            _dn = getattr(session, "display_name", None) or getattr(session, "agent_id", "")
-            # if display_name equals agent_id suffix, use it as friendly name
-            _friendly = _dn if _dn and not _dn.startswith("agent:") else getattr(session, "display_name", None) or session.agent_id.split(":")[-1]
+            # Owner onboarding preferences are separate from the internal agent id.
+            # Never use the Mattermost username as the user's honorific fallback.
+            _prefs = self._registration_preferences(session)
+            _honorific = _prefs.get("honorific", "").strip()
+            _response_style = _prefs.get("response_style", "").strip()
+            _dn = getattr(session, "display_name", None)
+            _friendly = _dn if _dn and not _dn.startswith("agent:") else "마이"
+            # The onboarding answer may contain the literal username (e.g. mykim).
+            # The administrator-approved display name is the canonical user-facing
+            # identity and must take precedence over that answer for the master.
+            _master_user_ids = {"employee:mykim", "mykim"}
+            if session.user_id in _master_user_ids:
+                _honorific = "마스터/대표님/민영님"
+            preference_lines = []
+            if _honorific:
+                preference_lines.append(f"사용자 호칭 선호: {_honorific}")
+            if _response_style:
+                preference_lines.append(f"응답 방식 선호: {_response_style}")
+            preference_block = "\n".join(preference_lines)
             base_system = (
                 f"You are Open Agent OS personal agent {session.agent_id} for user {session.user_id} "
                 f"(tenant {session.tenant_id}, session {session.session_id}). "
                 f"Your display name is '{_friendly}'. Always refer to yourself as '{_friendly}' if the user asks your name. "
                 "You are SEPARATE from Hermes @openit CoCo (company-wide). "
-                "Reply in Korean, concise, helpful. Keep identity consistent."
+                "Reply in Korean, concise, helpful. Keep identity consistent. "
+                "Do not address the user by their Mattermost username or internal id; use the stored user honorific preference."
+                + ("\n" + preference_block if preference_block else "")
             )
             # Adaptive Profile: resolve minimal Response Policy (safe fallback, no leakage)
             try:
@@ -523,6 +569,13 @@ class ACPAdapter:
                     except Exception:
                         content = data.get("content", "") or ""
                     content = content.strip()
+                    # Mattermost usernames are internal identifiers, never user-facing
+                    # honorifics.  The model can still copy a username from conversation
+                    # history despite the system instruction, so enforce the master mapping
+                    # at the OAOS boundary before posting the reply.
+                    if session.user_id in {"employee:mykim", "mykim"}:
+                        content = re.sub(r"(?i)\bmykim님\b", "마스터", content)
+                        content = re.sub(r"(?i)\bmykim\b(?=\s*(?:님|씨))", "마스터", content)
                     if content:
                         # yield in bounded chunks to simulate streaming and avoid half-truncation
                         chunk_size = 800
