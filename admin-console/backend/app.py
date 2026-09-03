@@ -182,6 +182,28 @@ app.include_router(user_mappings_router)
 app.include_router(llm_providers_router)
 app.include_router(runtime_mode_router)
 app.include_router(fallback_router)
+# Setup wizard + ACP/MCP config routers (initial-install + runtime connection settings)
+try:
+    _setup_mod = _load_admin_sibling("setup")
+    setup_router = _setup_mod.router
+    app.include_router(setup_router)
+    logger.info("Setup router mounted at /v1/setup")
+except Exception as e:
+    logger.warning(f"Setup router not mounted: {e}")
+try:
+    _acp_mod = _load_admin_sibling("acp_config")
+    acp_router = _acp_mod.router
+    app.include_router(acp_router)
+    logger.info("ACP router mounted at /v1/acp")
+except Exception as e:
+    logger.warning(f"ACP router not mounted: {e}")
+try:
+    _mcp_mod = _load_admin_sibling("mcp_config")
+    mcp_router = _mcp_mod.router
+    app.include_router(mcp_router)
+    logger.info("MCP router mounted at /v1/mcp")
+except Exception as e:
+    logger.warning(f"MCP router not mounted: {e}")
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")
