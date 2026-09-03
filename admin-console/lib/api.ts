@@ -1300,3 +1300,144 @@ export function getRuntimeAppliedStatus(tenantId?: string): Promise<RuntimeAppli
     headers: runtimeTenantHeader(tenantId),
   });
 }
+
+// ---- Notion connector (matches backend/notion_config.py) ----
+export interface NotionConfig {
+  notion_api_url: string;
+  api_key_set: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface NotionUpdateRequest {
+  notion_api_url?: string;
+  api_key?: string;
+}
+export interface NotionTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  user_count?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getNotionConfig(): Promise<NotionConfig> {
+  return apiFetch<NotionConfig>("/v1/notion/config");
+}
+export function updateNotionConfig(payload: NotionUpdateRequest): Promise<NotionConfig> {
+  return apiFetch<NotionConfig>("/v1/notion/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testNotionConnection(payload?: { api_key?: string }): Promise<NotionTestResult> {
+  return apiFetch<NotionTestResult>("/v1/notion/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- Slack connector (matches backend/slack_config.py) ----
+export interface SlackConfig {
+  webhook_url_set: boolean;
+  channel: string;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface SlackUpdateRequest {
+  webhook_url?: string;
+  channel?: string;
+}
+export interface SlackTestResult {
+  ok: boolean;
+  status_code?: number;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getSlackConfig(): Promise<SlackConfig> {
+  return apiFetch<SlackConfig>("/v1/slack/config");
+}
+export function updateSlackConfig(payload: SlackUpdateRequest): Promise<SlackConfig> {
+  return apiFetch<SlackConfig>("/v1/slack/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testSlackConnection(payload?: { webhook_url?: string }): Promise<SlackTestResult> {
+  return apiFetch<SlackTestResult>("/v1/slack/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- OAuth connectors (matches backend/oauth_config.py; secrets env-only) ----
+export interface OAuthConfig {
+  google_client_id_set: boolean;
+  google_client_secret_set: boolean;
+  google_redirect_uri: string;
+  microsoft_client_id_set: boolean;
+  microsoft_client_secret_set: boolean;
+  microsoft_redirect_uri: string;
+  google_enabled: boolean;
+  microsoft_enabled: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface OAuthUpdateRequest {
+  google_enabled?: boolean;
+  microsoft_enabled?: boolean;
+}
+export interface OAuthProviderTestResult {
+  ok: boolean;
+  configured: boolean;
+  status_code?: number;
+  latency_ms?: number;
+  enabled?: boolean;
+  error?: string;
+}
+export interface OAuthTestResult {
+  ok: boolean;
+  providers: Record<string, OAuthProviderTestResult>;
+  redirect_uris: Record<string, string>;
+  source?: string;
+}
+export function getOAuthConfig(): Promise<OAuthConfig> {
+  return apiFetch<OAuthConfig>("/v1/oauth/config");
+}
+export function updateOAuthConfig(payload: OAuthUpdateRequest): Promise<OAuthConfig> {
+  return apiFetch<OAuthConfig>("/v1/oauth/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testOAuthConnection(payload?: { provider?: string }): Promise<OAuthTestResult> {
+  return apiFetch<OAuthTestResult>("/v1/oauth/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}
+
+// ---- SMTP connector (matches backend/smtp_config.py) ----
+export interface SmtpConfig {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_password_set: boolean;
+  use_starttls: boolean;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface SmtpUpdateRequest {
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_user?: string;
+  smtp_password?: string;
+  use_starttls?: boolean;
+}
+export interface SmtpTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  starttls?: boolean;
+  login?: boolean;
+  latency_ms?: number;
+  note?: string;
+  error?: string;
+  source?: string;
+}
+export function getSmtpConfig(): Promise<SmtpConfig> {
+  return apiFetch<SmtpConfig>("/v1/smtp/config");
+}
+export function updateSmtpConfig(payload: SmtpUpdateRequest): Promise<SmtpConfig> {
+  return apiFetch<SmtpConfig>("/v1/smtp/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testSmtpConnection(payload?: { smtp_password?: string }): Promise<SmtpTestResult> {
+  return apiFetch<SmtpTestResult>("/v1/smtp/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}

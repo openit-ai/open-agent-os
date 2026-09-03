@@ -218,6 +218,34 @@ try:
     logger.info("Outline router mounted at /v1/outline")
 except Exception as e:
     logger.warning(f"Outline router not mounted: {e}")
+try:
+    _notion_mod = _load_admin_sibling("notion_config")
+    notion_router = _notion_mod.router
+    app.include_router(notion_router)
+    logger.info("Notion router mounted at /v1/notion")
+except Exception as e:
+    logger.warning(f"Notion router not mounted: {e}")
+try:
+    _slack_mod = _load_admin_sibling("slack_config")
+    slack_router = _slack_mod.router
+    app.include_router(slack_router)
+    logger.info("Slack router mounted at /v1/slack")
+except Exception as e:
+    logger.warning(f"Slack router not mounted: {e}")
+try:
+    _oauth_mod = _load_admin_sibling("oauth_config")
+    oauth_router = _oauth_mod.router
+    app.include_router(oauth_router)
+    logger.info("OAuth router mounted at /v1/oauth")
+except Exception as e:
+    logger.warning(f"OAuth router not mounted: {e}")
+try:
+    _smtp_mod = _load_admin_sibling("smtp_config")
+    smtp_router = _smtp_mod.router
+    app.include_router(smtp_router)
+    logger.info("SMTP router mounted at /v1/smtp")
+except Exception as e:
+    logger.warning(f"SMTP router not mounted: {e}")
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")

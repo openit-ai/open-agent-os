@@ -162,7 +162,11 @@
     "seedFailed": "Seed failed",
     "seeding": "Seeding...",
     "tabLive": "Live",
-    "tabUnified": "Unified Registry"
+    "tabUnified": "Unified Registry",
+    "tabNotion": "Notion",
+    "tabSlack": "Slack",
+    "tabOAuth": "OAuth",
+    "tabSmtp": "SMTP"
   },
   "users": {
     "title": "Users / Agents",
@@ -780,5 +784,63 @@
     "providerCount": "Providers",
     "mappingCount": "Mappings",
     "fallbackDescNote": "Snapshot captures runtime_mode, hermes, providers (no secrets), fallback, infra, user_mappings — signed HMAC-SHA256 (fail-closed if OAOS_RUNTIME_CONFIG_SIGNING_KEY missing in production)"
+  },
+  "notion": {
+    "title": "Notion",
+    "subtitle": "Notion connector for enterprise Knowledge Index",
+    "url": "Notion API URL",
+    "key": "API key",
+    "keyHint": "Issue in Notion Integrations. Empty keeps stored key.",
+    "keySet": "API key set",
+    "save": "Save",
+    "test": "Test",
+    "saved": "Saved",
+    "loadFailed": "Load failed",
+    "saveFailed": "Save failed",
+    "appliedYes": "Live env values in effect",
+    "appliedNo": "DB values — env update + restart required"
+  },
+  "slack": {
+    "title": "Slack",
+    "subtitle": "Slack alerts via incoming webhook",
+    "webhook": "Webhook URL",
+    "webhookHint": "Issue in Slack app → Incoming Webhooks. Empty keeps stored URL.",
+    "webhookSet": "Webhook set",
+    "channel": "Channel",
+    "save": "Save",
+    "test": "Send test",
+    "saved": "Saved",
+    "loadFailed": "Load failed",
+    "saveFailed": "Save failed",
+    "appliedYes": "Live env values in effect",
+    "appliedNo": "DB values — env update + restart required"
+  },
+  "oauth": {
+    "title": "OAuth Login",
+    "subtitle": "Google/Microsoft social login connectors",
+    "save": "Save",
+    "test": "Verify",
+    "saved": "Saved",
+    "loadFailed": "Load failed",
+    "saveFailed": "Save failed",
+    "envNotice": "client-id/secret are never stored in DB. Set them via host env (GOOGLE_*, MS_*/MICROSOFT_*)."
+  },
+  "smtp": {
+    "title": "SMTP",
+    "subtitle": "Outbound-mail SMTP connector (connection check only, never sends mail)",
+    "host": "Host",
+    "port": "Port",
+    "user": "User",
+    "pass": "Password",
+    "passHint": "Empty keeps the stored password; input replaces it (never shown again)",
+    "passSet": "Password set",
+    "save": "Save",
+    "test": "Check connection",
+    "saved": "Saved",
+    "loadFailed": "Load failed",
+    "saveFailed": "Save failed",
+    "appliedYes": "Live env values in effect",
+    "appliedNo": "DB values — env update + restart required",
+    "noMail": "no mail sent"
   }
 }

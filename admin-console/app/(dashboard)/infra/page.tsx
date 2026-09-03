@@ -15,6 +15,10 @@ import { SetupTab } from "./setup-tab";
 import { McpPanel } from "./mcp-panel";
 import { MmPanel } from "./mm-panel";
 import { OlPanel } from "./ol-panel";
+import { NotionPanel } from "./notion-panel";
+import { SlackPanel } from "./slack-panel";
+import { OAuthPanel } from "./oauth-panel";
+import { SmtpPanel } from "./smtp-panel";
 
 interface InfraItem {
   id: string; service: string; host: string; port: number; health_path: string;
@@ -45,6 +49,10 @@ export default function InfraPage() {
           <TabsTrigger value="mcp">{t("infra.tabMcp")}</TabsTrigger>
           <TabsTrigger value="mm">{t("infra.tabMm")}</TabsTrigger>
           <TabsTrigger value="ol">{t("infra.tabOl")}</TabsTrigger>
+          <TabsTrigger value="notion">{t("infra.tabNotion")}</TabsTrigger>
+          <TabsTrigger value="slack">{t("infra.tabSlack")}</TabsTrigger>
+          <TabsTrigger value="oauth">{t("infra.tabOAuth")}</TabsTrigger>
+          <TabsTrigger value="smtp">{t("infra.tabSmtp")}</TabsTrigger>
         </TabsList>
         <TabsContent value="services"><InfraServices /></TabsContent>
         <TabsContent value="live"><InfraLive /></TabsContent>
@@ -53,6 +61,10 @@ export default function InfraPage() {
         <TabsContent value="mcp"><McpPanel /></TabsContent>
         <TabsContent value="mm"><MmPanel /></TabsContent>
         <TabsContent value="ol"><OlPanel /></TabsContent>
+        <TabsContent value="notion"><NotionPanel /></TabsContent>
+        <TabsContent value="slack"><SlackPanel /></TabsContent>
+        <TabsContent value="oauth"><OAuthPanel /></TabsContent>
+        <TabsContent value="smtp"><SmtpPanel /></TabsContent>
       </Tabs>
     </div>
   );
