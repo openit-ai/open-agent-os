@@ -50,7 +50,7 @@ def upgrade() -> None:
             sa.Column("model", sa.Text(), nullable=True),
             sa.Column("path", sa.Text(), nullable=True),
             sa.Column("url", sa.Text(), nullable=True),
-            sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+            sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("last_test_at", sa.DateTime(timezone=True), nullable=True),
@@ -83,13 +83,12 @@ def upgrade() -> None:
             from datetime import datetime, timezone
             conn = op.get_bind()
             now = datetime.now(timezone.utc).isoformat()
-            # use raw SQL for compat
-            conn.execute(sa.text("INSERT OR IGNORE INTO admin_settings (key, value, updated_at) VALUES ('runtime_mode', 'hermes', :now)"), {"now": now})
-            # postgres fallback: try INSERT ... ON CONFLICT
-            try:
+            # use raw SQL for compat (dialect-aware: a failed statement would
+            # abort the Postgres transaction, so run only the matching one)
+            if conn.dialect.name == "sqlite":
+                conn.execute(sa.text("INSERT OR IGNORE INTO admin_settings (key, value, updated_at) VALUES ('runtime_mode', 'hermes', :now)"), {"now": now})
+            else:
                 conn.execute(sa.text("INSERT INTO admin_settings (key, value, updated_at) VALUES ('runtime_mode', 'hermes', :now) ON CONFLICT (key) DO NOTHING"), {"now": now})
-            except Exception:
-                pass
         except Exception:
             pass
 
