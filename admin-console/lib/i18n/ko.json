@@ -139,7 +139,8 @@
     "tabSetup": "초기 설정",
     "tabMcp": "MCP 설정",
     "monitorTitle": "설정 연결 상태 (모니터링)",
-    "monitorNoData": "감지된 설정값이 없습니다. 초기 설정 탭에서 확인하세요."
+    "monitorNoData": "감지된 설정값이 없습니다. 초기 설정 탭에서 확인하세요.",
+    "tabMm": "Mattermost"
   },
   "users": {
     "title": "Users / Agents",
@@ -654,5 +655,21 @@
     "count": "개",
     "empty": "등록된 MCP 서버가 없습니다",
     "source": "원천"
+  },
+  "mm": {
+    "title": "Mattermost 봇 설정",
+    "subtitle": "개인에이전트(@agent)용 Mattermost 서버·봇 연결",
+    "url": "Mattermost URL",
+    "botUsername": "MM 봇 ID",
+    "displayName": "기본표시이름",
+    "token": "봇 토큰",
+    "tokenHint": "비워두면 기존 등록값 유지, 입력 시 교체 저장 (화면에 다시 표시 안 함)",
+    "save": "저장",
+    "test": "연결 테스트",
+    "saved": "저장됐습니다",
+    "loadFailed": "불러오기 실패",
+    "saveFailed": "저장 실패",
+    "appliedYes": "실행 중 환경값 사용 중",
+    "appliedNo": "DB 저장값 — 환경 반영+재기동 필요"
   }
 }

@@ -1027,3 +1027,39 @@ export function deleteMcpServer(name: string): Promise<{ deleted: string; count:
 export function testMcpServer(name: string): Promise<McpServerTestResult> {
   return apiFetch<McpServerTestResult>(`/v1/mcp/servers/${name}/test`, { method: "POST" });
 }
+
+// ---- Mattermost bot (matches backend/mattermost_config.py) ----
+export interface MmConfig {
+  mattermost_url: string;
+  bot_token_set: boolean;
+  bot_username: string;
+  default_display_name: string;
+  source?: string;
+  applied?: boolean;
+  note?: string;
+}
+export interface MmUpdateRequest {
+  mattermost_url?: string;
+  bot_token?: string;
+  bot_username?: string;
+  default_display_name?: string;
+}
+export interface MmTestResult {
+  ok: boolean;
+  target?: string;
+  status_code?: number;
+  bot_user_id?: string;
+  bot_username?: string;
+  latency_ms?: number;
+  error?: string;
+  source?: string;
+}
+export function getMmConfig(): Promise<MmConfig> {
+  return apiFetch<MmConfig>("/v1/mattermost/config");
+}
+export function updateMmConfig(payload: MmUpdateRequest): Promise<MmConfig> {
+  return apiFetch<MmConfig>("/v1/mattermost/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function testMmConnection(payload?: { bot_token?: string }): Promise<MmTestResult> {
+  return apiFetch<MmTestResult>("/v1/mattermost/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
+}

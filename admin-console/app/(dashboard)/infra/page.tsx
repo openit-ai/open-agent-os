@@ -13,6 +13,7 @@ import { RefreshCw, Trash2, Pencil, Plus, Server } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { SetupTab } from "./setup-tab";
 import { McpPanel } from "./mcp-panel";
+import { MmPanel } from "./mm-panel";
 
 interface InfraItem {
   id: string; service: string; host: string; port: number; health_path: string;
@@ -39,10 +40,12 @@ export default function InfraPage() {
           <TabsTrigger value="services">{t("infra.tabServices")}</TabsTrigger>
           <TabsTrigger value="setup">{t("infra.tabSetup")}</TabsTrigger>
           <TabsTrigger value="mcp">{t("infra.tabMcp")}</TabsTrigger>
+          <TabsTrigger value="mm">{t("infra.tabMm")}</TabsTrigger>
         </TabsList>
         <TabsContent value="services"><InfraServices /></TabsContent>
         <TabsContent value="setup"><SetupTab /></TabsContent>
         <TabsContent value="mcp"><McpPanel /></TabsContent>
+        <TabsContent value="mm"><MmPanel /></TabsContent>
       </Tabs>
     </div>
   );

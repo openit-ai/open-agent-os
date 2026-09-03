@@ -204,6 +204,13 @@ try:
     logger.info("MCP router mounted at /v1/mcp")
 except Exception as e:
     logger.warning(f"MCP router not mounted: {e}")
+try:
+    _mm_mod = _load_admin_sibling("mattermost_config")
+    mm_router = _mm_mod.router
+    app.include_router(mm_router)
+    logger.info("Mattermost router mounted at /v1/mattermost")
+except Exception as e:
+    logger.warning(f"Mattermost router not mounted: {e}")
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")

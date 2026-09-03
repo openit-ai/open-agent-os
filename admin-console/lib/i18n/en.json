@@ -139,7 +139,8 @@
     "tabSetup": "Setup",
     "tabMcp": "MCP",
     "monitorTitle": "Configured connections (monitor)",
-    "monitorNoData": "No detected config. Check the Setup tab."
+    "monitorNoData": "No detected config. Check the Setup tab.",
+    "tabMm": "Mattermost"
   },
   "users": {
     "title": "Users / Agents",
@@ -654,5 +655,21 @@
     "count": "",
     "empty": "No MCP servers registered",
     "source": "Source"
+  },
+  "mm": {
+    "title": "Mattermost Bot",
+    "subtitle": "Mattermost server + bot for the personal agent (@agent)",
+    "url": "Mattermost URL",
+    "botUsername": "Bot ID",
+    "displayName": "Default display name",
+    "token": "Bot token",
+    "tokenHint": "Empty keeps the stored token; input replaces it (never shown again)",
+    "save": "Save",
+    "test": "Test",
+    "saved": "Saved",
+    "loadFailed": "Load failed",
+    "saveFailed": "Save failed",
+    "appliedYes": "Live env values in effect",
+    "appliedNo": "DB values — env update + restart required"
   }
 }

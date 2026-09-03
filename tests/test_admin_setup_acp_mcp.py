@@ -213,3 +213,38 @@ def test_setup_checks_include_masked_targets(client, monkeypatch):
     assert body["redis"]["target"] == "127.0.0.1:6380/0"
     assert body["hermes"]["target"] == "http://127.0.0.1:9"
     assert "s3cr3t-pw" not in json.dumps(body)
+
+
+def _load_mm(client):
+    import sys as _sys
+    mod = _sys.modules.get("admin_console.backend.mattermost_config")
+    assert mod is not None, "mattermost router not mounted"
+    return mod
+
+
+def test_mm_config_crud_and_masking(client):
+    _load_mm(client)
+    tok = _login(client)
+    r = client.get("/v1/mattermost/config", headers=_h(tok))
+    assert r.status_code == 200, r.text
+    assert r.json()["bot_username"] == "agent"
+    assert "token" not in json.dumps(r.json()).lower().replace("bot_token_set", "")
+    bad = client.put("/v1/mattermost/config", json={"bot_username": "Bad Name!"}, headers=_h(tok))
+    assert bad.status_code == 422
+    r2 = client.put("/v1/mattermost/config", json={"mattermost_url": "http://127.0.0.1:8065", "bot_username": "agent", "default_display_name": "코코", "bot_token": "t0k3n"}, headers=_h(tok))
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["bot_token_set"] is True
+    assert r2.json()["source"] == "db"
+    r3 = client.get("/v1/mattermost/config", headers=_h(tok))
+    assert r3.json()["default_display_name"] == "코코"
+    assert "t0k3n" not in json.dumps(r3.json())
+
+
+def test_mm_test_unreachable(client):
+    _load_mm(client)
+    tok = _login(client)
+    r = client.post("/v1/mattermost/test", json={"bot_token": "x" * 26}, headers=_h(tok))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "target" in body
