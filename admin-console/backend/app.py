@@ -246,6 +246,35 @@ try:
     logger.info("SMTP router mounted at /v1/smtp")
 except Exception as e:
     logger.warning(f"SMTP router not mounted: {e}")
+# P2 write surfaces — quota/embedding/secrets/feature-flags (additive; no enforcement/auth changes)
+try:
+    _quota_admin_mod = _load_admin_sibling("quota_admin")
+    quota_admin_router = _quota_admin_mod.router
+    app.include_router(quota_admin_router)
+    logger.info("Quota admin router mounted at /v1/quota")
+except Exception as e:
+    logger.warning(f"Quota admin router not mounted: {e}")
+try:
+    _embedding_mod = _load_admin_sibling("embedding_config")
+    embedding_router = _embedding_mod.router
+    app.include_router(embedding_router)
+    logger.info("Embedding router mounted at /v1/embedding")
+except Exception as e:
+    logger.warning(f"Embedding router not mounted: {e}")
+try:
+    _secrets_admin_mod = _load_admin_sibling("secrets_admin")
+    secrets_admin_router = _secrets_admin_mod.router
+    app.include_router(secrets_admin_router)
+    logger.info("Secrets admin router mounted at /v1/secrets")
+except Exception as e:
+    logger.warning(f"Secrets admin router not mounted: {e}")
+try:
+    _flags_mod = _load_admin_sibling("feature_flags")
+    flags_router = _flags_mod.router
+    app.include_router(flags_router)
+    logger.info("Feature flags router mounted at /v1/feature-flags")
+except Exception as e:
+    logger.warning(f"Feature flags router not mounted: {e}")
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")

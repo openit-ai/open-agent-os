@@ -1441,3 +1441,122 @@ export function updateSmtpConfig(payload: SmtpUpdateRequest): Promise<SmtpConfig
 export function testSmtpConnection(payload?: { smtp_password?: string }): Promise<SmtpTestResult> {
   return apiFetch<SmtpTestResult>("/v1/smtp/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
 }
+
+// ---- P2: Quota admin (display/planned overrides; enforcement unchanged) ----
+export interface QuotaLimits {
+  tenant_id: string;
+  daily_limit: number;
+  per_minute_limit: number;
+  defaults: { daily_limit: number; per_minute_limit: number };
+  override: { daily_limit: number; per_minute_limit: number; updated_at?: string | null; updated_by?: string | null } | null;
+  overridden: boolean;
+  source?: string;
+  enforcement?: string;
+  note?: string;
+}
+export interface QuotaUpdateRequest {
+  tenant_id?: string;
+  daily_limit?: number;
+  per_minute_limit?: number;
+}
+export interface QuotaUsage {
+  tenant_id: string;
+  effective_limits: { daily_limit: number; per_minute_limit: number };
+  usage: Record<string, unknown> | null;
+  usage_source?: string;
+  enforcement?: string;
+  note?: string;
+}
+export function getQuotaLimits(tenantId = "default"): Promise<QuotaLimits> {
+  return apiFetch<QuotaLimits>(`/v1/quota/limits?tenant_id=${encodeURIComponent(tenantId)}`);
+}
+export function updateQuotaLimits(payload: QuotaUpdateRequest): Promise<QuotaLimits> {
+  return apiFetch<QuotaLimits>("/v1/quota/limits", { method: "PUT", body: JSON.stringify(payload) });
+}
+export function getQuotaUsage(tenantId = "default"): Promise<QuotaUsage> {
+  return apiFetch<QuotaUsage>(`/v1/quota/usage?tenant_id=${encodeURIComponent(tenantId)}`);
+}
+
+// ---- P2: Embedding config (console source of truth; restart to apply) ----
+export interface EmbeddingConfig {
+  provider: string;
+  model: string;
+  dim: number;
+  api_url: string;
+  source?: string;
+  applied?: boolean;
+  restart_required?: boolean;
+  note?: string;
+}
+export interface EmbeddingUpdateRequest {
+  provider?: string;
+  model?: string;
+  dim?: number;
+  api_url?: string;
+}
+export function getEmbeddingConfig(): Promise<EmbeddingConfig> {
+  return apiFetch<EmbeddingConfig>("/v1/embedding/config");
+}
+export function updateEmbeddingConfig(payload: EmbeddingUpdateRequest): Promise<EmbeddingConfig> {
+  return apiFetch<EmbeddingConfig>("/v1/embedding/config", { method: "PUT", body: JSON.stringify(payload) });
+}
+
+// ---- P2: Secrets status (metadata only; values never returned) ----
+export interface SecretStatusItem {
+  name: string;
+  configured: boolean;
+  length: number;
+  source_env: string | null;
+  rotation_needed: boolean;
+  reason: string;
+}
+export interface SecretsStatus {
+  checked_at: string;
+  count: number;
+  items: SecretStatusItem[];
+  rotation_needed_count: number;
+  note?: string;
+}
+export interface RotationGuideStep { order: number; title: string; detail: string }
+export interface RotationChecklistItem { id: string; label: string }
+export interface RotationGuide {
+  overview: string;
+  steps: RotationGuideStep[];
+  checklist: RotationChecklistItem[];
+  executes_rotation: boolean;
+  note?: string;
+}
+export function getSecretsStatus(): Promise<SecretsStatus> {
+  return apiFetch<SecretsStatus>("/v1/secrets/status");
+}
+export function getRotationGuide(): Promise<RotationGuide> {
+  return apiFetch<RotationGuide>("/v1/secrets/rotation-guide");
+}
+
+// ---- P2: Feature flags (console-stored only; no runtime wiring) ----
+export interface FeatureFlag {
+  name: string;
+  enabled: boolean;
+  default: boolean;
+  overridden: boolean;
+  custom: boolean;
+  description: string;
+}
+export interface FeatureFlagsResponse {
+  count: number;
+  flags: FeatureFlag[];
+  source?: string;
+  runtime_wired?: boolean;
+  note?: string;
+}
+export interface FeatureFlagToggleResult extends FeatureFlag {
+  source?: string;
+  runtime_wired?: boolean;
+  note?: string;
+}
+export function getFeatureFlags(): Promise<FeatureFlagsResponse> {
+  return apiFetch<FeatureFlagsResponse>("/v1/feature-flags");
+}
+export function toggleFeatureFlag(name: string, enabled: boolean): Promise<FeatureFlagToggleResult> {
+  return apiFetch<FeatureFlagToggleResult>("/v1/feature-flags", { method: "PUT", body: JSON.stringify({ name, enabled }) });
+}

@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut, BadgeCheck, ShieldAlert, DatabaseBackup, Image as ImageIcon, UserCog, ChevronDown, Globe, Cpu, BarChart3, Layers, Settings2 } from "lucide-react";
+import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut, BadgeCheck, ShieldAlert, DatabaseBackup, Image as ImageIcon, UserCog, ChevronDown, Globe, Cpu, BarChart3, Layers, Settings2, Gauge, Database, Lock, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,6 +34,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { href: "/fallback", label: t("nav.fallback"), icon: Layers },
     { href: "/runtime-config", label: t("nav.runtimeConfig"), icon: Settings2 },
     { href: "/llm-usage", label: t("nav.llmUsage"), icon: BarChart3 },
+    { href: "/quota", label: t("nav.quota"), icon: Gauge },
+    { href: "/embedding", label: t("nav.embedding"), icon: Database },
+    { href: "/secrets", label: t("nav.secrets"), icon: Lock },
+    { href: "/feature-flags", label: t("nav.featureFlags"), icon: Flag },
     { href: "/users", label: t("nav.users"), icon: Users },
     { href: "/policy", label: t("nav.policy"), icon: Shield },
     { href: "/approvals", label: t("nav.approvals"), icon: ClipboardCheck },
