@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { getSetupStatus, postSetupChecks, postSetupComplete, type SetupStatus, type SetupChecks } from "@/lib/api";
+import { getSetupStatus, postSetupChecks, postSetupComplete, getSetupEffective, type SetupStatus, type SetupChecks, type SetupEffective } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { Rocket, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { McpPanel } from "./mcp-panel";
@@ -21,6 +21,7 @@ function CheckBadge({ ok }: { ok?: boolean }) {
 function OverviewTab() {
   const { t } = useI18n();
   const [status, setStatus] = useState<SetupStatus | null>(null);
+  const [effective, setEffective] = useState<SetupEffective | null>(null);
   const [checks, setChecks] = useState<SetupChecks | null>(null);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
@@ -39,6 +40,12 @@ function OverviewTab() {
       setError(e instanceof Error ? e.message : "load failed");
     } finally {
       setLoading(false);
+    }
+    try {
+      const eff = await getSetupEffective();
+      setEffective(eff);
+    } catch {
+      // unauthenticated (before login) — manual input still works
     }
   }, []);
 
@@ -88,6 +95,14 @@ function OverviewTab() {
               : <><XCircle className="h-4 w-4 text-amber-600" /> {t("setup.notCompleted")}</>}
             <span className="text-muted-foreground">· has_admin: {String(status?.has_admin)}</span>
           </div>
+          {effective && (
+            <div className="rounded-md bg-muted p-3 text-xs">
+              <div className="mb-1 font-medium">{t("setup.detected")}</div>
+              <div>DB: {effective.db.configured ? `${effective.db.driver}://${effective.db.user}@${effective.db.host}${effective.db.port ? `:${effective.db.port}` : ""}/${effective.db.database}` : "—"}</div>
+              <div>Redis: {effective.redis.configured ? `${effective.redis.host}:${effective.redis.port}/${effective.redis.db}` : "—"}</div>
+              <div>ACP: {effective.hermes.base_url || "—"}{effective.hermes.model ? ` · ${effective.hermes.model}` : ""} · acp_enabled={String(effective.hermes.acp_enabled)}</div>
+            </div>
+          )}
           <div className="grid gap-3 md:grid-cols-3">
             <div>
               <Label>{t("setup.dbUrl")}</Label>

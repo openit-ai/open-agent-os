@@ -601,7 +601,8 @@
     "saveNote": "URLs on this screen are probe-only and never stored. Apply real values via the server env file and the ACP/MCP screens.",
     "tabOverview": "Setup",
     "tabAcp": "ACP",
-    "tabMcp": "MCP"
+    "tabMcp": "MCP",
+    "detected": "Detected on server (leave inputs empty to check these)"
   },
   "acp": {
     "title": "ACP Settings",

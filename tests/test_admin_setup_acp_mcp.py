@@ -173,3 +173,28 @@ def test_mcp_crud_flow(client):
     assert r6.json()["count"] == 0
     r7 = client.delete("/v1/mcp/servers/outline", headers=_h(tok))
     assert r7.status_code == 404
+
+
+def test_setup_effective_masks_secrets(client, monkeypatch):
+    tok = _login(client)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://oaos:s3cr3t-pw@127.0.0.1:5432/oaos")
+    monkeypatch.setenv("REDIS_URL", "redis://:r3d1s-pw@127.0.0.1:6380/2")
+    monkeypatch.setenv("OAOS_CP_HERMES_BASE_URL", "http://127.0.0.1:8001")
+    monkeypatch.setenv("OAOS_CP_HERMES_MODEL", "qwen2.5")
+    r = client.get("/v1/setup/effective", headers=_h(tok))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["db"]["user"] == "oaos"
+    assert body["db"]["host"] == "127.0.0.1"
+    assert body["db"]["database"] == "oaos"
+    assert body["redis"]["port"] == 6380
+    assert body["redis"]["db"] == 2
+    assert body["hermes"]["base_url"] == "http://127.0.0.1:8001"
+    dumped = json.dumps(body)
+    assert "s3cr3t-pw" not in dumped
+    assert "r3d1s-pw" not in dumped
+
+
+def test_setup_effective_requires_auth(client):
+    r = client.get("/v1/setup/effective")
+    assert r.status_code == 401

@@ -221,6 +221,51 @@ def setup_status() -> dict:
     }
 
 
+def _mask_db_url(url: str) -> dict:
+    """Split a DB URL into non-secret parts (password never returned)."""
+    import re
+    m = re.match(r"^(.*?://)([^:/@]+)(?::[^@]*)?@([^:/]+)(?::(\d+))?/(.+?)(\?.*)?$", (url or "").strip())
+    if not m:
+        return {"configured": bool((url or "").strip()), "driver": None, "user": None,
+                "host": None, "port": None, "database": None}
+    return {"configured": True, "driver": m.group(1).rstrip(":/"), "user": m.group(2),
+            "host": m.group(3), "port": int(m.group(4)) if m.group(4) else None,
+            "database": m.group(5)}
+
+
+def _mask_redis_url(url: str) -> dict:
+    import re
+    m = re.match(r"^(redis[s]?://)(?::[^@]*)?@?([^:/]+)(?::(\d+))?(?:/(\d+))?", (url or "").strip())
+    if not m:
+        return {"configured": bool((url or "").strip()), "host": None, "port": None, "db": None}
+    return {"configured": True, "host": m.group(2),
+            "port": int(m.group(3)) if m.group(3) else 6379,
+            "db": int(m.group(4)) if m.group(4) else 0}
+
+
+@router.get("/effective")
+def setup_effective(admin: AdminUser = Depends(get_current_admin)) -> dict:
+    """Server-side effective connection values (auto-detected, secrets never returned).
+
+    Lets the wizard prefill/verify without manual typing on hosts where
+    Hermes Agent + OAOS are already installed.
+    """
+    db_url = _db_url() or ""
+    redis_url = ((os.environ.get("OAOS_CP_REDIS_URL") or os.environ.get("OAOS_REDIS_URL")
+                  or os.environ.get("REDIS_URL") or "").strip())
+    acp_raw = (os.environ.get("OAOS_CP_HERMES_ACP_ENABLED") or "").strip().lower()
+    return {
+        "db": _mask_db_url(db_url),
+        "redis": _mask_redis_url(redis_url),
+        "hermes": {
+            "base_url": ((os.environ.get("OAOS_CP_HERMES_BASE_URL")
+                          or os.environ.get("HERMES_BASE_URL") or "").strip()),
+            "model": (os.environ.get("OAOS_CP_HERMES_MODEL") or "").strip(),
+            "acp_enabled": acp_raw in ("1", "true", "yes"),
+        },
+    }
+
+
 @router.post("/checks")
 def setup_checks(req: ChecksRequest, admin: AdminUser = Depends(require_l5)) -> dict:
     """L5 connectivity checks. Supplied URLs are used for probing only (never stored)."""

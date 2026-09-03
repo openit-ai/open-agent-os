@@ -931,6 +931,14 @@ export interface SetupChecks {
 export function getSetupStatus(): Promise<SetupStatus> {
   return apiFetch<SetupStatus>("/v1/setup/status");
 }
+export interface SetupEffective {
+  db: { configured: boolean; driver: string | null; user: string | null; host: string | null; port: number | null; database: string | null };
+  redis: { configured: boolean; host: string | null; port: number | null; db: number | null };
+  hermes: { base_url: string; model: string; acp_enabled: boolean };
+}
+export function getSetupEffective(): Promise<SetupEffective> {
+  return apiFetch<SetupEffective>("/v1/setup/effective");
+}
 export function postSetupChecks(payload?: { db_url?: string; redis_url?: string; hermes_url?: string }): Promise<SetupChecks> {
   return apiFetch<SetupChecks>("/v1/setup/checks", { method: "POST", body: JSON.stringify(payload ?? {}) });
 }
