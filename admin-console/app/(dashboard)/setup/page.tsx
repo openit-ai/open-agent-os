@@ -1,14 +1,15 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { getSetupStatus, postSetupChecks, postSetupComplete, type SetupStatus, type SetupChecks } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { Rocket, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { McpPanel } from "./mcp-panel";
 
 function CheckBadge({ ok }: { ok?: boolean }) {
   if (ok === undefined) return <Badge variant="secondary">—</Badge>;
@@ -17,7 +18,7 @@ function CheckBadge({ ok }: { ok?: boolean }) {
     : <Badge className="bg-red-600 text-white">FAIL</Badge>;
 }
 
-export default function SetupPage() {
+function OverviewTab() {
   const { t } = useI18n();
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [checks, setChecks] = useState<SetupChecks | null>(null);
@@ -35,11 +36,11 @@ export default function SetupPage() {
       const res = await getSetupStatus();
       setStatus(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("setup.loadFailed") ?? "load failed");
+      setError(e instanceof Error ? e.message : "load failed");
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
@@ -73,16 +74,11 @@ export default function SetupPage() {
     }
   };
 
-  if (loading) return <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>;
+  if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
 
   return (
-    <div className="space-y-6 p-6">
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-semibold"><Rocket className="h-6 w-6" /> {t("setup.title")}</h1>
-        <p className="text-sm text-muted-foreground">{t("setup.subtitle")}</p>
-      </div>
+    <div className="space-y-6">
       {error && <Card className="border-red-500"><CardContent className="pt-4 text-sm text-red-600">{error}</CardContent></Card>}
-
       <Card>
         <CardHeader><CardTitle>{t("setup.step")} 1 — {t("setup.check")}</CardTitle></CardHeader>
         <CardContent className="space-y-3">
@@ -133,16 +129,33 @@ export default function SetupPage() {
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle>{t("setup.step")} 2 — {t("setup.complete")}</CardTitle>
-          <CardDescription>ACP · MCP <Link className="underline" href="/acp">ACP</Link> · <Link className="underline" href="/mcp">MCP</Link></CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle>{t("setup.step")} 2 — {t("setup.complete")}</CardTitle></CardHeader>
         <CardContent>
           <Button onClick={complete} disabled={completing || status?.setup_completed}>
             {completing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("setup.complete")}
           </Button>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+export default function SetupPage() {
+  const { t } = useI18n();
+  return (
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold"><Rocket className="h-6 w-6" /> {t("setup.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("setup.subtitle")}</p>
+      </div>
+      <Tabs defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">{t("setup.tabOverview")}</TabsTrigger>
+          <TabsTrigger value="mcp">{t("setup.tabMcp")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview"><OverviewTab /></TabsContent>
+        <TabsContent value="mcp"><McpPanel /></TabsContent>
+      </Tabs>
     </div>
   );
 }

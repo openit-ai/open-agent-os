@@ -9,7 +9,7 @@ import { getAcpConfig, updateAcpConfig, testAcpConnection, type AcpConfig, type 
 import { useI18n } from "@/lib/i18n";
 import { PlugZap, Loader2 } from "lucide-react";
 
-export default function AcpPage() {
+export function AcpSection() {
   const { t } = useI18n();
   const [cfg, setCfg] = useState<AcpConfig | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
@@ -70,7 +70,7 @@ export default function AcpPage() {
   if (loading) return <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>;
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-semibold"><PlugZap className="h-6 w-6" /> {t("acp.title")}</h1>
         <p className="text-sm text-muted-foreground">{t("acp.subtitle")}</p>

@@ -11,7 +11,7 @@ import { Boxes, Loader2, Plus, Trash2 } from "lucide-react";
 
 const TRANSPORTS = ["stdio", "sse", "streamable-http"] as const;
 
-export default function McpPage() {
+export function McpPanel() {
   const { t } = useI18n();
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,7 +116,7 @@ export default function McpPage() {
   if (loading) return <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>;
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold"><Boxes className="h-6 w-6" /> {t("mcp.title")}</h1>

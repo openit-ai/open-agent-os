@@ -49,7 +49,7 @@
     "securityUpdates": "Security Updates",
     "backup": "Backup / Upgrade",
     "fallback": "Fallback",
-    "setup": "Setup",
+    "setup": "Infra Setup",
     "acp": "ACP",
     "mcp": "MCP"
   },
@@ -583,7 +583,7 @@
     "hermesBannerAction": "Change mode in Providers → Runtime Mode (L5 only)"
   },
   "setup": {
-    "title": "Setup Wizard",
+    "title": "Infra Setup",
     "subtitle": "Check DB · Redis · ACP · MCP connectivity, then complete setup",
     "step": "Step",
     "check": "Connectivity check",
@@ -598,7 +598,10 @@
     "runChecks": "Run checks",
     "ok": "OK",
     "fail": "FAIL",
-    "saveNote": "URLs on this screen are probe-only and never stored. Apply real values via the server env file and the ACP/MCP screens."
+    "saveNote": "URLs on this screen are probe-only and never stored. Apply real values via the server env file and the ACP/MCP screens.",
+    "tabOverview": "Setup",
+    "tabAcp": "ACP",
+    "tabMcp": "MCP"
   },
   "acp": {
     "title": "ACP Settings",

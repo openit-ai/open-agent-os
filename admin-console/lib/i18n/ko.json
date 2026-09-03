@@ -49,7 +49,7 @@
     "securityUpdates": "Security Updates",
     "backup": "Backup / Upgrade",
     "fallback": "Fallback",
-    "setup": "초기 설정",
+    "setup": "Infra Setup",
     "acp": "ACP",
     "mcp": "MCP"
   },
@@ -583,7 +583,7 @@
     "hermesBannerAction": "Providers → Runtime Mode에서 변경 (L5 전용)"
   },
   "setup": {
-    "title": "초기 설정 마법사",
+    "title": "Infra Setup (인프라 설정)",
     "subtitle": "DB·Redis·ACP·MCP 연결 점검 후 설정을 완료합니다",
     "step": "단계",
     "check": "연결 점검",
@@ -598,7 +598,10 @@
     "runChecks": "점검 실행",
     "ok": "정상",
     "fail": "실패",
-    "saveNote": "이 화면의 URL 입력은 점검용이며 저장되지 않습니다. 실제 반영은 서버 환경파일과 ACP·MCP 화면에서 수행하세요."
+    "saveNote": "이 화면의 URL 입력은 점검용이며 저장되지 않습니다. 실제 반영은 서버 환경파일과 ACP·MCP 화면에서 수행하세요.",
+    "tabOverview": "초기 설정",
+    "tabAcp": "ACP 설정",
+    "tabMcp": "MCP 설정"
   },
   "acp": {
     "title": "ACP 설정",
