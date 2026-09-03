@@ -1560,3 +1560,81 @@ export function getFeatureFlags(): Promise<FeatureFlagsResponse> {
 export function toggleFeatureFlag(name: string, enabled: boolean): Promise<FeatureFlagToggleResult> {
   return apiFetch<FeatureFlagToggleResult>("/v1/feature-flags", { method: "PUT", body: JSON.stringify({ name, enabled }) });
 }
+
+// ---- P3: Profile ops (read-only status + worker backfill + reset delegation) ----
+export interface ProfileOpsStatus {
+  tenant_id?: string | null;
+  user_id?: string | null;
+  profile_exists: boolean;
+  profile_count: number;
+  trait_count: number;
+  evidence_count: number;
+  worker_queue_depth: number;
+  source?: string;
+  checked_at?: string;
+  note?: string;
+}
+export interface ProfileBackfillResult {
+  enqueued: boolean;
+  job_id: string;
+  via: string;
+  payload?: Record<string, unknown>;
+}
+export interface ProfileResetResult {
+  status?: string;
+  tenant_id?: string;
+  user_id?: string;
+  delegated?: boolean;
+  via?: string;
+  note?: string;
+}
+export function getProfileOpsStatus(tenantId?: string, userId?: string): Promise<ProfileOpsStatus> {
+  const q = new URLSearchParams();
+  if (tenantId) q.set("tenant_id", tenantId);
+  if (userId) q.set("user_id", userId);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiFetch<ProfileOpsStatus>(`/v1/profile-ops/status${suffix}`);
+}
+export function postProfileBackfill(payload: { tenant_id: string; user_id: string; reason?: string }): Promise<ProfileBackfillResult> {
+  return apiFetch<ProfileBackfillResult>("/v1/profile-ops/backfill", { method: "POST", body: JSON.stringify(payload) });
+}
+export function postProfileReset(payload: { tenant_id: string; user_id: string; confirm: string }): Promise<ProfileResetResult> {
+  return apiFetch<ProfileResetResult>("/v1/profile-ops/reset", { method: "POST", body: JSON.stringify(payload) });
+}
+
+// ---- P3: Knowledge ops (checkpoint status + connector sync + dry-run) ----
+export interface KnowledgeCheckpoint {
+  tenant_id: string;
+  source_system: string;
+  cursor?: string | null;
+  last_sync_at?: string | null;
+  updated_at?: string | null;
+}
+export interface KnowledgeOpsStatus {
+  tenant_id?: string | null;
+  checkpoints: KnowledgeCheckpoint[];
+  checkpoint_count: number;
+  document_count: number;
+  known_connectors: string[];
+  synced_connectors: string[];
+  pending_connectors: string[];
+  source?: string;
+  checked_at?: string;
+  note?: string;
+}
+export interface KnowledgeSyncResult {
+  dry_run: boolean;
+  enqueued: boolean;
+  job_id?: string;
+  via?: string;
+  planned?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+  note?: string;
+}
+export function getKnowledgeOpsStatus(tenantId?: string): Promise<KnowledgeOpsStatus> {
+  const suffix = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : "";
+  return apiFetch<KnowledgeOpsStatus>(`/v1/knowledge-ops/status${suffix}`);
+}
+export function postKnowledgeSync(payload: { connector: string; tenant_id?: string; dry_run?: boolean }): Promise<KnowledgeSyncResult> {
+  return apiFetch<KnowledgeSyncResult>("/v1/knowledge-ops/sync", { method: "POST", body: JSON.stringify(payload) });
+}

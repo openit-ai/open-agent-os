@@ -56,7 +56,9 @@
     "setup": "Infra Setup",
     "acp": "ACP",
     "mcp": "MCP",
-    "runtimeConfig": "Runtime Config"
+    "runtimeConfig": "Runtime Config",
+    "profileOps": "Profile Ops",
+    "knowledgeOps": "Knowledge Ops"
   },
   "header": {
     "adminMenu": "Admin menu",
@@ -900,5 +902,45 @@
     "saved": "Saved",
     "loadFailed": "Load failed",
     "saveFailed": "Save failed"
+  },
+  "profileOps": {
+    "title": "Profile Ops",
+    "subtitle": "Read-only profile aggregates + worker backfill + delegated reset (pipelines dormant when evidence is 0)",
+    "tenant": "Tenant ID",
+    "user": "User ID",
+    "profileExists": "Profile exists",
+    "profiles": "Profiles",
+    "traits": "Traits",
+    "evidence": "Evidence rows",
+    "queueDepth": "Worker queue depth",
+    "backfill": "Enqueue backfill",
+    "backfillReason": "Reason (optional)",
+    "backfilled": "Backfill enqueued",
+    "reset": "Reset profile",
+    "resetConfirmLabel": "Type RESET to confirm",
+    "resetConfirmBad": "Type RESET exactly to enable reset",
+    "resetDone": "Reset delegated",
+    "loadFailed": "Load failed",
+    "actionFailed": "Action failed",
+    "via": "via",
+    "source": "source"
+  },
+  "knowledgeOps": {
+    "title": "Knowledge Ops",
+    "subtitle": "Checkpoint status + connector sync jobs (pipelines dormant when checkpoints are 0)",
+    "tenant": "Tenant ID",
+    "connector": "Connector",
+    "checkpoints": "Checkpoints",
+    "documents": "Documents",
+    "synced": "Synced",
+    "pending": "Pending / unsynced",
+    "dryRun": "Dry run",
+    "sync": "Enqueue sync",
+    "syncPlanned": "Sync planned (dry-run, nothing enqueued)",
+    "syncEnqueued": "Sync enqueued",
+    "loadFailed": "Load failed",
+    "actionFailed": "Action failed",
+    "via": "via",
+    "source": "source"
   }
 }

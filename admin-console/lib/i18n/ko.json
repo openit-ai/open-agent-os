@@ -56,7 +56,9 @@
     "setup": "Infra Setup",
     "acp": "ACP",
     "mcp": "MCP",
-    "runtimeConfig": "Runtime Config"
+    "runtimeConfig": "Runtime Config",
+    "profileOps": "프로필 운영",
+    "knowledgeOps": "지식 운영"
   },
   "header": {
     "adminMenu": "관리자 메뉴",
@@ -900,5 +902,45 @@
     "saved": "저장됐습니다",
     "loadFailed": "불러오기 실패",
     "saveFailed": "저장 실패"
+  },
+  "profileOps": {
+    "title": "프로필 운영",
+    "subtitle": "읽기 전용 프로필 집계 + 워커 재집계 + 기존 Reset 위임 (evidence 0이면 파이프라인 휴면)",
+    "tenant": "테넌트 ID",
+    "user": "사용자 ID",
+    "profileExists": "프로필 존재",
+    "profiles": "프로필",
+    "traits": "특성",
+    "evidence": "Evidence 행",
+    "queueDepth": "워커 큐 깊이",
+    "backfill": "재집계 투입",
+    "backfillReason": "사유(선택)",
+    "backfilled": "재집계 투입됨",
+    "reset": "프로필 초기화",
+    "resetConfirmLabel": "RESET 입력하여 확인",
+    "resetConfirmBad": "RESET을 정확히 입력해야 초기화 가능",
+    "resetDone": "초기화 위임됨",
+    "loadFailed": "조회 실패",
+    "actionFailed": "실행 실패",
+    "via": "경유",
+    "source": "출처"
+  },
+  "knowledgeOps": {
+    "title": "지식 운영",
+    "subtitle": "체크포인트 상태 + 커넥터 동기화 작업 (체크포인트 0이면 파이프라인 휴면)",
+    "tenant": "테넌트 ID",
+    "connector": "커넥터",
+    "checkpoints": "체크포인트",
+    "documents": "문서",
+    "synced": "동기화됨",
+    "pending": "미동기",
+    "dryRun": "드라이런",
+    "sync": "동기화 투입",
+    "syncPlanned": "동기화 계획됨(드라이런, 투입 없음)",
+    "syncEnqueued": "동기화 투입됨",
+    "loadFailed": "조회 실패",
+    "actionFailed": "실행 실패",
+    "via": "경유",
+    "source": "출처"
   }
 }

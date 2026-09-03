@@ -275,6 +275,21 @@ try:
     logger.info("Feature flags router mounted at /v1/feature-flags")
 except Exception as e:
     logger.warning(f"Feature flags router not mounted: {e}")
+# P3 ops surfaces — profile/knowledge sync operation views (additive; no pipeline logic changes)
+try:
+    _profile_ops_mod = _load_admin_sibling("profile_ops")
+    profile_ops_router = _profile_ops_mod.router
+    app.include_router(profile_ops_router)
+    logger.info("Profile ops router mounted at /v1/profile-ops")
+except Exception as e:
+    logger.warning(f"Profile ops router not mounted: {e}")
+try:
+    _knowledge_ops_mod = _load_admin_sibling("knowledge_ops")
+    knowledge_ops_router = _knowledge_ops_mod.router
+    app.include_router(knowledge_ops_router)
+    logger.info("Knowledge ops router mounted at /v1/knowledge-ops")
+except Exception as e:
+    logger.warning(f"Knowledge ops router not mounted: {e}")
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")

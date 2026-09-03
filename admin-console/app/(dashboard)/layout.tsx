@@ -38,6 +38,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { href: "/embedding", label: t("nav.embedding"), icon: Database },
     { href: "/secrets", label: t("nav.secrets"), icon: Lock },
     { href: "/feature-flags", label: t("nav.featureFlags"), icon: Flag },
+    { href: "/profile-ops", label: t("nav.profileOps"), icon: UserCog },
+    { href: "/knowledge-ops", label: t("nav.knowledgeOps"), icon: Database },
     { href: "/users", label: t("nav.users"), icon: Users },
     { href: "/policy", label: t("nav.policy"), icon: Shield },
     { href: "/approvals", label: t("nav.approvals"), icon: ClipboardCheck },
