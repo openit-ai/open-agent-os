@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { apiFetch, getToken, getSetupEffective, type SetupEffective } from "@/lib/api";
+import { apiFetch, getToken, getSetupEffective, getMmConfig, getOlConfig, type SetupEffective } from "@/lib/api";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RefreshCw, Trash2, Pencil, Plus, Server } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
@@ -111,6 +111,38 @@ function InfraServices() {
         }
       } catch { /* ignore unparseable base_url */ }
     }
+    // Mattermost / Outline: register from their config tabs so saved
+    // connections show up in the services table for monitoring/editing.
+    try {
+      const mm = await getMmConfig();
+      if (mm?.mattermost_url) {
+        try {
+          const u = new URL(mm.mattermost_url);
+          if (u.hostname) {
+            desired.push({
+              service: "mattermost", host: u.hostname,
+              port: u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80),
+              health_path: "/api/v4/system/ping",
+            });
+          }
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+    try {
+      const ol = await getOlConfig();
+      if (ol?.outline_url) {
+        try {
+          const u = new URL(ol.outline_url);
+          if (u.hostname) {
+            desired.push({
+              service: "outline", host: u.hostname,
+              port: u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80),
+              health_path: "/",
+            });
+          }
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
     if (desired.length === 0) return;
     let changed = false;
     try {

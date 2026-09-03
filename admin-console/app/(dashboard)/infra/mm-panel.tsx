@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getMmConfig, updateMmConfig, testMmConnection, getMmBridge, mmBridgeAction, type MmConfig, type MmTestResult, type MmBridgeStatus } from "@/lib/api";
+import { getMmConfig, updateMmConfig, testMmConnection, getMmBridge, mmBridgeAction, apiFetch, type MmConfig, type MmTestResult, type MmBridgeStatus } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { MessageSquare, Loader2 } from "lucide-react";
 
@@ -80,6 +80,24 @@ export function MmPanel() {
       setCfg(res);
       setToken("");
       setMsg(t("mm.saved"));
+      // Best-effort: register into services table so it shows under 서비스현황.
+      try {
+        const u = new URL(url);
+        if (u.hostname) {
+          const listRes = await apiFetch<{ items: { service: string }[] } | { service: string }[]>("/v1/infra");
+          const list = Array.isArray(listRes) ? listRes : (listRes.items ?? []);
+          if (!list.some((it) => it.service === "mattermost")) {
+            await apiFetch("/v1/infra", {
+              method: "POST",
+              body: JSON.stringify({
+                service: "mattermost", host: u.hostname,
+                port: u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80),
+                health_path: "/api/v4/system/ping",
+              }),
+            });
+          }
+        }
+      } catch { /* ignore registration errors */ }
     } catch (e) {
       setError(e instanceof Error ? e.message : t("mm.saveFailed"));
     } finally {

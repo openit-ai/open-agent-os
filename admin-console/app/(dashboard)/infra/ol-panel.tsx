@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getOlConfig, updateOlConfig, testOlConnection, type OlConfig, type OlTestResult } from "@/lib/api";
+import { getOlConfig, updateOlConfig, testOlConnection, apiFetch, type OlConfig, type OlTestResult } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { BookOpen, Loader2 } from "lucide-react";
 
@@ -48,6 +48,24 @@ export function OlPanel() {
       setCfg(res);
       setKey("");
       setMsg(t("ol.saved"));
+      // Best-effort: register into services table so it shows under 서비스현황.
+      try {
+        const u = new URL(url);
+        if (u.hostname) {
+          const listRes = await apiFetch<{ items: { service: string }[] } | { service: string }[]>("/v1/infra");
+          const list = Array.isArray(listRes) ? listRes : (listRes.items ?? []);
+          if (!list.some((it) => it.service === "outline")) {
+            await apiFetch("/v1/infra", {
+              method: "POST",
+              body: JSON.stringify({
+                service: "outline", host: u.hostname,
+                port: u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80),
+                health_path: "/",
+              }),
+            });
+          }
+        }
+      } catch { /* ignore registration errors */ }
     } catch (e) {
       setError(e instanceof Error ? e.message : t("ol.saveFailed"));
     } finally {
