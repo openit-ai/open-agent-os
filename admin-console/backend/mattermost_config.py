@@ -268,3 +268,59 @@ def mm_test(body: dict | None = None, admin: AdminUser = Depends(require_l5)) ->
     except Exception as e:
         return {"ok": False, "target": target,
                 "error": f"{type(e).__name__}: {str(e)[:160]}", "source": source}
+
+
+BRIDGE_UNIT = "oaos-mm-bridge.service"
+
+
+def _bridge_configured() -> bool:
+    cfg, _ = _load_config()
+    return bool(cfg.get("mattermost_url")) and bool(
+        cfg.get("bot_token_set")
+        or (os.environ.get("MATTERMOST_TOKEN") or os.environ.get("MATTERMOST_BOT_TOKEN") or "").strip()
+    )
+
+
+def _systemctl(*args: str) -> tuple[bool, str]:
+    import subprocess
+    try:
+        r = subprocess.run(["systemctl", *args], capture_output=True, text=True, timeout=30)
+        return r.returncode == 0, (r.stdout or "" + r.stderr or "").strip()[:300]
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"[:300]
+
+
+@router.get("/bridge")
+def mm_bridge_status(admin: AdminUser = Depends(get_current_admin)) -> dict:
+    """Bridge install/run/config state (read-only, any authenticated admin)."""
+    import pathlib
+    installed = any(
+        pathlib.Path(p).exists()
+        for p in ("/etc/systemd/system/oaos-mm-bridge.service",
+                  "/lib/systemd/system/oaos-mm-bridge.service")
+    )
+    ok, state = _systemctl("is-active", BRIDGE_UNIT)
+    return {
+        "installed": installed,
+        "active": state or "unknown",
+        "configured": _bridge_configured(),
+    }
+
+
+@router.post("/bridge/{action}")
+def mm_bridge_control(action: str, admin: AdminUser = Depends(require_l5)) -> dict:
+    """L5 start/stop/restart the bridge unit (requires sudoers rule for oaos)."""
+    if action not in ("start", "stop", "restart"):
+        raise HTTPException(status_code=400, detail="action must be start|stop|restart")
+    if not _bridge_configured():
+        raise HTTPException(status_code=409, detail="Mattermost bot not configured (save URL + token first)")
+    import subprocess
+    try:
+        r = subprocess.run(["sudo", "-n", "systemctl", action, BRIDGE_UNIT],
+                           capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"control failed: {type(e).__name__}")
+    if r.returncode != 0:
+        raise HTTPException(status_code=503, detail=f"systemctl {action} failed: {(r.stderr or r.stdout or '').strip()[:200]} (sudoers rule may be missing)")
+    ok, state = _systemctl("is-active", BRIDGE_UNIT)
+    return {"action": action, "active": state or "unknown"}

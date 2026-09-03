@@ -670,6 +670,11 @@
     "loadFailed": "Load failed",
     "saveFailed": "Save failed",
     "appliedYes": "Live env values in effect",
-    "appliedNo": "DB values — env update + restart required"
+    "appliedNo": "DB values — env update + restart required",
+    "bridgeTitle": "Live ingress bridge",
+    "bridgeDesc": "Forwards MM mentions/DMs to the Control Plane. Save the bot first.",
+    "bridge_start": "Start",
+    "bridge_restart": "Restart",
+    "bridge_stop": "Stop"
   }
 }

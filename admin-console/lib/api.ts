@@ -1063,3 +1063,14 @@ export function updateMmConfig(payload: MmUpdateRequest): Promise<MmConfig> {
 export function testMmConnection(payload?: { bot_token?: string }): Promise<MmTestResult> {
   return apiFetch<MmTestResult>("/v1/mattermost/test", { method: "POST", body: JSON.stringify(payload ?? {}) });
 }
+export interface MmBridgeStatus {
+  installed: boolean;
+  active: string;
+  configured: boolean;
+}
+export function getMmBridge(): Promise<MmBridgeStatus> {
+  return apiFetch<MmBridgeStatus>("/v1/mattermost/bridge");
+}
+export function mmBridgeAction(action: "start" | "stop" | "restart"): Promise<MmBridgeStatus & { action: string }> {
+  return apiFetch(`/v1/mattermost/bridge/${action}`, { method: "POST" });
+}

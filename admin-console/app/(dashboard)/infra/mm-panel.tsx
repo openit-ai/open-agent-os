@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getMmConfig, updateMmConfig, testMmConnection, type MmConfig, type MmTestResult } from "@/lib/api";
+import { getMmConfig, updateMmConfig, testMmConnection, getMmBridge, mmBridgeAction, type MmConfig, type MmTestResult, type MmBridgeStatus } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { MessageSquare, Loader2 } from "lucide-react";
 
@@ -17,6 +17,8 @@ export function MmPanel() {
   const [displayName, setDisplayName] = useState("");
   const [token, setToken] = useState("");
   const [testRes, setTestRes] = useState<MmTestResult | null>(null);
+  const [bridge, setBridge] = useState<MmBridgeStatus | null>(null);
+  const [bridging, setBridging] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -39,6 +41,30 @@ export function MmPanel() {
   }, [t]);
 
   useEffect(() => { fetchCfg(); }, [fetchCfg]);
+
+  const fetchBridge = useCallback(async () => {
+    try {
+      setBridge(await getMmBridge());
+    } catch {
+      setBridge(null);
+    }
+  }, []);
+
+  useEffect(() => { fetchBridge(); }, [fetchBridge]);
+
+  const bridgeAct = async (action: "start" | "stop" | "restart") => {
+    setBridging(action);
+    setError(null);
+    try {
+      const res = await mmBridgeAction(action);
+      setBridge(res);
+      setMsg(`${action}: ${res.active}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : `${action} failed`);
+    } finally {
+      setBridging(null);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -127,6 +153,34 @@ export function MmPanel() {
                 : <span className="text-red-600">FAIL · {testRes.error ?? testRes.status_code}</span>}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            {t("mm.bridgeTitle")}
+            {bridge && (bridge.active === "active"
+              ? <Badge className="bg-green-600 text-white">active</Badge>
+              : <Badge variant="secondary">{bridge.active}</Badge>)}
+          </CardTitle>
+          <CardDescription>{t("mm.bridgeDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="text-xs text-muted-foreground">
+            installed: {String(bridge?.installed)} · configured: {String(bridge?.configured)}
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={() => bridgeAct("start")} disabled={bridging !== null}>
+              {bridging === "start" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.bridge_start")}
+            </Button>
+            <Button variant="outline" onClick={() => bridgeAct("restart")} disabled={bridging !== null}>
+              {bridging === "restart" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.bridge_restart")}
+            </Button>
+            <Button variant="destructive" onClick={() => bridgeAct("stop")} disabled={bridging !== null}>
+              {bridging === "stop" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.bridge_stop")}
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

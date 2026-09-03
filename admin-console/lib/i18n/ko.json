@@ -670,6 +670,11 @@
     "loadFailed": "불러오기 실패",
     "saveFailed": "저장 실패",
     "appliedYes": "실행 중 환경값 사용 중",
-    "appliedNo": "DB 저장값 — 환경 반영+재기동 필요"
+    "appliedNo": "DB 저장값 — 환경 반영+재기동 필요",
+    "bridgeTitle": "실시간 수신 브리지",
+    "bridgeDesc": "MM 멘션·DM을 Control Plane으로 전달합니다. 봇 저장 후 시작하세요.",
+    "bridge_start": "브리지 시작",
+    "bridge_restart": "재시작",
+    "bridge_stop": "중지"
   }
 }

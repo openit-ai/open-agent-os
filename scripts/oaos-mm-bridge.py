@@ -148,7 +148,7 @@ def _signature(body):
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest() if secret else ""
 
 MATTERMOST_URL = os.getenv("MATTERMOST_URL", "https://chat.openit.co.kr")
-BOT_TOKEN = os.getenv("MATTERMOST_BOT_TOKEN", "") or "7t59pff9fpreppmf85pzn9b7za"
+BOT_TOKEN = os.getenv("MATTERMOST_BOT_TOKEN", "")
 if not BOT_TOKEN or len(BOT_TOKEN) < 20:
     try:
         for line in pathlib.Path.home().joinpath(".hermes/.env").read_text().splitlines():

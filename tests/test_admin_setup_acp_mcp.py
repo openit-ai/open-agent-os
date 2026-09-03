@@ -248,3 +248,27 @@ def test_mm_test_unreachable(client):
     body = r.json()
     assert body["ok"] is False
     assert "target" in body
+
+
+def test_mm_bridge_status_public_shape(client):
+    _load_mm(client)
+    tok = _login(client)
+    r = client.get("/v1/mattermost/bridge", headers=_h(tok))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body.keys()) == {"installed", "active", "configured"}
+
+
+def test_mm_bridge_control_guards(client):
+    _load_mm(client)
+    tok = _login(client)
+    r = client.post("/v1/mattermost/bridge/bogus", headers=_h(tok))
+    assert r.status_code == 400
+    r2 = client.post("/v1/mattermost/bridge/start", headers=_h(tok))
+    # no sudoers in test env -> 503 with hint, or 409 when unconfigured
+    assert r2.status_code in (409, 503)
+
+
+def test_mm_bridge_requires_auth(client):
+    r = client.get("/v1/mattermost/bridge")
+    assert r.status_code == 401
