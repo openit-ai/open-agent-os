@@ -231,19 +231,31 @@ def ol_test(body: dict | None = None, admin: AdminUser = Depends(require_l5)) ->
         return {"ok": False, "error": "no API key configured (save one first or pass api_key for a one-shot probe)", "source": source}
     target = cfg["outline_url"]
     t0 = time.monotonic()
-    try:
+
+    def _probe(extra_headers: dict | None = None) -> tuple[int, str]:
         import httpx
-        r = httpx.post(target + "/api/collections.list", json={"token": key}, timeout=8.0)
+        r = httpx.post(target + "/api/collections.list", json={"token": key},
+                       headers={"Content-Type": "application/json", **(extra_headers or {})},
+                       timeout=8.0)
+        return r.status_code, r.text
+
+    try:
+        scheme = target.split("://", 1)[0].lower() if "://" in target else "http"
+        # Outline behind a TLS proxy requires X-Forwarded-Proto; plain-http
+        # direct calls get 405, so retry once with the header on 405.
+        status, text = _probe({"X-Forwarded-Proto": scheme})
+        if status == 405 and scheme == "http":
+            status, text = _probe({"X-Forwarded-Proto": "https"})
         ms = round((time.monotonic() - t0) * 1000, 1)
-        if r.status_code == 200:
+        if status == 200:
             try:
-                n = len(r.json().get("data", []))
+                n = len(__import__("json").loads(text).get("data", []))
             except Exception:
                 n = -1
             return {"ok": True, "target": target, "status_code": 200,
                     "collection_count": n, "latency_ms": ms, "source": source}
-        return {"ok": False, "target": target, "status_code": r.status_code,
-                "error": r.text[:200], "latency_ms": ms, "source": source}
+        return {"ok": False, "target": target, "status_code": status,
+                "error": text[:200], "latency_ms": ms, "source": source}
     except Exception as e:
         return {"ok": False, "target": target,
                 "error": f"{type(e).__name__}: {str(e)[:160]}", "source": source}
