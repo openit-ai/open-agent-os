@@ -1,0 +1,27 @@
+[Unit]
+Description=OAOS Admin API — Admin Console backend :8010 (systemd production)
+Documentation=https://github.com/openit-ai/open-agent-os
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=oaos
+Group=oaos
+WorkingDirectory=/home/openit/apps/oaos/admin-console/backend
+EnvironmentFile=-/etc/oaos/oaos.env
+# PYTHONPATH: repo root (shared packages) — backend sibling modules resolve by path.
+Environment=PYTHONPATH=/home/openit/apps/oaos:/home/openit/apps/oaos/admin-console/backend
+ExecStart=/home/openit/apps/oaos/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8010 --workers 1
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/openit/apps/oaos/admin-console/backend /tmp
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
