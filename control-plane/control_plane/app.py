@@ -284,6 +284,23 @@ except Exception as _rce:
     import logging as _lg
     _lg.getLogger(__name__).warning(f"Runtime Config Plane not mounted: {_rce}")
 
+# OAOS-owned Google OAuth — user auth endpoints (separate from admin /v1/oauth config)
+try:
+    from .google_oauth import router as google_oauth_router, localhost_callback_router
+    app.include_router(google_oauth_router)
+    app.include_router(localhost_callback_router)
+except Exception as _goe:
+    import logging as _lg2
+    _lg2.getLogger(__name__).warning(f"Google OAuth router not mounted: {_goe}")
+
+# Required-route aliases: /v1/oauth/google/* (thin delegation, same flow)
+try:
+    from .google_oauth_compat import router as google_oauth_compat_router
+    app.include_router(google_oauth_compat_router)
+except Exception as _goe2:
+    import logging as _lg3
+    _lg3.getLogger(__name__).warning(f"Google OAuth compat router not mounted: {_goe2}")
+
 # -- Lazy RuntimeRouter wiring (section 16F) --
 def _get_runtime_router():
     """Lazy RuntimeRouter — respects EXECUTE runtime/<name> capability.

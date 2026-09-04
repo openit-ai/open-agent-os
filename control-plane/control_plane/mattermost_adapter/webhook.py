@@ -800,6 +800,24 @@ async def _handle_core_logic_unserialized(
     if _arefs and not _fid:
         _fid = [r.get("attachment_id") or r.get("vault_path") or r.get("file_id") for r in _arefs if isinstance(r, dict)]
         _fid = [x for x in _fid if x]
+    # CP-side bounded extraction (owner-safe Vault read): validate each stored
+    # ref against the verified tenant/agent, extract bounded masked text for
+    # extractable formats, keep metadata-only otherwise. Images preserved.
+    # Fail-closed: on any error keep the original refs (ACP gate stays safe).
+    _fid_derived = bool(_arefs and not _fid)
+    if _arefs:
+        try:
+            from .attachment_extract import enrich_attachment_refs as _enrich_refs
+            _arefs = await _enrich_refs(
+                _arefs, tenant_id=tenant_id, agent_principal=mapping.agent_principal,
+            )
+            if _fid_derived:
+                # Recompute ids from the sanitized refs so raw absolute paths /
+                # Mattermost URLs never persist as file_ids.
+                _fid = [str(r.get("attachment_id") or r.get("vault_path") or r.get("file_id") or "") for r in _arefs if isinstance(r, dict)]
+                _fid = [x for x in _fid if x and not (x.startswith("/") or x.startswith("file://") or "://" in x)]
+        except Exception as _enrich_exc:
+            log.warning("attachment extraction unavailable session=%s: %s", session_id, type(_enrich_exc).__name__)
     session_store.append_prompt(session_id, user_id, text, rid, file_ids=_fid or None, attachment_refs=_arefs or None, runtime_context=_rctx or None)
     try:
         from ..adaptive_profile.queue import enqueue as _enqueue

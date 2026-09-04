@@ -45,3 +45,42 @@ def test_registration_notice_requires_explicit_message():
     bridge.api_post = lambda path, body: calls.append((path, body))
     bridge._post_registration_notice("channel", "root", "안전한 안내")
     assert calls == [("/api/v4/posts", {"channel_id": "channel", "root_id": "root", "message": "안전한 안내"})]
+
+
+def test_attachment_router_text_previewable():
+    bridge = load_bridge()
+    assert bridge._is_text_previewable("application/json", "data.json") is True
+    assert bridge._is_text_previewable("text/plain", "note.txt") is True
+    assert bridge._is_text_previewable("application/pdf", "doc.pdf") is False
+    assert bridge._is_text_previewable("audio/mpeg", "song.mp3") is False
+
+
+def test_attachment_router_masks_secrets():
+    bridge = load_bridge()
+    masked = bridge._mask_secrets('{"api_key": "abc123", "name": "x"}')
+    assert "abc123" not in masked
+    assert "***" in masked
+
+
+def test_attachment_router_sensitive_filename_blocked():
+    bridge = load_bridge()
+    ref = bridge._build_non_image_ref("abc123", "client_secret_123.json", "application/json", 100)
+    assert ref["kind"] == "stored_only"
+    assert ref["reason"] == "sensitive"
+    assert "preview" not in ref
+
+
+def test_attachment_router_unsupported_has_no_bytes():
+    bridge = load_bridge()
+    ref = bridge._build_non_image_ref("abc123", "doc.pdf", "application/pdf", 100)
+    assert ref["kind"] == "stored_only"
+    assert "preview" not in ref
+    assert "base64" not in ref
+    assert "data_url" not in ref
+
+
+def test_format_400_message_guides_attachment():
+    bridge = load_bridge()
+    msg = bridge._cp_user_message(400, "text/message required (or file_ids/attachment_refs for image)")
+    assert "이미지" in msg
+    assert "traceback" not in msg.lower()

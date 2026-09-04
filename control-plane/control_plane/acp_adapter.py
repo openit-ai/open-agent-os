@@ -237,10 +237,72 @@ class ACPAdapter:
         # Multimodal current-session message contract — no model selection, direct delivery via active runtime
         # Hermes runtime reliably consumes OpenAI multimodal image_url only when URL is data URL or accessible path.
         # Prefer bounded base64/data URL from bridge's attachment_refs; fallback to file:// only when no bytes available.
+        # Non-image refs (kind=text_preview/stored_only or MIME not image/*) NEVER become image_url parts:
+        # their masked preview / stored-only note is already composed into prompt_text by the bridge.
+        # Vault paths are citations only — never emitted as absolute file:// URLs.
+        # A CP-side bounded extractor may fill ref["extracted_text"]; when present it is
+        # appended as a bounded, masked citation text part (bridge never extracts).
         user_content: str | list[dict] = prompt_text
         if file_ids or attachment_refs:
             parts: list[dict] = [{"type": "text", "text": prompt_text}]
             refs = attachment_refs or []
+
+            def _mask_extracted(text: str) -> str:
+                try:
+                    masked = re.sub(
+                        r'("(?:client_secret|private[\s_\-]*key|refresh[\s_\-]*token|access[\s_\-]*token|api[\s_\-]*key|passw(?:or)?d)"\s*:\s*")[^"]*(")',
+                        lambda m: f"{m.group(1)}***{m.group(2)}",
+                        text or "", flags=re.IGNORECASE,
+                    )
+                    return re.sub(
+                        r"(client_secret|private[\s_\-]*key|refresh[\s_\-]*token|access[\s_\-]*token|api[\s_\-]*key|passw(?:or)?d)\s*([:=]|=>)\s*\S+",
+                        lambda m: f"{m.group(1)}{m.group(2)}***",
+                        masked, flags=re.IGNORECASE,
+                    )
+                except Exception:
+                    return text or ""
+
+            def _citation_name(ref: dict | None) -> str:
+                try:
+                    raw = str((ref or {}).get("filename") or "attachment")
+                except Exception:
+                    raw = "attachment"
+                return _mask_extracted(raw)[:120] or "attachment"
+
+            def _citation_path(ref: dict | None) -> str:
+                try:
+                    vp = str((ref or {}).get("vault_path") or "")
+                except Exception:
+                    vp = ""
+                # citation only: relative owner-scoped path; never absolute or file://
+                if not vp or vp.startswith("/") or vp.startswith("file://") or "://" in vp:
+                    return _citation_name(ref)
+                return vp[:300]
+
+            def _is_image_ref(ref: dict | None) -> bool:
+                """True only for image attachments: kind=image or MIME image/*.
+
+                Legacy refs without kind fall back to MIME: known non-image MIME
+                returns False; unknown/empty MIME stays True for back-compat.
+                """
+                if not isinstance(ref, dict):
+                    return False
+                kind = str(ref.get("kind") or "").strip().lower()
+                if kind == "image":
+                    return True
+                if kind in ("text_preview", "stored_only", "stored", "text", "document", "file"):
+                    return False
+                raw_mime = (
+                    ref.get("mime_type") or ref.get("mimeType") or ref.get("mime") or ""
+                )
+                raw_mime = str(raw_mime).strip().lower().split(";")[0].strip()
+                if kind:
+                    # unknown kind string — trust MIME when known
+                    return raw_mime.startswith("image/") if raw_mime else True
+                if raw_mime:
+                    return raw_mime.startswith("image/")
+                return True
+
             fids = file_ids or [r.get("attachment_id") or r.get("file_id") or r.get("vault_path") for r in refs if isinstance(r, dict)]
             # index refs by common ids for data_url lookup
             def _ref_for_fid(fid: str) -> dict | None:
@@ -255,13 +317,34 @@ class ACPAdapter:
                 return None
             for fid in (fids or []):
                 ref = _ref_for_fid(str(fid))
+                if ref is not None and not _is_image_ref(ref):
+                    # Non-image attachment: skip image_url entirely. The bridge
+                    # already composed its masked text preview / stored-only
+                    # note into prompt_text; sending it as image_url/file://
+                    # breaks the LLM call (TXT E2E timeout cause).
+                    # Optional CP-side bounded extraction: a pre-filled,
+                    # masked extracted_text citation may still be appended.
+                    try:
+                        _ext = (ref or {}).get("extracted_text")
+                    except Exception:
+                        _ext = None
+                    if isinstance(_ext, str) and _ext.strip():
+                        _bounded = _mask_extracted(_ext.strip()[:20000])
+                        parts.append({
+                            "type": "text",
+                            "text": f"[첨부 텍스트 추출: {_citation_name(ref)} ({_citation_path(ref)})]\n{_bounded}",
+                        })
+                    continue
                 data_url = None
                 mime = "image/png"
                 if ref:
-                    mime = (ref.get("mime_type") or ref.get("mimeType") or "image/png").strip().lower().split(";")[0].strip() or "image/png"
-                    # MIME validation: only image/* allowed
+                    raw = (ref.get("mime_type") or ref.get("mimeType") or "image/png")
+                    mime = str(raw).strip().lower().split(";")[0].strip() or "image/png"
                     if not mime.startswith("image/"):
-                        mime = "image/png"
+                        # Known non-image MIME on a ref that passed the image
+                        # gate (e.g. legacy kind-less ref): do not coerce to
+                        # image/png, do not emit image_url at all.
+                        continue
                     # bounded data URL from bridge's authenticated download
                     cand = ref.get("data_url") or ref.get("dataUrl") or ref.get("base64") or ""
                     if isinstance(cand, str) and cand:
@@ -284,7 +367,11 @@ class ACPAdapter:
                 else:
                     # Fallback: only if no bounded bytes available; preserves tenant/user/session/channel/post/root context via existing headers
                     # No model/provider selection here; Hermes will attempt file:// only if path is actually accessible.
-                    parts.append({"type": "image_url", "image_url": {"url": f"file://{fid}"}, "file_id": str(fid)})
+                    # Vault paths are citations only: never emit an absolute path or vault_path as file://.
+                    _sfid = str(fid)
+                    if _sfid.startswith("/") or _sfid.startswith("file://") or "://" in _sfid:
+                        continue
+                    parts.append({"type": "image_url", "image_url": {"url": f"file://{_sfid}"}, "file_id": _sfid})
             user_content = parts
         return [
             {"role": "system", "content": system_content},

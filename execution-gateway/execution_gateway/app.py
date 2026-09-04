@@ -27,12 +27,14 @@ try:
     from .mcp_registry import default_registry, MCPRegistry
     from .proxy import proxy_tool_call
     from .authz_hook import AuthorizationHook
+    from .connectors.google import GoogleConnector
     from .risk import classify
     from .normalize import normalize_resource, canonicalize_action
 except ImportError:
     from execution_gateway.mcp_registry import default_registry, MCPRegistry  # type: ignore
     from execution_gateway.proxy import proxy_tool_call  # type: ignore
     from execution_gateway.authz_hook import AuthorizationHook  # type: ignore
+    from execution_gateway.connectors.google import GoogleConnector  # type: ignore
     from execution_gateway.risk import classify  # type: ignore
     from execution_gateway.normalize import normalize_resource, canonicalize_action  # type: ignore
 
@@ -138,7 +140,7 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
             kwargs = {"pool_pre_ping": False, "poolclass": None, "connect_args": {"connect_timeout": timeout_s}}  # type: ignore
         elif sync_url.startswith("sqlite"):
             kwargs = {"connect_args": {"timeout": timeout_s}}
-        eng = create_engine(sync_url, **kwargs, pool_pre_ping=False)  # type: ignore
+        eng = create_engine(sync_url, **kwargs)  # type: ignore
         import concurrent.futures
         def _ping():
             with eng.connect() as conn:
@@ -303,9 +305,46 @@ def _ha_checks():
     checks["self"] = {"status": "draining" if _shutting_down else "ok", "latency_ms": 0, "active_requests": _active_requests}
     return checks
 
-# Registry & Auth Hook (singletons)
+# Registry & Auth Hook (singletons). Google credentials are resolved through
+# the OAOS Credential Vault at call time; no Hermes token path is used.
 _registry: MCPRegistry = default_registry
-_authz_hook = AuthorizationHook(tenant_id="default")
+_google_connector = GoogleConnector(
+    client_id=os.getenv("GOOGLE_CLIENT_ID") or None,
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET") or None,
+)
+_authz_hook = AuthorizationHook(google_connector=_google_connector, tenant_id="default")
+
+
+def _wire_google_credential_store() -> None:
+    """Attach OAOS Vault/delegation providers before serving tool requests."""
+    import sys as _sys
+    from pathlib import Path as _Path
+    _root = _Path(__file__).resolve().parents[2]
+    for _path in (
+        _root / "security",
+        _root / "security" / "credential-vault",
+        _root / "security" / "delegation",
+        _root / "packages" / "delegation-model",
+    ):
+        if str(_path) not in _sys.path:
+            _sys.path.insert(0, str(_path))
+    from delegation_service.service import DelegationService  # type: ignore
+    from vault import create_vault  # type: ignore
+    delegation_service = DelegationService()
+    vault = create_vault(delegation_service=delegation_service)
+    _google_connector.set_vault(vault)
+    _google_connector._delegation_service = delegation_service
+
+
+async def _ensure_google_credential_store() -> None:
+    """Lazy production wiring with a clear fail-closed connector state."""
+    if _google_connector._vault is not None and _google_connector._delegation_service is not None:
+        return
+    try:
+        _wire_google_credential_store()
+    except Exception as exc:
+        logger.error("Google credential store unavailable: %s", type(exc).__name__)
+        raise RuntimeError("OAOS Google credential store unavailable") from exc
 
 # -- Lazy ToolRateLimiter wiring (§16H.2) --
 _rate_limiter = None
@@ -579,7 +618,25 @@ async def execute(
     if _registry.find_tool(req.tool) is None and req.tool not in _registry.list_tools():
         raise HTTPException(status_code=404, detail=f"unknown tool: {req.tool}")
 
-    # 5. Authorization Hook — Personal vs Enterprise 분기
+    # 5. OAuth-owned Google store is resolved before authorization/execution.
+    # This keeps the live connector wired to OAOS Vault without granting it
+    # access to Hermes files. A production wiring failure is fail-closed.
+    if req.tool.startswith(("gmail_", "calendar_", "drive_", "tasks_")):
+        try:
+            await _ensure_google_credential_store()
+        except RuntimeError as exc:
+            if _is_production():
+                return JSONResponse(status_code=503, content={
+                    "error": "GOOGLE_CREDENTIAL_STORE_UNAVAILABLE",
+                    "reason": str(exc),
+                    "trace_id": ctx.get("trace_id", "unknown"),
+                })
+            logger.debug("Google credential store unavailable in non-production: %s", type(exc).__name__)
+
+    # 5b. OAuth-owned Google connector is deliberately used only after the
+    # common policy gate below. It cannot bypass capability or approval rules.
+
+    # 6. Authorization Hook — Personal vs Enterprise 분기
     authz = await _authz_hook.authorize(
         agent_context=ctx,
         action=canon_action,
@@ -612,7 +669,10 @@ async def execute(
             },
         )
 
-    # 6. Proxy — capability + risk + trace 전파
+    # 7. Google personal tools use the OAOS-owned connector.  The connector
+    # performs the second owner/binding/Vault check and only read-only tools
+    # may take its direct Google API path.  Writes remain on the normal proxy
+    # path so the existing capability/approval chain is preserved.
     proxy_ctx = {
         **ctx,
         "action": canon_action,
@@ -620,12 +680,33 @@ async def execute(
         "is_external": req.is_external,
         "data_classification": req.data_classification,
     }
-    result = await proxy_tool_call(
-        tool_name=req.tool,
-        args=req.args,
-        capability_token=req.capability_token,
-        context=proxy_ctx,
-    )
+    if req.tool in _google_connector.list_tools():
+        try:
+            result = await _google_connector.call_via_gateway(
+                tool_name=req.tool,
+                args=req.args,
+                agent_context=proxy_ctx,
+                capability_token=req.capability_token,
+            )
+        except PermissionError as exc:
+            return JSONResponse(status_code=403, content={
+                "error": "GOOGLE_CREDENTIAL_DENIED",
+                "reason": str(exc),
+                "trace_id": ctx.get("trace_id", "unknown"),
+            })
+        except RuntimeError as exc:
+            return JSONResponse(status_code=503, content={
+                "error": "GOOGLE_CONNECTOR_UNAVAILABLE",
+                "reason": str(exc),
+                "trace_id": ctx.get("trace_id", "unknown"),
+            })
+    else:
+        result = await proxy_tool_call(
+            tool_name=req.tool,
+            args=req.args,
+            capability_token=req.capability_token,
+            context=proxy_ctx,
+        )
 
     # Personal Wiki auto-archive hook (best-effort, non-blocking) — after proxy_tool_call
     try:
@@ -637,7 +718,7 @@ async def execute(
     except Exception:
         pass
 
-    # 7. proxy 결과 상태 매핑
+    # 8. proxy 결과 상태 매핑
     if "error" in result:
         err = result["error"]
         if err == "CAPABILITY_REQUIRED":

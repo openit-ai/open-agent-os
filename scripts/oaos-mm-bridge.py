@@ -175,6 +175,473 @@ ALLOWED_IMAGE_MIMES = {
 }
 ATTACH_CACHE_DIR = pathlib.Path.home() / ".hermes/cache/oaos-mm-attachments"
 
+# ── Owner-scoped Vault durable store (streaming, never full 500MB in memory) ──
+# Live vault root is OAOS_WIKI_VAULT (vault.get_vault_root() honors it + fallbacks).
+# Bridge streams each attachment in 64KB units directly into
+# personal_wiki.vault.store_attachment (tenant/agent owner path, sha256, 0600,
+# atomic .part->os.replace, 500MB cap). Import is lazy/file-located so unit
+# tests and vault-less environments keep the old logical-path fallback.
+VAULT_STREAM_CHUNK = 65536  # 64KB — streaming unit for durable store
+VAULT_DOWNLOAD_TIMEOUT_S = 60
+
+# Formats the CP may later extract with a bounded extractor (pdf/docx/xlsx/pptx…).
+# Bridge only marks extractability; it never runs large/async extraction itself.
+# CP fills optional ref["extracted_text"] (bounded, masked) for prompt use.
+EXTRACTABLE_EXTENSIONS = frozenset({
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+    ".hwp", ".hwpx", ".txt", ".md", ".markdown", ".csv", ".tsv",
+    ".json", ".jsonl", ".xml", ".yaml", ".yml", ".log",
+})
+
+_VAULT_MOD_CACHE: dict = {}
+
+# Mattermost file ids are lowercase alnum, but accept the wider safe segment
+# shape everywhere (vault allowlist) so persist/preview/image paths agree.
+_FID_RE = r"^[A-Za-z0-9_-]{1,128}$"
+_FID_MM_RE = r"^[a-z0-9]+$"
+
+# ── Attachment router: IMAGE / TEXT_PREVIEW / STORED_ONLY ──
+# 500MB 한도까지 저장·활용하되 500MB 원본을 LLM에 직전송하지 않는다.
+# 바이트·base64·data_url은 IMAGE만, 미리보기는 마스킹된 텍스트만,
+# 원문 비밀은 절대 로그·전송하지 않는다.
+MAX_TOTAL_ATTACHMENT_BYTES = 500 * 1024 * 1024  # 524288000
+MAX_TEXT_PREVIEW_BYTES = 200 * 1024  # 204800
+
+TEXT_PREVIEW_MIMES = {
+    "text/plain", "text/markdown", "text/csv", "text/html", "text/xml",
+    "text/yaml", "text/x-log", "application/json", "application/xml",
+    "application/javascript", "application/x-javascript", "application/x-yaml",
+    "application/x-sh", "application/x-python", "application/sql",
+}
+TEXT_PREVIEW_EXTENSIONS = {
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".log", ".json", ".jsonl",
+    ".xml", ".yaml", ".yml", ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".java", ".c", ".h", ".cpp", ".hpp", ".go", ".rs", ".sh", ".bash",
+    ".sql", ".css", ".html", ".htm", ".ini", ".cfg", ".toml",
+}
+
+# 민감 판정: 파일명·미리보기에서 이 패턴이 보이면 미리보기 금지 → STORED_ONLY + 안전 안내
+_SENSITIVE_KEY_RE = re.compile(
+    r"client_secret|private[\s_\-]*key|refresh[\s_\-]*token|access[\s_\-]*token|api[\s_\-]*key|passw(?:or)?d",
+    re.IGNORECASE,
+)
+_SECRET_VALUE_RE = re.compile(
+    r"(client_secret|private[\s_\-]*key|refresh[\s_\-]*token|access[\s_\-]*token|api[\s_\-]*key|passw(?:or)?d)\s*([:=]|=>)\s*\S+",
+    re.IGNORECASE,
+)
+_SECRET_JSON_VALUE_RE = re.compile(
+    r'("(?:client_secret|private[\s_\-]*key|refresh[\s_\-]*token|access[\s_\-]*token|api[\s_\-]*key|passw(?:or)?d)"\s*:\s*")[^"]*(")',
+    re.IGNORECASE,
+)
+
+ATTACHMENT_FORMAT_GUIDANCE = (
+    "첨부 파일 형식 안내: 이미지는 바로 확인할 수 있고, 텍스트·코드·CSV 등은 "
+    "미리보기(최대 200KB, 민감 정보 제외)로 확인합니다. 그 외 형식(PDF·Office·"
+    "음성·영상·압축 등)은 내용 확인이 어려우니 이미지 또는 텍스트로 다시 보내 주세요."
+)
+
+
+def _mask_secrets(text: str) -> str:
+    """Mask secret values (key=value and JSON quoted shapes) so raw secrets never reach logs or the LLM."""
+    try:
+        masked = _SECRET_JSON_VALUE_RE.sub(lambda m: f"{m.group(1)}***{m.group(2)}", text or "")
+        return _SECRET_VALUE_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", masked)
+    except Exception:
+        return text or ""
+
+
+def _format_bytes(n) -> str:
+    try:
+        n = int(n or 0)
+    except Exception:
+        return "size unknown"
+    if n <= 0:
+        return "0B"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.1f}{unit}" if unit != "B" else f"{n}B"
+        n /= 1024
+    return f"{n:.1f}GB"
+
+
+def _is_text_previewable(mime: str, filename: str) -> bool:
+    """Text-decodable formats only (text/code/csv/md/log/small json etc.)."""
+    m = (mime or "").strip().lower().split(";")[0].strip()
+    if m in TEXT_PREVIEW_MIMES or m.startswith("text/"):
+        return True
+    ext = pathlib.Path(filename or "").suffix.lower()
+    return ext in TEXT_PREVIEW_EXTENSIONS
+
+
+def _resolve_bridge_tenant(explicit: str | None = None) -> str:
+    """Bridge-side tenant matching the CP server authority (settings.tenant_id).
+
+    The CP webhook ignores payload tenant_id and uses its server-configured
+    tenant for sessions AND for owner validation of vault_path. The bridge
+    embeds tenant in every vault_path it emits, so it must use the same
+    value or every ref fails CP cross-owner validation (extraction unusable).
+    Precedence: explicit arg > OAOS_CP_TENANT_ID > OAOS_TENANT_ID > TENANT_ID.
+    """
+    for cand in (explicit, os.getenv("OAOS_CP_TENANT_ID"), os.getenv("OAOS_TENANT_ID"), os.getenv("TENANT_ID")):
+        if cand and str(cand).strip():
+            return str(cand).strip()
+    return "default"
+
+
+def _download_capped_bytes(file_id: str, cap: int) -> tuple[bytes | None, bool]:
+    """Bounded download without MIME enforcement. Returns (bytes, truncated)."""
+    fid = (file_id or "").strip()
+    if not fid or not re.match(_FID_RE, fid):
+        return None, False
+    url = f"{MATTERMOST_URL}/api/v4/files/{fid}"
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {BOT_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read(cap + 1)
+            if len(data) > cap:
+                return data[:cap], True
+            if not data:
+                return None, False
+            return data, False
+    except Exception as e:
+        print(f"[attach] preview download failed fid={fid[:6]} err={str(e)[:120]}", flush=True)
+        return None, False
+
+
+def _build_non_image_ref(
+    fid: str, filename: str, mime: str, size: int,
+    tenant_id: str = "default", agent_id: str = "",
+) -> dict:
+    """Route a non-image file to TEXT_PREVIEW or STORED_ONLY with durable Vault bytes.
+
+    - Original bytes are streamed (Bearer, 64KB) into the owner-scoped Vault
+      (tenant/agent) even for sensitive/unsupported formats — policy allows
+      preservation in the owner vault while preview/LLM exposure is forbidden.
+    - TEXT_PREVIEW keeps the bounded 200KB masked preview; STORED_ONLY refs
+      carry metadata only (no preview/base64/data_url) plus owner-scoped
+      relative vault_path, stored, sha256, actual size.
+    - PDF/Office/HWP etc. get extractable/extract_hint markers so the CP may
+      run a bounded extractor later; the bridge never extracts here.
+    """
+    mime_disp = (mime or "").strip().lower().split(";")[0].strip() or "unknown"
+    safe_name = _sanitize_filename(filename or fid)
+    # Durable owner-vault store first (streaming; never full file in memory).
+    vault_meta = None
+    if agent_id:
+        try:
+            vault_meta = _persist_attachment_to_vault(fid, filename or fid, tenant_id, agent_id)
+        except Exception:
+            vault_meta = None
+    if vault_meta and isinstance(vault_meta, dict) and vault_meta.get("stored"):
+        vault_path = str(vault_meta.get("vault_path") or "")
+        actual_size = int(vault_meta.get("size") or size or 0)
+        sha256 = str(vault_meta.get("sha256") or "")
+        stored = True
+    elif isinstance(vault_meta, dict) and vault_meta.get("over_limit"):
+        # Durable stream proved the bytes exceed the 500MB cap: metadata-only,
+        # never download a preview bypass.
+        return {
+            "file_id": fid,
+            "attachment_id": fid,
+            "kind": "stored_only",
+            "filename": safe_name,
+            "mime_type": mime_disp,
+            "size": int(vault_meta.get("size") or size or 0),
+            "source": "mattermost",
+            "vault_path": str(vault_meta.get("vault_path") or _owner_vault_fallback(tenant_id, agent_id, fid, filename or fid)),
+            "stored": False,
+            "reason": "over_limit",
+            "extractable": _is_extractable_hint(mime, filename or ""),
+            "extract_hint": (pathlib.Path(filename or "").suffix.lower().lstrip(".") or mime_disp),
+            "extracted_text": None,
+        }
+    else:
+        vault_path = _owner_vault_fallback(tenant_id, agent_id, fid, filename or fid)
+        actual_size = int(size or 0)
+        sha256 = ""
+        stored = bool(vault_meta and vault_meta.get("stored"))
+    base = {
+        "file_id": fid,
+        "attachment_id": fid,
+        "kind": "stored_only",
+        "filename": safe_name,
+        "mime_type": mime_disp,
+        "size": actual_size,
+        "source": "mattermost",
+        "vault_path": vault_path,
+        "stored": stored,
+        "extractable": _is_extractable_hint(mime, filename or ""),
+        "extract_hint": (pathlib.Path(filename or "").suffix.lower().lstrip(".") or mime_disp),
+        "extracted_text": None,
+    }
+    if sha256:
+        base["sha256"] = sha256
+
+    def _stored(reason: str) -> dict:
+        ref = dict(base)
+        ref["reason"] = reason
+        # stored_only metadata only: never preview/base64/data_url bytes
+        ref.pop("preview", None)
+        ref.pop("base64", None)
+        ref.pop("data_url", None)
+        return ref
+
+    # sensitive filename → preview forbidden, no preview download (vault bytes already preserved)
+    if _SENSITIVE_KEY_RE.search(filename or ""):
+        print(f"[attach] preview blocked sensitive name fid={fid[:6]}", flush=True)
+        return _stored("sensitive")
+    if not _is_text_previewable(mime, filename):
+        return _stored("unsupported")
+    # text preview path: serve from the just-stored vault copy when available
+    # (single-download: durable stream already fetched the bytes), else one
+    # bounded 200KB HTTP fetch. Decode + sensitive-content checks stay identical.
+    data: bytes | None = None
+    truncated = False
+    if stored:
+        try:
+            _vb = _read_vault_prefix_bytes(vault_path, MAX_TEXT_PREVIEW_BYTES)
+        except Exception:
+            _vb = None
+        if isinstance(_vb, bytes) and _vb:
+            if len(_vb) > MAX_TEXT_PREVIEW_BYTES:
+                data, truncated = _vb[:MAX_TEXT_PREVIEW_BYTES], True
+            else:
+                data, truncated = _vb, False
+    if data is None:
+        data, truncated = _download_capped_bytes(fid, MAX_TEXT_PREVIEW_BYTES)
+    if data is None:
+        return _stored("preview_unavailable")
+    if b"\x00" in data:
+        return _stored("unsupported")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return _stored("unsupported")
+    if _SENSITIVE_KEY_RE.search(text):
+        # never log or transmit the raw preview
+        print(f"[attach] preview blocked sensitive content fid={fid[:6]}", flush=True)
+        return _stored("sensitive")
+    ref = dict(base)
+    ref["kind"] = "text_preview"
+    # No MM API url: CP resolves bytes via owner vault_path; the Bearer URL
+    # (host + fid) must not travel to the LLM path.
+    ref["preview"] = _mask_secrets(text)
+    ref["truncated"] = bool(truncated)
+    return ref
+
+
+def _preview_block(ref: dict) -> str:
+    fname = ref.get("filename") or "attachment"
+    mime = ref.get("mime_type") or "unknown"
+    trunc = " (앞부분 200KB만 표시)" if ref.get("truncated") else ""
+    return f"[첨부 미리보기: {fname} ({mime}, {_format_bytes(ref.get('size'))}){trunc}]\n{ref.get('preview') or ''}"
+
+
+def _stored_note(ref: dict) -> str:
+    fname = _mask_secrets(str(ref.get("filename") or "첨부 파일"))
+    mime = ref.get("mime_type") or "unknown"
+    reason = ref.get("reason") or "unsupported"
+    if reason == "sensitive":
+        return (
+            f"[참고: 첨부 {fname}은 민감 정보가 포함될 수 있어 미리보기를 생략합니다. "
+            f"필요한 부분만 텍스트로 보내 주세요.]"
+        )
+    if reason == "over_limit":
+        return (
+            f"[참고: 첨부 {fname} ({_format_bytes(ref.get('size'))})은 500MB 한도를 초과하여 "
+            f"내용 없이 메타데이터만 전달됩니다.]"
+        )
+    return (
+        f"[참고: 첨부 {fname} ({mime})은 현재 내용 확인이 어려워 메타데이터만 전달됩니다. "
+        f"이미지 또는 텍스트로 보내 주시면 확인해 드리겠습니다.]"
+    )
+
+
+def _load_vault_module():
+    """Lazy-load personal_wiki.vault.store_attachment via file location (cached).
+
+    Returns module or None when unavailable — callers fall back to a logical
+    owner-scoped vault_path without bytes. Never raises.
+    """
+    try:
+        if _VAULT_MOD_CACHE.get("mod") is not None:
+            return _VAULT_MOD_CACHE["mod"]
+    except Exception:
+        pass
+    try:
+        import importlib.util as _ilu
+        here = pathlib.Path(__file__).resolve()
+        cands = [
+            here.parents[1] / "packages" / "personal-wiki" / "personal_wiki" / "vault.py",
+            here.parent / "packages" / "personal-wiki" / "personal_wiki" / "vault.py",
+            pathlib.Path.cwd() / "packages" / "personal-wiki" / "personal_wiki" / "vault.py",
+        ]
+        target = next((c for c in cands if c.exists()), None)
+        if target is None:
+            # also try importable package path
+            try:
+                import personal_wiki.vault as _pv  # type: ignore
+                _VAULT_MOD_CACHE["mod"] = _pv
+                return _pv
+            except Exception:
+                _VAULT_MOD_CACHE["mod"] = None
+                return None
+        spec = _ilu.spec_from_file_location("oaos_bridge_vault", str(target))
+        if not spec or not spec.loader:
+            _VAULT_MOD_CACHE["mod"] = None
+            return None
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore
+        _VAULT_MOD_CACHE["mod"] = mod
+        return mod
+    except Exception:
+        try:
+            _VAULT_MOD_CACHE["mod"] = None
+        except Exception:
+            pass
+        return None
+
+
+def _owner_vault_fallback(tenant_id: str, agent_id: str, fid: str, filename: str) -> str:
+    """Owner-scoped relative vault_path used when durable store is unavailable."""
+    t = (tenant_id or "default").strip() or "default"
+    a = (agent_id or "").strip() or "agent"
+    # keep single-segment safety without importing vault (colons preserved)
+    t = re.sub(r"[^A-Za-z0-9:._-]", "_", t)[:64] or "default"
+    a = re.sub(r"[^A-Za-z0-9:._-]", "_", a)[:128] or "agent"
+    # fid is a logical path segment too: hash odd ids to an isolated segment
+    # instead of colliding every odd id onto "file/".
+    fid_s = (fid or "").strip()
+    if not re.match(r"^[A-Za-z0-9_-]{1,128}$", fid_s):
+        import hashlib as _hl
+        _dig = _hl.sha256(fid_s.encode("utf-8", errors="replace")).hexdigest()[:12] if fid_s else "empty"
+        fid_s = f"file-{_dig}"
+    return f"{t}/{a}/attachments/{fid_s}/{_sanitize_filename(filename or fid)}"
+
+
+def _is_extractable_hint(mime: str, filename: str) -> bool:
+    """True when CP-side bounded extractor may handle the format (bridge never extracts)."""
+    ext = pathlib.Path(filename or "").suffix.lower()
+    return ext in EXTRACTABLE_EXTENSIONS
+
+
+def _persist_attachment_to_vault(
+    file_id: str, filename: str, tenant_id: str = "default", agent_id: str = "",
+) -> dict | None:
+    """Stream one Mattermost file (Bearer, 64KB units) into the owner vault.
+
+    Never holds the full file in memory: the HTTP response object is passed as
+    the stream and vault.store_attachment reads it in 64KB chunks with a 500MB
+    cap, incremental sha256, atomic .part->os.replace, mode 0600.
+    Returns vault metadata (stored/vault_path/sha256/size) or None on any
+    failure (fallback path is used; raw errors are truncated, no secrets).
+    """
+    fid = (file_id or "").strip()
+    if not fid or not re.match(_FID_RE, fid):
+        return None
+    tenant = (tenant_id or "default").strip() or "default"
+    agent = (agent_id or "").strip()
+    if not agent:
+        return None
+    mod = _load_vault_module()
+    if mod is None or not hasattr(mod, "store_attachment"):
+        return None
+    url = f"{MATTERMOST_URL}/api/v4/files/{fid}"
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {BOT_TOKEN}"})
+        # NOTE: response is streamed — vault reads .read(64KB); never resp.read() fully here.
+        with urllib.request.urlopen(req, timeout=VAULT_DOWNLOAD_TIMEOUT_S) as resp:
+            meta = mod.store_attachment(
+                tenant, agent, filename or fid, resp,
+                file_id=fid, max_bytes=MAX_TOTAL_ATTACHMENT_BYTES,
+            )
+            if isinstance(meta, dict) and meta.get("stored"):
+                return meta
+            return None
+    except Exception as e:
+        # Over-cap streams stay metadata-only: signal over_limit so callers skip
+        # preview/data_url downloads instead of bypassing the cap via a 2nd fetch.
+        # (class identity is by name: vault is loaded lazily via file location.)
+        if type(e).__name__ == "AttachmentTooLargeError":
+            try:
+                _fb = _owner_vault_fallback(tenant, agent, fid, filename or fid)
+            except Exception:
+                _fb = f"{tenant}/{agent}/attachments/file/{_sanitize_filename(filename or fid)}"
+            print(f"[attach] vault store over 500m cap fid={fid[:6]} — metadata only", flush=True)
+            return {"stored": False, "over_limit": True, "vault_path": _fb,
+                    "size": MAX_TOTAL_ATTACHMENT_BYTES + 1, "sha256": "",
+                    "tenant_id": tenant, "agent_id": agent}
+        # Other network/vault errors: metadata-only fallback (no secrets in log).
+        print(f"[attach] vault store failed fid={fid[:6]} err={str(e)[:120]}", flush=True)
+        return None
+
+
+def _read_vault_prefix_bytes(vault_path: str, cap: int) -> bytes | None:
+    """Read first cap+1 bytes from a stored owner-vault file (no network).
+
+    Single-download optimization: after the streaming durable store succeeds,
+    preview / image bytes are served from the local vault copy instead of a
+    second Mattermost fetch. Fail-closed: any validation/IO error returns None
+    so callers fall back to the bounded HTTP path or metadata-only.
+    """
+    try:
+        vp = (vault_path or "").strip()
+        if not vp:
+            return None
+        if vp.startswith("/") or vp.startswith("\\") or vp.startswith("file://") or "://" in vp:
+            return None
+        if pathlib.Path(vp).is_absolute():
+            return None
+        parts = vp.replace("\\", "/").split("/")
+        if ".." in parts:
+            return None
+        if len(parts) < 4:
+            return None
+        try:
+            cap_i = int(cap)
+        except Exception:
+            return None
+        if cap_i <= 0 or cap_i > MAX_TOTAL_ATTACHMENT_BYTES:
+            return None
+        mod = _load_vault_module()
+        root = None
+        try:
+            if mod is not None and hasattr(mod, "get_vault_root"):
+                root = pathlib.Path(str(mod.get_vault_root()))
+        except Exception:
+            root = None
+        if root is None:
+            for _k in ("OAOS_WIKI_VAULT", "PERSONAL_WIKI_VAULT", "VAULT_ROOT"):
+                try:
+                    _v = os.getenv(_k, "").strip()
+                except Exception:
+                    _v = ""
+                if _v:
+                    root = pathlib.Path(_v).expanduser()
+                    break
+        if root is None:
+            return None
+        joined = root.joinpath(*parts)
+        try:
+            _rr = root.resolve()
+            _jr = joined.resolve()
+            if _jr != _rr and _rr not in _jr.parents:
+                return None
+        except Exception:
+            return None
+        try:
+            if not _jr.is_file():
+                return None
+        except Exception:
+            return None
+        try:
+            with open(_jr, "rb") as _f:
+                return _f.read(cap_i + 1)
+        except Exception:
+            return None
+    except Exception:
+        return None
+
 def _normalize_mime(mime: str) -> str:
     m = (mime or "").strip().lower().split(";")[0].strip()
     # alias
@@ -197,17 +664,21 @@ def _is_image_mime(mime: str, filename: str) -> bool:
     return ext in IMAGE_EXTENSIONS
 
 def _sanitize_filename(name: str) -> str:
-    # safe vault/local filename: keep alnum, dot, dash, underscore
+    # safe single-segment filename: keep alnum, dot, dash, underscore
     base = pathlib.Path(name or "attachment").name
+    # strip NUL/controls first so they never reach logs, paths, or the LLM
+    base = re.sub(r"[\x00-\x1f\x7f]", "_", base)
+    base = base.strip().strip(".") or "attachment"
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", base) or "attachment"
     # avoid path traversal
     safe = safe.replace("..", "_")
-    return safe[:180]
+    safe = re.sub(r"_+", "_", safe)
+    return safe[:180] or "attachment"
 
 def get_mattermost_file_info(file_id: str) -> dict:
     """Fetch Mattermost file metadata safely (no secret logging). Returns normalized dict or {} on failure."""
     fid = (file_id or "").strip()
-    if not fid or not re.match(r"^[a-z0-9]+$", fid):
+    if not fid or not re.match(_FID_RE, fid):
         return {}
     try:
         info = api_get(f"/api/v4/files/{fid}/info")
@@ -228,7 +699,7 @@ def _download_mattermost_file_bytes(file_id: str) -> tuple[bytes | None, str | N
     Enforces MAX_ATTACHMENT_BYTES and image MIME validation. Uses Bearer BOT_TOKEN.
     """
     fid = (file_id or "").strip()
-    if not fid or not re.match(r"^[a-z0-9]+$", fid):
+    if not fid or not re.match(_FID_RE, fid):
         return None, None
     url = f"{MATTERMOST_URL}/api/v4/files/{fid}"
     try:
@@ -260,13 +731,26 @@ def _download_mattermost_file_bytes(file_id: str) -> tuple[bytes | None, str | N
         print(f"[attach] download failed fid={fid[:6]} err={str(e)[:160]}", flush=True)
         return None, None
 
-def build_attachment_refs_for_post(post: dict) -> tuple[list[str], list[dict]]:
-    """Build file_ids + attachment_refs for image attachments on a post.
+def build_attachment_refs_for_post(
+    post: dict, tenant_id: str = "default", employee: str = "", agent: str = "",
+) -> tuple[list[str], list[dict]]:
+    """Route post attachments: IMAGE / TEXT_PREVIEW / STORED_ONLY.
 
     - Uses post file_ids and optionally metadata.files
     - Fetches file info via api_get for mime/size validation
-    - Filters to image/* (by mime or extension) — non-images ignored for this slice
-    - No OCR, no model/provider selection — only a safe vault/local reference + authenticated URL
+    - IMAGE: existing behavior fully kept (20MB cap, base64/data_url via Agent Runtime),
+      PLUS a separate streaming durable store (Bearer, 64KB, 500MB cap) into the
+      owner-scoped Vault — storage and LLM transfer are decoupled.
+    - TEXT_PREVIEW: text-decodable formats only, max 200KB masked preview in CP text
+    - STORED_ONLY: PDF/Office/HWP/audio/video/archive/large/sensitive — metadata only
+      for the LLM, but original bytes are still streamed to the owner vault.
+    - Every ref records owner-scoped relative vault_path, stored, sha256 (when
+      stored), and actual size. vault_path is always relative — never absolute.
+    - file_ids includes every routed file so file-only posts carry refs (no CP 400)
+    - Raw secret values are never logged or transmitted (filenames masked in logs)
+    - No OCR, no model/provider selection for images — only a safe vault/local reference
+    - PDF/Office/HWP carry extractable/extract_hint for a future CP-side bounded
+      extractor (ref["extracted_text"], None by default); the bridge never extracts.
     """
     raw_ids: list[str] = []
     # primary: post.file_ids
@@ -314,43 +798,125 @@ def build_attachment_refs_for_post(post: dict) -> tuple[list[str], list[dict]]:
             except Exception:
                 pass
             filename = filename or fid
-        # size guard: skip absurdly large files (log, skip rather than OOM)
-        if size and size > MAX_ATTACHMENT_BYTES:
-            print(f"[attach] skip oversized fid={fid[:6]} size={size}", flush=True)
+        # size guard: 500MB 한도까지 저장·활용하되 500MB 원본을 LLM에 직전송하지 않는다.
+        if size and size > MAX_TOTAL_ATTACHMENT_BYTES:
+            ref = {
+                "file_id": fid,
+                "attachment_id": fid,
+                "kind": "stored_only",
+                "vault_path": _owner_vault_fallback(tenant_id, agent, fid, filename or fid),
+                "filename": _sanitize_filename(filename or fid),
+                "mime_type": (mime or "").strip().lower().split(";")[0].strip() or "unknown",
+                "size": size,
+                "source": "mattermost",
+                "reason": "over_limit",
+                "stored": False,
+                "extractable": _is_extractable_hint(mime, filename or ""),
+                "extract_hint": (pathlib.Path(filename or "").suffix.lower().lstrip(".") or "over_limit"),
+                "extracted_text": None,
+            }
+            print(f"[attach] over 500m fid={fid[:6]} size={size} — metadata only", flush=True)
+            file_ids.append(fid)
+            refs.append(ref)
             continue
         if not _is_image_mime(mime, filename):
-            # narrow slice: only forward images; skip non-images silently (trace)
-            print(f"[attach] skip non-image fid={fid[:6]} mime={mime or 'unknown'} name={filename[:40]}", flush=True)
+            # IMAGE / TEXT_PREVIEW / STORED_ONLY 라우터 (바이트는 IMAGE만, 미리보기는 마스킹 텍스트만)
+            # 원본은 owner vault에 스트리밍 보존, LLM에는 메타/마스킹 미리보기만 전달
+            ref = _build_non_image_ref(fid, filename or fid, mime, size, tenant_id, agent)
+            # Never log raw filenames: they may contain secret-bearing names.
+            print(f"[attach] routed fid={fid[:6]} kind={ref.get('kind')} mime={mime or 'unknown'} sensitive={bool(ref.get('reason') == 'sensitive')}", flush=True)
+            file_ids.append(fid)
+            refs.append(ref)
             continue
         safe_name = _sanitize_filename(filename or f"{fid}.png")
         mime_norm = _normalize_mime(mime or "image/png")
         if not _is_allowed_image_mime(mime_norm):
-            print(f"[attach] skip disallowed mime fid={fid[:6]} mime={mime_norm}", flush=True)
+            # MIME says non-image but extension looked like an image: do not
+            # silently drop the file (file_ids would vanish → CP 400 on
+            # file-only posts, bytes never preserved). Route through the
+            # non-image router so bytes are vault-stored and a metadata ref
+            # is still forwarded.
+            print(f"[attach] disallowed image mime fid={fid[:6]} mime={mime_norm} — routing as stored_only", flush=True)
+            ref = _build_non_image_ref(fid, filename or fid, mime, size, tenant_id, agent)
+            print(f"[attach] routed fid={fid[:6]} kind={ref.get('kind')} mime={mime or 'unknown'} sensitive={bool(ref.get('reason') == 'sensitive')}", flush=True)
+            file_ids.append(fid)
+            refs.append(ref)
             continue
-        # safe vault reference (no secret, no FS traversal) — Control Plane / ACP resolves via active runtime
-        vault_path = f"mattermost/{fid}/{safe_name}"
-        # authenticated reference URL (requires Bearer — not fetched here)
-        source_url = f"{MATTERMOST_URL}/api/v4/files/{fid}"
-        # local cache reference (not auto-downloaded; path reserved for optional lazy fetch)
-        try:
-            ATTACH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        local_path = str(ATTACH_CACHE_DIR / f"{fid}_{safe_name}")
+        # safe vault reference (no secret, no FS traversal) — owner-scoped relative path.
+        # Control Plane / ACP resolves via active runtime; absolute paths and MM
+        # API URLs are never emitted (CP strips them; the gate needs data_url only).
+        vault_path = _owner_vault_fallback(tenant_id, agent, fid, safe_name)
         ref = {
             "file_id": fid,
             "attachment_id": fid,
+            "kind": "image",
             "vault_path": vault_path,
             "filename": safe_name,
             "mime_type": mime_norm,
             "size": size,
             "source": "mattermost",
-            "url": source_url,
-            "local_path": local_path,
+            "stored": False,
+            "extractable": False,
+            "extract_hint": "image",
+            "extracted_text": None,
         }
-        # ── Bounded base64/data URL delivery (authenticated download) ──
-        # Download bytes via Bridge's authenticated MM API; MIME validation + max-size enforced inside download
-        dl_bytes, dl_mime = _download_mattermost_file_bytes(fid)
+        # ── Durable owner-vault store (streaming Bearer 64KB, 500MB cap) — decoupled from LLM bytes ──
+        # Original image bytes are preserved in the owner vault even though only a
+        # bounded 20MB data_url (below) is ever sent to the LLM.
+        if agent:
+            try:
+                _vmeta = _persist_attachment_to_vault(fid, filename or safe_name, tenant_id, agent)
+                if isinstance(_vmeta, dict) and _vmeta.get("stored"):
+                    ref["vault_path"] = str(_vmeta.get("vault_path") or vault_path)
+                    ref["stored"] = True
+                    ref["sha256"] = str(_vmeta.get("sha256") or "")
+                    # actual durable size; LLM data_url below stays bounded at 20MB
+                    ref["size"] = int(_vmeta.get("size") or size or 0)
+                elif isinstance(_vmeta, dict) and _vmeta.get("over_limit"):
+                    # stream proved >500MB: metadata-only, no 2nd download bypass
+                    ref["vault_path"] = str(_vmeta.get("vault_path") or vault_path)
+                    ref["stored"] = False
+                    ref["reason"] = "over_limit"
+                    try:
+                        ref["size"] = int(_vmeta.get("size") or size or 0)
+                    except Exception:
+                        pass
+                    print(f"[attach] image over 500m cap fid={fid[:6]} — metadata only, no bytes", flush=True)
+                    file_ids.append(fid)
+                    refs.append(ref)
+                    continue
+            except Exception:
+                pass
+        # Vault-proven oversize for the LLM path: skip the 2nd 20MB download.
+        try:
+            _vsize = int(ref.get("size") or 0)
+        except Exception:
+            _vsize = 0
+        if ref.get("stored") and _vsize > MAX_ATTACHMENT_BYTES:
+            print(f"[attach] image bytes skipped (vault {_vsize}B > 20MB LLM bound) fid={fid[:6]}", flush=True)
+            file_ids.append(fid)
+            refs.append(ref)
+            continue
+        # ── Bounded base64/data URL delivery (vault-first, single-download) ──
+        # Durable stream already fetched the bytes: reuse the local vault copy
+        # (bounded 20MB+1 read) instead of a 2nd authenticated MM download.
+        # HTTP fallback only when vault missed/failed. MIME allowlist enforced below.
+        dl_bytes: bytes | None = None
+        dl_mime: str | None = None
+        if ref.get("stored"):
+            try:
+                _ivb = _read_vault_prefix_bytes(str(ref.get("vault_path") or ""), MAX_ATTACHMENT_BYTES)
+            except Exception:
+                _ivb = None
+            if isinstance(_ivb, bytes) and _ivb:
+                if len(_ivb) > MAX_ATTACHMENT_BYTES:
+                    print(f"[attach] skip oversized vault bytes fid={fid[:6]} {len(_ivb)}", flush=True)
+                    file_ids.append(fid)
+                    refs.append(ref)
+                    continue
+                dl_bytes, dl_mime = _ivb, mime_norm
+        if dl_bytes is None:
+            dl_bytes, dl_mime = _download_mattermost_file_bytes(fid)
         if dl_bytes is not None:
             effective_mime = _normalize_mime(dl_mime or mime_norm)
             if not _is_allowed_image_mime(effective_mime):
@@ -358,8 +924,10 @@ def build_attachment_refs_for_post(post: dict) -> tuple[list[str], list[dict]]:
             elif len(dl_bytes) > MAX_ATTACHMENT_BYTES:
                 print(f"[attach] skip oversized bytes fid={fid[:6]} {len(dl_bytes)}", flush=True)
             else:
-                # update size to actual bytes if info size mismatched
-                ref["size"] = len(dl_bytes)
+                # LLM transfer size (bounded 20MB data_url). Durable vault size stored
+                # above is canonical — only fill size from download when vault missed.
+                if not ref.get("stored"):
+                    ref["size"] = len(dl_bytes)
                 # keep mime consistent with actual content-type if provided
                 if dl_mime:
                     ref["mime_type"] = effective_mime
@@ -431,6 +999,10 @@ def _cp_user_message(status, detail):
     if status == 403 and any(token in normalized for token in ("registration", "registered", "onboarding", "mapping")):
         return "현재 OAOS 사용자 등록이 되어 있지 않습니다. 웹관리자 콘솔에서 등록 상태를 확인한 뒤 다시 시도해 주세요."
     if status == 400:
+        if "text/message required" in normalized:
+            return ("첨부 파일 형식 안내: 이미지는 바로 확인할 수 있고, 텍스트·코드·CSV 등은 "
+                    "미리보기(최대 200KB, 민감 정보 제외)로 확인합니다. 그 외 형식은 이미지 또는 "
+                    "텍스트로 다시 보내 주세요. 문제가 계속되면 관리자에게 문의해 주세요.")
         return "요청 형식을 확인해 주세요. 문제가 계속되면 관리자에게 문의해 주세요."
     if status == 401:
         return "OAOS 인증 확인에 실패했습니다. 관리자에게 문의해 주세요."
@@ -532,7 +1104,8 @@ def call_ollama_fallback(username, employee, msg):
         print(f"[ollama fallback] {e}", flush=True)
         return ""
 
-def poll_once(seen):
+def poll_once(seen, tenant_id: str | None = None):
+    _tenant_default = _resolve_bridge_tenant(tenant_id)
     new_seen = set(seen)
     try:
         channels = api_get("/api/v4/users/me/channels")
@@ -585,23 +1158,58 @@ def poll_once(seen):
             typing_stop = threading.Event()
             typing_thread = threading.Thread(target=_typing_loop, args=(cid, typing_stop), daemon=True)
             typing_thread.start()
-            # Build image attachment refs (no OCR, no model/provider selection) for Agent Runtime
-            file_ids, attachment_refs = build_attachment_refs_for_post(p)
+            # Build attachment refs: IMAGE / TEXT_PREVIEW / STORED_ONLY (500MB 한도, 비밀원문 미전송)
+            # Owner context (tenant/employee/agent) scopes the durable Vault path per ref.
+            # Tenant matches the CP server authority so CP owner validation passes.
+            _tenant = _tenant_default
+            file_ids, attachment_refs = build_attachment_refs_for_post(
+                p, tenant_id=_tenant, employee=employee, agent=agent,
+            )
             if file_ids:
-                print(f"[attach] forwarding {len(file_ids)} image(s) fid={file_ids[0][:6]}", flush=True)
+                kinds = {}
+                for r in attachment_refs:
+                    k = (r.get("kind") or "image") if isinstance(r, dict) else "image"
+                    kinds[k] = kinds.get(k, 0) + 1
+                print(f"[attach] forwarding {len(file_ids)} file(s) {kinds} fid={file_ids[0][:6]}", flush=True)
+            # 문서 미리보기·저장 참조를 CP 텍스트에 합성 (500MB 원본 직전송 없음, 마스킹 텍스트만)
+            # CP-side bounded extractor가 채운 extracted_text가 있으면 함께 합성 (bridge는 추출 안 함)
+            effective_text = msg
+            try:
+                _blocks = []
+                for r in attachment_refs or []:
+                    if not isinstance(r, dict):
+                        continue
+                    _ext = r.get("extracted_text") if isinstance(r.get("extracted_text"), str) else ""
+                    if r.get("kind") == "text_preview" and r.get("preview"):
+                        _blocks.append(_preview_block(r))
+                    elif (r.get("kind") or "image") != "image":
+                        _blocks.append(_stored_note(r))
+                    if _ext and _ext.strip():
+                        _bounded = _mask_secrets(_ext.strip()[:20000])
+                        _fname = _mask_secrets(str(r.get("filename") or "첨부 파일"))
+                        _blocks.append(f"[첨부 추출 텍스트: {_fname}]\n{_bounded}")
+                if _blocks:
+                    _note = "\n\n".join(_blocks)
+                    effective_text = f"{msg}\n\n{_note}".strip() if msg else _note
+                    if len(effective_text) > 220000:
+                        effective_text = effective_text[:220000] + "\n[…미리보기 truncated…]"
+            except Exception:
+                effective_text = msg
             runtime_context = {
                 "platform": "mattermost",
-                "tenant_id": "default",
+                "tenant_id": _tenant,
                 "user_id": employee,
+                "agent_id": agent,
                 "channel_id": cid,
                 "post_id": pid,
                 "root_id": thread_root,
             }
             # Forward to Control Plane standard endpoint (thread root correctly)
             payload = {
-                "tenant_id": "default",
+                "tenant_id": _tenant,
                 "user_id": employee,
-                "text": msg,
+                "agent_id": agent,
+                "text": effective_text,
                 "channel_id": cid,
                 "post_id": pid,
                 "root_id": thread_root,
@@ -669,6 +1277,8 @@ def main():
         print("[init] empty bot id — refusing to start (fail-closed)", flush=True)
         raise SystemExit(1)
     print(f"[oaos-mm-bridge] MATTERMOST={MATTERMOST_URL} BOT={BOT_ID[:6]} CP={CONTROL_PLANE} OLLAMA={OLLAMA_MODEL}", flush=True)
+    _bridge_tenant = _resolve_bridge_tenant()
+    print(f"[oaos-mm-bridge] tenant={_bridge_tenant}", flush=True)
     seen = load_seen()
     if not SEEN_FILE.exists():
         try:
@@ -682,7 +1292,7 @@ def main():
     while True:
         try:
             prev_len = len(seen)
-            seen, n = poll_once(seen)
+            seen, n = poll_once(seen, tenant_id=_bridge_tenant)
             # Persist whenever seen grows (not only when reply confirmed) to prevent re-processing same post
             if len(seen) != prev_len:
                 save_seen(seen)

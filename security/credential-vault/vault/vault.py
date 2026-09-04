@@ -226,6 +226,9 @@ class EncryptedPostgresVault(CredentialVault):
             except Exception:
                 self._session_maker = None
 
+        if _is_production() and self._session_maker is None and not os.getenv("VAULT_ADDR", "").strip():
+            raise RuntimeError("durable credential vault database is unavailable in production")
+
         # ── external backend wiring (Phase B) ──
         self._external = None  # type: ignore
         try:
@@ -411,8 +414,13 @@ class EncryptedPostgresVault(CredentialVault):
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
                 return ref
-            except Exception:
-                # fall through to memory on DB failure
+            except Exception as exc:
+                # A configured production database is the persistence
+                # boundary. Never silently downgrade OAuth credentials to a
+                # process-local store when that boundary fails.
+                if _is_production():
+                    raise RuntimeError("credential vault database insert failed in production") from exc
+                # non-production keeps the historical in-memory fallback
                 pass
 
         self._store[ref] = encrypted

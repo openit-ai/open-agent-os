@@ -110,6 +110,13 @@ def _delegation_hash(d: Delegation) -> str:
 
 # ── DB helpers (lazy, sync) ──────────────────────────────────────────
 
+def _is_production() -> bool:
+    return any(
+        os.environ.get(key, "").strip().lower() in ("production", "prod")
+        for key in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT")
+    )
+
+
 def _db_enabled() -> bool:
     url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
     return bool(url and url.strip())
@@ -336,7 +343,10 @@ class DelegationService:
         if _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_production():
+                        raise RuntimeError("delegation database unavailable in production")
+                else:
                     try:
                         orm = _delegation_to_orm(d)
                         session.add(orm)
@@ -346,11 +356,17 @@ class DelegationService:
                             session.rollback()
                         except Exception:
                             pass
+                        if _is_production():
+                            raise RuntimeError("delegation database persist failed in production") from e
                         logger.debug("Delegation grant DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
             except Exception:
-                pass
+                if _is_production():
+                    self._store.pop(d.id, None)
+                    self._hash_store.pop(d.id, None)
+                    self._delegation_bindings.pop(d.id, None)
+                    raise
         return d
 
     def revoke(self, delegation_id: str) -> Delegation | None:
@@ -623,7 +639,10 @@ class DelegationService:
         if _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_production():
+                        raise RuntimeError("delegation database unavailable in production")
+                else:
                     try:
                         from security.models.orm import DelegationORM  # type: ignore
 
@@ -636,7 +655,8 @@ class DelegationService:
                     finally:
                         _db_close(session, engine)
             except Exception:
-                pass
+                if _is_production():
+                    raise
             # if DB enabled but row not found in DB, fallback to memory (may be uncommitted)
             return self._store.get(delegation_id)
         return self._store.get(delegation_id)
@@ -704,7 +724,10 @@ class DelegationService:
         if _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_production():
+                        raise RuntimeError("credential binding database unavailable in production")
+                else:
                     try:
                         orm = _binding_to_orm(b)
                         session.add(orm)
@@ -714,18 +737,26 @@ class DelegationService:
                             session.rollback()
                         except Exception:
                             pass
+                        if _is_production():
+                            raise RuntimeError("credential binding database persist failed in production") from e
                         logger.debug("bind_credential DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
             except Exception:
-                pass
+                if _is_production():
+                    self._bindings.pop(b.id, None)
+                    self._delegation_bindings.get(delegation_id, set()).discard(b.id)
+                    raise
         return b
 
     def get_binding(self, binding_id: str) -> CredentialBinding | None:
         if _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_production():
+                        raise RuntimeError("credential binding database unavailable in production")
+                else:
                     try:
                         from security.models.orm import CredentialBindingORM  # type: ignore
 
@@ -737,8 +768,51 @@ class DelegationService:
                     finally:
                         _db_close(session, engine)
             except Exception:
-                pass
+                if _is_production():
+                    raise
         return self._bindings.get(binding_id)
+
+    def list_bindings_for_delegation(self, delegation_id: str) -> list[CredentialBinding]:
+        """Return bindings for a delegation, loading the durable rows first.
+
+        Execution Gateway processes are separate from the Control Plane, so
+        the process-local ``_delegation_bindings`` index is empty after a
+        restart.  GoogleConnector uses this method to resolve an active
+        ``secret_ref`` from the shared OAOS database rather than relying on a
+        stale in-memory cache.
+        """
+        if not delegation_id:
+            return []
+        if _db_enabled():
+            try:
+                session, engine = _db_get_session()
+                if session is None:
+                    if _is_production():
+                        raise RuntimeError("credential binding database unavailable in production")
+                else:
+                    try:
+                        from security.models.orm import CredentialBindingORM  # type: ignore
+
+                        rows = session.query(CredentialBindingORM).filter(
+                            CredentialBindingORM.delegation_id == delegation_id
+                        ).all()  # type: ignore
+                        result: list[CredentialBinding] = []
+                        ids: set[str] = set()
+                        for row in rows:
+                            binding = _binding_from_orm(row)
+                            self._bindings[binding.id] = binding
+                            ids.add(binding.id)
+                            result.append(binding)
+                        self._delegation_bindings[delegation_id] = ids
+                        return result
+                    finally:
+                        _db_close(session, engine)
+            except Exception as e:
+                if _is_production():
+                    raise RuntimeError("credential binding lookup failed in production") from e
+                logger.debug("binding list DB lookup failed: %s", e)
+        ids = self._delegation_bindings.get(delegation_id, set())
+        return [self._bindings[binding_id] for binding_id in ids if binding_id in self._bindings]
 
     def is_binding_active(self, binding_id: str) -> bool:
         b = self.get_binding(binding_id)

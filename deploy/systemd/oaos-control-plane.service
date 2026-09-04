@@ -41,6 +41,7 @@ ProtectSystem=full
 ProtectHome=read-only
 # Allow writes to repo WorkingDirectory and logs; adjust if repo lives elsewhere
 ReadWritePaths=/home/openitsvc/open-agent-os
+ReadOnlyPaths=/var/lib/oaos/.open-agent-os/wiki-vault
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

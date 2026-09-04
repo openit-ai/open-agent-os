@@ -11,9 +11,11 @@ from __future__ import annotations
 import os
 import re
 import json
+import hashlib
+import secrets
 from datetime import datetime, timezone, date as date_type
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Iterable, Iterator
 
 # Isolated wiki JWT loader — avoids bare `auth` collision (security/auth.py vs admin-console/backend/auth.py)
 import importlib.util as _ilu
@@ -147,6 +149,285 @@ def ensure_vault_dirs(vault_root: Path | str | None = None) -> Path:
         except Exception:
             pass
     return root
+
+
+# ---------------------------------------------------------------------------
+# Attachment streaming store (owner-scoped, bounded, atomic)
+# ---------------------------------------------------------------------------
+
+ATTACHMENT_MAX_BYTES = 500 * 1024 * 1024  # 524288000 — full upload/storage bound (NOT LLM transfer)
+ATTACHMENT_STREAM_CHUNK = 65536  # 64KB streaming unit — never hold full 500MB in memory
+ATTACHMENT_SUBDIR = "attachments"
+
+
+class AttachmentTooLargeError(ValueError):
+    """Raised when streamed attachment exceeds max_bytes; partial output is removed."""
+
+
+def sanitize_attachment_filename(name: str | None) -> str:
+    """Sanitize to a single safe path segment (no traversal, bounded length)."""
+    base = Path(name or "attachment").name
+    # strip NUL/control
+    base = re.sub(r"[\x00-\x1f\x7f]", "_", base)
+    base = base.strip().strip(".") or "attachment"
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", base) or "attachment"
+    safe = safe.replace("..", "_")
+    safe = re.sub(r"_+", "_", safe)
+    return safe[:180] or "attachment"
+
+
+def _validate_owner_id(value: str, label: str) -> str:
+    v = (value or "").strip()
+    if not v:
+        raise ValueError(f"missing {label}")
+    # traversal defense: owner ids are single path segments (colons allowed, e.g. agent:assistant:x)
+    if "/" in v or "\\" in v or ".." in v or Path(v).is_absolute():
+        raise ValueError(f"PATH_TRAVERSAL in {label}")
+    for seg in Path(v).parts:
+        if seg == "..":
+            raise ValueError(f"PATH_TRAVERSAL in {label}")
+    if "\x00" in v:
+        raise ValueError(f"invalid NUL in {label}")
+    return v
+
+
+def _iter_stream_chunks(stream: Any, chunk_size: int = ATTACHMENT_STREAM_CHUNK) -> Iterator[bytes]:
+    """Normalize bytes / file-like (.read) / iterable-of-bytes to a byte-chunk iterator."""
+    if stream is None:
+        return
+        yield  # make this a generator
+    if isinstance(stream, (bytes, bytearray)):
+        mv = bytes(stream)
+        for i in range(0, len(mv), chunk_size):
+            yield mv[i:i + chunk_size]
+        return
+    read = getattr(stream, "read", None)
+    if callable(read):
+        while True:
+            # Read errors must propagate: store_attachment deletes the
+            # .part partial and re-raises (never stored=True truncated).
+            chunk = read(chunk_size)
+            if not chunk:
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8", errors="replace")
+            yield bytes(chunk)
+        return
+    try:
+        for _chunk in stream:  # type: ignore[union-attr]
+            if _chunk is None:
+                continue
+            if isinstance(_chunk, str):
+                _b = _chunk.encode("utf-8", errors="replace")
+            elif isinstance(_chunk, (bytes, bytearray, memoryview)):
+                _b = bytes(_chunk)
+            else:
+                continue
+            if _b:
+                # re-split oversized yielded chunks so memory stays bounded
+                for i in range(0, len(_b), chunk_size):
+                    yield _b[i:i + chunk_size]
+    except TypeError:
+        raise ValueError("stream must be bytes, a file-like with .read(), or an iterable of bytes")
+
+
+def store_attachment(
+    tenant_id: str,
+    agent_id: str,
+    filename: str,
+    stream: bytes | BinaryIO | Iterable[bytes],
+    *,
+    file_id: str | None = None,
+    vault_root: Path | str | None = None,
+    max_bytes: int = ATTACHMENT_MAX_BYTES,
+) -> dict[str, Any]:
+    """Stream an attachment to the owner-scoped vault without holding it in memory.
+
+    Layout: <vault>/<tenant>/<agent>/attachments/[<file_id>/]<sanitized-filename>
+    - Incremental sha256 while writing in 64KB units; cap enforced during stream.
+    - Atomic ``.part`` -> :func:`os.replace`; mode ``0600`` on the final file.
+    - Traversal defense on tenant/agent/filename/file_id; cap exceed deletes partial.
+    - Returns metadata dict with owner-scoped *relative* ``vault_path`` (POSIX),
+      ``stored=True``, ``size`` (actual bytes), ``sha256``, ``filename``.
+
+    Existing vault APIs are unchanged.
+    """
+    tenant = _validate_owner_id(tenant_id, "tenant_id")
+    agent = _validate_owner_id(agent_id, "agent_id")
+    safe_name = sanitize_attachment_filename(filename)
+    try:
+        limit = int(max_bytes)
+    except Exception:
+        limit = ATTACHMENT_MAX_BYTES
+    if limit <= 0:
+        limit = ATTACHMENT_MAX_BYTES
+    # Hard cap: caller-supplied max_bytes can only lower the bound, never raise it.
+    if limit > ATTACHMENT_MAX_BYTES:
+        limit = ATTACHMENT_MAX_BYTES
+
+    root = Path(vault_root) if vault_root else get_vault_root()
+    owner_root = vault_path_for_tenant_agent(tenant, agent, vault_root=root)
+    dest_dir = owner_root / ATTACHMENT_SUBDIR
+    # file_id subdir isolates re-uploads; only safe alnum ids are used as a segment.
+    # Unsafe-but-present ids map to a deterministic hash segment (no silent
+    # collide onto the bare owner dir, which would overwrite across files).
+    safe_fid = ""
+    if file_id:
+        fid = str(file_id).strip()
+        if re.match(r"^[A-Za-z0-9_-]{1,128}$", fid):
+            safe_fid = fid
+        elif fid:
+            safe_fid = "file-" + hashlib.sha256(fid.encode("utf-8", errors="replace")).hexdigest()[:16]
+    if safe_fid:
+        dest_dir = dest_dir / safe_fid
+    # Pre-mkdir fail-closed: owner must resolve inside the vault root and
+    # neither the owner root nor dest may be a symlink (no FS side-effect
+    # outside the vault when a link is pre-planted). Hard 500MiB cap is
+    # enforced at write time regardless of caller max_bytes (see limit).
+    try:
+        _root_pre = root.resolve()
+        _owner_pre = owner_root.resolve()
+        if _owner_pre != _root_pre and _root_pre not in _owner_pre.parents:
+            raise ValueError("vault owner escapes vault root")
+        if os.path.islink(owner_root) or os.path.islink(dest_dir):
+            raise ValueError("symlinked vault destination")
+        _dir_pre = dest_dir.resolve()
+        if _dir_pre != _owner_pre and _owner_pre not in _dir_pre.parents:
+            raise ValueError("vault destination escapes owner root")
+        if _dir_pre != _root_pre and _root_pre not in _dir_pre.parents:
+            raise ValueError("vault destination escapes vault root")
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("vault destination validation failed")
+    # Owner-only dirs (0700): attachments may hold secrets (e.g. *.json keys).
+    dest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(dest_dir, 0o700)
+    except Exception:
+        pass
+    # Symlink/traversal containment: the resolved dir must stay inside the
+    # resolved owner root (refuses pre-planted symlink escapes). Fail closed.
+    try:
+        _owner_resolved = owner_root.resolve()
+        _dir_resolved = dest_dir.resolve()
+        if _dir_resolved != _owner_resolved and _owner_resolved not in _dir_resolved.parents:
+            raise ValueError("vault destination escapes owner root")
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("vault destination validation failed")
+    dest = dest_dir / safe_name
+
+    tmp = dest_dir / f"{safe_name}.part-{os.getpid()}-{secrets.token_hex(6)}"
+    digest = hashlib.sha256()
+    total = 0
+    # Secure temp creation: mode 0600 from birth (no world-readable window)
+    # + O_EXCL to refuse symlink/hardlink races on the random suffix
+    # + O_NOFOLLOW so a planted symlink at the random name fails closed.
+    _open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        _tmp_fd = os.open(str(tmp), _open_flags, 0o600)
+    except FileExistsError:
+        raise ValueError("attachment temp collision; retry")
+    except OSError as _oe:
+        # ELOOP with O_NOFOLLOW (or EEXIST): symlink race — fail closed.
+        import errno as _errno
+        if getattr(_oe, "errno", None) in (_errno.ELOOP, _errno.EEXIST):
+            raise ValueError("attachment temp collision; retry")
+        raise
+    try:
+        try:
+            os.chmod(tmp, 0o600)
+        except Exception:
+            pass
+        try:
+            _fh = os.fdopen(_tmp_fd, "wb")
+        except BaseException:
+            try:
+                os.close(_tmp_fd)
+            except Exception:
+                pass
+            raise
+        with _fh:
+            for chunk in _iter_stream_chunks(stream):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > limit:
+                    raise AttachmentTooLargeError(
+                        f"attachment exceeds {limit} bytes cap"
+                    )
+                digest.update(chunk)
+                _fh.write(chunk)
+    except BaseException:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        raise
+    # 0600 effective before the atomic publish so the dest never appears 0644.
+    try:
+        os.chmod(tmp, 0o600)
+    except Exception:
+        pass
+    # Re-validate containment just before publish (closes mkdir-check vs
+    # replace TOCTOU: a swapped symlink at dest_dir fails closed here).
+    try:
+        _owner_re = owner_root.resolve()
+        _dir_re = dest_dir.resolve()
+        if _dir_re != _owner_re and _owner_re not in _dir_re.parents:
+            raise ValueError("vault destination escapes owner root")
+    except ValueError:
+        try:
+            if tmp.exists() or os.path.lexists(str(tmp)):
+                tmp.unlink()
+        except Exception:
+            pass
+        raise
+    except Exception:
+        try:
+            if tmp.exists() or os.path.lexists(str(tmp)):
+                tmp.unlink()
+        except Exception:
+            pass
+        raise ValueError("vault destination validation failed")
+    try:
+        os.replace(tmp, dest)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+    try:
+        os.chmod(dest, 0o600)
+    except Exception:
+        pass
+    # Post-publish containment: dest must resolve inside the vault root.
+    # Fail closed — remove an escaped dest instead of returning a logical path.
+    try:
+        rel = dest.resolve().relative_to(root.resolve()).as_posix()
+    except Exception:
+        try:
+            try:
+                if dest.exists() or os.path.lexists(str(dest)):
+                    dest.unlink()
+            except Exception:
+                pass
+        finally:
+            pass
+        raise ValueError("vault destination escapes vault root")
+    return {
+        "stored": True,
+        "vault_path": rel,
+        "filename": safe_name,
+        "size": total,
+        "sha256": digest.hexdigest(),
+        "tenant_id": tenant,
+        "agent_id": agent,
+    }
 
 
 def journal_file_for_date(

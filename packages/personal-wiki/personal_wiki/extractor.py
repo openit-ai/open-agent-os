@@ -28,7 +28,8 @@ from typing import Any
 
 SUPPORTED_EXTENSIONS = frozenset({
     ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
-    ".txt", ".md", ".csv", ".json",
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl",
+    ".xml", ".yaml", ".yml", ".log",
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",
 })
 
@@ -320,11 +321,16 @@ def extract_text(path: Path | str, max_chars: int = _MAX_CHARS_DEFAULT) -> str:
         return extract_pptx(p, max_chars)
     if ext in _IMAGE_EXTS:
         return extract_image(p, max_chars)
-    if ext in (".txt", ".md", ".csv", ".json"):
+    if ext in (".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl",
+                 ".xml", ".yaml", ".yml", ".log"):
         return _read_txt(p, max_chars)
     try:
         txt = _read_txt(p, max_chars)
-        if txt and len(txt) < max_chars:
+        # _read_txt already bounds to max_chars (with a truncation note), so a
+        # non-empty plain read is usable regardless of length — never discard
+        # truncated text in favor of an "[unsupported …]" marker for large
+        # text files (500MiB store / 10MB extract path).
+        if txt and not txt.startswith("[txt read error"):
             return txt
         if ext not in SUPPORTED_EXTENSIONS:
             return f"[unsupported extension {ext} — treated as binary, size {p.stat().st_size} bytes]"

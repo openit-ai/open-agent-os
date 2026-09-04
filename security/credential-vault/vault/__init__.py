@@ -31,6 +31,8 @@ def create_vault(
     if key is None:
         raw = _os.getenv("VAULT_ENCRYPTION_KEY", "change-me-32-byte-base64==")
         key = raw.encode()
+    if db_url is None:
+        db_url = _os.getenv("OAOS_DATABASE_URL") or _os.getenv("DATABASE_URL") or None
     return EncryptedPostgresVault(
         encryption_key=key,  # type: ignore[arg-type]
         session_maker=session_maker,

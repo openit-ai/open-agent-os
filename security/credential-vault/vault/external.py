@@ -546,12 +546,12 @@ def get_vault_backend(backend: str | None = None) -> VaultBackend | None:
             return AwsSecretsBackend()
         return EnvFileBackend()
     if val in _LEGACY_VALUES:
-        if _is_production():
-            raise RuntimeError(
-                "VAULT_BACKEND must select an external backend in production; "
-                "encrypted_postgres legacy storage is disabled"
-            )
+        # The current OAOS deployment uses the existing encrypted PostgreSQL
+        # CredentialVault as its durable backend. It is not a Hermes file or
+        # an in-memory fallback. Production construction fails closed in
+        # EncryptedPostgresVault when no durable DB session is available.
         return None
+
     if val in {"hashicorp", "hashicorp_vault", "vault", "external", "hashi", "hashicorp vault"}:
         return HashiCorpVaultBackend()
     if val in {"aws", "aws_secrets", "aws_secrets_manager", "aws_kms", "secretsmanager"}:
