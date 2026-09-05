@@ -266,7 +266,7 @@ def _get_mattermost_adapter():
 
         base_url = getattr(settings, "mattermost_url", "") or os.getenv("MATTERMOST_URL", "")
         bot_token = getattr(settings, "mattermost_bot_token", "") or os.getenv("MATTERMOST_BOT_TOKEN", "")
-        webhook_secret = getattr(settings, "mattermost_webhook_secret", "") or os.getenv("MATTERMOST_WEBHOOK_SECRET", "")
+        webhook_secret = getattr(settings, "mattermost_webhook_secret", "") or os.getenv("MATTERMOST_WEBHOOK_SECRET", "") or os.getenv("OAOS_CP_MATTERMOST_WEBHOOK_SECRET", "")
         # Do not read Hermes global files here. Same-OS-account sessions share
         # Unix permissions; OAOS must use its explicit service configuration.
         return MattermostAdapter(
