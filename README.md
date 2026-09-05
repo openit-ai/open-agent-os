@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.4 — Personal AX Business Platform
+# Open Agent OS v0.1.5 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,8 +13,8 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.4` — single source of truth `admin-console/package.json` `0.1.4` (candidate branch `release/v0.1.3-remediation` at `6d91f3b710`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.2` (`docs/architecture-v1.7.2.md`) is distinct from product version `0.1.3`** — v1.7.2 describes the Adaptive Profile Engine design (§16.12), not the release number.
-- **Canonical architecture:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine design included (see §16.12)
+- **Product version:** `0.1.5` — single source of truth `admin-console/package.json` `0.1.5` (candidate branch `release/v0.1.3-remediation` at `6d91f3b710`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.3` (`docs/architecture-v1.7.3.md`) is distinct from product version `0.1.5`** — v1.7.3 describes the Adaptive Profile Engine design (§16.12) and Control-Plane-centric IA aliases (§16.14), not the release number.
+- **Canonical architecture:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
 ---
@@ -332,6 +332,15 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 > **Historical note (for reference only):** `docs/architecture-v1.7.0.md` (`2ebeb981`, 5026 lines) was recorded at `648 tests` including production hardening (fail-closed runtime/deploy/audit/approval/token/rate + secrets). At `v1.6.4` the count was `612`; earlier milestones were `590` / `180`. Those numbers are point-in-time snapshots, not the current result.
 
+### 9c. Release v0.1.5 — product `0.1.5` (arch `v1.7.3` distinct)
+
+**Included (over v0.1.4 — integration + Control-Plane-centric IA, additive-only):**
+- **Google OAuth + MM attachments** — Control Plane-owned PKCE/state callback, per-user Vault binding, read-only Google API path; bridge streams MM attachments to owner-scoped Wiki Vault (500MiB cap, SHA-256, sensitive-name masking).
+- **Outline Knowledge + Mattermost RAG** — Outline→Knowledge Index bounded sync (tenant/source checkpoints); tenant/agent/group ACL pre-filter retriever + provenance on the MM→CP path.
+- **Control-Plane-centric IA aliases (§16.14)** — admin `/control/acp`, `/control/runtime`, `/execution/mcp` views; backend `/v1/control/acp/*` (3), `/v1/execution/mcp/*` (5) aliases sharing canonical endpoints; canonical units `oaos-adapter-mattermost`, `oaos-governance` (old units coexist 1 release); snapshot `process_aliases` reference-only.
+
+**Measured evidence (2026-09-05, main `b49073112a` + this bump):** full suite `1525 passed, 4 skipped, 10 failed` — 9 fail only in full-run order (pass in isolation on both clean worktree `b49073112a` and this tree), 1 (`test_stage5_migration_backup::test_existing_table_preservation`) reproduces on clean worktree (pre-existing); targeted admin+runtime-config `28 passed`; `npm run build` success locally and on KVM4 prod (3 new routes); alias routes verified via import (8) and live prod HTTP (canonical+alias `401` auth-gated, console/api/CP `200`); KVM4 selective sync (19 server deviations preserved) with backup; `oaos-admin-api`/`oaos-admin-console` restarted, 5 units active.
+
 ## 10. Repository Structure
 
 ```text
@@ -347,12 +356,12 @@ config/                    # oaos.env.example — systemd unified env template (
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + systemd (oaos-*.service) + firewall (hermes-egress.nft)
 scripts/                   # check-production-config.sh — friendly preflight (no secret output)
 tests/                     # see Verification Evidence — run pytest -q for the current count
-docs/architecture-v1.7.2.md  # Canonical implementation architecture — v1.7.2 Adaptive Profile Engine design (§16.12) included
+docs/architecture-v1.7.3.md  # Canonical implementation architecture — v1.7.3 IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — Current canonical implementation architecture; includes the v1.7.2 Adaptive Profile Engine design (§16.12). Previous: [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) (historical), [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` (historical).
+- [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — Current canonical implementation architecture; includes the v1.7.3 IA aliases (§16.14) and Adaptive Profile Engine design (§16.12). Previous: [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) (historical), [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) (historical), [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` (historical).
 - [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening design (C1/H1–H8, Personal Wiki JWT, Enterprise Knowledge Index spec, readiness strict, distributed state).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service integration.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.

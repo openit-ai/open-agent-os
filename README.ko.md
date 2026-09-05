@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.4 — Personal AX Business Platform
+# Open Agent OS v0.1.5 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,8 +13,8 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.4` — 단일 진실 `admin-console/package.json` `0.1.4` (후보 브랜치 `release/v0.1.3-remediation` at `6d91f3b710`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.2`(`docs/architecture-v1.7.2.md`)는 제품 버전 `0.1.3`와 별개** — v1.7.2는 Adaptive Profile Engine 설계(§16.12)를, 0.1.3는 제품 릴리즈 번호를 의미한다.
-- **기준 아키텍처:** [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — v1.7.2 Adaptive Profile Engine MVP 구현 완료(코드·운영 DB migration·CP router mount·Mattermost ingress/ACP hook·이미지 active-runtime E2E 확인, distributed/external/live RAG 미검증) — 상세 §16.12
+- **제품 버전:** `0.1.5` — 단일 진실 `admin-console/package.json` `0.1.5` (후보 브랜치 `release/v0.1.3-remediation` at `6d91f3b710`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.3`(`docs/architecture-v1.7.3.md`)는 제품 버전 `0.1.5`와 별개** — v1.7.3는 Adaptive Profile Engine 설계(§16.12)와 Control-Plane 중심 IA 별칭(§16.14)을, 0.1.5는 제품 릴리즈 번호를 의미한다.
+- **기준 아키텍처:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
 - **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
 ---
@@ -263,6 +263,15 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 > **Historical note (참고용):** `docs/architecture-v1.7.2.md`(`2ebeb981`, 5026 lines)는 `648 tests` 포함한 production hardening(fail-closed runtime/deploy/audit/approval/token/rate + secrets) 시점에 기록되었다. `v1.6.4` 시점은 `612`, 그 이전 마일스톤은 `590` / `180`이었다. 이 수치는 특정 시점의 스냅샷이며 현재 결과를 대체하지 않는다.
 
+### 9c. 릴리즈 v0.1.5 — 제품 `0.1.5` (아키텍처 `v1.7.3`와 별개)
+
+**포함 내역 (v0.1.4 대비 — 통합 + Control-Plane 중심 IA, additive-only):**
+- **Google OAuth + MM 첨부** — Control Plane 소유 PKCE/state 콜백, 사용자별 Vault 바인딩, 읽기전용 Google API 경로; 브리지가 MM 첨부를 owner-scoped Wiki Vault로 스트리밍(500MiB 캡·SHA-256·민감명 마스킹).
+- **Outline 지식 + Mattermost RAG** — Outline→Knowledge Index bounded sync(tenant/source 체크포인트); MM→CP 경로 tenant/agent/group ACL 선행필터 retriever + provenance.
+- **Control-Plane 중심 IA 별칭 (§16.14)** — 어드민 `/control/acp`·`/control/runtime`·`/execution/mcp` 뷰; 백엔드 `/v1/control/acp/*`(3)·`/v1/execution/mcp/*`(5) 별칭(정본 endpoint 공유); 정식 유닛 `oaos-adapter-mattermost`·`oaos-governance`(구 유닛 1릴리스 병행); 스냅샷 `process_aliases` 참조 전용.
+
+**측정 근거 (2026-09-05, main `b49073112a` + 본 범프):** 전수 `1525 passed, 4 skipped, 10 failed` — 9건은 전수 순서에서만 실패(clean worktree `b49073112a`·본 트리 격리 실행 모두 통과), 1건(`test_stage5_migration_backup::test_existing_table_preservation`)은 clean worktree 재현(기존 결함); 표적 admin+runtime-config `28 passed`; 로컬·KVM4 운영 `npm run build` 성공(신규 3라우트); 별칭 import 8건 + 운영 live HTTP(정본/별칭 `401` 인증게이트, console/api/CP `200`); KVM4 선별 sync(서버 편차 19건 보존) 및 백업; `oaos-admin-api`·`oaos-admin-console` 재기동, 5종 active.
+
 ## 10. Repository Structure
 
 ```text
@@ -276,12 +285,12 @@ packages/personal-wiki/    # Personal Wiki Vault FS(journal/notes/projects/files
 examples/morning-briefing/ # MVP — orchestrator(per-user kim vs lee) + output.json(13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + firewall(hermes-egress.nft)
 tests/                     # 검증 근거 참조 — 현재 수치는 pytest -q로 확인
-docs/architecture-v1.7.2.md  # 최신 정본 — v1.7.2 Adaptive Profile Engine (§16.12) 포함
+docs/architecture-v1.7.3.md  # 최신 정본 — v1.7.3 IA 별칭(§16.14) + Adaptive Profile Engine(§16.12) 포함
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) — 최신 정본 구현 아키텍처이며 v1.7.2 Adaptive Profile Engine 설계(§16.12)를 포함한다. 이전 버전은 과거 기준으로 보존한다.
+- [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — 최신 정본 구현 아키텍처이며 v1.7.3 IA 별칭(§16.14)과 Adaptive Profile Engine 설계(§16.12)를 포함한다. 이전 버전(v1.7.2 등)은 과거 기준으로 보존한다.
 - [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening 설계(C1/H1–H8, Personal Wiki JWT, 전사 Knowledge Index spec, readiness strict, 분산 상태).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service 연동.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.
