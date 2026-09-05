@@ -1,6 +1,5 @@
 [Unit]
-# NOTE: canonical successor is oaos-governance.service (coexistence, 1 release).
-Description=OAOS Security & Governance :8002 (systemd — optional, verified entrypoint)
+Description=OAOS Governance :8002 — policy/delegation/token/approval/audit (canonical; supersedes oaos-security.service, kept 1 release)
 Documentation=https://github.com/openit-ai/open-agent-os
 After=network.target network-online.target
 Wants=network-online.target
@@ -36,7 +35,7 @@ RemoveIPC=true
 PrivateDevices=true
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=oaos-security
+SyslogIdentifier=oaos-governance
 
 [Install]
 WantedBy=multi-user.target

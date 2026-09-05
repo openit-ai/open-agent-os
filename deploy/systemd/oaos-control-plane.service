@@ -1,5 +1,5 @@
 [Unit]
-Description=OAOS Control Plane — Mattermost Adapter Gateway :8100 (systemd production)
+Description=OAOS Control Plane :8100 — identity/session/ACP adapter/policy/audit + RuntimeRouter (center)
 Documentation=https://github.com/openit-ai/open-agent-os
 After=network.target network-online.target
 Wants=network-online.target

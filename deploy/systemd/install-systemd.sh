@@ -741,9 +741,16 @@ if [[ $WITH_OPTIONAL -eq 1 && $ONLY_CONTROL_PLANE -eq 0 ]]; then
       warn "No user unit for security (system only) — skipping in --user mode."
     else
       install_unit "${REPO_ROOT}/deploy/systemd/oaos-security.service" "oaos-security.service"
+      # Canonical alias coexistence (1 release): oaos-governance supersedes oaos-security
+      install_unit "${REPO_ROOT}/deploy/systemd/oaos-governance.service" "oaos-governance.service"
     fi
   else
     warn "Security entrypoint not verified — skipping oaos-security.service"
+  fi
+  # Canonical adapter unit coexistence (1 release): oaos-adapter-mattermost
+  # supersedes oaos-mm-bridge; bridge script path is prod (/home/openit/apps/oaos/scripts)
+  if [[ "${MODE}" != "user" && -f "${REPO_ROOT}/deploy/systemd/oaos-adapter-mattermost.service" ]]; then
+    install_unit "${REPO_ROOT}/deploy/systemd/oaos-adapter-mattermost.service" "oaos-adapter-mattermost.service"
   fi
 fi
 
@@ -785,7 +792,7 @@ else
   run systemctl daemon-reload
   run systemctl enable oaos-control-plane.service
   if [[ $WITH_OPTIONAL -eq 1 ]]; then
-    for u in oaos-execution-gateway.service oaos-security.service; do
+    for u in oaos-execution-gateway.service oaos-security.service oaos-governance.service oaos-adapter-mattermost.service; do
       if [[ -f "${DEST_DIR}/${u}" ]]; then
         run systemctl enable "${u}" || true
       fi
@@ -802,5 +809,5 @@ fi
 
 info "Done. Installed to ${DEST_DIR}. Env file: ${ENV_FILE} (no secrets printed)."
 if [[ "${MODE}" == "system" ]]; then
-  info "Production ports: control-plane 8100, execution-gateway 8001, security 8002, admin-api 8010 (if installed)."
+  info "Production ports: control-plane 8100, execution-gateway 8001, governance/security 8002, admin-api 8010 (if installed)."
 fi

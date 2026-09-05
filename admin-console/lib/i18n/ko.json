@@ -57,6 +57,9 @@
     "acp": "ACP",
     "mcp": "MCP",
     "runtimeConfig": "Runtime Config",
+    "controlAcp": "제어 / ACP",
+    "controlRuntime": "제어 / Runtime",
+    "executionMcp": "실행 / MCP",
     "profileOps": "프로필 운영",
     "knowledgeOps": "지식 운영"
   },

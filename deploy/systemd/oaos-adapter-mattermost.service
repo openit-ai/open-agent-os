@@ -1,6 +1,5 @@
 [Unit]
-# NOTE: canonical successor is oaos-adapter-mattermost.service (coexistence, 1 release).
-Description=OAOS Mattermost Bridge — @agent DM/mention ingress to Control Plane
+Description=OAOS Adapter Mattermost — @agent DM/mention ingress to Control Plane (canonical; supersedes oaos-mm-bridge.service, kept 1 release)
 Documentation=https://github.com/openit-ai/open-agent-os
 After=network.target oaos-control-plane.service mattermost.service
 Wants=oaos-control-plane.service
@@ -21,6 +20,7 @@ ProtectHome=read-only
 ReadWritePaths=/var/lib/oaos/.hermes /var/lib/oaos/.open-agent-os/wiki-vault /tmp
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=oaos-adapter-mattermost
 
 [Install]
 WantedBy=multi-user.target

@@ -204,6 +204,50 @@ try:
     logger.info("MCP router mounted at /v1/mcp")
 except Exception as e:
     logger.warning(f"MCP router not mounted: {e}")
+
+
+def _mount_router_alias(source_router, old_prefix: str, new_prefix: str, label: str) -> None:
+    """Mount additive alias routes (Control-Plane-centric IA).
+
+    Canonical routes (old_prefix) are untouched. Alias routes expose the same
+    endpoints under new_prefix with include_in_schema=False. No DB/secret change.
+    """
+    try:
+        count = 0
+        for route in list(getattr(source_router, "routes", []) or []):
+            path = getattr(route, "path", "") or ""
+            if not path.startswith(old_prefix):
+                continue
+            new_path = new_prefix + path[len(old_prefix):]
+            methods = sorted((getattr(route, "methods", None) or {"GET"}) - {"HEAD", "OPTIONS"}) or ["GET"]
+            kwargs: dict = {
+                "include_in_schema": False,
+                "dependencies": list(getattr(route, "dependencies", None) or []),
+            }
+            resp_model = getattr(route, "response_model", None)
+            if resp_model is not None:
+                kwargs["response_model"] = resp_model
+            app.add_api_route(
+                new_path,
+                route.endpoint,
+                methods=methods,
+                name=f"{getattr(route, 'name', label)}_alias",
+                **kwargs,
+            )
+            count += 1
+        logger.info(f"{label} alias mounted at {new_prefix} ({count} routes, canonical {old_prefix} kept)")
+    except Exception as e:
+        logger.warning(f"{label} alias not mounted: {e}")
+
+
+try:
+    _mount_router_alias(globals().get("acp_router"), "/v1/acp", "/v1/control/acp", "ACP")
+except Exception as e:
+    logger.warning(f"ACP alias not mounted: {e}")
+try:
+    _mount_router_alias(globals().get("mcp_router"), "/v1/mcp", "/v1/execution/mcp", "MCP")
+except Exception as e:
+    logger.warning(f"MCP alias not mounted: {e}")
 try:
     _mm_mod = _load_admin_sibling("mattermost_config")
     mm_router = _mm_mod.router

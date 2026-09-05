@@ -57,6 +57,9 @@
     "acp": "ACP",
     "mcp": "MCP",
     "runtimeConfig": "Runtime Config",
+    "controlAcp": "Control / ACP",
+    "controlRuntime": "Control / Runtime",
+    "executionMcp": "Execution / MCP",
     "profileOps": "Profile Ops",
     "knowledgeOps": "Knowledge Ops"
   },

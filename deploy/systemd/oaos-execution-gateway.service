@@ -1,5 +1,5 @@
 [Unit]
-Description=OAOS Execution Gateway :8001 (systemd — optional, verified entrypoint)
+Description=OAOS Execution Gateway :8001 — MCP registry/connectors/capability/risk (tools plane)
 Documentation=https://github.com/openit-ai/open-agent-os
 After=network.target network-online.target oaos-control-plane.service
 Wants=network-online.target

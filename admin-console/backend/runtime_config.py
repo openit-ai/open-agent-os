@@ -892,6 +892,17 @@ def _build_snapshot(tenant_id: str, actor: str, version: int, parent_version: in
         "infra": infra_cfg,
         "user_mappings": user_mappings_cfg,
         "observed_system_inventory": observed_inventory_cfg,
+        # Additive IA alias references (no secrets; old readers ignore unknown keys)
+        "process_aliases": {
+            "mattermost_adapter": {
+                "canonical": "oaos-adapter-mattermost.service",
+                "aliases": ["oaos-mm-bridge.service"],
+            },
+            "governance": {
+                "canonical": "oaos-governance.service",
+                "aliases": ["oaos-security.service"],
+            },
+        },
     }
     # Additive provenance for llm_providers (list contract preserved)
     try:
