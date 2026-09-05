@@ -856,6 +856,7 @@ async def _handle_core_logic_unserialized(
     if route:
         _rctx["knowledge_route"] = route
         _rctx["retrieval_used"] = bool(context_text)
+        _rctx["retrieval_count"] = len(context_text.split("[OAOS ")) - 1 if context_text else 0
         if retrieval_error:
             _rctx["retrieval_error"] = retrieval_error
             _rctx["retrieval_used"] = False
