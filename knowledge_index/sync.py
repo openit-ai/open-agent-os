@@ -26,6 +26,7 @@ class SyncResult:
     deleted_resource_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     checkpoint: SyncCheckpoint | None = None
+    has_more: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +39,7 @@ class SyncResult:
             "failed": self.failed,
             "chunks_written": self.chunks_written,
             "errors": self.errors,
+            "has_more": self.has_more,
         }
 
 
@@ -62,6 +64,7 @@ class SyncOrchestrator:
         chunk_config: ChunkConfig | None = None,
         max_retries: int = 3,
         retry_backoff_s: float = 0.05,
+        save_checkpoint: bool = True,
     ) -> None:
         self.source = source
         self.embedding_provider = embedding_provider
@@ -70,6 +73,7 @@ class SyncOrchestrator:
         self.chunk_config = chunk_config or ChunkConfig()
         self.max_retries = max(1, int(max_retries))
         self.retry_backoff_s = float(retry_backoff_s)
+        self.save_checkpoint = bool(save_checkpoint)
 
     def _fetch_with_retries(self, checkpoint: SyncCheckpoint | None) -> FetchResult:
         last_exc: Exception | None = None
@@ -203,13 +207,22 @@ class SyncOrchestrator:
                 if existed or rid in cp.resource_states:
                     result.deleted += 1
 
-        # Persist checkpoint (even on partial success — we checkpoint only successful resources)
+        # Build the candidate checkpoint. The persistent bridge commits this
+        # only after repository persistence succeeds; the legacy in-memory
+        # orchestrator keeps its historical behavior by default.
         new_cp = SyncCheckpoint(
             source_system=source_system,
             last_sync_at=datetime.now(timezone.utc).isoformat(),
-            cursor=fetch_result.next_cursor or cp.cursor,
+            # A completed source scan must start from the beginning on the
+            # next run. Keeping the terminal numeric offset would make every
+            # later run inspect only the tail and miss edits/ACL changes in
+            # earlier documents. The cursor is therefore only persisted while
+            # the source explicitly reports another page.
+            cursor=fetch_result.next_cursor if fetch_result.has_more else None,
             resource_states=new_states,
         )
-        self.checkpoint_store.save(new_cp)
+        if self.save_checkpoint:
+            self.checkpoint_store.save(new_cp)
         result.checkpoint = new_cp
+        result.has_more = bool(fetch_result.has_more)
         return result

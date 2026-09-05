@@ -339,12 +339,16 @@ async def _get_db_maker():
                     sys.path.insert(0, p)
             from security.models.db import Base  # type: ignore
             from security.models.orm import MemoryORM, MemorySourceORM  # noqa: F401  # type: ignore
-        # create tables lazily (no-op if already exist) — handle column mismatch via try
-        try:
-            async with _db_engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-        except Exception:
-            pass
+        # Production schema is migration-owned. Never create or alter tables
+        # implicitly from an HTTP service startup; a missing/invalid schema
+        # must remain an explicit readiness/sync error. SQLite test fixtures
+        # retain the historical create_all compatibility outside production.
+        if not _is_production():
+            try:
+                async with _db_engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+            except Exception:
+                pass
         _db_maker = async_sessionmaker(_db_engine, expire_on_commit=False)
         return _db_maker
     except Exception:
@@ -1781,19 +1785,23 @@ def _get_knowledge_sync_semaphore() -> asyncio.Semaphore:
 
 
 async def _get_knowledge_maker():
-    """Reuse memory_service DB maker but ensure knowledge_index table exists."""
+    """Return a maker only when the migration-managed knowledge schema exists."""
     # Primary: reuse memory_service maker (same DATABASE_URL / Base)
     maker = await _get_db_maker()
     if maker is not None:
-        # Ensure knowledge_index table exists on same engine (idempotent)
+        # Do not call create_all/create(checkfirst=True) in production. The
+        # Alembic head is the only authority for this table.
         try:
+            from sqlalchemy import inspect as _inspect
             eng = _db_engine
             if eng is not None:
-                from knowledge_index.orm import KnowledgeIndexORM  # type: ignore
-                async with eng.begin() as conn:
-                    await conn.run_sync(lambda sc: KnowledgeIndexORM.__table__.create(sc, checkfirst=True))
+                async with eng.connect() as conn:
+                    exists = await conn.run_sync(lambda sc: _inspect(sc).has_table("knowledge_index"))
+                if not exists and _is_production():
+                    return None
         except Exception:
-            pass
+            if _is_production():
+                return None
         return maker
     # Fallback for tests without DATABASE_URL: ephemeral sqlite (shared for process)
     global _knowledge_db_maker, _knowledge_db_engine

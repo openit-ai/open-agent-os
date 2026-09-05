@@ -215,15 +215,22 @@ class KnowledgeIndexRetriever:
             bind = maker.kw.get("bind") if hasattr(maker, "kw") else None
             engine = getattr(maker, "bind", None) or bind
             if engine is not None:
-                url_str = str(getattr(engine, "url", ""))
+                # AsyncEngine exposes the URL through sync_engine.
+                url_str = str(getattr(engine, "url", "") or getattr(getattr(engine, "sync_engine", None), "url", ""))
                 if "postgres" in url_str or "postgresql" in url_str:
                     is_pg = True
-            # Also try to check via maker() session bind
+            # Environment is a fallback for custom sessionmaker wrappers.
             if not is_pg:
-                # heuristic: try to import pgvector and assume pg if DATABASE_URL postgres
                 db_url = os.environ.get("DATABASE_URL") or os.environ.get("OAOS_DATABASE_URL", "")
                 if "postgres" in db_url:
                     is_pg = True
+            # A configured repository with the pgvector ORM type is also a
+            # positive signal when the async wrapper hides its bind URL.
+            if not is_pg:
+                try:
+                    is_pg = "vector" in str(KnowledgeIndexORM.__table__.c.embedding.type).lower()
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -231,13 +238,24 @@ class KnowledgeIndexRetriever:
         if is_pg:
             try:
                 from pgvector.sqlalchemy import Vector  # type: ignore
+            except Exception as exc:
+                raise RuntimeError("pgvector SQLAlchemy integration is unavailable") from exc
+            if Vector is not None:
                 # pgvector cosine distance: embedding <=> :vec
                 async with maker() as session:
                     # Use raw ORDER BY embedding <=> query_embedding if column type is VECTOR
                     # Fallback to python scoring if column not vector
                     # We attempt op via .op("<=>") if available
                     try:
-                        stmt = select(KnowledgeIndexORM).where(*base_clauses).order_by(KnowledgeIndexORM.embedding.op("<=>")(str(query_embedding))).limit(limit)  # type: ignore
+                        # SQLAlchemy binds the query vector using the ORM
+                        # column's VECTOR dimension/type. The live bge-m3
+                        # contract is VECTOR(1024), established by migration
+                        # 019; no TEXT <=> implicit cast is allowed.
+                        from sqlalchemy import bindparam
+                        from pgvector.sqlalchemy import Vector as _Vector
+                        query_vector = bindparam("query_vector", value=query_embedding, type_=_Vector(len(query_embedding)))
+                        distance = KnowledgeIndexORM.embedding.op("<=>")(query_vector)
+                        stmt = select(KnowledgeIndexORM).where(*base_clauses).order_by(distance).limit(limit)
                         res = await session.execute(stmt)
                         hits: list[RetrievalHit] = []
                         for row in res.scalars().all():
@@ -267,8 +285,6 @@ class KnowledgeIndexRetriever:
                     except Exception:
                         # pg query failed, fall through to deterministic fallback handling
                         pass
-            except Exception:
-                pass
 
         # Non-postgres or pgvector not available -> deterministic fallback ONLY for tests
         if _is_production():

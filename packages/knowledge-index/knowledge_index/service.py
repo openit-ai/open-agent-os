@@ -45,6 +45,7 @@ from .store import InMemoryChunkStore, InMemoryCheckpointStore
 from .checkpoint import PersistentCheckpointStore
 from .connectors.base import SourceAdapter
 from .connectors.http_outline import HttpOutlineSourceAdapter, OutlineAPIError
+from .outline_acl import OutlineACLResolver
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +164,7 @@ def create_outline_adapter(
     timeout_s: float = 10.0,
     max_retries: int = 3,
     page_limit: int = 25,
+    max_pages: int | None = None,
     http_client: Any | None = None,
     write_enabled: bool = False,
 ) -> HttpOutlineSourceAdapter:
@@ -179,6 +181,7 @@ def create_outline_adapter(
         timeout_s=timeout_s,
         max_retries=max_retries,
         page_limit=page_limit,
+        max_pages=max_pages,
         http_client=http_client,
         write_enabled=write_enabled,
     )
@@ -274,6 +277,7 @@ class OutlineSyncResult:
     persisted: int = 0  # entries written to persistent repository
     errors: list[str] = field(default_factory=list)
     checkpoint: Any | None = None
+    has_more: bool = False
 
 
 async def sync_outline_to_index(
@@ -286,12 +290,29 @@ async def sync_outline_to_index(
     checkpoint_store: Any | None = None,
     max_retries: int = 3,
     retry_backoff_s: float = 0.05,
+    resolve_outline_acl: bool = True,
+    acl_resolver: Any | None = None,
+    acl_on_error: str = "auto",
+    prune_absent_on_complete_snapshot: bool = False,
+    persist_batch_size: int = 200,
 ) -> OutlineSyncResult:
     """Run Outline sync through HttpOutlineSourceAdapter + SyncOrchestrator into persistent repo.
 
     Validates tenant, enforces no mock/hash fallback in production, runs incremental
     sync (chunk+embed via orchestrator), then drains chunks into KnowledgeIndexRepository
     with tenant-scoped entries preserving acl/provenance/source metadata.
+
+    Outline collection ACL enrichment (production-safe):
+      - resolve_outline_acl=True (default) enriches each fetched SourceDocument via
+        OutlineACLResolver (collections.info/list + collections.memberships +
+        users.list, read-only) BEFORE chunk/embed so StoredChunks ACLs are correct.
+      - collection permission read/read_write -> tenant-public (acl {});
+        admin/null -> members-only (agent principals from active users' email
+        local-parts); outline user IDs/emails preserved in provenance (no secrets).
+      - acl_on_error: "auto" (default: strict/fail-closed in production, keep
+        source ACL in non-prod), "strict" (always sentinel-restricted on failure,
+        never public), "passthrough" (dev/test only: keep source ACL, flag it).
+      - acl_resolver: optional prebuilt OutlineACLResolver (uses its adapter).
 
     Args:
         tenant_id: mandatory target tenant for persisted entries
@@ -301,6 +322,19 @@ async def sync_outline_to_index(
         chunk_config: optional ChunkConfig
         checkpoint_store: optional shared checkpoint store for incremental behavior
         max_retries: bounded retries for fetch/embed (passed to orchestrator)
+        prune_absent_on_complete_snapshot: when True, delete tenant resources
+          that are absent from a COMPLETE FULL-SCAN snapshot only (single
+          fetch starting at offset 0, has_more False, no fetch failure).
+          Resumed/truncated windows never delete by absence even when True.
+          Default False (safest). Prune passes need max_pages big enough to
+          hold the corpus in one window starting from offset 0.
+        persist_batch_size: entries per bulk_upsert call (page-batch
+          persistence; default 200, clamped >= 1).
+
+    Page-batch safety: each call persists exactly the window it fetched
+    (bounded by the adapter max_pages); deletions propagate only via explicit
+    source deletion IDs, blank-content cleanup, or the explicit
+    complete-snapshot prune above — never from paginated absence.
 
     Returns:
         OutlineSyncResult with sync stats and persisted count.
@@ -346,6 +380,127 @@ async def sync_outline_to_index(
             checkpoint_store = InMemoryCheckpointStore()
     chunk_config = chunk_config or ChunkConfig()
 
+    # Capture this run's fetched documents via a fresh snapshot wrapper.
+    # SyncOrchestrator does not return SourceDocuments, but StoredChunks carry
+    # the ACL/URI/classification metadata captured at fetch time. The snapshot
+    # below is taken from THIS run's fetch only (titles + empty-content
+    # detection) — never from an untracked/stale adapter mirror.
+    #
+    # Outline collection ACL enrichment (read-only) runs inside the same
+    # wrapper BEFORE chunk/embed: each fetched SourceDocument is enriched via
+    # OutlineACLResolver (collections.info/list + collections.memberships +
+    # users.list). Public collections (permission read/read_write) become
+    # tenant-public; admin/null become members-only agent allow-lists.
+    # Fail-closed: resolution failures in production (or acl_on_error="strict")
+    # yield a sentinel restricted ACL (never public); outline IDs/emails are
+    # stashed per-resource for provenance (no secrets).
+    fetched_docs: list[SourceDocument] = []
+    _acl_provenance: dict[str, dict[str, Any]] = {}
+    _acl_errors: list[str] = []
+    _fetch_has_more: list[bool] = []
+    _fetch_next_cursor: list[Any] = []
+    _fetch_start_cursors: list[Any] = []
+    # Checkpoint-before snapshot: authority for explicit complete-snapshot
+    # prune only. Loaded BEFORE the orchestrator run; paginated windows must
+    # never delete by absence.
+    _checkpoint_before_ids: set[str] = set()
+    try:
+        _cp_before = checkpoint_store.load(getattr(outline_adapter, "source_system", "outline"))
+        if _cp_before is not None:
+            _checkpoint_before_ids = set(getattr(_cp_before, "resource_states", {}) or {})
+    except Exception:
+        _checkpoint_before_ids = set()
+    _acl_resolver: Any | None = None
+    if resolve_outline_acl:
+        try:
+            if acl_resolver is not None:
+                _acl_resolver = acl_resolver
+            elif isinstance(outline_adapter, HttpOutlineSourceAdapter):
+                _acl_resolver = OutlineACLResolver(outline_adapter)
+        except Exception as exc:
+            _acl_errors.append(f"outline ACL resolver init failed: {type(exc).__name__}")
+            _acl_resolver = None
+    _orig_fetch = getattr(outline_adapter, "fetch", None)
+    if callable(_orig_fetch):
+        _bound_orig = _orig_fetch
+
+        def _recording_fetch(checkpoint: Any = None) -> Any:
+            try:
+                _fetch_start_cursors.append(getattr(checkpoint, "cursor", None))
+            except Exception:
+                pass
+            res = _bound_orig(checkpoint)
+            try:
+                _fetch_has_more.append(bool(getattr(res, "has_more", False)))
+            except Exception:
+                pass
+            try:
+                _fetch_next_cursor.append(getattr(res, "next_cursor", None))
+            except Exception:
+                pass
+            try:
+                docs = list(getattr(res, "documents", []) or [])
+                if _acl_resolver is not None:
+                    try:
+                        enriched, prov = _acl_resolver.enrich_documents(
+                            [d for d in docs if isinstance(d, SourceDocument)],
+                            on_error=acl_on_error,
+                        )
+                        try:
+                            setattr(res, "documents", enriched)
+                        except Exception:
+                            pass
+                        docs = enriched
+                        for rid, p in (prov or {}).items():
+                            try:
+                                _acl_provenance[str(rid)] = dict(p)
+                            except Exception:
+                                continue
+                        for rid, p in (prov or {}).items():
+                            try:
+                                if p.get("outline_acl_unresolved"):
+                                    _acl_errors.append(
+                                        f"outline ACL unresolved for {rid}: {str(p.get('outline_acl_error') or 'unknown')[:160]}"
+                                    )
+                            except Exception:
+                                continue
+                    except Exception as exc:
+                        # Catastrophic enrichment failure: fail-closed in
+                        # production (sentinel-restrict everything fetched),
+                        # keep source ACL only in non-prod passthrough.
+                        _acl_errors.append(f"outline ACL enrichment failed: {type(exc).__name__}")
+                        if _is_production() or acl_on_error == "strict":
+                            try:
+                                from .outline_acl import _restrict_doc as _acl_restrict
+                            except Exception:
+                                _acl_restrict = None  # type: ignore
+                            if _acl_restrict is not None:
+                                restricted: list[SourceDocument] = []
+                                for d in docs:
+                                    if not isinstance(d, SourceDocument):
+                                        continue
+                                    try:
+                                        rd, rp = _acl_restrict(d, f"{type(exc).__name__}")
+                                        restricted.append(rd)
+                                        _acl_provenance[rd.resource_id] = rp
+                                    except Exception:
+                                        continue
+                                try:
+                                    setattr(res, "documents", restricted)
+                                except Exception:
+                                    pass
+                                docs = restricted
+                for d in docs:
+                    if isinstance(d, SourceDocument):
+                        fetched_docs.append(d)
+            except Exception:
+                pass
+            return res
+
+        try:
+            setattr(outline_adapter, "fetch", _recording_fetch)
+        except Exception:
+            pass
     orchestrator = SyncOrchestrator(
         source=outline_adapter,
         embedding_provider=embedding_provider,
@@ -354,6 +509,10 @@ async def sync_outline_to_index(
         chunk_config=chunk_config,
         max_retries=max_retries,
         retry_backoff_s=retry_backoff_s,
+        # The persistent bridge commits the candidate checkpoint only after
+        # repository writes succeed. This prevents a DB outage from advancing
+        # the source cursor and silently losing the batch on the next run.
+        save_checkpoint=False,
     )
     # SyncOrchestrator.sync is synchronous (blocks on time.sleep for retries, stdlib HTTP + Ollama /api/embed urllib)
     # P1 availability fix: offload to thread to avoid starving event loop when single worker.
@@ -371,8 +530,18 @@ async def sync_outline_to_index(
             sync_result = orchestrator.sync()
     except RuntimeError as e:
         # production hash guard surfaces as RuntimeError — propagate
+        try:
+            if callable(_orig_fetch):
+                setattr(outline_adapter, "fetch", _orig_fetch)
+        except Exception:
+            pass
         raise
     except Exception as e:
+        try:
+            if callable(_orig_fetch):
+                setattr(outline_adapter, "fetch", _orig_fetch)
+        except Exception:
+            pass
         # orchestrator catches fetch failures as failed=1; but unexpected raises should convert to failed result
         return OutlineSyncResult(
             source_system=getattr(outline_adapter, "source_system", "outline"),
@@ -385,107 +554,55 @@ async def sync_outline_to_index(
             persisted=0,
             errors=[str(e)],
             checkpoint=None,
+            has_more=False,
         )
 
     # Now persist chunks to KnowledgeIndexRepository
     # Each SourceDocument's ACL is preserved as provenance + as group_id/agent_id pre-filter fields
     # Mapping: groups -> multiple entries per chunk (one per group) for correct ACL pre-filter;
     #          users -> agent_id entries; public (no acl) -> single entry with null group/agent.
+    # Metadata authority: StoredChunks fields captured by SyncOrchestrator at fetch
+    # time (acl_groups/acl_users/source_uri/classification/content_hash/...).
+    # The fresh per-run fetched_docs snapshot above supplies titles and
+    # empty-content detection only. No adapter-private mirror (e.g. _docs) is
+    # consulted — a stale/untracked mirror must never widen ACLs or resurrect
+    # deleted content.
+    try:
+        if callable(_orig_fetch):
+            setattr(outline_adapter, "fetch", _orig_fetch)
+    except Exception:
+        pass
 
     persisted = 0
-    # Build doc lookup for ACL/provenance
-    # orchestrator's chunk_store holds resource_id -> StoredChunks
-    # We need to correlate back to SourceDocument to get acl/attachment metadata.
-    # The orchestrator does not expose docs; we fetch the last result docs via checkpoint resource_states?
-    # Instead we retrieve documents from outline_adapter's last fetch? For Http adapter we don't have docs list after sync.
-    # So we track via chunk_store + checkpoint + knowledge that each resource's StoredChunks contains acl via?
-    # StoredChunks currently has content_hash/acl_version but not acl groups. So we need to capture acl from fetch.
-    # Workaround: re-use orchestrator's source fetch info by inspecting chunk_store keys and deriving acl from doc's acl if adapter is OutlineSourceAdapter fixture
-    # Better: we stored embeddings and chunks; we can fetch documents needed to map acl by re-reading from adapter's current state? Not reliable for incremental skipped.
-    # Simpler: for persistence we use whatever docs were upserted (those not skipped). We need their SourceDocument metadata.
-    # To achieve this, we will have orchestrator expose via custom flow? Instead we implement sync differently for persistence:
-    # Alternative path: if sync skipped count >0, we don't need to persist those; only upserted resources need persisting.
-    # For those, we can fetch documents directly via adapter before sync? But we already have sync result.
-
-    # Implementation: intercept by fetching documents before sync via adapter.fetch checkpoint? However SyncOrchestrator already did fetch.
-    # We can replicate by fetching with same checkpoint (but checkpoint now advanced). To avoid complexity, we will instead
-    # directly implement a persistent sync loop that mirrors orchestrator but writes to DB per chunk with correct ACL.
-    # For simplicity when using SyncOrchestrator, we approximate: persisted entries correspond to chunks in chunk_store after sync.
-    # ACL mapping: we will use a best-effort mapping — if adapter is InMemorySourceAdapter we can retrieve doc via adapter._docs;
-    # otherwise for Http adapter we can use doc acl from the fetch we would need to have captured.
-    #
-    # To make this robust, we implement a fallback: if we cannot determine ACL, persist as public entry (group_id=None) with
-    # provenance containing sync tenant and checkpoint info. This still satisfies tenant isolation and persistence wiring.
-    #
-    # Future: extend SyncOrchestrator to return created docs metadata.
-
-    # Metadata is captured into StoredChunks by SyncOrchestrator. The adapter
-    # private store is used only as a backwards-compatible test fixture path.
     doc_map: dict[str, SourceDocument] = {}
-    try:
-        if hasattr(outline_adapter, "_docs"):
-            docs_dict = getattr(outline_adapter, "_docs", {})
-            if isinstance(docs_dict, dict):
-                for rid, doc in docs_dict.items():
-                    if isinstance(doc, SourceDocument):
-                        doc_map[rid] = doc
-    except Exception as exc:
-        sync_result.errors.append(f"source metadata inspection failed: {type(exc).__name__}")
-
-    # Also attempt to get docs from FetchResult if we could replay fetch without advancing checkpoint?
-    # For incremental skipped docs, they still exist in chunk_store from prior sync, so we should have them already persisted earlier.
-    # Therefore persisting only upserted resources (those whose state changed) is sufficient for idempotent correctness.
-
-    # Determine which resources were upserted in this run: those where chunk_store content matches new state
-    # For now, persist all resources currently in chunk_store (idempotent upsert — no duplication harm)
+    for d in fetched_docs:
+        try:
+            doc_map[d.resource_id] = d
+        except Exception:
+            continue
     entries: list[KnowledgeIndexEntry] = []
     for rid, stored in list(chunk_store._store.items()):
         if not stored.chunks:
-            # empty content: delete from persistent store for this resource
-            # Delete entries for this resource+tenant
-            # We need to list and delete: use repository bulk delete via direct session? Repository has delete(index_id) but not bulk by resource.
-            # We handle via direct SQL delete for this tenant/resource
+            # Empty content: drop any previously persisted chunks for this
+            # tenant-scoped resource via the public repository API.
             try:
-                maker = repository._maker  # type: ignore
-                from sqlalchemy import delete as sqldelete
-                async def _delete_resource():
-                    async with maker() as session:
-                        from sqlalchemy import delete
-                        await session.execute(
-                            delete(KnowledgeIndexORM).where(
-                                KnowledgeIndexORM.source_resource_id == rid,
-                                KnowledgeIndexORM.tenant_id == tenant_id,
-                            )
-                        )
-                        await session.commit()
-                try:
-                    # if running in async context, await
-                    await _delete_resource()
-                except RuntimeError:
-                    # no running loop? fallback
-                    import concurrent.futures
-                    asyncio.run(_delete_resource())
-            except Exception:
-                pass
+                await repository.delete_by_resource(tenant_id, rid)
+            except Exception as exc:
+                sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
+                sync_result.failed = max(1, sync_result.failed)
             continue
-        # Resolve doc for this rid
+        # Metadata authority is StoredChunks (captured at fetch time by the
+        # orchestrator). The fresh per-run snapshot only backfills the title
+        # for provenance — it never overrides ACLs, URIs, or tenancy.
         doc = doc_map.get(rid)
-        # Prefer metadata captured at fetch time; never publish a restricted
-        # document as public merely because the HTTP adapter has no private _docs.
         acl_groups: list[str] = list(getattr(stored, "acl_groups", []) or [])
         acl_users: list[str] = list(getattr(stored, "acl_users", []) or [])
         classification: str | None = getattr(stored, "classification", None)
         source_uri: str | None = getattr(stored, "source_uri", None)
-        tenant_from_doc = getattr(stored, "tenant_id", None) or tenant_id
-        if doc is not None:
-            acl_groups = list((doc.acl or {}).get("groups") or (doc.acl or {}).get("allowedGroups") or acl_groups)
-            acl_users = list((doc.acl or {}).get("users") or (doc.acl or {}).get("allowedUsers") or acl_users)
-            classification = getattr(doc, "classification", None) or classification
-            source_uri = getattr(doc, "source_uri", None) or source_uri
-            tenant_from_doc = getattr(doc, "tenant_id", None) or tenant_from_doc
+        title: str | None = getattr(doc, "title", None)
         # If doc tenant differs, prefer caller tenant for isolation.
-        if tenant_from_doc != tenant_id:
-            tenant_from_doc = tenant_id
+        if (getattr(stored, "tenant_id", None) or tenant_id) != tenant_id:
+            pass  # caller tenant always wins; stored tenant kept for audit only
         # For each chunk + embedding, create entries
         for idx, (chunk, emb) in enumerate(zip(stored.chunks, stored.embeddings)):
             base_index_id = _short_index_id(rid, chunk.chunk_id)
@@ -496,6 +613,7 @@ async def sync_outline_to_index(
                 "source_resource_id": rid,
                 "source_uri": source_uri,
                 "resource_id": rid,
+                "title": title,
                 "chunk_id": chunk.chunk_id,
                 "content_hash": stored.content_hash,
                 "source_content_hash": getattr(chunk, "source_content_hash", None),
@@ -507,6 +625,15 @@ async def sync_outline_to_index(
                 "sync_source": getattr(outline_adapter, "source_system", "outline"),
                 "indexed_via": "sync_outline_to_index",
             }
+            # Outline collection ACL provenance (IDs/emails/mode, no secrets).
+            try:
+                _acl_prov = _acl_provenance.get(rid)
+                if isinstance(_acl_prov, dict):
+                    for _k, _v in _acl_prov.items():
+                        if _k not in provenance:
+                            provenance[_k] = _v
+            except Exception:
+                pass
             # Determine entries to create per ACL
             # public -> one entry
             if not acl_groups and not acl_users:
@@ -590,7 +717,21 @@ async def sync_outline_to_index(
                     # already added user entries; nothing else
                     pass
 
-    # Bulk upsert to persistent repository
+    # Bulk upsert to persistent repository in bounded page batches so a
+    # large window cannot hold an unbounded unit of work. Fail-closed: a
+    # batch failure marks the run failed and stops further batches.
+    # Remove the previous resource rows before writing a changed resource.
+    # ACL changes can change a public null/null row into private agent rows;
+    # upsert alone would leave the old public row searchable.
+    if entries:
+        try:
+            replace_resource_ids = sorted({e.source_resource_id for e in entries})
+            for _rid in replace_resource_ids:
+                await repository.delete_by_resource(tenant_id, _rid)
+        except Exception as exc:
+            sync_result.errors.append(f"replace existing resource rows failed: {type(exc).__name__}")
+            sync_result.failed = 1
+            entries = []
     if entries:
         # deduplicate by index_id (last wins)
         dedup: dict[str, KnowledgeIndexEntry] = {}
@@ -598,8 +739,15 @@ async def sync_outline_to_index(
             dedup[e.index_id] = e
         entries = list(dedup.values())
         try:
-            await repository.bulk_upsert(entries)
-            persisted = len(entries)
+            batch_size = max(1, int(persist_batch_size or 200))
+        except Exception:
+            batch_size = 200
+        try:
+            persisted = 0
+            for _i in range(0, len(entries), batch_size):
+                _batch = entries[_i : _i + batch_size]
+                await repository.bulk_upsert(_batch)
+                persisted += len(_batch)
         except Exception as e:
             # fail-closed for persistence errors in production
             sync_result.errors.append(f"persist failed: {e}")
@@ -614,6 +762,126 @@ async def sync_outline_to_index(
         except Exception as exc:
             sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
             sync_result.failed = max(1, sync_result.failed)
+    # Empty-content cleanup: the orchestrator removes blank documents from the
+    # chunk store (counts them as upserted) so they never reach the persist
+    # loop above. Drop any previously persisted chunks for fetched docs whose
+    # content is blank. Skipped (unchanged, non-blank) docs need no action —
+    # they were persisted by the run that first upserted them.
+    empty_cleaned = 0
+    try:
+        stored_ids = set(chunk_store._store.keys())
+    except Exception:
+        stored_ids = set()
+    for d in fetched_docs:
+        try:
+            rid = d.resource_id
+            content = d.content or ""
+        except Exception:
+            continue
+        if rid in stored_ids:
+            continue
+        if isinstance(content, str) and content.strip():
+            continue
+        try:
+            await repository.delete_by_resource(tenant_id, rid)
+            empty_cleaned += 1
+        except Exception as exc:
+            sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
+            sync_result.failed = max(1, sync_result.failed)
+    # Explicit complete-snapshot prune: ONLY when the caller opts in AND this
+    # run fetched a COMPLETE FULL SCAN in a single fetch (started at offset 0,
+    # has_more False, no fetch failure). Resumed windows (non-zero start
+    # cursor) and paginated/truncated windows never prune by absence, even
+    # when the flag is True — this keeps empty tail batches (cursor at end)
+    # and multi-batch paging from ever deleting. Absent IDs are diffed
+    # against the checkpoint-before snapshot (not the live DB) and removed
+    # from chunk store, persistent repository, and checkpoint. For corpora
+    # larger than one window, run a dedicated prune pass with max_pages big
+    # enough to hold the corpus starting from offset 0.
+    _pruned: list[str] = []
+    try:
+        _start = _fetch_start_cursors[0] if len(_fetch_start_cursors) == 1 else "__resumed__"
+        _started_at_zero = _start is None or (isinstance(_start, str) and _start.strip() in ("", "0"))
+        _snapshot_complete = (
+            bool(prune_absent_on_complete_snapshot)
+            and not bool(getattr(sync_result, "failed", 0))
+            and len(_fetch_has_more) == 1
+            and _fetch_has_more[0] is False
+            and bool(_started_at_zero)
+            # An empty response is not proof of a complete snapshot. It may
+            # be a resumed tail, a transient source omission, or an API page
+            # boundary; never prune by absence when no document was fetched.
+            and bool(getattr(sync_result, "fetched", 0))
+        )
+    except Exception:
+        _snapshot_complete = False
+    if _snapshot_complete:
+        try:
+            _fetched_ids = {d.resource_id for d in fetched_docs if isinstance(d, SourceDocument)}
+        except Exception:
+            _fetched_ids = set()
+        try:
+            _explicit = set(getattr(sync_result, "deleted_resource_ids", []) or [])
+        except Exception:
+            _explicit = set()
+        for _rid in sorted(_checkpoint_before_ids - _fetched_ids - _explicit):
+            try:
+                try:
+                    chunk_store.delete(_rid)
+                except Exception:
+                    pass
+                await repository.delete_by_resource(tenant_id, _rid)
+                _pruned.append(_rid)
+            except Exception as exc:
+                sync_result.errors.append(f"delete failed for {_rid}: {type(exc).__name__}")
+                sync_result.failed = max(1, sync_result.failed)
+        if _pruned:
+            try:
+                _cur = checkpoint_store.load(getattr(outline_adapter, "source_system", "outline"))
+                if _cur is not None:
+                    _states = dict(getattr(_cur, "resource_states", {}) or {})
+                    for _rid in _pruned:
+                        _states.pop(_rid, None)
+                    try:
+                        _cur.resource_states = _states  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    checkpoint_store.save(_cur)
+                    sync_result.checkpoint = _cur
+            except Exception as exc:
+                sync_result.errors.append(f"checkpoint prune failed: {type(exc).__name__}")
+            try:
+                sync_result.deleted += len(_pruned)
+                _merged = list(getattr(sync_result, "deleted_resource_ids", []) or [])
+                for _rid in _pruned:
+                    if _rid not in _merged:
+                        _merged.append(_rid)
+                sync_result.deleted_resource_ids = sorted(_merged)
+            except Exception:
+                pass
+    # Outline ACL enrichment notes (fail-closed markers, never secrets).
+    # Restricted-sentinel docs stay hidden until a later run resolves them
+    # (their acl_version differs once resolved, forcing reindex).
+    try:
+        for _e in _acl_errors:
+            if _e and _e not in sync_result.errors:
+                sync_result.errors.append(_e)
+    except Exception:
+        pass
+    # Commit the checkpoint last. The source cursor is durable only when the
+    # corresponding index rows and deletions have been committed. Never save
+    # a terminal empty/complete window cursor as a source-progress claim.
+    if (
+        not sync_result.failed
+        and checkpoint_store is not None
+        and sync_result.checkpoint is not None
+        and (sync_result.fetched > 0 or not _checkpoint_before_ids)
+    ):
+        try:
+            checkpoint_store.save(sync_result.checkpoint)
+        except Exception as exc:
+            sync_result.errors.append(f"checkpoint save failed: {type(exc).__name__}")
+            sync_result.failed = 1
     return OutlineSyncResult(
         source_system=sync_result.source_system,
         fetched=sync_result.fetched,
@@ -626,6 +894,7 @@ async def sync_outline_to_index(
         persisted=persisted,
         errors=list(sync_result.errors),
         checkpoint=sync_result.checkpoint,
+        has_more=bool(_fetch_has_more[-1]) if _fetch_has_more else False,
     )
 
 
@@ -1011,7 +1280,7 @@ class KnowledgeIndexService:
 
 # ---------------------------------------------------------------------------
 # Additional wrappers for task contract: KnowledgeSearchService / KnowledgeSyncService / KnowledgeMaterializationService
-# Provide explicit interface without pretending live sync (aliases to elaborate functions/classes)
+# KnowledgeSyncService.sync_to_persistent() is a live bridge onto sync_outline_to_index().
 # ---------------------------------------------------------------------------
 class KnowledgeSearchService:
     """Async persistent search wrapper around KnowledgeIndexRetriever.
@@ -1124,23 +1393,30 @@ class KnowledgeSearchService:
 # ---------------------------------------------------------------------------
 @dataclass
 class SyncServiceConfig:
-    """Config for KnowledgeSyncService — documents explicit limitation."""
+    """Config for KnowledgeSyncService — documents the live persistent bridge."""
     note: str = (
-        "SyncOrchestrator is sync/in-memory (InMemoryChunkStore/InMemoryCheckpointStore) "
-        "while KnowledgeIndexRepository is async/persistent (SQLAlchemy async_sessionmaker). "
-        "This service does NOT pretend live sync to persistent store."
+        "SyncOrchestrator runs synchronously (offloaded via asyncio.to_thread) "
+        "against an ephemeral InMemoryChunkStore, then sync_outline_to_index drains "
+        "chunks into the async persistent KnowledgeIndexRepository with "
+        "tenant/ACL provenance. Checkpointing uses the injected checkpoint store "
+        "(PersistentCheckpointStore in production)."
     )
 
 
 class KnowledgeSyncService:
     """Sync wiring around HttpOutlineSourceAdapter + SyncOrchestrator.
 
-    Explicit interface (no pretending live persistent sync):
+    Live persistent sync path:
     - sync() / sync_memory() : runs SyncOrchestrator against its in-memory store (bounded retries,
       checkpointed, idempotent). Returns SyncResult.
-    - describe_persistence_gap() : returns human-readable explanation of the async/sync gap.
-    - sync_to_persistent() : async stub that FAILS CLOSED (raises NotImplementedError) with remediation
-      guidance — caller must wire async KnowledgeIndexRepository + chunk embedding persistence themselves.
+    - sync_to_persistent() : delegates to sync_outline_to_index() (real persistent
+      sync: chunk+embed via orchestrator, then bulk upsert into
+      KnowledgeIndexRepository with tenant/ACL provenance, explicit deletions
+      via delete_by_resource, checkpoint persistence). Requires tenant_id,
+      repository, embedding_provider, and outline_adapter (or adapter alias);
+      raises ValueError listing whichever piece is missing.
+    - describe_persistence_gap() : retained for backward compatibility; describes
+      the (now implemented) sync-to-persistent bridge instead of a gap.
 
     No production mock/hash fallback: relies on adapter fail-closed and embedding provider guards.
     """
@@ -1185,20 +1461,25 @@ class KnowledgeSyncService:
 
     def describe_persistence_gap(self) -> str:
         return (
-            "Persistence gap: SyncOrchestrator.sync() is synchronous and writes to "
-            "InMemoryChunkStore / InMemoryCheckpointStore only. KnowledgeIndexRepository "
-            "is asynchronous (async_sessionmaker) and expects KnowledgeIndexEntry rows with "
-            "pgvector embeddings. Live persistent sync would require: "
-            "(1) an async orchestrator or bridge (asyncio.to_thread / async chunk store), "
-            "(2) an embedding provider wired to a real API (HashEmbeddingProvider is blocked in production), "
-            "(3) mapping SourceDocument chunks -> KnowledgeIndexEntry with tenant/ACL provenance, "
-            "(4) async repository upsert + checkpoint persistence. "
-            "This service exposes sync_to_persistent() as a fail-closed stub until that bridge is implemented. "
+            "Persistence bridge: sync_to_persistent() delegates to sync_outline_to_index(), "
+            "which runs SyncOrchestrator synchronously (offloaded via asyncio.to_thread) "
+            "into an ephemeral InMemoryChunkStore, then drains chunks into the async "
+            "KnowledgeIndexRepository as KnowledgeIndexEntry rows with tenant/ACL "
+            "provenance (groups -> group_id entries, users -> agent_id entries, public "
+            "-> single null group/agent entry), explicit deletions via "
+            "repository.delete_by_resource, and checkpoint persistence via the "
+            "injected checkpoint store (PersistentCheckpointStore in production). "
+            "No mock/hash fallback in production. "
             f"Note: {self.config.note}"
         )
 
-    async def sync_to_persistent(self, *args: Any, **kwargs: Any) -> SyncResult:  # type: ignore[no-untyped-def]
-        """Delegates to sync_outline_to_index when persistent context is provided, else fail-closed."""
+    async def sync_to_persistent(self, *args: Any, **kwargs: Any) -> Any:
+        """Run live persistent sync by delegating to sync_outline_to_index.
+
+        Requires tenant_id, repository, embedding_provider, and outline_adapter
+        (or `adapter` alias) — from kwargs or constructor context. Raises
+        ValueError listing any missing piece (fail-closed, no silent default).
+        """
         # If caller provides persistent context, delegate (covers compat validator that expects this)
         _tenant_raw = kwargs.get("tenant_id") if "tenant_id" in kwargs else getattr(self, "_tenant_id", None)
         tenant_id = str(_tenant_raw).strip() if _tenant_raw is not None else ""
@@ -1208,14 +1489,19 @@ class KnowledgeSyncService:
         if repo is not None and provider is not None and adapter is not None and tenant_id:
             # import here to avoid circular
             return await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter, **{k: v for k, v in kwargs.items() if k not in ("repository", "embedding_provider", "outline_adapter", "tenant_id", "adapter")})
-        raise NotImplementedError(
-            "Live persistent sync is not wired: SyncOrchestrator is sync/in-memory while "
-            "KnowledgeIndexRepository is async/persistent. "
-            "Remediation: implement an async bridge that maps SourceDocument -> chunks -> embeddings "
-            "-> KnowledgeIndexEntry and upserts via KnowledgeIndexRepository (async), "
-            "with a real embedding provider (hash blocked in production). "
-            "Use sync() / sync_memory() for the current in-memory path, and consult "
-            "describe_persistence_gap() for details. No mock/hash fallback in production."
+        missing = [
+            name
+            for name, present in (
+                ("tenant_id", bool(tenant_id)),
+                ("repository", repo is not None),
+                ("embedding_provider", provider is not None),
+                ("outline_adapter", adapter is not None),
+            )
+            if not present
+        ]
+        raise ValueError(
+            "persistent sync requires tenant_id, repository, embedding_provider, and "
+            f"outline_adapter (missing: {', '.join(missing)}). No silent default in production."
         )
 
     def adapter_fetch(self, checkpoint: Any | None = None) -> Any:

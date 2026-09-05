@@ -124,12 +124,8 @@ def _db_enabled() -> bool:
 
 def _normalize_sync_url(url: str) -> str:
     u = url.strip()
-    if "+asyncpg" in u:
-        u = u.replace("+asyncpg", "")
-    if "+aiosqlite" in u:
-        u = u.replace("+aiosqlite", "")
     if u.startswith("postgresql+asyncpg://"):
-        u = u.replace("postgresql+asyncpg://", "postgresql://", 1)
+        u = u.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
     if u.startswith("sqlite+aiosqlite://"):
         u = u.replace("sqlite+aiosqlite://", "sqlite://", 1)
     return u

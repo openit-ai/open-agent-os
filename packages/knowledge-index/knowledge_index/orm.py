@@ -25,10 +25,10 @@ except Exception:  # fallback when security not on path
 # pgvector fallback
 try:
     from pgvector.sqlalchemy import Vector as _PgVector  # type: ignore
+except Exception:  # pragma: no cover - package absent in lightweight test env
+    _PgVector = None  # type: ignore
 
-    _VECTOR_1536 = _PgVector(1536)  # type: ignore
-except Exception:  # pragma: no cover - pgvector not installed or SQLite
-    _VECTOR_1536 = Text  # type: ignore
+_VECTOR_1536 = Text  # legacy fallback; migration/runtime contract is 1024
 
 
 class KnowledgeIndexORM(Base):
@@ -45,7 +45,15 @@ class KnowledgeIndexORM(Base):
     agent_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_id: Mapped[str] = mapped_column(String(64), nullable=False)
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[str | None] = mapped_column(_VECTOR_1536, nullable=True)  # type: ignore[arg-type]
+    # The production migration 019 normalizes the live bge-m3 index to
+    # VECTOR(1024). Keep SQLite/Text fallback for isolated tests; the model
+    # contract is enforced by migration and the provider dimension gate.
+    try:
+        from pgvector.sqlalchemy import Vector as _PgVectorRuntime  # type: ignore
+        _VECTOR_RUNTIME = _PgVectorRuntime(1024)
+    except Exception:  # pragma: no cover - SQLite/test fallback
+        _VECTOR_RUNTIME = Text
+    embedding: Mapped[str | None] = mapped_column(_VECTOR_RUNTIME, nullable=True)  # type: ignore[arg-type]
     content_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -773,16 +773,27 @@ async def _handle_core_logic_unserialized(
 
     # Route explicit personal/company questions to owner-scoped context retrieval.
     # Retrieval is deterministic and runs before the single bounded LLM call.
+    # Enterprise path is owner/tenant/group-aware (fail-closed): group-scoped
+    # rows require a verified allow-list; default empty hides them. Retrieval
+    # infrastructure failure is marked explicitly (no false "no results").
     route = None
     context_text = ""
+    retrieval_error: str | None = None
     try:
         from ..context_retrieval import classify_context_route, format_context, retrieve_enterprise_context, retrieve_personal_context
         route = classify_context_route(text)
         if route == "personal":
             context_text = format_context(route, await retrieve_personal_context(mapping.human_principal, text))
         elif route == "enterprise":
-            context_text = format_context(route, await retrieve_enterprise_context(tenant_id, mapping.agent_principal, text))
+            _verified_groups = []
+            if isinstance(runtime_context, dict):
+                _verified_groups = [str(g).strip() for g in (runtime_context.get("allowed_group_ids") or []) if str(g).strip()]
+            context_text = format_context(route, await retrieve_enterprise_context(
+                tenant_id, mapping.agent_principal, text,
+                allowed_group_ids=_verified_groups, user_id=mapping.human_principal,
+            ))
     except Exception as exc:
+        retrieval_error = type(exc).__name__
         log.warning("context retrieval unavailable session=%s: %s", session_id, type(exc).__name__)
     # Forward prompt (non-briefing path)
     rid = new_request_id()
@@ -845,6 +856,9 @@ async def _handle_core_logic_unserialized(
     if route:
         _rctx["knowledge_route"] = route
         _rctx["retrieval_used"] = bool(context_text)
+        if retrieval_error:
+            _rctx["retrieval_error"] = retrieval_error
+            _rctx["retrieval_used"] = False
     try:
         acp_result = await acp.send_prompt(rec, prompt_for_llm, rid, attachment_refs=_arefs or None, file_ids=_fid or None, runtime_context=_rctx or None)
     except Exception as _acp_exc:

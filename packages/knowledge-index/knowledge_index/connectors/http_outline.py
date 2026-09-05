@@ -307,6 +307,7 @@ class HttpOutlineSourceAdapter(SourceAdapter):
         retry_backoff_s: base backoff seconds (multiplied by attempt)
         collection_id: optional filter to single collection
         http_client: injectable transport for tests (object with post(url, headers, json, timeout))
+        max_pages: optional bound on pages per fetch() call (default None -> hard cap 500)
         write_enabled: gate for create/update/delete; default False (fail-closed)
         allow_writes: alias for write_enabled (back-compat)
         write_permission_checker: optional callable(action, context)->bool to gate writes
@@ -324,6 +325,7 @@ class HttpOutlineSourceAdapter(SourceAdapter):
         retry_backoff_s: float = 0.2,
         collection_id: str | None = None,
         http_client: Any | None = None,
+        max_pages: int | None = None,
         write_enabled: bool = False,
         allow_writes: bool | None = None,
         write_permission_checker: Any | None = None,
@@ -334,6 +336,7 @@ class HttpOutlineSourceAdapter(SourceAdapter):
         self.max_retries = int(max_retries)
         self.page_limit = int(page_limit)
         self.retry_backoff_s = float(retry_backoff_s)
+        self.max_pages = max_pages if max_pages is None else max(1, int(max_pages))
         self.collection_id = collection_id
         self._http_client = http_client
         # write gate: allow_writes alias, explicit write_enabled wins if set
@@ -444,6 +447,21 @@ class HttpOutlineSourceAdapter(SourceAdapter):
         return data, bool(has_more)
 
     def fetch(self, checkpoint: Any | None = None) -> FetchResult:
+        """Fetch one bounded window of Outline documents.
+
+        Full-scan vs windowed semantics:
+        - checkpoint None (or missing/non-numeric cursor) starts at offset 0
+          (full scan from the beginning); incremental skip of unchanged docs
+          is handled downstream via content_hash comparison.
+        - A numeric checkpoint cursor resumes at that offset so a worker can
+          page through a large corpus in bounded ``max_pages`` windows with a
+          shared checkpoint store.
+        - ``max_pages`` (default None -> hard cap 500) bounds pages per call.
+          When the window is truncated but the server reports more,
+          ``FetchResult.has_more`` is True with ``next_cursor`` set; callers
+          must continue paging and must NOT treat a truncated window absence
+          as deletion. ``has_more=False`` means this window reached the end.
+        """
         # Fail closed when credentials absent — no mock fallback
         if not self._api_url or not self._api_token:
             raise RuntimeError(
@@ -451,8 +469,8 @@ class HttpOutlineSourceAdapter(SourceAdapter):
                 "(set OUTLINE_API_URL + OUTLINE_API_TOKEN / OUTLINE_API_KEY or "
                 "OAOS_OUTLINE_TOKEN). Refusing to return mock data."
             )
-        # Bounded pagination loop guard
-        max_pages = 500  # hard cap to avoid infinite loop even if API misbehaves
+        # Bounded pagination loop guard; callers may use a smaller batch window.
+        max_pages = self.max_pages or 500
         offset = 0
         # If checkpoint has cursor offset, resume from it (opaque cursor is offset string)
         if checkpoint is not None:
@@ -498,11 +516,16 @@ class HttpOutlineSourceAdapter(SourceAdapter):
         self._last_fetch_pages = pages
         # Deleted ids: Outline API does not return deletions in list; caller (SyncOrchestrator)
         # will treat checkpoint-only ids as deleted. We return empty deleted list here.
+        # Truncation signal: if we stopped because the max_pages window filled
+        # while the server still reports more, the snapshot is INCOMPLETE —
+        # report has_more=True so callers keep paging and never infer deletion
+        # from window absence. Otherwise the window reached the end.
+        truncated = bool(has_more) and pages >= max_pages
         return FetchResult(
             documents=all_docs,
             deleted_resource_ids=[],
             next_cursor=next_cursor,
-            has_more=False,
+            has_more=truncated,
         )
 
     # ------------------------------------------------------------------

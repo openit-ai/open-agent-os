@@ -6,7 +6,7 @@ class ControlPlaneSettings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     hermes_base_url: str = "http://localhost:8001"
     hermes_api_key: str = ""
-    hermes_model: str = "qwen2.5"
+    hermes_model: str = "muse-spark-1.2-contributor"
     log_level: str = "INFO"
     # Mattermost §16A
     mattermost_bot_token: str = ""

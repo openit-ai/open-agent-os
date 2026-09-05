@@ -88,6 +88,18 @@ class FakeGoogleHttp:
         code = str(data.get("code", ""))
         access = f"accesstok_{code}"
         scope = " ".join(go.DEFAULT_SCOPES)
+        if code == "code-google-oidc-aliases":
+            scope = " ".join([
+                "email",
+                "profile",
+                "https://www.googleapis.com/auth/userinfo.email",
+                "https://www.googleapis.com/auth/userinfo.profile",
+                "https://www.googleapis.com/auth/calendar.readonly",
+                "https://www.googleapis.com/auth/drive.readonly",
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/tasks.readonly",
+                "openid",
+            ])
         payload: dict = {"access_token": access, "scope": scope, "expires_in": 3600, "token_type": "Bearer"}
         if code != "code-norefresh":
             payload["refresh_token"] = f"refreshtok_{code}"
@@ -178,6 +190,34 @@ def test_callback_success_metadata_only_no_tokens(client: TestClient, oauth_env:
     # Token endpoint received the secret server-side (key present, value not logged).
     posts = oauth_env["log"]["posts"]
     assert any("oauth2.googleapis.com/token" in p["url"] for p in posts)
+
+
+def test_callback_accepts_google_oidc_scope_aliases(client: TestClient, oauth_env: dict) -> None:
+    """Google's userinfo URI aliases are equivalent to email/profile grants."""
+    state = _authorize(client, KIM)["state"]
+    r = _callback(client, state, "code-google-oidc-aliases")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["status"] == "ACTIVE"
+    assert data["has_refresh_token"] is True
+    assert data["scope"] == " ".join([
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/tasks.readonly",
+        "openid",
+    ])
+
+
+def test_production_delegation_sync_url_uses_installed_psycopg_driver() -> None:
+    try:
+        from delegation_service.service import _normalize_sync_url
+    except ImportError:
+        from security.delegation.delegation_service.service import _normalize_sync_url
+
+    assert _normalize_sync_url("postgresql+asyncpg://user:pass@db/oaos") == "postgresql+psycopg://user:pass@db/oaos"
 
 
 def test_callback_replay_denied(client: TestClient, oauth_env: dict) -> None:

@@ -255,7 +255,7 @@ class TestSyncFactory:
         orch = SyncOrchestrator(source=adapter, embedding_provider=FakeEmbeddingProvider(dim=4), chunk_store=InMemoryChunkStore(), checkpoint_store=InMemoryCheckpointStore(), retry_backoff_s=0.001)
         svc = KnowledgeSyncService(adapter=adapter, orchestrator=orch)
         gap = svc.describe_persistence_gap()
-        assert "Persistence gap" in gap or "sync" in gap.lower()
+        assert "Persistence bridge" in gap or "sync" in gap.lower()
         # sync_memory works (in-memory)
         res = svc.sync_memory()
         assert res.fetched == 1
@@ -285,7 +285,7 @@ class TestSyncFactory:
     @pytest.mark.asyncio
     async def test_sync_to_persistent_fails_closed_without_context(self):
         from knowledge_index.service import KnowledgeSyncService
-        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+        with pytest.raises(ValueError, match="persistent sync requires"):
             await KnowledgeSyncService().sync_to_persistent()
 
     @pytest.mark.asyncio
@@ -300,18 +300,18 @@ class TestSyncFactory:
         def _adapter():
             return HttpOutlineSourceAdapter(api_url="https://o.example.com", api_token="tok", http_client=FakeTransport(responses=[{"data": [_raw_doc()], "pagination": {"offset": 0, "total": 1}}]), retry_backoff_s=0.001)
         svc = KnowledgeSyncService()
-        # each required piece missing => fail-closed NotImplementedError
-        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+        # each required piece missing => fail-closed ValueError naming the gap
+        with pytest.raises(ValueError, match="persistent sync requires"):
             await svc.sync_to_persistent(repository=repo, embedding_provider=provider, outline_adapter=_adapter())
-        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+        with pytest.raises(ValueError, match="persistent sync requires"):
             await svc.sync_to_persistent(tenant_id="t1", embedding_provider=provider, outline_adapter=_adapter())
-        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+        with pytest.raises(ValueError, match="persistent sync requires"):
             await svc.sync_to_persistent(tenant_id="t1", repository=repo, outline_adapter=_adapter())
-        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+        with pytest.raises(ValueError, match="persistent sync requires"):
             await svc.sync_to_persistent(tenant_id="t1", repository=repo, embedding_provider=provider)
-        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+        with pytest.raises(ValueError, match="persistent sync requires"):
             await svc.sync_to_persistent(tenant_id="", repository=repo, embedding_provider=provider, outline_adapter=_adapter())
-        with pytest.raises(NotImplementedError, match="Live persistent sync is not wired"):
+        with pytest.raises(ValueError, match="persistent sync requires"):
             await svc.sync_to_persistent(tenant_id="   ", repository=repo, embedding_provider=provider, outline_adapter=_adapter())
         await engine.dispose()
 

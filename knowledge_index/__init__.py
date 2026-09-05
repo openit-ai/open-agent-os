@@ -65,3 +65,19 @@ except Exception:  # pragma: no cover
     materialize_knowledge_to_outline = None  # type: ignore
     SyncServiceConfig = None  # type: ignore
 
+try:
+    from .outline_acl import (  # type: ignore
+        OutlineACLResolver,
+        OutlineACLResolutionError,
+        agent_principal_for_email,
+    )
+except Exception:  # pragma: no cover
+    OutlineACLResolver = None  # type: ignore
+    OutlineACLResolutionError = None  # type: ignore
+    agent_principal_for_email = None  # type: ignore
+
+try:
+    from .worker_outline_sync import main as outline_sync_main  # type: ignore
+except Exception:  # pragma: no cover
+    outline_sync_main = None  # type: ignore
+

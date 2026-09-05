@@ -119,6 +119,42 @@ def _validate_scopes(scopes: list[str]) -> list[str]:
     return cleaned
 
 
+def _canonical_scope_for_comparison(scope: str) -> str:
+    """Normalize Google's equivalent OIDC scope aliases for grant checks.
+
+    Google may return both the short OIDC names requested by the consent URL
+    (``email``/``profile``) and their userinfo URI aliases.  They represent
+    the same least-privilege identity grants; treating the aliases as an
+    unexpected expansion incorrectly rejects a successful user consent.
+    This normalization is used only for set comparison, while the originally
+    returned scope string remains available as provider metadata.
+    """
+    aliases = {
+        "https://www.googleapis.com/auth/userinfo.email": "email",
+        "https://www.googleapis.com/auth/userinfo.profile": "profile",
+    }
+    return aliases.get(scope.strip(), scope.strip())
+
+
+def _canonicalize_scope_string(scopes: str) -> str:
+    """Return a bounded, de-duplicated scope string for persistence.
+
+    Google can return both short OIDC scopes and their equivalent userinfo URI
+    aliases. Persisting the raw response can exceed the deployed
+    ``scope VARCHAR(256)`` column even though it grants no additional access.
+    Keep the first provider order for readable metadata while collapsing only
+    the explicitly equivalent aliases.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in (scopes or "").split():
+        canonical = _canonical_scope_for_comparison(raw)
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            result.append(canonical)
+    return " ".join(result)
+
+
 # ---------------------------------------------------------------------------
 # Env / production helpers (presence only — values never logged/returned)
 # ---------------------------------------------------------------------------
@@ -816,7 +852,9 @@ async def callback(
         raise HTTPException(status_code=400, detail="invalid, expired, or already-used state")
 
     tok = await _exchange_code_for_tokens(code, entry.code_verifier)
-    scope = str(tok.get("scope") or " ".join(entry.scopes))
+    scope = _canonicalize_scope_string(
+        str(tok.get("scope") or " ".join(entry.scopes))
+    )
     expires_in = int(tok.get("expires_in", 3600) or 3600)
 
     # Read-only profile check against the bound expected email (if any).
@@ -833,8 +871,12 @@ async def callback(
     # Reject token responses that grant scopes outside the requested set.
     # Google may return a narrower set, but an unexpected broader grant must
     # never silently widen the delegation recorded by OAOS.
-    granted_scopes = {s for s in scope.split() if s}
-    requested_scopes = set(entry.scopes)
+    granted_scopes = {
+        _canonical_scope_for_comparison(s) for s in scope.split() if s
+    }
+    requested_scopes = {
+        _canonical_scope_for_comparison(s) for s in entry.scopes if s
+    }
     if not granted_scopes.issubset(requested_scopes):
         raise HTTPException(status_code=403, detail="Google returned scopes outside the requested allowlist; no credentials stored")
 
