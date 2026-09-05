@@ -83,7 +83,8 @@
 - Runtime: Control Plane and Mattermost bridge are active after approved restart; Control Plane PID and bridge PID are read back through user-systemd. Canonical production environment includes Outline, Ollama embedding, Hermes, and Mattermost bindings.
 - ACL: collection `read`/`read_write` is tenant-public; `admin`/unset is members-only using active Outline memberships; unresolved ACL is sentinel-restricted.
 - Verification: targeted Outline/ACL/retrieval/sync suite `157 passed, 2 skipped, 4 warnings`; live Outline bounded health PASS; live semantic direct retrieval PASS.
-- Remaining: the first approved Mattermost E2E probe was blocked by an unregistered OAOS mapping, then a second probe was deduplicated against the previous idempotency key and produced no fresh same-thread reply. A fresh real Mattermost source post is still required for user-path PASS.
+- Mattermost read-back: approved CP ingress after canonical Mattermost URL/token binding produced bot post `3s3uxfdifb8y5mkjdbum58j9se` under real root `n18kdon9jpntxxgwmgjyn53szh`; source/response IDs, root, author, timestamp, and message were read back from Mattermost API. This is synthetic signed-CP ingress evidence, not bridge human-source E2E.
+- Remaining: a fresh human-authored Mattermost source post routed through the polling bridge is still required for user-path PASS; the current evidence is therefore runtime + synthetic external read-back PASS, human bridge external E2E PARTIAL.
 
 ## Release and deployment boundaries
 
