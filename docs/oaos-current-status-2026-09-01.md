@@ -75,6 +75,16 @@
 - 구현 커밋: `8b2d744463494f43b191d41af6f2b2219083fc0a`; 회귀 검증: `91 passed, 1 warning`.
 - 상세 계약: `docs/architecture-v1.7.2.md` §16.11 및 `docs/oaos-user-registration-guide-v1.0.md` §6.
 
+## Outline Knowledge Index / Mattermost RAG completion ledger (2026-09-05)
+
+- Code commit: `3ab206b385` — Outline bounded worker, collection ACL resolution, persistent sync bridge, and enterprise retrieval path. Follow-up runtime-context metric commit: `3bd620b549`.
+- Schema: Alembic `019_ki_embedding_1024` applied after a PostgreSQL 16 custom dump backup. `knowledge_index.embedding` is now `vector`, 9,380 default-tenant rows, 0 null embeddings, 1,024 dimensions.
+- Full source sync: 883 unique Outline documents / 36 bounded batches / 9,380 persisted index entries / 0 failures; checkpoint `default/outline` cursor is terminal `NULL`, last sync `2026-09-05T02:26:59Z`.
+- Runtime: Control Plane and Mattermost bridge are active after approved restart; Control Plane PID and bridge PID are read back through user-systemd. Canonical production environment includes Outline, Ollama embedding, Hermes, and Mattermost bindings.
+- ACL: collection `read`/`read_write` is tenant-public; `admin`/unset is members-only using active Outline memberships; unresolved ACL is sentinel-restricted.
+- Verification: targeted Outline/ACL/retrieval/sync suite `157 passed, 2 skipped, 4 warnings`; live Outline bounded health PASS; live semantic direct retrieval PASS.
+- Remaining: the first approved Mattermost E2E probe was blocked by an unregistered OAOS mapping, then a second probe was deduplicated against the previous idempotency key and produced no fresh same-thread reply. A fresh real Mattermost source post is still required for user-path PASS.
+
 ## Release and deployment boundaries
 
 - This document records repository evidence only. It does not claim production deployment, distributed PASS, or external PASS.
