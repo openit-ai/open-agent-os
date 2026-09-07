@@ -274,7 +274,7 @@ def _get_mattermost_adapter():
             bot_token=bot_token,
             webhook_secret=webhook_secret,
         )
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         # Fallback import relative
         try:
             import importlib.util
@@ -290,7 +290,7 @@ def _get_mattermost_adapter():
                     bot_token=getattr(settings, "mattermost_bot_token", "") or "",
                     webhook_secret=getattr(settings, "mattermost_webhook_secret", "") or "",
                 )
-        except Exception:
+        except (ImportError, ModuleNotFoundError, FileNotFoundError):
             return None
 def _get_personal_display_name(agent_id: str) -> tuple[str | None, str | None]:
     """Resolve A안 display_name/avatar_url for agent_id from admin_user_mappings (DB if available)."""
@@ -343,7 +343,7 @@ def _get_approval_store():
             key = getattr(settings, "mattermost_webhook_secret", "") or "dev-signing-key"
             _get_approval_store._store = ApprovalStore(signing_key=key)  # type: ignore
         return _get_approval_store._store  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
 
 

@@ -165,7 +165,7 @@ def _load_vault_helpers() -> tuple[Any, Any, Any]:
             safe_join_vault as _join,
         )
         return _root, _join, _assert
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     try:  # file-location fallback (isolated, no package import)
         import importlib.util as _ilu
@@ -181,7 +181,7 @@ def _load_vault_helpers() -> tuple[Any, Any, Any]:
                     getattr(mod, "safe_join_vault", None),
                     getattr(mod, "assert_vault_path_safe", None),
                 )
-    except Exception:
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
         pass
     return None, None, None
 
@@ -193,7 +193,7 @@ def _load_extractor():
         from personal_wiki.extractor import extract_text  # type: ignore
 
         return extract_text
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     try:
         import importlib.util as _ilu
@@ -207,7 +207,7 @@ def _load_extractor():
                 fn = getattr(mod, "extract_text", None)
                 if callable(fn):
                     return fn
-    except Exception:
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
         pass
     return None
 

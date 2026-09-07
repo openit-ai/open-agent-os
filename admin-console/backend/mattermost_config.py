@@ -27,6 +27,11 @@ except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
 router = APIRouter(prefix="/v1/mattermost", tags=["mattermost"])
 
 MM_KEY = "mm_config"
@@ -46,7 +51,7 @@ def _db_url() -> str | None:
         url = get_database_url()
         if url and url.strip():
             return url.strip()
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError):
         pass
     url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
     return url.strip() if url and url.strip() else None
@@ -80,7 +85,7 @@ def _get_engine():
                 kwargs["connect_args"] = {"check_same_thread": False}
         _db_engine = create_engine(sync_url, **kwargs)
         return _db_engine
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"mm DB engine failed: {e}")
         return None
 
@@ -90,7 +95,7 @@ def _ensure_table(engine) -> None:
         from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE IF NOT EXISTS admin_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT, extra TEXT)"))
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError):
         pass
 
 
@@ -105,7 +110,7 @@ def _db_get_raw() -> str | None:
             row = conn.execute(text("SELECT value FROM admin_settings WHERE key='mm_config'")).fetchone()
             if row and row[0]:
                 return row[0]
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"mm DB read failed: {e}")
     return None
 
@@ -124,16 +129,16 @@ def _db_set_raw(value_json: str, updated_by: str | None = None) -> bool:
                 conn.execute(text("INSERT INTO admin_settings (key, value, updated_at, updated_by) VALUES ('mm_config', :v, :now, :by) ON CONFLICT (key) DO UPDATE SET value=:v, updated_at=:now, updated_by=:by"),
                              {"v": value_json, "now": now, "by": updated_by})
                 return True
-            except Exception:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError):
                 pass
             try:
                 conn.execute(text("INSERT OR REPLACE INTO admin_settings (key, value, updated_at, updated_by) VALUES ('mm_config', :v, :now, :by)"),
                              {"v": value_json, "now": now, "by": updated_by})
                 return True
-            except Exception as e2:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e2:
                 logger.debug(f"mm DB write fallback failed: {e2}")
                 return False
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"mm DB write failed: {e}")
         return False
 
@@ -163,7 +168,7 @@ def _load_config() -> tuple[dict, str]:
             }
             _inmem = cfg
             return cfg, "db"
-        except Exception as e:
+        except (ValueError, AttributeError, TypeError) as e:
             logger.debug(f"mm parse DB failed: {e}")
     if _inmem is not None:
         return dict(_inmem), "in-memory"

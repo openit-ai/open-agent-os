@@ -29,7 +29,7 @@ try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "security" / "policy-engine"))
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "packages" / "policy-model"))
     from policy_engine.small_business_bundle import classify_risk, TASK_RISK, PERMISSION_LEVELS  # type: ignore
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     classify_risk = None  # type: ignore
     TASK_RISK = {}  # type: ignore
     PERMISSION_LEVELS = {}  # type: ignore

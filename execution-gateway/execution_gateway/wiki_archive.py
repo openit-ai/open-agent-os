@@ -15,7 +15,7 @@ def _try_import_append_journal():
     try:
         from personal_wiki.vault import append_journal  # type: ignore
         return append_journal
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     # Fallback: add packages/personal-wiki to sys.path
     try:
@@ -29,7 +29,7 @@ def _try_import_append_journal():
                 try:
                     from personal_wiki.vault import append_journal  # type: ignore
                     return append_journal
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     return None
             # also try open-agent-os root
             if (parent / "packages" / "personal-wiki" / "personal_wiki" / "vault.py").exists():
@@ -39,9 +39,9 @@ def _try_import_append_journal():
                 try:
                     from personal_wiki.vault import append_journal  # type: ignore
                     return append_journal
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     return None
-    except Exception:
+    except (ImportError, ModuleNotFoundError, OSError):
         pass
     return None
 

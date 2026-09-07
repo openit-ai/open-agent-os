@@ -131,7 +131,7 @@ def extract_docx(path: Path | str, max_chars: int = _MAX_CHARS_DEFAULT) -> str:
             import importlib.util
             if importlib.util.find_spec("docx") is None:
                 return f"[docx extraction unavailable — install python-docx (file {p.name})]"
-        except Exception:
+        except (ImportError, ModuleNotFoundError, ValueError):
             pass
         return f"[docx extraction failed: {e}]"
 
@@ -161,7 +161,7 @@ def extract_xlsx(path: Path | str, max_chars: int = _MAX_CHARS_DEFAULT) -> str:
             import importlib.util
             if importlib.util.find_spec("openpyxl") is None:
                 return f"[xlsx extraction unavailable — install openpyxl (file {p.name})]"
-        except Exception:
+        except (ImportError, ModuleNotFoundError, ValueError):
             pass
         return f"[xlsx extraction failed: {e}]"
 
@@ -183,7 +183,7 @@ def extract_pptx(path: Path | str, max_chars: int = _MAX_CHARS_DEFAULT) -> str:
                     txt = getattr(shape, "text", "") or ""
                     if txt:
                         parts.append(txt)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
                 if getattr(shape, "has_table", False):  # type: ignore[attr-defined]
                     try:
@@ -191,7 +191,7 @@ def extract_pptx(path: Path | str, max_chars: int = _MAX_CHARS_DEFAULT) -> str:
                             cells = [getattr(c, "text", "") for c in row.cells]  # type: ignore
                             if any(cells):
                                 parts.append(" | ".join(cells))
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         pass
             parts.append("")
         text = "\n".join(parts).strip()
@@ -201,7 +201,7 @@ def extract_pptx(path: Path | str, max_chars: int = _MAX_CHARS_DEFAULT) -> str:
             import importlib.util
             if importlib.util.find_spec("pptx") is None:
                 return f"[pptx extraction unavailable — install python-pptx (file {p.name})]"
-        except Exception:
+        except (ImportError, ModuleNotFoundError, ValueError):
             pass
         return f"[pptx extraction failed: {e}]"
 

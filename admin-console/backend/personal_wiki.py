@@ -167,7 +167,7 @@ def _extract_text_for_file(path: Path, max_chars: int = 5000) -> str:
                     return mod.extract_text(path, max_chars=max_chars)  # type: ignore
                 except Exception as e:
                     logger.debug(f"extractor failed: {e}")
-    except Exception:
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
         pass
     # fallback: utf8 decode or hex preview
     try:
@@ -407,7 +407,7 @@ def _audit(request: Request | None, event_type: str, detail: dict[str, Any]) -> 
         if sec_path not in sys.path:
             sys.path.insert(0, sec_path)
         # we just log; actual ledger wiring is optional
-    except Exception:
+    except (OSError, AttributeError):
         pass
 
 # ---------------------------------------------------------------------------
@@ -894,7 +894,7 @@ async def search_notes(
                 "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
                 "source": "vault_fs",
             }
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug(f"fs search failed: {e}")
     # if no FS hits and DB not configured -> mock fallback only in non-prod
     if not _is_db_configured():
@@ -982,7 +982,7 @@ async def list_notes(
                 "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
                 "source": "vault_fs",
             }
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug(f"fs list failed: {e}")
     if not _is_db_configured():
         if _is_production():

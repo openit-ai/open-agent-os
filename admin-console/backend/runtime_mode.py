@@ -25,6 +25,11 @@ except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
 router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
 
 
@@ -47,7 +52,7 @@ def _db_url() -> str | None:
         url = get_database_url()
         if url and url.strip():
             return url.strip()
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError):
         pass
     url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
     return url.strip() if url and url.strip() else None
@@ -78,7 +83,7 @@ def _get_engine():
         from sqlalchemy import create_engine
         _db_engine = create_engine(_normalize_sync_url(url), pool_pre_ping=True) if not _normalize_sync_url(url).startswith("sqlite") else create_engine(_normalize_sync_url(url))
         return _db_engine
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"runtime_mode DB engine failed: {e}")
         return None
 
@@ -93,7 +98,7 @@ def _db_get_mode() -> str | None:
             row = conn.execute(text("SELECT value FROM admin_settings WHERE key='runtime_mode'")).fetchone()
             if row and row[0] in ("hermes", "llm"):
                 return row[0]
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"runtime_mode DB read failed: {e}")
     return None
 
@@ -109,23 +114,23 @@ def _db_set_mode(value: str) -> bool:
         try:
             with engine.begin() as conn:
                 conn.execute(text("CREATE TABLE IF NOT EXISTS admin_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT, extra TEXT)"))
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError):
             pass
         with engine.begin() as conn:
             # Try Postgres ON CONFLICT first
             try:
                 conn.execute(text("INSERT INTO admin_settings (key, value, updated_at) VALUES ('runtime_mode', :v, :now) ON CONFLICT (key) DO UPDATE SET value=:v, updated_at=:now"), {"v": value, "now": now})
                 return True
-            except Exception:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError):
                 pass
             # SQLite fallback
             try:
                 conn.execute(text("INSERT OR REPLACE INTO admin_settings (key, value, updated_at) VALUES ('runtime_mode', :v, :now)"), {"v": value, "now": now})
                 return True
-            except Exception as e2:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e2:
                 logger.debug(f"runtime_mode DB write fallback failed: {e2}")
                 return False
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"runtime_mode DB write failed: {e}")
         return False
 
@@ -137,7 +142,7 @@ def _init_mode() -> RuntimeMode:
         db_v = _db_get_mode()
         if db_v in ("hermes", "llm"):
             return RuntimeMode(db_v)
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError):
         pass
     env_v = os.environ.get("OAOS_RUNTIME_MODE", "").lower()
     if env_v in ("hermes", "llm"):
@@ -159,7 +164,7 @@ def get_mode() -> RuntimeMode:
                 _current_mode = RuntimeMode(db_v)
                 os.environ["OAOS_RUNTIME_MODE"] = db_v
             return _current_mode
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError):
         pass
     return _current_mode
 

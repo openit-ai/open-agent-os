@@ -487,7 +487,7 @@ def _emit_audit(request: Request, event_type: str, detail: dict[str, Any]) -> No
         # try to resolve event type enum
         try:
             et = _AuditEventType(event_type)  # type: ignore
-        except Exception:
+        except (ValueError, AttributeError):
             # fallback: use string as event_type if not in enum (MEMORY_DELETE not in enum)
             et = event_type  # type: ignore
         # Try to append to a process-global ledger if available (security.app audit_ledger)
@@ -498,7 +498,7 @@ def _emit_audit(request: Request, event_type: str, detail: dict[str, Any]) -> No
             spec = importlib.util.spec_from_file_location("audit_ledger_mod", str(ledger_mod_path))
             if spec and spec.loader:
                 pass  # just ensure import works
-        except Exception:
+        except (ImportError, ModuleNotFoundError, FileNotFoundError):
             pass
         # Construct event for logging / DB persistence; we don't maintain a long-lived ledger here
         # Log with hash-chain intent
@@ -514,7 +514,7 @@ def _emit_audit(request: Request, event_type: str, detail: dict[str, Any]) -> No
                 "agent_id": agent_id,
                 "detail": detail,
             })
-        except Exception:
+        except (AttributeError, TypeError):
             pass
     except Exception as e:
         logger.info(f"[AUDIT:{event_type}] tenant={tenant} user={user_id} detail={detail} (ledger fallback failed: {e})")
@@ -546,7 +546,7 @@ async def _emit_audit_db(event_type: str, tenant_id: str, user_id: str | None, a
             )
             session.add(row)
             await session.commit()
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.warning(f"audit DB persist failed for {event_type}: {e}")
 
 
@@ -680,17 +680,17 @@ async def _db_physical_delete(memory_ids: list[str]) -> int:
             # delete embeddings
             try:
                 await session.execute(delete(MemoryEmbeddingORM).where(MemoryEmbeddingORM.id.in_(memory_ids)))  # type: ignore
-            except Exception as e:
+            except SQLAlchemyError as e:
                 logger.warning(f"db delete embeddings failed: {e}")
             # delete access bindings
             try:
                 await session.execute(delete(MemoryAccessBindingORM).where(MemoryAccessBindingORM.memory_id.in_(memory_ids)))  # type: ignore
-            except Exception as e:
+            except SQLAlchemyError as e:
                 logger.warning(f"db delete access_bindings failed: {e}")
             # delete sources
             try:
                 await session.execute(delete(MemorySourceORM).where(MemorySourceORM.memory_id.in_(memory_ids)))  # type: ignore
-            except Exception as e:
+            except SQLAlchemyError as e:
                 logger.warning(f"db delete sources failed: {e}")
             # delete memories
             try:
@@ -1563,7 +1563,7 @@ async def memory_invalidate(payload: dict, request: Request):
                             update(MemoryORM).where(MemoryORM.source_delegation_id == delegation_id).values(invalidated_at=datetime.now(timezone.utc), invalidation_reason=reason)  # type: ignore
                         )
                         await session.commit()
-                except Exception as e:
+                except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
                     logger.warning(f"memory_invalidate DB update by delegation failed: {e}")
         _emit_audit(request, "MEMORY_INVALIDATE", {"delegation_id": delegation_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
@@ -1598,7 +1598,7 @@ async def memory_invalidate(payload: dict, request: Request):
                             if mids2:
                                 await session.execute(update(MemoryORM).where(MemoryORM.id.in_(mids2)).values(invalidated_at=datetime.now(timezone.utc), invalidation_reason=reason))  # type: ignore
                                 await session.commit()
-                except Exception as e:
+                except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
                     logger.warning(f"memory_invalidate DB update by resource failed: {e}")
         _emit_audit(request, "MEMORY_INVALIDATE", {"source_resource_id": source_resource_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
@@ -1625,7 +1625,7 @@ async def memory_invalidate(payload: dict, request: Request):
                     async with maker() as session:
                         await session.execute(update(MemoryORM).where(MemoryORM.id == memory_id).values(invalidated_at=datetime.now(timezone.utc), invalidation_reason=reason))  # type: ignore
                         await session.commit()
-                except Exception as e:
+                except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
                     logger.warning(f"memory_invalidate DB update by memory_id failed: {e}")
         _emit_audit(request, "MEMORY_INVALIDATE", {"memory_id": memory_id, "reason": reason, "count": 1 if ok else 0, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:

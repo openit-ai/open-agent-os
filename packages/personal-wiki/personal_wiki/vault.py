@@ -54,7 +54,7 @@ def _load_wiki_auth():
             _sys2.modules[spec.name] = mod
             spec.loader.exec_module(mod)  # type: ignore
             return mod
-    except Exception:
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
         return None
     return None
 

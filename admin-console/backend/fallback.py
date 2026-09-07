@@ -37,6 +37,11 @@ except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
 router = APIRouter(prefix="/v1/llm", tags=["llm-fallback"])
 
 try:
@@ -172,7 +177,7 @@ def _db_url() -> str | None:
         url = get_database_url()
         if url and url.strip():
             return url.strip()
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError):
         pass
     url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
     return url.strip() if url and url.strip() else None
@@ -207,7 +212,7 @@ def _get_engine():
                 kwargs["connect_args"] = {"check_same_thread": False}
         _db_engine = create_engine(sync_url, **kwargs)
         return _db_engine
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"fallback DB engine failed: {e}")
         return None
 
@@ -216,7 +221,7 @@ def _ensure_table(engine) -> None:
         from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE IF NOT EXISTS admin_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT, extra TEXT)"))
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError):
         pass
 
 def _db_get_raw() -> str | None:
@@ -230,7 +235,7 @@ def _db_get_raw() -> str | None:
             row = conn.execute(text("SELECT value FROM admin_settings WHERE key='llm_fallback'")).fetchone()
             if row and row[0]:
                 return row[0]
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"fallback DB read failed: {e}")
     return None
 
@@ -247,16 +252,16 @@ def _db_set_raw(value_json: str, updated_by: str | None = None) -> bool:
                 conn.execute(text("INSERT INTO admin_settings (key, value, updated_at, updated_by) VALUES ('llm_fallback', :v, :now, :by) ON CONFLICT (key) DO UPDATE SET value=:v, updated_at=:now, updated_by=:by"),
                              {"v": value_json, "now": now, "by": updated_by})
                 return True
-            except Exception:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError):
                 pass
             try:
                 conn.execute(text("INSERT OR REPLACE INTO admin_settings (key, value, updated_at, updated_by) VALUES ('llm_fallback', :v, :now, :by)"),
                              {"v": value_json, "now": now, "by": updated_by})
                 return True
-            except Exception as e2:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e2:
                 logger.debug(f"fallback DB write fallback failed: {e2}")
                 return False
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"fallback DB write failed: {e}")
         return False
 
@@ -302,7 +307,7 @@ def _load_config() -> FallbackConfig:
                 logger.warning("[model_guard] _load_config stripping blocked fallback_model=%r", fm)
                 data = dict(data)
                 data["fallback_model"] = None
-        except Exception:
+        except (AttributeError, TypeError):
             pass
         return data
     # DB first
@@ -316,7 +321,7 @@ def _load_config() -> FallbackConfig:
             # mirror to env for OAOS consumers (LLM Runtime only)
             os.environ["OAOS_LLM_FALLBACK_JSON"] = raw
             return cfg
-        except Exception as e:
+        except (ValueError, AttributeError, TypeError) as e:
             logger.debug(f"fallback parse DB failed: {e}")
     # env
     env_raw = os.environ.get("OAOS_LLM_FALLBACK_JSON", "").strip()
@@ -327,7 +332,7 @@ def _load_config() -> FallbackConfig:
             cfg = FallbackConfig(**data)
             _inmem = cfg
             return cfg
-        except Exception:
+        except (ValueError, AttributeError, TypeError):
             pass
     # in-memory or default
     if _inmem is not None:
@@ -356,7 +361,7 @@ def _save_config(cfg: FallbackConfig, updated_by: str | None = None) -> Fallback
             os.environ["OAOS_FALLBACK_MODEL"] = cfg.fallback_model
         else:
             os.environ.pop("OAOS_FALLBACK_MODEL", None)
-    except Exception:
+    except (OSError, TypeError, ValueError):
         pass
     _db_set_raw(raw, updated_by=updated_by)
     # Hermes config write is disabled by default (ownership gate).
@@ -409,7 +414,7 @@ def _write_hermes_config(cfg: FallbackConfig) -> None:
         }
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.warning(f"Hermes fallback config overwritten via OAOS (explicit opt-in): {path}")
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug(f"hermes config write skipped: {e}")
 
 def _validate_update(req: FallbackUpdateRequest, current: FallbackConfig) -> FallbackConfig:

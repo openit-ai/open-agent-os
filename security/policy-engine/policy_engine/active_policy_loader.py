@@ -224,9 +224,9 @@ def _get_mem_active_dict(tenant_id: str = "default") -> Optional[dict]:
                         rec = m.get_active_published_bundle(tenant_id)  # type: ignore
                         if rec is not None:
                             return rec
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     pass
-    except Exception:
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
         pass
     return None
 
@@ -326,10 +326,10 @@ def get_active_policy_engine(tenant_id: str = "default"):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from policy_engine.engine import PolicyEngine  # type: ignore
         return PolicyEngine([bundle])
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         try:
             from policy_engine.engine import PolicyEngine  # type: ignore
             return PolicyEngine([bundle])
-        except Exception as e:
+        except (ImportError, ModuleNotFoundError) as e:
             logger.debug(f"active_policy_loader engine build failed: {e}")
             return None

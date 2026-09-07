@@ -15,6 +15,11 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+try:
+    from redis.exceptions import RedisError
+except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effort fallback
+    RedisError = Exception  # type: ignore
+
 _TTL_SECONDS = 600
 _PREFIX = "profile:policy"
 _CACHE_PREFIX = "profile:policy"
@@ -66,7 +71,7 @@ def _get_client() -> Any | None:
         # don't cache this auto client as global to avoid stale; but store for reuse
         _client = c
         return c
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, RedisError) as e:
         logger.debug(f"cache lazy redis unavailable: {e}")
         return None
 
@@ -101,7 +106,7 @@ def get_cached_policy(tenant_id: str, user_id: str, task_type: str, profile_vers
                     if any(k in data for k in ("verbosity", "conclusion_first")):
                         return {"policy": data}
                     return data
-        except Exception as e:
+        except (RedisError, ValueError) as e:
             logger.debug(f"cache get redis failed key={key}: {e}")
             # fail-safe: if redis URL configured, don't fallback, just return None
             if has_redis_url and not has_injected:
@@ -124,7 +129,7 @@ def get_cached_policy(tenant_id: str, user_id: str, task_type: str, profile_vers
         if isinstance(data, dict):
             return {"policy": data} if any(k in data for k in ("verbosity", "conclusion_first")) else data
         return None
-    except Exception as e:
+    except ValueError as e:
         logger.debug(f"cache get fallback failed key={key}: {e}")
         return None
 
@@ -150,7 +155,7 @@ def set_cached_policy(tenant_id: str, user_id: str, task_type: str, profile_vers
             if has_injected:
                 _fallback[key] = (payload, time.monotonic() + _TTL_SECONDS)
             return
-        except Exception as e:
+        except (RedisError, TypeError) as e:
             logger.debug(f"cache set redis failed key={key}: {e}")
             # fail-safe: if redis URL configured and not injected, don't fallback
             if has_redis_url and not has_injected:
@@ -187,7 +192,7 @@ def invalidate_user_cache(tenant_id: str, user_id: str) -> int:
                         keys.extend(k2)
                     elif k2:
                         keys.append(k2)
-            except Exception as se:
+            except RedisError as se:
                 logger.debug(f"cache scan failed: {se}")
             # decode bytes keys if needed
             decoded_keys: list[str] = []
@@ -195,7 +200,7 @@ def invalidate_user_cache(tenant_id: str, user_id: str) -> int:
                 if isinstance(k, bytes):
                     try:
                         decoded_keys.append(k.decode())
-                    except Exception:
+                    except (UnicodeDecodeError, AttributeError):
                         decoded_keys.append(str(k))
                 else:
                     decoded_keys.append(str(k))
@@ -206,7 +211,7 @@ def invalidate_user_cache(tenant_id: str, user_id: str) -> int:
                         deleted += res
                     else:
                         deleted += len(decoded_keys)
-                except Exception:
+                except RedisError:
                     for kk in decoded_keys:
                         try:
                             r = client.delete(kk)
@@ -214,9 +219,9 @@ def invalidate_user_cache(tenant_id: str, user_id: str) -> int:
                                 deleted += 1 if isinstance(r, int) else 1
                             else:
                                 deleted += 0
-                        except Exception:
+                        except RedisError:
                             pass
-        except Exception as e:
+        except RedisError as e:
             logger.debug(f"cache invalidate redis failed: {e}")
     # always clear fallback matching prefix
     try:

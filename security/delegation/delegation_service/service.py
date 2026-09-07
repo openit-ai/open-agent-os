@@ -162,7 +162,7 @@ def _db_get_session():
             from security.models.db import Base  # type: ignore
             from security.models.orm import DelegationORM, CredentialBindingORM  # noqa: F401  # type: ignore
             Base.metadata.create_all(bind=engine)
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError):
             # fallback: try via file path
             try:
                 import sys
@@ -173,7 +173,7 @@ def _db_get_session():
                 from security.models.db import Base  # type: ignore
                 from security.models.orm import DelegationORM, CredentialBindingORM  # noqa: F401  # type: ignore
                 Base.metadata.create_all(bind=engine)
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 pass
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         session = Session()

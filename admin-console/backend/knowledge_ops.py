@@ -30,6 +30,11 @@ except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
 router = APIRouter(prefix="/v1/knowledge-ops", tags=["knowledge-ops"])
 
 KNOWN_CONNECTORS: tuple[str, ...] = ("notion", "outline")
@@ -85,7 +90,7 @@ def load_checkpoints(tenant_id: str | None = None) -> tuple[list[dict[str, Any]]
                 for r in rows
             ]
             return out, "db"
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"knowledge-ops load_checkpoints fallback: {e}")
         return [], "fallback"
 
@@ -114,10 +119,10 @@ def count_documents(tenant_id: str | None = None) -> tuple[int, str]:
                     else:
                         row = conn.execute(text(f"SELECT COUNT(*) FROM {tbl}")).fetchone()
                     return int(row[0] if row else 0), "db"
-                except Exception:
+                except SQLAlchemyError:
                     continue
             return 0, "fallback"
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
         logger.debug(f"knowledge-ops count_documents fallback: {e}")
         return 0, "fallback"
 
@@ -139,7 +144,7 @@ def _enqueue_sync(connector: str, tenant_id: str) -> dict[str, Any]:
         payload["via"] = "sync-entrypoint"
         _PENDING_SYNC_JOBS.append(payload)
         return {"enqueued": True, "job_id": job_id, "via": "sync-entrypoint", "payload": payload}
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError) as e:
         logger.debug(f"knowledge-ops sync entrypoint unavailable, local ledger: {e}")
     payload["via"] = "local"
     _PENDING_SYNC_JOBS.append(payload)

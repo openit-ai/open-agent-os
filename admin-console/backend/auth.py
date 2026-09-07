@@ -39,6 +39,7 @@ try:
     from argon2 import PasswordHasher as _Argon2PasswordHasher  # type: ignore
     from argon2.exceptions import VerifyMismatchError as _Argon2VerifyError  # type: ignore
     from argon2.exceptions import InvalidHash as _Argon2InvalidHash  # type: ignore
+    from argon2.exceptions import HashingError as _Argon2HashingError  # type: ignore
 
     # Argon2id with OWASP-recommended params
     _argon2_hasher = _Argon2PasswordHasher(
@@ -148,7 +149,7 @@ def _hash_password(password: str) -> str:
     if _argon2_hasher is not None:
         try:
             return _argon2_hasher.hash(password)
-        except Exception as exc:  # pragma: no cover - extremely rare
+        except _Argon2HashingError as exc:  # pragma: no cover - extremely rare
             logger.warning(f"Argon2id hash failed, falling back to bcrypt: {exc}")
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 

@@ -127,7 +127,7 @@ def _decrypt_api_key(enc: str | None) -> str | None:
     try:
         plain = f.decrypt(enc.encode("utf-8"))
         return plain.decode("utf-8")
-    except Exception:
+    except InvalidToken:
         # InvalidToken or wrong key
         logger.warning("Failed to decrypt api_key — invalid token or wrong key")
         return None

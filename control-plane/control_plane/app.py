@@ -337,7 +337,7 @@ def _get_runtime_router():
             checker = None
         except (ImportError, ModuleNotFoundError):
             pass
-    except Exception:
+    except (ImportError, ModuleNotFoundError, OSError):
         pass
     try:
         return RuntimeRouter(capability_checker=checker) if checker else RuntimeRouter()

@@ -448,7 +448,7 @@ def get_vault() -> Any | None:
                     warnings.simplefilter("ignore", DeprecationWarning)
                     _vault_singleton = cls(encryption_key=b"oaos-control-plane-google-oauth-dev")
                 return _vault_singleton
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             continue
     return None
 
