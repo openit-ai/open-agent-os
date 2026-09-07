@@ -221,8 +221,9 @@ def _db_enabled() -> bool:
             from .persistence import get_database_url  # type: ignore
         url = get_database_url()
         return bool(url and url.strip())
-    except Exception:
+    except (AttributeError, TypeError, ValueError) as exc:
         # fallback: check env directly
+        logger.warning("admin database URL helper failed; using environment fallback: %s", type(exc).__name__)
         url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
         return bool(url and url.strip())
 
@@ -315,7 +316,8 @@ def _db_sync_url() -> str | None:
         except ImportError:
             from .persistence import get_database_url  # type: ignore
         url = get_database_url()
-    except Exception:
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.warning("admin database URL helper failed; using environment fallback: %s", type(exc).__name__)
         url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
     if not url or not url.strip():
         return None
@@ -349,16 +351,16 @@ def _db_ensure_table(engine) -> None:
                 # sqlite: add extra if missing (ignore if exists)
                 try:
                     conn.execute(text("ALTER TABLE admin_users ADD COLUMN extra TEXT"))
-                except Exception:
+                except SQLAlchemyError:
                     pass
                 try:
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_admin_users_email ON admin_users (email)"))
-                except Exception:
+                except SQLAlchemyError:
                     pass
-        except Exception:
+        except SQLAlchemyError:
             pass
         return
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, AttributeError, TypeError, ValueError):
         pass
     try:
         from sqlalchemy import text
@@ -395,9 +397,9 @@ def _db_ensure_table(engine) -> None:
             # legacy fix: add extra column if table was created by older DDL
             try:
                 conn.execute(text("ALTER TABLE admin_users ADD COLUMN extra TEXT"))
-            except Exception:
+            except SQLAlchemyError:
                 pass
-    except Exception:
+    except SQLAlchemyError:
         pass
 
 
@@ -421,7 +423,8 @@ def _db_get_session():
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         session = Session()
         return session, engine
-    except Exception:
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as exc:
+        logger.warning("admin DB session creation failed: %s", type(exc).__name__)
         return None, None
 
 
@@ -456,7 +459,7 @@ def _has_existing_admin() -> bool:
                     return cnt > 0
                 finally:
                     _db_close(session, engine)
-        except Exception as e:
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             # Startup probe only — failure means "no visible admin" which keeps
             # production fail-closed (bootstrap-or-crash in _seed_admin).
             logger.debug("admin existence probe failed: %s", type(e).__name__)
@@ -489,29 +492,33 @@ def _seed_admin() -> None:
         if _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    raise RuntimeError("production admin bootstrap database unavailable")
+                try:
+                    from security.models.orm import AdminUserORM  # type: ignore
+                    existing = session.query(AdminUserORM).filter(AdminUserORM.email == _bootstrap_email).first()  # type: ignore
+                    if existing is None:
+                        orm = _to_orm(user)
+                        session.add(orm)
+                        session.commit()
+                    else:
+                        db_user = _from_orm(existing)
+                        _users_by_id[db_user.id] = db_user
+                        _users_by_email[db_user.email] = db_user
+                        if db_user.id != uid and uid in _users_by_id:
+                            del _users_by_id[uid]
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
                     try:
-                        from security.models.orm import AdminUserORM  # type: ignore
-                        existing = session.query(AdminUserORM).filter(AdminUserORM.email == _bootstrap_email).first()  # type: ignore
-                        if existing is None:
-                            orm = _to_orm(user)
-                            session.add(orm)
-                            session.commit()
-                        else:
-                            db_user = _from_orm(existing)
-                            _users_by_id[db_user.id] = db_user
-                            _users_by_email[db_user.email] = db_user
-                            if db_user.id != uid and uid in _users_by_id:
-                                del _users_by_id[uid]
-                    except Exception:
-                        try:
-                            session.rollback()
-                        except SQLAlchemyError:
-                            logger.debug("admin auth rollback failed (best-effort)")
-                    finally:
-                        _db_close(session, engine)
-            except Exception:
-                pass
+                        session.rollback()
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
+                    logger.warning("production admin bootstrap DB persist failed: %s", type(e).__name__)
+                    raise RuntimeError("production admin bootstrap could not be persisted") from e
+                finally:
+                    _db_close(session, engine)
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
+                logger.warning("production admin bootstrap DB session unavailable: %s", type(e).__name__)
+                raise RuntimeError("production admin bootstrap database unavailable") from e
         return
     # Non-production: dev/test seed (preserves existing tests)
     email = "admin@openit.co.kr"
@@ -532,7 +539,9 @@ def _seed_admin() -> None:
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                logger.debug("non-production admin seed DB session unavailable; keeping cache seed")
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # lazy
                     existing = session.query(AdminUserORM).filter(AdminUserORM.email == email).first()  # type: ignore
@@ -548,15 +557,15 @@ def _seed_admin() -> None:
                         # remove the temp uid entry if ids differ
                         if db_user.id != uid and uid in _users_by_id:
                             del _users_by_id[uid]
-                except Exception:
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError):
                     try:
                         session.rollback()
                     except SQLAlchemyError:
                         logger.debug("admin auth rollback failed (best-effort)")
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
+            logger.debug("non-production admin seed DB persist failed: %s", type(e).__name__)
 
 
 _seed_admin()
@@ -587,7 +596,7 @@ def get_user_by_email(email: str) -> Optional[AdminUser]:
                         return user
                 finally:
                     _db_close(session, engine)
-        except Exception as e:
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             db_down = True
             logger.warning("auth DB lookup by email failed (backend, not unknown user): %s", type(e).__name__)
     user = _users_by_email.get(email)
@@ -631,7 +640,7 @@ def get_user_by_id(uid: str) -> Optional[AdminUser]:
                         return user
                 finally:
                     _db_close(session, engine)
-        except Exception as e:
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             db_down = True
             logger.warning("auth DB lookup by id failed (backend, not unknown user): %s", type(e).__name__)
     user = _users_by_id.get(uid)
@@ -663,20 +672,23 @@ def clear_users() -> None:
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                if _is_production():
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     session.query(AdminUserORM).delete()  # type: ignore
                     session.commit()
-                except Exception:
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError):
                     try:
                         session.rollback()
                     except SQLAlchemyError:
                         logger.debug("admin auth rollback failed (best-effort)")
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
+            logger.debug("admin clear-users DB cleanup failed: %s", type(e).__name__)
     _seed_admin()
 
 
@@ -684,7 +696,10 @@ def list_users() -> list[AdminUser]:
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                if _is_production():
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     rows = session.query(AdminUserORM).all()  # type: ignore
@@ -698,8 +713,8 @@ def list_users() -> list[AdminUser]:
                     return users
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
+            logger.warning("admin list-users DB lookup failed; using cache: %s", type(e).__name__)
     return list(_users_by_id.values())
 
 
@@ -757,7 +772,10 @@ def register(req: RegisterRequest, admin: AdminUser = Depends(require_l5)):
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                if _is_production():
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     # double-check duplicate inside DB tx
@@ -776,7 +794,7 @@ def register(req: RegisterRequest, admin: AdminUser = Depends(require_l5)):
                     except SQLAlchemyError:
                         logger.debug("admin auth rollback failed (best-effort)")
                     raise
-                except Exception as e:
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
                     try:
                         session.rollback()
                     except (SQLAlchemyError, AttributeError, TypeError):
@@ -790,7 +808,7 @@ def register(req: RegisterRequest, admin: AdminUser = Depends(require_l5)):
                     _db_close(session, engine)
         except HTTPException:
             raise
-        except Exception as e:
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             logger.warning("admin register DB unavailable: %s", type(e).__name__)
             if _is_production():
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
@@ -833,7 +851,10 @@ def delete_admin_user(user_id: str, admin: AdminUser = Depends(require_l5)):
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                if _is_production():
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     row = session.query(AdminUserORM).filter(AdminUserORM.id == user_id).first()  # type: ignore
@@ -847,7 +868,7 @@ def delete_admin_user(user_id: str, admin: AdminUser = Depends(require_l5)):
                     except SQLAlchemyError:
                         logger.debug("admin auth rollback failed (best-effort)")
                     raise
-                except Exception as e:
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
                     # Credential delete failed in durable store — must not claim "deleted"
                     # while the DB row persists (would resurrect on re-hydrate).
                     try:
@@ -861,7 +882,7 @@ def delete_admin_user(user_id: str, admin: AdminUser = Depends(require_l5)):
                     _db_close(session, engine)
         except HTTPException:
             raise
-        except Exception as e:
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             logger.warning("admin delete DB unavailable for %s: %s", user_id, type(e).__name__)
             if _is_production():
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
@@ -888,14 +909,17 @@ def change_password(req: ChangePasswordRequest, admin: AdminUser = Depends(get_c
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                if _is_production():
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     row = session.query(AdminUserORM).filter(AdminUserORM.email == fresh.email).first()  # type: ignore
                     if row is not None:
                         row.hashed_password = new_hashed  # type: ignore
                         session.commit()
-                except Exception as e:
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
                     try:
                         session.rollback()
                     except (SQLAlchemyError, AttributeError, TypeError):
@@ -908,7 +932,7 @@ def change_password(req: ChangePasswordRequest, admin: AdminUser = Depends(get_c
                     _db_close(session, engine)
         except HTTPException:
             raise
-        except Exception as e:
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             logger.warning("change-password DB unavailable: %s", type(e).__name__)
             if _is_production():
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
@@ -931,14 +955,17 @@ def update_profile(req: UpdateProfileRequest, admin: AdminUser = Depends(get_cur
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                if _is_production():
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     row = session.query(AdminUserORM).filter(AdminUserORM.email == fresh.email).first()  # type: ignore
                     if row is not None:
                         row.display_name = req.display_name  # type: ignore
                         session.commit()
-                except Exception as e:
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
                     try:
                         session.rollback()
                     except (SQLAlchemyError, AttributeError, TypeError):
@@ -950,7 +977,7 @@ def update_profile(req: UpdateProfileRequest, admin: AdminUser = Depends(get_cur
                     _db_close(session, engine)
         except HTTPException:
             raise
-        except Exception as e:
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             logger.warning("update-profile DB unavailable: %s", type(e).__name__)
             if _is_production():
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")

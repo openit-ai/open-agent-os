@@ -37,6 +37,7 @@ import time
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
+from jose import JWTError
 
 logger = logging.getLogger(__name__)
 
@@ -109,16 +110,20 @@ def _ensure_signing_key_fresh() -> None:
         try:
             if hasattr(svc, "signing_key") and getattr(svc, "signing_key") != fresh:
                 svc.signing_key = fresh
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            logger.warning("signing key refresh failed for %s: %s", type(svc).__name__, type(exc).__name__)
+            if _is_production():
+                raise RuntimeError("security signing key refresh failed") from exc
     # Also handle TokenService's alternate attribute names
     for svc in (token_service,):
         for attr in ("signing_key", "_signing_key"):
             try:
                 if hasattr(svc, attr) and getattr(svc, attr) != fresh:
                     setattr(svc, attr, fresh)
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                logger.warning("signing key refresh failed for %s.%s: %s", type(svc).__name__, attr, type(exc).__name__)
+                if _is_production():
+                    raise RuntimeError("security signing key refresh failed") from exc
 
 ENCRYPTION_KEY = os.environ.get("OAOS_ENCRYPTION_KEY", "dev-encryption-key-32bytes!!").encode()
 
@@ -151,10 +156,10 @@ try:
     _memory_store_instance = _get_mem_store()
     try:
         delegation_service.set_memory_store(_memory_store_instance)
-    except Exception:
-        pass
-except Exception:
-    pass
+    except (AttributeError, TypeError, RuntimeError) as exc:
+        logger.warning("memory-store revoke wiring unavailable: %s", type(exc).__name__)
+except (ImportError, ModuleNotFoundError, AttributeError, TypeError, RuntimeError) as exc:
+    logger.warning("memory-store initialization unavailable: %s", type(exc).__name__)
 try:
     # create vault singleton for cascade (reuses ENCRYPTION_KEY); lazy so tests without DB still pass
     try:
@@ -169,12 +174,13 @@ try:
             vault_instance = EncryptedPostgresVault(encryption_key=ENCRYPTION_KEY, audit_ledger=audit_ledger, delegation_service=delegation_service)
             try:
                 delegation_service.set_vault(vault_instance)
-            except Exception:
-                pass
-        except Exception:
+            except (AttributeError, TypeError, RuntimeError) as exc:
+                logger.warning("vault revoke wiring unavailable: %s", type(exc).__name__)
+        except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError, OSError) as exc:
+            logger.warning("vault initialization unavailable: %s", type(exc).__name__)
             vault_instance = None
-except Exception:
-    pass
+except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, RuntimeError, OSError) as exc:
+    logger.warning("vault wiring unavailable: %s", type(exc).__name__)
 
 
 # ── Request / Response 모델 ────────────────────────────────────
@@ -246,14 +252,14 @@ def _handle_sigterm_sec(signum, frame):
     try:
         import logging as _lg
         _lg.getLogger(__name__).warning("SIGTERM draining security %s", _active_requests)
-    except Exception:
-        pass
+    except (ImportError, AttributeError, TypeError) as exc:
+        logger.debug("SIGTERM logging unavailable: %s", type(exc).__name__)
 
 try:
     import signal as _sig
     _sig.signal(_sig.SIGTERM, _handle_sigterm_sec)
-except Exception:
-    pass
+except (AttributeError, OSError, RuntimeError, ValueError) as exc:
+    logger.debug("SIGTERM handler registration unavailable: %s", type(exc).__name__)
 
 @app.middleware("http")
 async def _track_active_sec(request: Request, call_next):
@@ -271,6 +277,7 @@ def _check_latency(fn):
         latency = round((time.monotonic() - start) * 1000, 2)
         return {"status": "ok", "latency_ms": latency}
     except Exception as e:
+        logger.warning("security health check degraded: %s", type(e).__name__)
         latency = round((time.monotonic() - start) * 1000, 2)
         return {"status": "degraded", "latency_ms": latency, "error": str(e)[:200]}
 
@@ -316,7 +323,7 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
     except Exception as e:
         msg = str(e).lower()
         if "no such module" in msg or "could not parse" in msg or "not found" in msg:
-            return
+            raise RuntimeError(f"db ping unavailable: {e}") from e
         raise RuntimeError(f"db ping failed: {e}") from e
 
 def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
@@ -346,7 +353,7 @@ def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
     except Exception as e:
         msg = str(e).lower()
         if "no module" in msg:
-            return
+            raise RuntimeError(f"redis ping unavailable: {e}") from e
         raise RuntimeError(f"redis ping failed: {e}") from e
 
 def _bounded_vault_ping(timeout_s: float = 0.8) -> None:
@@ -373,8 +380,6 @@ def _bounded_vault_ping(timeout_s: float = 0.8) -> None:
                         return
                     except ImportError:
                         pass
-                    except Exception as e:
-                        raise e
                     import urllib.request
                     import ssl
                     ctx = ssl._create_unverified_context() if vault_addr.startswith("https") else None
@@ -510,8 +515,11 @@ def policy_evaluate(req: PolicyEvaluationRequest, payload: dict = Depends(verify
         )
         audit_ledger.append(evt)
     except Exception as e:
-        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
-        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
+        # The ledger is the primary audit store in production; only non-prod may degrade.
+        logger.error("primary audit append failed: %s", type(e).__name__)
+        if _is_production():
+            raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+        logger.warning("audit append degraded in non-production: %s", type(e).__name__)
     return result
 
 
@@ -537,8 +545,10 @@ def delegation_grant(req: DelegationGrantRequest, payload: dict = Depends(verify
         )
         audit_ledger.append(evt)
     except Exception as e:
-        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
-        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
+        logger.error("primary audit append failed: %s", type(e).__name__)
+        if _is_production():
+            raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+        logger.warning("audit append degraded in non-production: %s", type(e).__name__)
     return d
 
 
@@ -563,8 +573,10 @@ def delegation_revoke(req: DelegationRevokeRequest, payload: dict = Depends(veri
         )
         audit_ledger.append(evt)
     except Exception as e:
-        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
-        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
+        logger.error("primary audit append failed: %s", type(e).__name__)
+        if _is_production():
+            raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+        logger.warning("audit append degraded in non-production: %s", type(e).__name__)
     return {"status": "revoked", "delegation_id": d.id, "delegation": d}
 
 
@@ -609,8 +621,10 @@ def token_issue(req: TokenIssueRequest, payload: dict = Depends(verify_security_
         )
         audit_ledger.append(evt)
     except Exception as e:
-        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
-        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
+        logger.error("primary audit append failed: %s", type(e).__name__)
+        if _is_production():
+            raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+        logger.warning("audit append degraded in non-production: %s", type(e).__name__)
     return {"token": token}
 
 
@@ -622,7 +636,7 @@ def token_verify(req: TokenVerifyRequest, payload: dict = Depends(verify_securit
     except RuntimeError as e:
         # Backend unavailable (Redis/DB in production) — 503, never conflated with invalid credential
         raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+    except (JWTError, ValueError, TypeError) as e:
         raise HTTPException(status_code=401, detail=str(e))
 
 
@@ -656,8 +670,10 @@ def approval_request(req: ApprovalRequestBody, payload: dict = Depends(verify_se
         )
         audit_ledger.append(evt)
     except Exception as e:
-        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
-        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
+        logger.error("primary audit append failed: %s", type(e).__name__)
+        if _is_production():
+            raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+        logger.warning("audit append degraded in non-production: %s", type(e).__name__)
     return ar
 
 
@@ -684,8 +700,10 @@ def approval_decide(req: ApprovalDecideBody, payload: dict = Depends(verify_secu
             )
             audit_ledger.append(evt)
         except Exception as e:
-            # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
-            logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
+            logger.error("primary audit append failed: %s", type(e).__name__)
+            if _is_production():
+                raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+            logger.warning("audit append degraded in non-production: %s", type(e).__name__)
         return ar
     except RuntimeError as e:
         # Approval backend unavailable in production (fail-closed) — 503, not 400/500
@@ -735,7 +753,8 @@ def audit_checkpoint(verify_external: bool = True, payload: dict = Depends(verif
     # base payload
     try:
         base = cp.model_dump(mode="json") if hasattr(cp, "model_dump") else dict(cp)
-    except Exception:
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.debug("audit checkpoint serialization fallback: %s", type(exc).__name__)
         base = {"chain_head_hash": getattr(cp, "chain_head_hash", ""), "event_count": getattr(cp, "event_count", 0), "created_at": str(getattr(cp, "created_at", "")), "signature": getattr(cp, "signature", "")}
     # external verification (best-effort, never fails 200)
     try:
@@ -749,7 +768,8 @@ def audit_checkpoint(verify_external: bool = True, payload: dict = Depends(verif
             if ext_cp is not None:
                 try:
                     base["external_checkpoint"] = ext_cp.model_dump(mode="json") if hasattr(ext_cp, "model_dump") else dict(ext_cp)
-                except Exception:
+                except (AttributeError, TypeError, ValueError) as exc:
+                    logger.debug("external checkpoint serialization fallback: %s", type(exc).__name__)
                     base["external_checkpoint"] = {"chain_head_hash": getattr(ext_cp, "chain_head_hash", ""), "event_count": getattr(ext_cp, "event_count", 0), "signature": getattr(ext_cp, "signature", "")}
             else:
                 base["external_checkpoint"] = None
@@ -760,6 +780,7 @@ def audit_checkpoint(verify_external: bool = True, payload: dict = Depends(verif
             base["external_checkpoint"] = None
             base["external_head_match"] = False
     except Exception as e:
+        logger.warning("external audit checkpoint verification degraded: %s", type(e).__name__)
         base["external_verified"] = False
         base["external_exists"] = False
         base["external_error"] = str(e)[:200]
