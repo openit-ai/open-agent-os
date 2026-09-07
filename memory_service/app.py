@@ -33,7 +33,21 @@ logger = logging.getLogger(__name__)
 try:
     from sqlalchemy.exc import SQLAlchemyError
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
-    SQLAlchemyError = Exception  # type: ignore
+    class SQLAlchemyError(Exception):
+        """Marker used when SQLAlchemy is not installed."""
+
+
+_MEMORY_OPERATION_ERRORS = (
+    ImportError,
+    ModuleNotFoundError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    SQLAlchemyError,
+)
 
 # ---------------------------------------------------------------------------
 # H3 Memory Service Auth Hardening — verified JWT only, no unverified claims
@@ -101,8 +115,8 @@ def _verify_memory_jwt(token: str, required_scope: str | None = None) -> dict:
                 raise HTTPException(status_code=401, detail="invalid bearer: none algorithm not allowed")
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except _MEMORY_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     try:
         payload = _jwt.decode(token, key, algorithms=["HS256"], options={"verify_aud": False, "verify_iss": False})
     except _ESE as e:
@@ -205,7 +219,7 @@ async def _bounded_dependency_check() -> dict[str, Any]:
             async with maker() as session:
                 await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=timeout)
             checks["database"] = {"status": "ok"}
-        except Exception as exc:
+        except _MEMORY_OPERATION_ERRORS as exc:
             checks["database"] = {"status": "failed", "error": type(exc).__name__}
     redis_url = os.environ.get("REDIS_URL") or os.environ.get("OAOS_REDIS_URL")
     if redis_url:
@@ -215,7 +229,7 @@ async def _bounded_dependency_check() -> dict[str, Any]:
             await asyncio.wait_for(client.ping(), timeout=timeout)
             await client.aclose()
             checks["redis"] = {"status": "ok"}
-        except Exception as exc:
+        except _MEMORY_OPERATION_ERRORS as exc:
             checks["redis"] = {"status": "failed", "error": type(exc).__name__}
     else:
         checks["redis"] = {"status": "not_configured"}
@@ -352,11 +366,11 @@ async def _get_db_maker():
             try:
                 async with _db_engine.begin() as conn:
                     await conn.run_sync(Base.metadata.create_all)
-            except Exception:
-                pass
+            except _MEMORY_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
         _db_maker = async_sessionmaker(_db_engine, expire_on_commit=False)
         return _db_maker
-    except Exception:
+    except _MEMORY_OPERATION_ERRORS:
         return None
 
 
@@ -499,7 +513,7 @@ def _emit_audit(request: Request, event_type: str, detail: dict[str, Any]) -> No
             if spec and spec.loader:
                 pass  # just ensure import works
         except (ImportError, ModuleNotFoundError, FileNotFoundError):
-            pass
+            logger.debug("best-effort exception suppressed", exc_info=True)
         # Construct event for logging / DB persistence; we don't maintain a long-lived ledger here
         # Log with hash-chain intent
         logger.info(f"[AUDIT] {event_type} tenant={tenant} user={user_id} detail={detail}")
@@ -515,8 +529,8 @@ def _emit_audit(request: Request, event_type: str, detail: dict[str, Any]) -> No
                 "detail": detail,
             })
         except (AttributeError, TypeError):
-            pass
-    except Exception as e:
+            logger.debug("best-effort exception suppressed", exc_info=True)
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.info(f"[AUDIT:{event_type}] tenant={tenant} user={user_id} detail={detail} (ledger fallback failed: {e})")
     # Fallback always logged above; DB persistence for audit_events is handled async elsewhere if needed
     # We also attempt to log at INFO regardless
@@ -700,17 +714,17 @@ async def _db_physical_delete(memory_ids: list[str]) -> int:
                 try:
                     rc = getattr(result, "rowcount", -1)
                     cnt = rc if rc != -1 else len(memory_ids)
-                except Exception:
+                except _MEMORY_OPERATION_ERRORS:
                     cnt = len(memory_ids)
                 return cnt
-            except Exception as e:
+            except _MEMORY_OPERATION_ERRORS as e:
                 logger.warning(f"db delete memories failed: {e}")
                 try:
                     await session.rollback()
                 except SQLAlchemyError:
                     logger.debug("db delete memories rollback failed (best-effort)")
                 return 0
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"_db_physical_delete failed: {e}")
         return 0
     return 0
@@ -738,7 +752,7 @@ async def _db_collect_ids_by_delegation(delegation_id: str) -> list[str]:
             stmt = select(MemoryORM.id).where(MemoryORM.source_delegation_id == delegation_id)  # type: ignore
             res = await session.execute(stmt)
             return [row[0] for row in res.all()]
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"_db_collect_ids_by_delegation failed: {e}")
         return []
 
@@ -769,8 +783,8 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
                 res = await session.execute(stmt)
                 for row in res.all():
                     ids.add(row[0])
-            except Exception:
-                pass
+            except _MEMORY_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             # also via source_uri
             try:
                 stmt2 = select(MemorySourceORM.memory_id).where(MemorySourceORM.source_uri == source_resource_id)  # type: ignore
@@ -778,7 +792,7 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
                 for row in res2.all():
                     ids.add(row[0])
             except (SQLAlchemyError, IndexError, TypeError):
-                pass
+                logger.debug("best-effort exception suppressed", exc_info=True)
             # via MemoryORM source_ids JSON column (GenericJSON list) — python filter for sqlite/postgres compat
             try:
                 from sqlalchemy import select as _sel2
@@ -796,11 +810,11 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
                             if isinstance(parsed, list) and source_resource_id in parsed:
                                 ids.add(mem_id)
                         except ValueError:
-                            pass
+                            logger.debug("best-effort exception suppressed", exc_info=True)
             except (ImportError, ModuleNotFoundError, SQLAlchemyError):
-                pass
+                logger.debug("best-effort exception suppressed", exc_info=True)
         return list(ids)
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"_db_collect_ids_by_resource failed: {e}")
         return []
 
@@ -854,7 +868,7 @@ try:
         source_resource_id: str | None = None
         reason: str = "manual_delete"
 
-except Exception:  # pragma: no cover
+except _MEMORY_OPERATION_ERRORS:  # pragma: no cover
     WriteRequest = object  # type: ignore
     SearchRequest = object  # type: ignore
     InvalidateRequest = object  # type: ignore
@@ -891,7 +905,7 @@ async def memory_write(payload: dict, request: Request):
         from pydantic import ValidationError  # type: ignore
 
         req = WriteRequest(**payload)  # type: ignore
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         # fallback: plain dict
         if "ValidationError" in type(e).__name__:
             raise HTTPException(status_code=422, detail=str(e))
@@ -938,7 +952,7 @@ async def memory_write(payload: dict, request: Request):
     if isinstance(expires_at, str):
         try:
             expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        except Exception:
+        except _MEMORY_OPERATION_ERRORS:
             raise HTTPException(status_code=422, detail=f"invalid expires_at: {expires_at}")
 
     # ---- Classification + Retention guard (§27.6 / §29) ----
@@ -985,7 +999,7 @@ async def memory_write(payload: dict, request: Request):
         raise HTTPException(status_code=422, detail=str(ve))
     except HTTPException:
         raise
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     # ---- DB persistence when configured ----
@@ -1036,12 +1050,12 @@ async def memory_write(payload: dict, request: Request):
                         # if pgvector Vector, keep list
                         is_text_fallback = False
                 except (ImportError, ModuleNotFoundError):
-                    pass
+                    logger.debug("best-effort exception suppressed", exc_info=True)
                 if is_text_fallback:
                     import json as _json
                     try:
                         embedding_val = _json.dumps(embedding)  # type: ignore
-                    except Exception:
+                    except _MEMORY_OPERATION_ERRORS:
                         raise HTTPException(status_code=422, detail="embedding serialization failed")
                 else:
                     embedding_val = embedding  # type: ignore
@@ -1089,8 +1103,8 @@ async def memory_write(payload: dict, request: Request):
                         if hasattr(mem_row, col):
                             try:
                                 setattr(mem_row, col, val)
-                            except Exception:
-                                pass
+                            except _MEMORY_OPERATION_ERRORS:
+                                logger.debug("best-effort exception suppressed", exc_info=True)
                     session.add(mem_row)
                     # Provenance source row
                     src_row = MemorySourceORM(
@@ -1109,14 +1123,14 @@ async def memory_write(payload: dict, request: Request):
                 _emit_audit(request, "MEMORY_WRITE", {"memory_id": rec.id, "owner": owner, "tenant_id": tenant_id, "classification": classification, "retention_policy": retention_policy})
                 try:
                     await _emit_audit_db("MEMORY_WRITE", tenant_id, owner, agent_id, {"memory_id": rec.id, "classification": classification, "retention_policy": retention_policy})
-                except Exception:
-                    pass
-            except Exception as e:
+                except _MEMORY_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
+            except _MEMORY_OPERATION_ERRORS as e:
                 # DB persistence failed after in-memory write — compensating delete to avoid divergence
                 logger.warning(f"memory_service DB persist failed: {e}")
                 try:
                     _store_physical_delete_single(store, rec.id)
-                except Exception as ce:
+                except _MEMORY_OPERATION_ERRORS as ce:
                     logger.warning(f"compensating delete failed for {rec.id}: {ce}")
                 raise HTTPException(status_code=500, detail=f"DB persist failed: {e}")
             # return governed record (DB persisted)
@@ -1142,7 +1156,7 @@ async def memory_search(payload: dict, request: Request):
     """
     try:
         req = SearchRequest(**payload)  # type: ignore
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         if "ValidationError" in type(e).__name__:
             raise HTTPException(status_code=422, detail=str(e))
         req = payload  # type: ignore
@@ -1252,20 +1266,20 @@ async def memory_search(payload: dict, request: Request):
             if hasattr(MemoryORM, "expires_at"):
                 try:
                     stmt = stmt.where(or_(MemoryORM.expires_at.is_(None), MemoryORM.expires_at > now))  # type: ignore
-                except Exception:
-                    pass
+                except _MEMORY_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
             if hasattr(MemoryORM, "invalidated_at"):
                 try:
                     if not include_invalidated:
                         stmt = stmt.where(MemoryORM.invalidated_at.is_(None))  # type: ignore
-                except Exception:
-                    pass
+                except _MEMORY_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
             elif hasattr(MemoryORM, "invalidated"):
                 try:
                     if not include_invalidated:
                         stmt = stmt.where(MemoryORM.invalidated.is_(False))  # type: ignore
-                except Exception:
-                    pass
+                except _MEMORY_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
 
             # substring / LIKE filter if query provided and pgvector not needed
             has_pgvector = False
@@ -1285,10 +1299,10 @@ async def memory_search(payload: dict, request: Request):
                 esc = _escape_like(query)
                 try:
                     stmt = stmt.where(MemoryORM.content.ilike(f"%{esc}%", escape="\\"))  # type: ignore
-                except Exception:
+                except _MEMORY_OPERATION_ERRORS:
                     try:
                         stmt = stmt.where(MemoryORM.content.like(f"%{esc}%", escape="\\"))  # type: ignore
-                    except Exception:
+                    except _MEMORY_OPERATION_ERRORS:
                         stmt = stmt.where(MemoryORM.content.like(f"%{esc}%"))  # type: ignore
 
             stmt = stmt.order_by(MemoryORM.created_at.desc()).limit(limit * 3)  # fetch extra for ACL post-filter
@@ -1306,8 +1320,8 @@ async def memory_search(payload: dict, request: Request):
                     for src in res2.scalars().all():
                         md = getattr(src, "metadata_", None) or getattr(src, "metadata", None) or {}
                         provenance_map[src.memory_id] = md if isinstance(md, dict) else {}
-                except Exception:
-                    pass
+                except _MEMORY_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
 
             # Python post-filter: ACL (namespace isolation) + scope + classification + expired/invalidated fallback + query fallback
             filtered: list[dict[str, Any]] = []
@@ -1352,8 +1366,8 @@ async def memory_search(payload: dict, request: Request):
                                 ea = ea.replace(tzinfo=timezone.utc)
                             if now > ea:
                                 continue
-                        except Exception:
-                            pass
+                        except _MEMORY_OPERATION_ERRORS:
+                            logger.debug("best-effort exception suppressed", exc_info=True)
 
                 # ACL check via governance store._can_access helper
                 # Build a MemoryRecord-like object for ACL check
@@ -1365,7 +1379,7 @@ async def memory_search(payload: dict, request: Request):
                 # normalize scope for MemoryRecord
                 try:
                     ms = MemoryScope(scope_val) if isinstance(scope_val, str) else scope_val
-                except Exception:
+                except _MEMORY_OPERATION_ERRORS:
                     ms = MemoryScope.PERSONAL  # fallback
 
                 rec_stub = MemoryRecord(
@@ -1414,7 +1428,7 @@ async def memory_search(payload: dict, request: Request):
             return {"results": filtered, "count": len(filtered), "tenant_id": effective_tenant}
     except HTTPException:
         raise
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"memory_service DB search failed: {e}")
         if _is_production():
             raise HTTPException(status_code=503, detail="memory database query failed") from e
@@ -1458,8 +1472,8 @@ async def memory_get(memory_id: str, request: Request):
                             src = res.scalars().first()
                             if src is not None:
                                 prov = getattr(src, "metadata_", None) or getattr(src, "metadata", None) or {}
-                        except Exception:
-                            pass
+                        except _MEMORY_OPERATION_ERRORS:
+                            logger.debug("best-effort exception suppressed", exc_info=True)
                         # ACL check
                         scope_val = getattr(row, "memory_type", None) or getattr(row, "kind", "personal") or getattr(row, "scope", None) or "personal"
                         owner_val = getattr(row, "user_id", None) or getattr(row, "owner", "")
@@ -1471,7 +1485,7 @@ async def memory_get(memory_id: str, request: Request):
 
                         try:
                             ms = MemoryScope(scope_val) if isinstance(scope_val, str) else scope_val
-                        except Exception:
+                        except _MEMORY_OPERATION_ERRORS:
                             ms = MemoryScope.PERSONAL
                         rec_stub = MemoryRecord(
                             id=row.id,
@@ -1509,8 +1523,8 @@ async def memory_get(memory_id: str, request: Request):
                         return out
             except HTTPException:
                 raise
-            except Exception:
-                pass  # fallback to in-memory
+            except _MEMORY_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)  # fallback to in-memory
 
     # Fallback in-memory
     rec = store.read(memory_id, requester=requester)
@@ -1539,7 +1553,7 @@ async def memory_invalidate(payload: dict, request: Request):
         _verify_tenant_binding(auth.get("jwt_payload") or {"tenant_id": auth.get("tenant_id")}, str(_pt).strip())
     try:
         req = InvalidateRequest(**payload)  # type: ignore
-    except Exception:
+    except _MEMORY_OPERATION_ERRORS:
         req = payload  # type: ignore
     memory_id = getattr(req, "memory_id", None) or payload.get("memory_id")
     delegation_id = getattr(req, "delegation_id", None) or payload.get("delegation_id")
@@ -1568,8 +1582,8 @@ async def memory_invalidate(payload: dict, request: Request):
         _emit_audit(request, "MEMORY_INVALIDATE", {"delegation_id": delegation_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
             await _emit_audit_db("MEMORY_INVALIDATE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"delegation_id": delegation_id, "reason": reason, "count": count})
-        except Exception:
-            pass
+        except _MEMORY_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         return {"invalidated": count, "by": "delegation", "delegation_id": delegation_id, "reason": reason}
     if source_resource_id:
         count = store.invalidate_by_resource(source_resource_id, reason=reason)
@@ -1603,8 +1617,8 @@ async def memory_invalidate(payload: dict, request: Request):
         _emit_audit(request, "MEMORY_INVALIDATE", {"source_resource_id": source_resource_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
             await _emit_audit_db("MEMORY_INVALIDATE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"source_resource_id": source_resource_id, "reason": reason, "count": count})
-        except Exception:
-            pass
+        except _MEMORY_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         return {"invalidated": count, "by": "resource", "source_resource_id": source_resource_id, "reason": reason}
     if memory_id:
         # H3 owner/tenant isolation for single invalidate
@@ -1630,8 +1644,8 @@ async def memory_invalidate(payload: dict, request: Request):
         _emit_audit(request, "MEMORY_INVALIDATE", {"memory_id": memory_id, "reason": reason, "count": 1 if ok else 0, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
             await _emit_audit_db("MEMORY_INVALIDATE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"memory_id": memory_id, "reason": reason})
-        except Exception:
-            pass
+        except _MEMORY_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         return {"invalidated": 1 if ok else 0, "by": "memory_id", "memory_id": memory_id, "reason": reason}
     raise HTTPException(status_code=422, detail="memory_id or delegation_id or source_resource_id required")
 
@@ -1655,7 +1669,7 @@ async def memory_delete(payload: dict, request: Request):
         _verify_tenant_binding(auth.get("jwt_payload") or {"tenant_id": auth.get("tenant_id")}, str(_pt).strip())
     try:
         req = DeleteRequest(**payload)  # type: ignore
-    except Exception:
+    except _MEMORY_OPERATION_ERRORS:
         req = payload  # type: ignore
     memory_id = getattr(req, "memory_id", None) or payload.get("memory_id")
     delegation_id = getattr(req, "delegation_id", None) or payload.get("delegation_id")
@@ -1686,8 +1700,8 @@ async def memory_delete(payload: dict, request: Request):
         _emit_audit(request, "MEMORY_DELETE", {"delegation_id": delegation_id, "reason": reason, "count": count_mem, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
             await _emit_audit_db("MEMORY_DELETE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"delegation_id": delegation_id, "reason": reason, "count": count_mem})
-        except Exception:
-            pass
+        except _MEMORY_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         return {"deleted": count_mem, "by": "delegation", "delegation_id": delegation_id, "reason": reason}
 
     if source_resource_id:
@@ -1708,8 +1722,8 @@ async def memory_delete(payload: dict, request: Request):
         _emit_audit(request, "MEMORY_DELETE", {"source_resource_id": source_resource_id, "reason": reason, "count": count_mem, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
             await _emit_audit_db("MEMORY_DELETE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"source_resource_id": source_resource_id, "reason": reason, "count": count_mem})
-        except Exception:
-            pass
+        except _MEMORY_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         return {"deleted": count_mem, "by": "resource", "source_resource_id": source_resource_id, "reason": reason}
 
     if memory_id:
@@ -1726,8 +1740,8 @@ async def memory_delete(payload: dict, request: Request):
         _emit_audit(request, "MEMORY_DELETE", {"memory_id": memory_id, "reason": reason, "count": count, "tenant_id": auth.get("tenant_id"), "user_id": auth.get("user_id")})
         try:
             await _emit_audit_db("MEMORY_DELETE", auth.get("tenant_id") or "default", auth.get("user_id"), auth.get("agent_id"), {"memory_id": memory_id, "reason": reason})
-        except Exception:
-            pass
+        except _MEMORY_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         return {"deleted": count, "by": "memory_id", "memory_id": memory_id, "reason": reason}
 
     raise HTTPException(status_code=422, detail="memory_id or delegation_id or source_resource_id required")
@@ -1779,7 +1793,7 @@ _knowledge_db_engine = None  # type: ignore
 # External API semantics unchanged; health never acquires semaphore.
 try:
     _KN_SYNC_CONC = int((os.environ.get("OAOS_KNOWLEDGE_SYNC_CONCURRENCY") or "2").strip() or "2")
-except Exception:
+except _MEMORY_OPERATION_ERRORS:
     _KN_SYNC_CONC = 2
 _KNOWLEDGE_SYNC_CONCURRENCY = max(1, min(_KN_SYNC_CONC, 4))
 _KNOWLEDGE_SYNC_SEMAPHORE: asyncio.Semaphore | None = None  # lazy
@@ -1807,7 +1821,7 @@ async def _get_knowledge_maker():
                     exists = await conn.run_sync(lambda sc: _inspect(sc).has_table("knowledge_index"))
                 if not exists and _is_production():
                     return None
-        except Exception:
+        except _MEMORY_OPERATION_ERRORS:
             if _is_production():
                 return None
         return maker
@@ -1829,7 +1843,7 @@ async def _get_knowledge_maker():
             await conn.run_sync(lambda sc: KnowledgeIndexORM.__table__.create(sc, checkfirst=True))
         _knowledge_db_maker = async_sessionmaker(_knowledge_db_engine, expire_on_commit=False)
         return _knowledge_db_maker
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"knowledge maker init failed: {e}")
         return None
 
@@ -1840,7 +1854,7 @@ async def knowledge_health():
     try:
         maker = await _get_knowledge_maker()
         db_ok = maker is not None
-    except Exception:
+    except _MEMORY_OPERATION_ERRORS:
         db_ok = False
     return {"status": "ok", "service": "knowledge-index", "db_configured": bool(db_ok or _is_db_configured())}
 
@@ -1877,7 +1891,7 @@ async def knowledge_search(payload: dict, request: Request):
     raw_limit = payload.get("limit", 10)
     try:
         limit = max(1, min(int(raw_limit), 100))
-    except Exception:
+    except _MEMORY_OPERATION_ERRORS:
         limit = 10
 
     # Optional semantic embedding
@@ -1935,7 +1949,7 @@ async def knowledge_search(payload: dict, request: Request):
                 sys.path.insert(0, _cand)
         from knowledge_index.service import search_knowledge  # type: ignore
         from knowledge_index.repository import KnowledgeIndexRepository  # type: ignore
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         raise HTTPException(status_code=500, detail=f"knowledge service import failed: {e}")
 
     repo = KnowledgeIndexRepository(maker)
@@ -1959,7 +1973,7 @@ async def knowledge_search(payload: dict, request: Request):
     except RuntimeError as e:
         # production semantic guard etc.
         raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"knowledge search failed: {e}")
         raise HTTPException(status_code=500, detail=f"knowledge search failed: {e}")
 
@@ -2012,8 +2026,8 @@ async def knowledge_search(payload: dict, request: Request):
     _emit_audit(request, "KNOWLEDGE_SEARCH", {"query": query, "tenant_id": tenant_id, "mode": mode, "count": len(results), "user_id": user_id})
     try:
         await _emit_audit_db("KNOWLEDGE_SEARCH", tenant_id, user_id, auth.get("agent_id"), {"query": query, "mode": mode, "count": len(results)})
-    except Exception:
-        pass
+    except _MEMORY_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     return {"results": results, "count": len(results), "tenant_id": tenant_id, "query": query, "mode": mode}
 
 
@@ -2062,7 +2076,7 @@ async def knowledge_sync(payload: dict, request: Request):
         from knowledge_index.repository import KnowledgeIndexRepository  # type: ignore
         from knowledge_index.embedding import FakeEmbeddingProvider, HashEmbeddingProvider, OllamaEmbeddingProvider  # type: ignore
         from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter  # type: ignore
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         raise HTTPException(status_code=500, detail=f"knowledge service import failed: {e}")
 
     # Decide provider — production uses Ollama (env OAOS_EMBED_API_URL/MODEL), non-prod uses Fake.
@@ -2079,7 +2093,7 @@ async def knowledge_sync(payload: dict, request: Request):
         if _ed:
             try:
                 embed_dim = int(_ed)
-            except Exception:
+            except _MEMORY_OPERATION_ERRORS:
                 embed_dim = int(dim)
         else:
             # in prod prefer 1024 for bge-m3, else payload dim
@@ -2109,7 +2123,7 @@ async def knowledge_sync(payload: dict, request: Request):
                 provider = FakeEmbeddingProvider(dim=dim)
     except HTTPException:
         raise
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         raise HTTPException(status_code=503, detail=f"embedding provider unavailable: {e}")
 
     # Build Outline adapter from payload or env (fail-closed if missing)
@@ -2156,7 +2170,7 @@ async def knowledge_sync(payload: dict, request: Request):
                 result = await sync_outline_to_index(tenant_id=tenant_id, repository=repo, embedding_provider=provider, outline_adapter=adapter, chunk_config=None)
             try:
                 out = result.to_dict()  # type: ignore
-            except Exception:
+            except _MEMORY_OPERATION_ERRORS:
                 import dataclasses as _dc
                 out = _dc.asdict(result) if _dc.is_dataclass(result) else dict(result.__dict__)  # type: ignore
             # Ensure persisted fields
@@ -2165,12 +2179,12 @@ async def knowledge_sync(payload: dict, request: Request):
             _emit_audit(request, "KNOWLEDGE_SYNC", {"tenant_id": tenant_id, "fetched": out.get("fetched"), "persisted": out.get("persisted"), "collection_id": collection_id, "injected": True})
             try:
                 await _emit_audit_db("KNOWLEDGE_SYNC", tenant_id, auth.get("user_id"), auth.get("agent_id"), {"collection_id": collection_id, "fetched": out.get("fetched")})
-            except Exception:
-                pass
+            except _MEMORY_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             return out
         except HTTPException:
             raise
-        except Exception as e:
+        except _MEMORY_OPERATION_ERRORS as e:
             raise HTTPException(status_code=500, detail=f"injected sync failed: {e}")
 
     # Normal path: require Http adapter credentials
@@ -2179,7 +2193,7 @@ async def knowledge_sync(payload: dict, request: Request):
 
     try:
         adapter = HttpOutlineSourceAdapter(api_url=api_url, api_token=api_token, collection_id=collection_id, timeout_s=10.0, max_retries=2, retry_backoff_s=0.1)
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         raise HTTPException(status_code=422, detail=f"invalid Outline adapter config: {e}")
 
     repo = KnowledgeIndexRepository(maker)
@@ -2190,13 +2204,13 @@ async def knowledge_sync(payload: dict, request: Request):
         raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"knowledge sync failed: {e}")
         raise HTTPException(status_code=500, detail=f"knowledge sync failed: {e}")
 
     try:
         out2 = result.to_dict()  # type: ignore
-    except Exception:
+    except _MEMORY_OPERATION_ERRORS:
         import dataclasses as _dc2
         out2 = _dc2.asdict(result) if _dc2.is_dataclass(result) else dict(result.__dict__)  # type: ignore
     if hasattr(result, "persisted"):
@@ -2204,8 +2218,8 @@ async def knowledge_sync(payload: dict, request: Request):
     _emit_audit(request, "KNOWLEDGE_SYNC", {"tenant_id": tenant_id, "fetched": out2.get("fetched"), "persisted": out2.get("persisted"), "collection_id": collection_id})
     try:
         await _emit_audit_db("KNOWLEDGE_SYNC", tenant_id, auth.get("user_id"), auth.get("agent_id"), {"collection_id": collection_id, "fetched": out2.get("fetched")})
-    except Exception:
-        pass
+    except _MEMORY_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     return out2
 
 
@@ -2247,7 +2261,7 @@ async def knowledge_materialize(payload: dict, request: Request):
         try:
             from knowledge_index.repository import KnowledgeIndexRepository  # type: ignore
             repo = KnowledgeIndexRepository(maker)
-        except Exception:
+        except _MEMORY_OPERATION_ERRORS:
             repo = None
 
     try:
@@ -2260,7 +2274,7 @@ async def knowledge_materialize(payload: dict, request: Request):
         from knowledge_index.service import materialize_knowledge_to_outline  # type: ignore
         from knowledge_index.connectors.http_outline import HttpOutlineSourceAdapter  # type: ignore
         from knowledge_index.embedding import FakeEmbeddingProvider, OllamaEmbeddingProvider  # type: ignore
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         raise HTTPException(status_code=500, detail=f"knowledge service import failed: {e}")
 
     # Build adapter — requires write_enabled explicit
@@ -2285,7 +2299,7 @@ async def knowledge_materialize(payload: dict, request: Request):
 
     try:
         adapter = HttpOutlineSourceAdapter(api_url=api_url, api_token=api_token, write_enabled=True, collection_id=collection_id)
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         raise HTTPException(status_code=422, detail=f"invalid Outline adapter: {e}")
 
     # Provider for optional post-materialize indexing; production uses Ollama only.
@@ -2305,7 +2319,7 @@ async def knowledge_materialize(payload: dict, request: Request):
                 )
             else:
                 provider = FakeEmbeddingProvider(dim=1536)
-        except Exception as exc:
+        except _MEMORY_OPERATION_ERRORS as exc:
             logger.warning("knowledge materialization embedding provider unavailable: %s", exc)
             provider = None
             if is_prod:
@@ -2333,15 +2347,15 @@ async def knowledge_materialize(payload: dict, request: Request):
         raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+    except _MEMORY_OPERATION_ERRORS as e:
         logger.warning(f"knowledge materialize failed: {e}")
         raise HTTPException(status_code=500, detail=f"materialize failed: {e}")
 
     _emit_audit(request, "KNOWLEDGE_MATERIALIZE", {"tenant_id": tenant_id, "title": title, "outline_resource_id": result.outline_resource_id})
     try:
         await _emit_audit_db("KNOWLEDGE_MATERIALIZE", tenant_id, auth.get("user_id"), auth.get("agent_id"), {"title": title, "resource_id": result.outline_resource_id})
-    except Exception:
-        pass
+    except _MEMORY_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     return {
         "outline_resource_id": result.outline_resource_id,
         "verification_passed": result.verification_passed,

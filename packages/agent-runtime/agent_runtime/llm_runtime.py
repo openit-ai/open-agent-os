@@ -40,11 +40,28 @@ logger = logging.getLogger(__name__)
 try:
     from sqlalchemy.exc import SQLAlchemyError
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
-    SQLAlchemyError = Exception  # type: ignore
+    class SQLAlchemyError(Exception):
+        """Marker used when SQLAlchemy is not installed."""
+
 try:
     from redis.exceptions import RedisError
 except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effort fallback
-    RedisError = Exception  # type: ignore
+    class RedisError(Exception):
+        """Marker used when redis is not installed."""
+
+
+_RUNTIME_OPERATION_ERRORS = (
+    ImportError,
+    ModuleNotFoundError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    SQLAlchemyError,
+    RedisError,
+)
 
 from pydantic import BaseModel, ValidationError
 
@@ -149,10 +166,11 @@ def _resolve_runtime_mode(explicit: str | RuntimeMode | None = None) -> RuntimeM
                                 m = RuntimeMode.from_str(str(raw))
                                 if m:
                                     return m
-                except Exception:
+                except _RUNTIME_OPERATION_ERRORS:
+                    logger.debug("runtime config endpoint failed endpoint=%s", endpoint, exc_info=True)
                     continue
-        except Exception:
-            pass
+        except _RUNTIME_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
     return RuntimeMode.LLM
 
 def _resolve_provider_from_env() -> ProviderType | None:
@@ -202,10 +220,11 @@ def _fetch_provider_config_from_admin_api(provider: str | None = None) -> dict[s
                             if provider and provider in data and isinstance(data[provider], dict):
                                 return data[provider]
                         return data if isinstance(data, dict) else None
-            except Exception:
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("provider config endpoint failed endpoint=%s", ep, exc_info=True)
                 continue
-    except Exception:
-        pass
+    except _RUNTIME_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     return None
 
 def _provider_env_config(provider: ProviderType | str | None) -> dict[str, Any]:
@@ -335,8 +354,8 @@ def _inject_oaos_context(fn: Callable[..., Any], ctx: OAOSContext, args: dict[st
             elif get_origin(ann) is not None:
                 # Union etc not needed
                 pass
-        except Exception:
-            pass
+        except _RUNTIME_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         if expects_ctx:
             # inject as first positional arg, keep args as kwargs
             return (ctx,), args
@@ -349,7 +368,7 @@ def _inject_oaos_context(fn: Callable[..., Any], ctx: OAOSContext, args: dict[st
                     args[p.name] = ctx
                 return (), args
         return (), args
-    except Exception:
+    except _RUNTIME_OPERATION_ERRORS:
         return (), args
 
 
@@ -381,7 +400,7 @@ class ToolOutputLimits:
         if not isinstance(content, str):
             try:
                 content_str = json.dumps(content, ensure_ascii=False, default=str)
-            except Exception:
+            except _RUNTIME_OPERATION_ERRORS:
                 content_str = str(content)
         else:
             content_str = content
@@ -424,7 +443,7 @@ class ToolOutputLimits:
                     # valid JSON and schema passed
                 except json.JSONDecodeError as e:
                     return content_str, True, f"invalid JSON: {e}"
-                except Exception as e:
+                except _RUNTIME_OPERATION_ERRORS as e:
                     return content_str, True, f"schema check error: {e}"
 
         # No hard retry for pure truncation — LLM can handle marker
@@ -479,9 +498,9 @@ def _quota_redis_url() -> str | None:
     return None
 
 def _allow_quota_fallback() -> bool:
-    if _is_quota_production():
-        return os.getenv("OAOS_ALLOW_TEST_FALLBACK", "").lower() in ("1", "true", "yes")
-    return True
+    # Quota enforcement is a production control; test flags must never bypass
+    # an unavailable Redis/DB backend once production mode is active.
+    return not _is_quota_production()
 
 def _get_quota_redis_client():
     if _quota_redis_override is not None:
@@ -503,18 +522,18 @@ def _get_quota_redis_client():
 def _quota_redis_eval(client, daily_key: str, minute_key: str, dlim: int, mlim: int):
     try:
         return client.eval(_QUOTA_LUA_SCRIPT, 2, daily_key, minute_key, dlim, mlim)
-    except Exception as e:
+    except _RUNTIME_OPERATION_ERRORS as e:
         msg = str(e).lower()
         if "unknown command" in msg and "eval" in msg:
             # fakeredis without lupa fallback — emulate atomically
             dc = client.incr(daily_key)
             if dc == 1:
                 try: client.expire(daily_key, 86400)
-                except RedisError: pass
+                except RedisError: logger.debug("best-effort exception suppressed", exc_info=True)
             mc = client.incr(minute_key)
             if mc == 1:
                 try: client.expire(minute_key, 120)
-                except RedisError: pass
+                except RedisError: logger.debug("best-effort exception suppressed", exc_info=True)
             if dc > dlim:
                 return [-1, dc, mc]
             if mc > mlim:
@@ -558,7 +577,7 @@ def _llm_quota_check(tenant_id):
     rc = None
     try:
         rc = _get_quota_redis_client()
-    except Exception as e:
+    except _RUNTIME_OPERATION_ERRORS as e:
         # production redis unavailable already raised as 503 inside helper
         raise
     if rc is not None:
@@ -589,7 +608,7 @@ def _llm_quota_check(tenant_id):
                     except SQLAlchemyError:
                         logger.debug("llm_runtime engine dispose failed (best-effort)")
             except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError):
-                pass
+                logger.debug("best-effort exception suppressed", exc_info=True)
         daily_key = f"oaos:quota:{tid}:daily:{now.strftime('%Y-%m-%d')}"
         minute_key = f"oaos:quota:{tid}:minute:{now.strftime('%Y-%m-%dT%H:%M')}"
         try:
@@ -600,14 +619,15 @@ def _llm_quota_check(tenant_id):
             if code == -2:
                 raise _quota_http_exc("per-minute quota exceeded")
             return
-        except Exception as e:
+        except _RUNTIME_OPERATION_ERRORS as e:
             if getattr(e, "status_code", None) == 429 or getattr(e, "status_code", None) == 503:
                 raise
             try:
                 detail = getattr(e, "detail", None)
                 if isinstance(detail, dict) and detail.get("code") in ("QUOTA_EXCEEDED","QUOTA_BACKEND_UNAVAILABLE"):
                     raise
-            except: pass
+            except (AttributeError, TypeError):
+                logger.debug("quota exception detail was not a mapping", exc_info=True)
             if "QUOTA_EXCEEDED" in str(e) or "quota exceeded" in str(e).lower():
                 raise
             if _is_quota_production() and not _allow_quota_fallback():
@@ -616,7 +636,7 @@ def _llm_quota_check(tenant_id):
             try:
                 from .env_gate import fail_open_telemetry
                 fail_open_telemetry("quota","redis_failure_fail_open_nonprod", tenant_id=tid, error=str(e)[:200])
-            except Exception:
+            except _RUNTIME_OPERATION_ERRORS:
                 logger.warning("[fail-open] quota redis failure non-prod tenant=%s err=%s", tid, str(e)[:200])
             # fall through
     else:
@@ -653,8 +673,8 @@ def _llm_quota_check(tenant_id):
                 ddl = "CREATE TABLE IF NOT EXISTS admin_llm_quotas (tenant_id TEXT PRIMARY KEY, daily_limit INTEGER NOT NULL DEFAULT 100, per_minute_limit INTEGER NOT NULL DEFAULT 10, used_today INTEGER NOT NULL DEFAULT 0, window_start TEXT, updated_at TEXT NOT NULL)"
                 with eng.begin() as conn:
                     conn.execute(_tt(ddl))
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             from sqlalchemy.orm import sessionmaker as _sm  # type: ignore
             # Use ORM if available else raw
             try:
@@ -686,8 +706,8 @@ def _llm_quota_check(tenant_id):
                 with eng.begin() as conn:
                     try:
                         conn.execute(_t("SELECT tenant_id FROM admin_llm_quotas LIMIT 1"))
-                    except Exception:
-                        pass
+                    except _RUNTIME_OPERATION_ERRORS:
+                        logger.debug("best-effort exception suppressed", exc_info=True)
                 try: eng.dispose()
                 except SQLAlchemyError:
                     logger.debug("llm_runtime engine dispose failed (best-effort)")
@@ -710,7 +730,7 @@ def _llm_quota_check(tenant_id):
                 if isinstance(detail, dict) and detail.get("code") == "QUOTA_EXCEEDED":
                     raise
             except (AttributeError, TypeError, ValueError):
-                pass
+                logger.debug("best-effort exception suppressed", exc_info=True)
             if _is_quota_production():
                 logger.error("quota DB failure fail-closed tenant=%s err=%s", tid, str(e)[:300])
                 raise _quota_db_failure_exc(f"quota backend unavailable: {e}")
@@ -743,7 +763,7 @@ def _llm_quota_clear():
     try:
         if _quota_redis_override is not None:
             _quota_redis_override.flushdb()
-    except RedisError: pass
+    except RedisError: logger.debug("best-effort exception suppressed", exc_info=True)
 
 # ---------------------------------------------------------------------------
 # LLM usage tracking (011) — latency/token/cost, tenant_id aggregated
@@ -787,8 +807,8 @@ def _usage_ensure_table(engine) -> None:
         from security.models.orm import AdminLlmUsageORM  # type: ignore
         from security.models.db import Base  # type: ignore
         Base.metadata.create_all(bind=engine)
-    except Exception:
-        pass
+    except _RUNTIME_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     try:
         from sqlalchemy import text as _t
         ddl = """CREATE TABLE IF NOT EXISTS admin_llm_usage (
@@ -799,8 +819,8 @@ def _usage_ensure_table(engine) -> None:
             error TEXT, created_at TEXT NOT NULL)"""
         with engine.begin() as conn:
             conn.execute(_t(ddl))
-    except Exception:
-        pass
+    except _RUNTIME_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
 
 def _usage_normalize_sync_url(url: str) -> str:
     u = url.strip()
@@ -846,8 +866,8 @@ def _usage_db_insert(rec: dict) -> None:
             eng.dispose()
         except SQLAlchemyError:
             logger.debug("llm_runtime engine dispose failed (best-effort)")
-    except Exception:
-        pass  # fail-open
+    except _RUNTIME_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)  # fail-open
 
 def record_llm_usage(
     tenant_id: str | None = None,
@@ -883,8 +903,8 @@ def record_llm_usage(
     _llm_usage_records.append(rec)
     try:
         _usage_db_insert(rec)
-    except Exception:
-        pass
+    except _RUNTIME_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     return rec
 
 def clear_llm_usage() -> None:
@@ -904,14 +924,14 @@ def clear_llm_usage() -> None:
         with eng.begin() as conn:
             try:
                 conn.execute(_t("DELETE FROM admin_llm_usage"))
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
         try:
             eng.dispose()
         except SQLAlchemyError:
             logger.debug("llm_runtime engine dispose failed (best-effort)")
-    except Exception:
-        pass
+    except _RUNTIME_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
 
 def _usage_to_public(r: dict) -> dict:
     ca = r.get("created_at")
@@ -967,8 +987,8 @@ def get_llm_usage_history(limit: int = 20, tenant_id: str | None = None) -> list
                     eng.dispose()
                 except SQLAlchemyError:
                     logger.debug("llm_runtime engine dispose failed (best-effort)")
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
     # sort newest first
     recs_sorted = sorted(recs, key=lambda x: x.get("created_at") or datetime.min.replace(tzinfo=_tz.utc), reverse=True)
     return [_usage_to_public(r) for r in recs_sorted[:lim]]
@@ -1011,8 +1031,8 @@ def get_llm_usage_summary(tenant_id: str | None = None) -> dict:
                     eng.dispose()
                 except SQLAlchemyError:
                     logger.debug("llm_runtime engine dispose failed (best-effort)")
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
     total = len(recs)
     if total == 0:
         return {"tenant_id": tid or "all", "total_requests": 0, "success_count": 0, "fail_count": 0,
@@ -1183,8 +1203,8 @@ class AuditLogStub:
         for h in self._hooks:
             try:
                 h(ev.to_dict())
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
         return ev
 
     def query(self, trace_id: str | None = None, event_type: str | None = None) -> list[AuditEvent]:
@@ -1218,8 +1238,8 @@ def _is_retryable_exception(exc: BaseException) -> bool:
         import httpx as _hx  # type: ignore
         if isinstance(exc, _hx.TimeoutException):  # type: ignore
             return True
-    except Exception:
-        pass
+    except _RUNTIME_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     # status code based
     for attr in ("status_code", "status", "code"):
         v = getattr(exc, attr, None)
@@ -1316,8 +1336,8 @@ async def _with_retry(
         if audit_log is not None:
             try:
                 audit_log.emit({"event_type": "circuit_breaker_open", "trace_id": trace_id, "data": {"breaker": cb.name, "state": cb.state}})
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
         raise err
     for attempt in range(max_retries + 1):
         try:
@@ -1331,8 +1351,8 @@ async def _with_retry(
                 if audit_log is not None:
                     try:
                         audit_log.emit({"event_type": "llm_failure", "trace_id": trace_id, "data": {"error": str(e)[:500], "retryable": False, "attempt": attempt + 1}})
-                    except Exception:
-                        pass
+                    except _RUNTIME_OPERATION_ERRORS:
+                        logger.debug("best-effort exception suppressed", exc_info=True)
                 raise
             last_exc = e
             if attempt >= max_retries:
@@ -1347,13 +1367,13 @@ async def _with_retry(
                             "data": {"attempt": attempt + 1, "max_retries": max_retries, "error": str(e), "backoff_s": delay},
                         }
                     )
-                except Exception:
-                    pass
+                except _RUNTIME_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
             if audit_log is not None:
                 try:
                     audit_log.emit({"event_type": "retry", "trace_id": trace_id, "data": {"attempt": attempt + 1, "max_retries": max_retries, "error": str(e)[:300], "backoff_s": delay}})
-                except Exception:
-                    pass
+                except _RUNTIME_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
             await asyncio.sleep(delay)
     assert last_exc is not None
     # final failure audit
@@ -1361,8 +1381,8 @@ async def _with_retry(
     if audit_log is not None:
         try:
             audit_log.emit({"event_type": "llm_failure", "trace_id": trace_id, "data": {"error": str(last_exc)[:500], "retryable": True, "attempts": max_retries + 1, "breaker_state": cb.state}})
-        except Exception:
-            pass
+        except _RUNTIME_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
     raise last_exc
 
 
@@ -1377,7 +1397,7 @@ def _extract_content(response: dict[str, Any]) -> str:
             return ""
         msg = choices[0].get("message") or {}
         return str(msg.get("content") or "")
-    except Exception:
+    except _RUNTIME_OPERATION_ERRORS:
         return ""
 
 
@@ -1412,7 +1432,7 @@ async def _validate_and_retry_output(
     try:
         schema_name = getattr(output_type, "__name__", str(output_type))
         json_schema = output_type.model_json_schema() if hasattr(output_type, "model_json_schema") else {}
-    except Exception:
+    except _RUNTIME_OPERATION_ERRORS:
         schema_name = str(output_type)
         json_schema = {}
 
@@ -1478,10 +1498,10 @@ async def _validate_and_retry_output(
                 # Use internal method to avoid re-entering validation
                 current_resp = await llm._raw_completion(retry_messages, tools=tools, trace_id=trace_id, request_id=request_id, **retry_kwargs)
                 history = retry_messages
-            except Exception as e2:
+            except _RUNTIME_OPERATION_ERRORS as e2:
                 current_resp["_output_type_error"] = f"retry failed: {e2}; original: {validation_error}"
                 return current_resp, None
-        except Exception as e:
+        except _RUNTIME_OPERATION_ERRORS as e:
             last_err = str(e)
             current_resp["_output_type_error"] = last_err
             return current_resp, None
@@ -1564,16 +1584,16 @@ class LLMProviderAdapter:
                     from .env_gate import fail_open_telemetry  # type: ignore
 
                     fail_open_telemetry("model_guard", "llm_init_blocked", reason=_reason, provider=str(self.provider_type), model=str(model))  # type: ignore[call-arg]
-                except Exception:
-                    pass
+                except _RUNTIME_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
                 self.provider_type = None
                 # clear blocked model so routing defaults
                 if any(sub in str(model).lower() for sub in ("gpt-5.6-luna", "gpt-5.6-sol")):
                     model = "gpt-4o-mini"
                     routing = {}
                 base_url = None
-        except Exception:
-            pass
+        except _RUNTIME_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         # Provider config resolution: admin-console API merged over env, unless hermes mode (skip)
         if self.runtime_mode == RuntimeMode.HERMES:
             self.provider_config: dict[str, Any] = {}
@@ -1606,8 +1626,8 @@ class LLMProviderAdapter:
                 self.provider_config.pop("base_url", None)
             if is_blocked_model(str(self.provider_config.get("model") or "")):
                 self.provider_config.pop("model", None)
-        except Exception:
-            pass
+        except _RUNTIME_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         self.routing = ModelRouting(default_model=model, routes=routing or {})
         self.timeout_s = timeout_s
         self.max_retries = max_retries
@@ -1628,13 +1648,13 @@ class LLMProviderAdapter:
         if self.audit_log is not None:
             try:
                 self.audit_log.emit(payload)
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
         if self.observability_hook is not None:
             try:
                 self.observability_hook(payload)
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
 
     def push_mock_response(self, response: dict[str, Any]) -> None:
         self._mock_responses.append(response)
@@ -1647,12 +1667,11 @@ class LLMProviderAdapter:
                 resp = dict(resp)
                 resp["model"] = model
             return resp
-        if tools:
-            pass
         return _mock_completion_response(model, messages, tools=tools)
 
     def _check_quota(self, tenant_id: str | None = None, oaos_context: Any | None = None) -> None:
-        # quota hook before provider dispatch — fail-open on DB missing
+        # Quota backend failures are fail-closed in production and explicitly
+        # observable fallback only in non-production.
         tid = ""
         if oaos_context is not None and hasattr(oaos_context, "tenant_id"):
             tid = str(getattr(oaos_context, "tenant_id") or "")
@@ -1662,7 +1681,7 @@ class LLMProviderAdapter:
             tid = "default"
         try:
             _llm_quota_check(tid)
-        except Exception as e:
+        except _RUNTIME_OPERATION_ERRORS as e:
             # re-raise quota 429 (has code QUOTA_EXCEEDED), otherwise fail-open
             msg = str(e)
             if "QUOTA_EXCEEDED" in msg or getattr(e, "status_code", None) == 429:
@@ -1672,9 +1691,11 @@ class LLMProviderAdapter:
                 detail = getattr(e, "detail", None)
                 if isinstance(detail, dict) and detail.get("code") == "QUOTA_EXCEEDED":
                     raise
-            except Exception:
-                pass
-            # fail-open for DB errors
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
+            if _is_quota_production():
+                raise
+            logger.warning("[fail-open] quota backend unavailable non-prod tenant=%s err=%s", tid, msg[:200])
             return
 
     def _get_provider_instance(self) -> Any | None:
@@ -1700,7 +1721,7 @@ class LLMProviderAdapter:
                 cfg["model"] = model_cfg
             self._provider_instance = _get_provider(pkey, cfg)
             return self._provider_instance
-        except Exception:
+        except _RUNTIME_OPERATION_ERRORS:
             return None
 
     async def _hermes_completion(
@@ -1743,12 +1764,13 @@ class LLMProviderAdapter:
                                 data.setdefault("object", "chat.completion")
                                 data.setdefault("model", resolved)
                                 return data
-                    except Exception:
+                    except _RUNTIME_OPERATION_ERRORS:
+                        logger.debug("Hermes completion endpoint failed path=%s", path, exc_info=True)
                         continue
                 if not _is_mock_allowed():
                     raise RuntimeError("LLM provider unavailable — mock fallback disabled in production (OAOS_ENV=production or OAOS_MOCK_FALLBACK=0)")
                 return _mock_completion_response(resolved, messages, **kwargs)
-        except Exception:
+        except _RUNTIME_OPERATION_ERRORS:
             if not _is_mock_allowed():
                 raise
             return _mock_completion_response(resolved, messages, **kwargs)
@@ -1801,19 +1823,23 @@ class LLMProviderAdapter:
                 p = _usage_provider
                 # if litellm path, try litellm model, else provider value
                 record_llm_usage(tenant_id=_usage_tid, provider=p, model=m, prompt_tokens=pt, completion_tokens=ct, latency_ms=round(latency*1000,2), status="success")
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
         def _record_fail(err: str, latency: float):
             try:
                 record_llm_usage(tenant_id=_usage_tid, provider=_usage_provider, model=resolved, prompt_tokens=0, completion_tokens=0, latency_ms=round(latency*1000,2), status="failed", error=str(err)[:500])
-            except Exception:
-                pass
-        try:
-            _llm_quota_check(tenant_for_quota or "default")
-        except Exception as e:
-            if getattr(e, "status_code", None)==429 or "QUOTA_EXCEEDED" in str(e) or (isinstance(getattr(e, "detail", None), dict) and getattr(e, "detail", {}).get("code")=="QUOTA_EXCEEDED"):
-                _record_fail(str(e) or "quota exceeded", time.perf_counter() - _usage_start)
-                raise
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
+        # An explicitly injected response is a deterministic test/adapter
+        # fixture, not a provider execution. It must not require live quota
+        # infrastructure; real provider calls always stay fail-closed.
+        if not (self._mock_responses and self._mock_index < len(self._mock_responses)):
+            try:
+                _llm_quota_check(tenant_for_quota or "default")
+            except _RUNTIME_OPERATION_ERRORS as e:
+                if getattr(e, "status_code", None)==429 or "QUOTA_EXCEEDED" in str(e) or (isinstance(getattr(e, "detail", None), dict) and getattr(e, "detail", {}).get("code")=="QUOTA_EXCEEDED"):
+                    _record_fail(str(e) or "quota exceeded", time.perf_counter() - _usage_start)
+                    raise
         # — Hermes mode: bypass provider logic entirely —
         if self.runtime_mode == RuntimeMode.HERMES:
             async def _do_hermes() -> dict[str, Any]:
@@ -1841,7 +1867,7 @@ class LLMProviderAdapter:
                 self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s})
                 _record_fail("timeout", time.perf_counter() - _usage_start)
                 raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
-            except Exception as e:
+            except _RUNTIME_OPERATION_ERRORS as e:
                 self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e)})
                 _record_fail(str(e), time.perf_counter() - _usage_start)
                 raise
@@ -1879,7 +1905,7 @@ class LLMProviderAdapter:
                     self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s, "provider": str(self.provider_type.value)})
                     _record_fail("timeout", time.perf_counter() - _usage_start)
                     raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
-                except Exception as e:
+                except _RUNTIME_OPERATION_ERRORS as e:
                     self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e), "provider": str(self.provider_type.value)})
                     _record_fail(str(e), time.perf_counter() - _usage_start)
                     raise
@@ -1891,7 +1917,7 @@ class LLMProviderAdapter:
                 try:
                     from .env_gate import fail_open_telemetry
                     fail_open_telemetry("llm_runtime","provider_missing_fallback_to_litellm", provider=str(self.provider_type.value))
-                except Exception:
+                except _RUNTIME_OPERATION_ERRORS:
                     logger.warning("[fail-open] llm_runtime provider %s missing, fallback to litellm", str(self.provider_type.value))
 
         async def _do() -> dict[str, Any]:
@@ -1914,10 +1940,10 @@ class LLMProviderAdapter:
                 if not isinstance(resp, dict):
                     try:
                         resp = resp.model_dump()  # type: ignore
-                    except Exception:
+                    except _RUNTIME_OPERATION_ERRORS:
                         resp = dict(resp)  # type: ignore
                 return resp  # type: ignore
-            except Exception as e:
+            except _RUNTIME_OPERATION_ERRORS as e:
                 raise e
 
         try:
@@ -1940,7 +1966,7 @@ class LLMProviderAdapter:
             self._emit("error", trace_id=trace_id, model=resolved, data={"error": "timeout", "timeout_s": self.timeout_s})
             _record_fail("timeout", time.perf_counter() - _usage_start)
             raise TimeoutError(f"LLM completion timeout after {self.timeout_s}s") from e
-        except Exception as e:
+        except _RUNTIME_OPERATION_ERRORS as e:
             self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e)})
             _record_fail(str(e), time.perf_counter() - _usage_start)
             raise
@@ -2054,7 +2080,7 @@ class LLMProviderAdapter:
                         mock = await prov_instance.call(messages, model=resolved, tools=tools, trace_id=trace_id, request_id=request_id, **kwargs)
                     except TypeError:
                         mock = await prov_instance.call(messages, model=resolved, tools=tools, **kwargs)
-                    except Exception:
+                    except _RUNTIME_OPERATION_ERRORS:
                         mock = _mock_completion_response(resolved, messages, tools=tools)
                 content = ""
                 try:
@@ -2102,11 +2128,11 @@ class LLMProviderAdapter:
                 if not isinstance(chunk, dict):
                     try:
                         chunk = chunk.model_dump()  # type: ignore
-                    except Exception:
+                    except _RUNTIME_OPERATION_ERRORS:
                         chunk = dict(chunk)  # type: ignore
                 yield chunk  # type: ignore
             self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True})
-        except Exception as e:
+        except _RUNTIME_OPERATION_ERRORS as e:
             self._emit("error", trace_id=trace_id, model=resolved, data={"error": str(e), "stream": True})
             raise
 
@@ -2132,10 +2158,11 @@ def _extract_tool_calls(response: dict[str, Any]) -> list[dict[str, Any]]:
             else:
                 try:
                     out.append(dict(tc))  # type: ignore
-                except Exception:
+                except _RUNTIME_OPERATION_ERRORS:
+                    logger.debug("tool call could not be normalized", exc_info=True)
                     continue
         return out
-    except Exception:
+    except _RUNTIME_OPERATION_ERRORS:
         return []
 
 
@@ -2146,7 +2173,7 @@ def _tool_result_message(tool_call_id: str, tool_name: str, result: Any, limits:
     else:
         try:
             content = json.dumps(result, ensure_ascii=False, default=str)
-        except Exception:
+        except _RUNTIME_OPERATION_ERRORS:
             content = str(result)
     # Apply limits
     if limits is not None:
@@ -2193,8 +2220,8 @@ async def _call_gateway(
             params = list(sig.parameters.values())
             if params and params[0].annotation is OAOSContext or (isinstance(params[0].annotation, str) and "OAOSContext" in str(params[0].annotation)) or params[0].name.lower() in ("ctx", "oaos_context", "context"):
                 prefix_args = (oaos_context,)
-        except Exception:
-            pass
+        except _RUNTIME_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
 
     kwargs: dict[str, Any] = {"trace_id": trace_id}
     if session_id:
@@ -2253,9 +2280,9 @@ async def _call_gateway(
                         res2 = await tmp2 if asyncio.iscoroutine(tmp2) else tmp2  # type: ignore
                 last_result = res2
                 return last_result if isinstance(last_result, dict) else {"result": last_result}
-            except Exception:
+            except _RUNTIME_OPERATION_ERRORS:
                 raise
-        except Exception:
+        except _RUNTIME_OPERATION_ERRORS:
             raise
     return last_result if isinstance(last_result, dict) else {"result": last_result}
 
@@ -2288,13 +2315,13 @@ class StructuredToolLoop:
         if self.audit_log is not None:
             try:
                 self.audit_log.emit(payload)
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
         if self.observability_hook is not None:
             try:
                 self.observability_hook(payload)
-            except Exception:
-                pass
+            except _RUNTIME_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
 
     async def run(
         self,
@@ -2336,7 +2363,7 @@ class StructuredToolLoop:
                         resp = await self.llm.completion(
                             history, tools=tools, trace_id=trace_id, request_id=request_id or f"req-{step}", oaos_context=ctx, **llm_kwargs
                         )
-                    except Exception as e:
+                    except _RUNTIME_OPERATION_ERRORS as e:
                         self._emit("error", trace_id, {"step": step, "error": str(e)})
                         terminated = "error"
                         last_response = {"error": str(e)}
@@ -2423,7 +2450,7 @@ class StructuredToolLoop:
                         except asyncio.TimeoutError:
                             gw_result = {"error": "gateway timeout", "tool": tool_name}
                             self._emit("error", trace_id, {"step": step, "tool": tool_name, "error": "gateway timeout"})
-                        except Exception as e:
+                        except _RUNTIME_OPERATION_ERRORS as e:
                             gw_result = {"error": str(e), "tool": tool_name}
                             self._emit("error", trace_id, {"step": step, "tool": tool_name, "error": str(e)})
 
@@ -2537,7 +2564,7 @@ class LLMRuntime:
         """
         try:
             sess = self.sessions.get_state(session_id, tenant_id, agent_id)
-        except Exception as e:
+        except _RUNTIME_OPERATION_ERRORS as e:
             yield {"type": "error", "data": {"reason": str(e)}, "session_id": session_id}
             yield {"type": "completion", "data": {"session_id": session_id, "error": str(e)}, "session_id": session_id}
             return
@@ -2561,7 +2588,7 @@ class LLMRuntime:
                     yield {"type": "error", "data": {"reason": err, "output_type": output_type.__name__}, "trace_id": ctx.trace_id, "session_id": session_id}
                     yield {"type": "completion", "data": {"session_id": session_id, "error": err}, "trace_id": ctx.trace_id, "session_id": session_id}
                     return
-            except Exception as e:
+            except _RUNTIME_OPERATION_ERRORS as e:
                 yield {"type": "error", "data": {"reason": str(e)}, "trace_id": ctx.trace_id, "session_id": session_id}
                 yield {"type": "completion", "data": {"session_id": session_id, "error": str(e)}, "trace_id": ctx.trace_id, "session_id": session_id}
                 return
@@ -2583,9 +2610,9 @@ class LLMRuntime:
                             try:
                                 # try to keep structured if not truncated too much
                                 ev["data"]["result"] = json.loads(limited) if limited.strip().startswith("{") else limited
-                            except Exception:
+                            except _RUNTIME_OPERATION_ERRORS:
                                 ev["data"]["result"] = limited
-                        except Exception as ex:
+                        except _RUNTIME_OPERATION_ERRORS as ex:
                             ev["data"]["result"] = {"error": str(ex)}
                 yield ev
             return
@@ -2625,7 +2652,7 @@ class LLMRuntime:
                 return None
             chunks = [text[i : i + 40] for i in range(0, len(text), 40)]
             return chunks if chunks else None
-        except Exception:
+        except _RUNTIME_OPERATION_ERRORS:
             return None
 
     # ── MCP delegation with OAOSContext + limits (§16C.5) ──
@@ -2645,7 +2672,7 @@ class LLMRuntime:
                 try:
                     sess = self.sessions.get_state(session_id, tenant_id, agent_id)
                     oaos_context = OAOSContext.from_session(sess)
-                except Exception:
+                except _RUNTIME_OPERATION_ERRORS:
                     oaos_context = OAOSContext(tenant_id=tenant_id or "", agent_id=agent_id or "", session_id=session_id or "", trace_id=kwargs.get("trace_id", ""))
             else:
                 oaos_context = OAOSContext(tenant_id=tenant_id or "", agent_id=agent_id or "", session_id=session_id or "", trace_id=kwargs.get("trace_id", ""))

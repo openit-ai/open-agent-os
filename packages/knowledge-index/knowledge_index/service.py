@@ -28,6 +28,7 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,6 +47,24 @@ from .checkpoint import PersistentCheckpointStore
 from .connectors.base import SourceAdapter
 from .connectors.http_outline import HttpOutlineSourceAdapter, OutlineAPIError
 from .outline_acl import OutlineACLResolver
+
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):
+    class SQLAlchemyError(Exception):
+        """Marker used when SQLAlchemy is not installed."""
+
+logger = logging.getLogger(__name__)
+
+_KNOWLEDGE_OPERATION_ERRORS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    SQLAlchemyError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +393,7 @@ async def sync_outline_to_index(
                     raise RuntimeError("persistent checkpoint requires OAOS_DATABASE_URL or DATABASE_URL in production")
                 sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
                 checkpoint_store = PersistentCheckpointStore(create_engine(sync_url, pool_pre_ping=True), tenant_id)
-            except Exception as exc:
+            except _KNOWLEDGE_OPERATION_ERRORS as exc:
                 raise RuntimeError(f"persistent checkpoint unavailable in production: {type(exc).__name__}") from exc
         else:
             checkpoint_store = InMemoryCheckpointStore()
@@ -408,7 +427,7 @@ async def sync_outline_to_index(
         _cp_before = checkpoint_store.load(getattr(outline_adapter, "source_system", "outline"))
         if _cp_before is not None:
             _checkpoint_before_ids = set(getattr(_cp_before, "resource_states", {}) or {})
-    except Exception:
+    except _KNOWLEDGE_OPERATION_ERRORS:
         _checkpoint_before_ids = set()
     _acl_resolver: Any | None = None
     if resolve_outline_acl:
@@ -417,7 +436,7 @@ async def sync_outline_to_index(
                 _acl_resolver = acl_resolver
             elif isinstance(outline_adapter, HttpOutlineSourceAdapter):
                 _acl_resolver = OutlineACLResolver(outline_adapter)
-        except Exception as exc:
+        except _KNOWLEDGE_OPERATION_ERRORS as exc:
             _acl_errors.append(f"outline ACL resolver init failed: {type(exc).__name__}")
             _acl_resolver = None
     _orig_fetch = getattr(outline_adapter, "fetch", None)
@@ -427,17 +446,17 @@ async def sync_outline_to_index(
         def _recording_fetch(checkpoint: Any = None) -> Any:
             try:
                 _fetch_start_cursors.append(getattr(checkpoint, "cursor", None))
-            except Exception:
-                pass
+            except _KNOWLEDGE_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             res = _bound_orig(checkpoint)
             try:
                 _fetch_has_more.append(bool(getattr(res, "has_more", False)))
-            except Exception:
-                pass
+            except _KNOWLEDGE_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             try:
                 _fetch_next_cursor.append(getattr(res, "next_cursor", None))
-            except Exception:
-                pass
+            except _KNOWLEDGE_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             try:
                 docs = list(getattr(res, "documents", []) or [])
                 if _acl_resolver is not None:
@@ -448,13 +467,14 @@ async def sync_outline_to_index(
                         )
                         try:
                             setattr(res, "documents", enriched)
-                        except Exception:
-                            pass
+                        except _KNOWLEDGE_OPERATION_ERRORS:
+                            logger.debug("best-effort exception suppressed", exc_info=True)
                         docs = enriched
                         for rid, p in (prov or {}).items():
                             try:
                                 _acl_provenance[str(rid)] = dict(p)
-                            except Exception:
+                            except _KNOWLEDGE_OPERATION_ERRORS:
+                                logger.debug("ACL provenance entry could not be normalized resource=%s", rid, exc_info=True)
                                 continue
                         for rid, p in (prov or {}).items():
                             try:
@@ -462,9 +482,10 @@ async def sync_outline_to_index(
                                     _acl_errors.append(
                                         f"outline ACL unresolved for {rid}: {str(p.get('outline_acl_error') or 'unknown')[:160]}"
                                     )
-                            except Exception:
+                            except _KNOWLEDGE_OPERATION_ERRORS:
+                                logger.debug("ACL provenance status could not be inspected resource=%s", rid, exc_info=True)
                                 continue
-                    except Exception as exc:
+                    except _KNOWLEDGE_OPERATION_ERRORS as exc:
                         # Catastrophic enrichment failure: fail-closed in
                         # production (sentinel-restrict everything fetched),
                         # keep source ACL only in non-prod passthrough.
@@ -483,24 +504,25 @@ async def sync_outline_to_index(
                                         rd, rp = _acl_restrict(d, f"{type(exc).__name__}")
                                         restricted.append(rd)
                                         _acl_provenance[rd.resource_id] = rp
-                                    except Exception:
+                                    except _KNOWLEDGE_OPERATION_ERRORS:
+                                        logger.warning("ACL restriction failed resource=%s", getattr(d, "resource_id", "unknown"), exc_info=True)
                                         continue
                                 try:
                                     setattr(res, "documents", restricted)
-                                except Exception:
-                                    pass
+                                except _KNOWLEDGE_OPERATION_ERRORS:
+                                    logger.debug("best-effort exception suppressed", exc_info=True)
                                 docs = restricted
                 for d in docs:
                     if isinstance(d, SourceDocument):
                         fetched_docs.append(d)
-            except Exception:
-                pass
+            except _KNOWLEDGE_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             return res
 
         try:
             setattr(outline_adapter, "fetch", _recording_fetch)
-        except Exception:
-            pass
+        except _KNOWLEDGE_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
     orchestrator = SyncOrchestrator(
         source=outline_adapter,
         embedding_provider=embedding_provider,
@@ -533,15 +555,15 @@ async def sync_outline_to_index(
         try:
             if callable(_orig_fetch):
                 setattr(outline_adapter, "fetch", _orig_fetch)
-        except Exception:
-            pass
+        except _KNOWLEDGE_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         raise
-    except Exception as e:
+    except _KNOWLEDGE_OPERATION_ERRORS as e:
         try:
             if callable(_orig_fetch):
                 setattr(outline_adapter, "fetch", _orig_fetch)
-        except Exception:
-            pass
+        except _KNOWLEDGE_OPERATION_ERRORS:
+            logger.debug("best-effort exception suppressed", exc_info=True)
         # orchestrator catches fetch failures as failed=1; but unexpected raises should convert to failed result
         return OutlineSyncResult(
             source_system=getattr(outline_adapter, "source_system", "outline"),
@@ -570,16 +592,13 @@ async def sync_outline_to_index(
     try:
         if callable(_orig_fetch):
             setattr(outline_adapter, "fetch", _orig_fetch)
-    except Exception:
-        pass
+    except _KNOWLEDGE_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
 
     persisted = 0
     doc_map: dict[str, SourceDocument] = {}
     for d in fetched_docs:
-        try:
-            doc_map[d.resource_id] = d
-        except Exception:
-            continue
+        doc_map[d.resource_id] = d
     entries: list[KnowledgeIndexEntry] = []
     for rid, stored in list(chunk_store._store.items()):
         if not stored.chunks:
@@ -587,7 +606,7 @@ async def sync_outline_to_index(
             # tenant-scoped resource via the public repository API.
             try:
                 await repository.delete_by_resource(tenant_id, rid)
-            except Exception as exc:
+            except _KNOWLEDGE_OPERATION_ERRORS as exc:
                 sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
                 sync_result.failed = max(1, sync_result.failed)
             continue
@@ -632,8 +651,8 @@ async def sync_outline_to_index(
                     for _k, _v in _acl_prov.items():
                         if _k not in provenance:
                             provenance[_k] = _v
-            except Exception:
-                pass
+            except _KNOWLEDGE_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
             # Determine entries to create per ACL
             # public -> one entry
             if not acl_groups and not acl_users:
@@ -728,7 +747,7 @@ async def sync_outline_to_index(
             replace_resource_ids = sorted({e.source_resource_id for e in entries})
             for _rid in replace_resource_ids:
                 await repository.delete_by_resource(tenant_id, _rid)
-        except Exception as exc:
+        except _KNOWLEDGE_OPERATION_ERRORS as exc:
             sync_result.errors.append(f"replace existing resource rows failed: {type(exc).__name__}")
             sync_result.failed = 1
             entries = []
@@ -740,7 +759,7 @@ async def sync_outline_to_index(
         entries = list(dedup.values())
         try:
             batch_size = max(1, int(persist_batch_size or 200))
-        except Exception:
+        except _KNOWLEDGE_OPERATION_ERRORS:
             batch_size = 200
         try:
             persisted = 0
@@ -748,7 +767,7 @@ async def sync_outline_to_index(
                 _batch = entries[_i : _i + batch_size]
                 await repository.bulk_upsert(_batch)
                 persisted += len(_batch)
-        except Exception as e:
+        except _KNOWLEDGE_OPERATION_ERRORS as e:
             # fail-closed for persistence errors in production
             sync_result.errors.append(f"persist failed: {e}")
             sync_result.failed = 1
@@ -759,7 +778,7 @@ async def sync_outline_to_index(
     for rid in getattr(sync_result, "deleted_resource_ids", []):
         try:
             await repository.delete_by_resource(tenant_id, rid)
-        except Exception as exc:
+        except _KNOWLEDGE_OPERATION_ERRORS as exc:
             sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
             sync_result.failed = max(1, sync_result.failed)
     # Empty-content cleanup: the orchestrator removes blank documents from the
@@ -770,14 +789,11 @@ async def sync_outline_to_index(
     empty_cleaned = 0
     try:
         stored_ids = set(chunk_store._store.keys())
-    except Exception:
+    except _KNOWLEDGE_OPERATION_ERRORS:
         stored_ids = set()
     for d in fetched_docs:
-        try:
-            rid = d.resource_id
-            content = d.content or ""
-        except Exception:
-            continue
+        rid = d.resource_id
+        content = d.content or ""
         if rid in stored_ids:
             continue
         if isinstance(content, str) and content.strip():
@@ -785,7 +801,7 @@ async def sync_outline_to_index(
         try:
             await repository.delete_by_resource(tenant_id, rid)
             empty_cleaned += 1
-        except Exception as exc:
+        except _KNOWLEDGE_OPERATION_ERRORS as exc:
             sync_result.errors.append(f"delete failed for {rid}: {type(exc).__name__}")
             sync_result.failed = max(1, sync_result.failed)
     # Explicit complete-snapshot prune: ONLY when the caller opts in AND this
@@ -813,26 +829,26 @@ async def sync_outline_to_index(
             # boundary; never prune by absence when no document was fetched.
             and bool(getattr(sync_result, "fetched", 0))
         )
-    except Exception:
+    except _KNOWLEDGE_OPERATION_ERRORS:
         _snapshot_complete = False
     if _snapshot_complete:
         try:
             _fetched_ids = {d.resource_id for d in fetched_docs if isinstance(d, SourceDocument)}
-        except Exception:
+        except _KNOWLEDGE_OPERATION_ERRORS:
             _fetched_ids = set()
         try:
             _explicit = set(getattr(sync_result, "deleted_resource_ids", []) or [])
-        except Exception:
+        except _KNOWLEDGE_OPERATION_ERRORS:
             _explicit = set()
         for _rid in sorted(_checkpoint_before_ids - _fetched_ids - _explicit):
             try:
                 try:
                     chunk_store.delete(_rid)
-                except Exception:
-                    pass
+                except _KNOWLEDGE_OPERATION_ERRORS:
+                    logger.debug("best-effort exception suppressed", exc_info=True)
                 await repository.delete_by_resource(tenant_id, _rid)
                 _pruned.append(_rid)
-            except Exception as exc:
+            except _KNOWLEDGE_OPERATION_ERRORS as exc:
                 sync_result.errors.append(f"delete failed for {_rid}: {type(exc).__name__}")
                 sync_result.failed = max(1, sync_result.failed)
         if _pruned:
@@ -844,11 +860,11 @@ async def sync_outline_to_index(
                         _states.pop(_rid, None)
                     try:
                         _cur.resource_states = _states  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                    except _KNOWLEDGE_OPERATION_ERRORS:
+                        logger.debug("best-effort exception suppressed", exc_info=True)
                     checkpoint_store.save(_cur)
                     sync_result.checkpoint = _cur
-            except Exception as exc:
+            except _KNOWLEDGE_OPERATION_ERRORS as exc:
                 sync_result.errors.append(f"checkpoint prune failed: {type(exc).__name__}")
             try:
                 sync_result.deleted += len(_pruned)
@@ -857,8 +873,8 @@ async def sync_outline_to_index(
                     if _rid not in _merged:
                         _merged.append(_rid)
                 sync_result.deleted_resource_ids = sorted(_merged)
-            except Exception:
-                pass
+            except _KNOWLEDGE_OPERATION_ERRORS:
+                logger.debug("best-effort exception suppressed", exc_info=True)
     # Outline ACL enrichment notes (fail-closed markers, never secrets).
     # Restricted-sentinel docs stay hidden until a later run resolves them
     # (their acl_version differs once resolved, forcing reindex).
@@ -866,8 +882,8 @@ async def sync_outline_to_index(
         for _e in _acl_errors:
             if _e and _e not in sync_result.errors:
                 sync_result.errors.append(_e)
-    except Exception:
-        pass
+    except _KNOWLEDGE_OPERATION_ERRORS:
+        logger.debug("best-effort exception suppressed", exc_info=True)
     # Commit the checkpoint last. The source cursor is durable only when the
     # corresponding index rows and deletions have been committed. Never save
     # a terminal empty/complete window cursor as a source-progress claim.
@@ -879,7 +895,7 @@ async def sync_outline_to_index(
     ):
         try:
             checkpoint_store.save(sync_result.checkpoint)
-        except Exception as exc:
+        except _KNOWLEDGE_OPERATION_ERRORS as exc:
             sync_result.errors.append(f"checkpoint save failed: {type(exc).__name__}")
             sync_result.failed = 1
     return OutlineSyncResult(
@@ -927,7 +943,7 @@ def _parse_updated_at(s: str | None) -> datetime | None:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
-    except Exception:
+    except _KNOWLEDGE_OPERATION_ERRORS:
         return None
 
 
@@ -1098,7 +1114,7 @@ async def materialize_knowledge_to_outline(
             texts = [c.text for c in chs]
             try:
                 embeddings = embedding_provider.embed(texts)
-            except Exception as e:
+            except _KNOWLEDGE_OPERATION_ERRORS as e:
                 raise RuntimeError(f"embedding failed for materialized doc {rid}: {e}") from e
             # Build entries: materialized doc is typically public to its tenant's groups; use actor's allowed groups if provided
             # For provenance, keep full source_refs
