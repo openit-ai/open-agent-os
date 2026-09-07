@@ -25,6 +25,44 @@ try:
 except ImportError:
     httpx = None  # type: ignore
 
+
+class GoogleCredentialError(PermissionError, RuntimeError):
+    """Credential missing, rejected, expired, or revoked (401 semantics)."""
+
+    status_code = 401
+
+
+class GoogleScopeError(PermissionError):
+    """Authenticated Google identity lacks the requested scope (403 semantics)."""
+
+    status_code = 403
+
+
+class GoogleValidationError(ValueError):
+    """Malformed local input or external Google response (422 semantics)."""
+
+    status_code = 422
+
+
+class GoogleBackendError(RuntimeError):
+    """Google, Vault, credential-store, or transport backend unavailable (503 semantics)."""
+
+    status_code = 503
+
+
+class GoogleRateLimitError(RuntimeError):
+    """Google or local rate limit exhausted (429 semantics)."""
+
+    status_code = 429
+
+
+if httpx is not None:
+    _HTTP_TRANSPORT_ERRORS = (httpx.TimeoutException, httpx.RequestError)
+    _HTTP_STATUS_ERRORS = (httpx.HTTPStatusError,)
+else:
+    _HTTP_TRANSPORT_ERRORS = ()
+    _HTTP_STATUS_ERRORS = ()
+
 try:
     from ..normalize import parse_resource, is_personal_resource, extract_owner_user_id
 except ImportError:
@@ -55,17 +93,22 @@ def _is_production() -> bool:
     try:
         from execution_gateway.env_gate import is_production as _p  # type: ignore
         return bool(_p())
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError):
+        logger.debug("canonical execution-gateway production gate unavailable")
     try:
         from .env_gate import is_production as _p2  # type: ignore
         return bool(_p2())
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError):
+        logger.debug("relative execution-gateway production gate unavailable")
     for k in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
         if os.getenv(k, "").strip().lower() in ("production", "prod"):
             return True
     return False
+
+
+def _safe_error(exc: BaseException) -> str:
+    """Return exception metadata without exposing tokens, secrets, or URLs."""
+    return type(exc).__name__
 
 
 def _parse_token_bundle(raw: bytes) -> dict[str, Any]:
@@ -76,23 +119,31 @@ def _parse_token_bundle(raw: bytes) -> dict[str, Any]:
     adapter bundle (b"<access>::<refresh>").
     Never logs or prints secret values — callers must only audit metadata.
     """
+    if not isinstance(raw, (bytes, bytearray)):
+        raise GoogleValidationError("token bundle must be bytes")
     try:
-        text = raw.decode("utf-8")
-    except Exception as e:
-        raise ValueError("invalid token bundle encoding") from e
+        text = bytes(raw).decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise GoogleValidationError("invalid token bundle encoding") from e
     s = text.strip()
+    if not s:
+        raise GoogleValidationError("empty token bundle")
     if s.startswith("{"):
         try:
             obj = json.loads(s)
-        except Exception as e:
-            raise ValueError("invalid token bundle JSON") from e
+        except json.JSONDecodeError as e:
+            raise GoogleValidationError("invalid token bundle JSON") from e
+        if not isinstance(obj, dict):
+            raise GoogleValidationError("token bundle JSON must be an object")
         access = str(obj.get("access_token") or "")
         refresh = obj.get("refresh_token") or None
         expires_at = obj.get("expires_at")
         try:
             expires_at_f = float(expires_at) if expires_at is not None else None
         except (TypeError, ValueError):
-            expires_at_f = None
+            raise GoogleValidationError("token bundle expires_at must be numeric") from None
+        if not access:
+            raise GoogleCredentialError("token bundle has no access credential")
         return {
             "access_token": access,
             "refresh_token": str(refresh) if refresh else None,
@@ -100,6 +151,8 @@ def _parse_token_bundle(raw: bytes) -> dict[str, Any]:
             "scope": str(obj.get("scope") or ""),
         }
     parts = text.split("::", 1)
+    if not parts[0]:
+        raise GoogleCredentialError("token bundle has no access credential")
     return {
         "access_token": parts[0],
         "refresh_token": parts[1] if len(parts) > 1 and parts[1] else None,
@@ -228,11 +281,11 @@ class GoogleConnector:
         try:
             from execution_gateway.tool_policy import ToolRateLimiter  # type: ignore
             self._rate_limiter = ToolRateLimiter(rate_per_sec=rate_limit_per_sec, burst=burst)
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             try:
                 from tool_policy import ToolRateLimiter  # type: ignore
                 self._rate_limiter = ToolRateLimiter(rate_per_sec=rate_limit_per_sec, burst=burst)
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 self._rate_limiter = None
         self._simple_buckets: dict[str, list[float]] = {}
 
@@ -263,20 +316,23 @@ class GoogleConnector:
         if isinstance(prov, dict):
             try:
                 prov[str(delegation_id)] = new_ref
-            except Exception:
-                pass
+            except (KeyError, TypeError, RuntimeError, OSError) as exc:
+                logger.warning("credential binding write-back unavailable: %s", _safe_error(exc))
         else:
             for meth in ("bind_credential", "set_binding", "update_binding"):
                 try:
                     fn = getattr(prov, meth, None)
-                except Exception:
+                except (AttributeError, TypeError) as exc:
+                    logger.warning("credential binding adapter lookup failed: %s", _safe_error(exc))
                     fn = None
                 if callable(fn):
                     try:
                         fn(str(delegation_id), new_ref)
-                    except Exception:
-                        continue
-                    break
+                    except (AttributeError, KeyError, TypeError, RuntimeError, OSError) as exc:
+                        logger.warning("credential binding write-back unavailable: %s", _safe_error(exc))
+                        fn = None
+                    if callable(fn):
+                        break
 
     def _ctx_dict(self, agent_context: dict | Any) -> dict[str, Any]:
         if isinstance(agent_context, dict):
@@ -285,7 +341,7 @@ class GoogleConnector:
         for k in ("user_id", "agent_id", "tenant_id", "delegation_id", "credential_binding_id", "granted_scope", "scope"):
             try:
                 v = getattr(agent_context, k, None)
-            except Exception:
+            except AttributeError:
                 v = None
             if v is not None:
                 out[k] = v
@@ -310,15 +366,17 @@ class GoogleConnector:
                     ref = prov.get(delegation_id)
                     if ref:
                         return str(ref)
-                elif hasattr(prov, "get") and not callable(getattr(prov, "get", None)) is False:
+                elif callable(getattr(prov, "get", None)):
                     try:
                         ref = prov.get(delegation_id)  # type: ignore[attr-defined]
                         if ref and not inspect.isawaitable(ref):
                             return str(ref)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except (AttributeError, KeyError, TypeError, RuntimeError, OSError) as exc:
+                        logger.warning("credential provider lookup unavailable: %s", _safe_error(exc))
+                        raise GoogleBackendError("credential provider unavailable") from exc
+            except (AttributeError, KeyError, TypeError, RuntimeError, OSError) as exc:
+                logger.warning("credential provider lookup unavailable: %s", _safe_error(exc))
+                raise GoogleBackendError("credential provider unavailable") from exc
         if self._delegation_service is not None and delegation_id:
             try:
                 list_fn = getattr(self._delegation_service, "list_bindings_for_delegation", None)
@@ -337,8 +395,9 @@ class GoogleConnector:
                     ref = getattr(b, "secret_ref", None)
                     if ref:
                         return str(ref)
-            except Exception:
-                pass
+            except (AttributeError, KeyError, TypeError, RuntimeError, OSError) as exc:
+                logger.warning("delegation binding lookup unavailable: %s", _safe_error(exc))
+                raise GoogleBackendError("delegation binding store unavailable") from exc
         return None
 
     def resolve_secret_ref(
@@ -366,8 +425,9 @@ class GoogleConnector:
                                 ref = getattr(b, "secret_ref", None)
                                 if ref:
                                     return str(ref)
-                except Exception:
-                    pass
+                except (AttributeError, KeyError, TypeError, RuntimeError, OSError) as exc:
+                    logger.warning("credential binding lookup unavailable: %s", _safe_error(exc))
+                    raise GoogleBackendError("credential binding store unavailable") from exc
             if cbid in self._credential_binding:
                 return self._credential_binding[cbid]
         if did:
@@ -393,16 +453,23 @@ class GoogleConnector:
                 try:
                     out = prov(*args)  # type: ignore[operator]
                 except TypeError:
+                    logger.debug("credential provider signature mismatch during resolution")
                     continue
-                except Exception:
-                    break
+                except (ConnectionError, OSError, TimeoutError, RuntimeError) as exc:
+                    logger.warning("credential provider unavailable: %s", _safe_error(exc))
+                    raise GoogleBackendError("credential provider unavailable") from exc
+                except (AttributeError, KeyError, ValueError) as exc:
+                    raise GoogleValidationError("credential provider returned invalid input") from exc
                 try:
                     if inspect.isawaitable(out):
                         out = await out
                     if out:
                         return str(out) if not isinstance(out, dict) else str(out.get("secret_ref") or out.get("ref") or "")
-                except Exception:
-                    break
+                except (ConnectionError, OSError, TimeoutError, RuntimeError) as exc:
+                    logger.warning("credential provider unavailable: %s", _safe_error(exc))
+                    raise GoogleBackendError("credential provider unavailable") from exc
+                except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                    raise GoogleValidationError("credential provider returned invalid output") from exc
         return None
 
     def _oauth_client(self) -> tuple[str, str]:
@@ -436,23 +503,55 @@ class GoogleConnector:
             "grant_type": "refresh_token",
         }
         factory = self._http_factory()
-        async with factory(timeout=15) as client:
-            resp = await client.post(self._token_url, data=data)
-            resp.raise_for_status()
+        try:
+            async with factory(timeout=15) as client:
+                resp = await client.post(self._token_url, data=data)
+        except _HTTP_TRANSPORT_ERRORS + (ConnectionError, TimeoutError, OSError) as exc:
+            raise GoogleBackendError("google token endpoint unavailable") from exc
+        status_code = getattr(resp, "status_code", 200)
+        if not isinstance(status_code, int):
+            status_code = 200
+        if status_code == 429:
+            raise GoogleRateLimitError("google token endpoint rate limited")
+        if status_code in (400, 401):
+            raise GoogleCredentialError("google refresh credential rejected")
+        if status_code == 403:
+            raise GoogleScopeError("google refresh scope denied")
+        if 400 <= status_code < 500:
+            raise GoogleValidationError("google token request rejected")
+        if status_code >= 500:
+            raise GoogleBackendError("google token endpoint unavailable")
+        try:
+            raise_for_status = getattr(resp, "raise_for_status", None)
+            if callable(raise_for_status):
+                raise_for_status()
             tok = resp.json()
-        access = (tok.get("access_token") or "") if isinstance(tok, dict) else ""
+        except _HTTP_STATUS_ERRORS + (RuntimeError,) as exc:
+            raise GoogleBackendError("google token endpoint request failed") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError) as exc:
+            raise GoogleValidationError("malformed google token response") from exc
+        if not isinstance(tok, dict):
+            raise GoogleValidationError("malformed google token response")
+        if tok.get("error"):
+            raise GoogleCredentialError("google refresh credential rejected")
+        access = tok.get("access_token") or ""
+        if not isinstance(access, str):
+            raise GoogleValidationError("malformed google token response")
         if not access:
-            raise RuntimeError("token refresh failed: no access_token in response")
+            raise GoogleCredentialError("google refresh credential rejected")
         try:
             expires_in = int(tok.get("expires_in", 3600))
         except (TypeError, ValueError):
-            expires_in = 3600
+            raise GoogleValidationError("malformed google token expiry") from None
+        response_scope = tok.get("scope", scope)
+        if not isinstance(response_scope, str):
+            raise GoogleValidationError("malformed google token scope")
         return {
             "access_token": access,
             "refresh_token": tok.get("refresh_token") or refresh_token,
             "expires_at": time.time() + expires_in,
             "expires_in": expires_in,
-            "scope": tok.get("scope", scope) if isinstance(tok, dict) else scope,
+            "scope": response_scope,
         }
 
     async def resolve_access_token(
@@ -479,15 +578,22 @@ class GoogleConnector:
         requester = self._requester_agent_id(ctx)
         if not requester:
             raise PermissionError("missing agent identity for credential retrieve")
-        raw = await self._vault.retrieve(secret_ref, requester)
+        try:
+            raw = await self._vault.retrieve(secret_ref, requester)
+        except (KeyError, LookupError) as exc:
+            raise GoogleCredentialError("google credential not found") from exc
+        except PermissionError:
+            raise
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+            raise GoogleBackendError("credential store unavailable") from exc
         bundle = _parse_token_bundle(raw)
         access = bundle.get("access_token") or ""
         if not access:
-            raise RuntimeError("empty access token in vault bundle")
+            raise GoogleCredentialError("google credential has no access token")
         if _bundle_expired(bundle):
             refresh_token = bundle.get("refresh_token")
             if not refresh_token:
-                raise RuntimeError("access token expired and no refresh_token available")
+                raise GoogleCredentialError("expired access token and no refresh_token available")
             user_id = ctx.get("user_id")
             if not user_id:
                 raise PermissionError("missing user_id for token refresh store")
@@ -499,7 +605,12 @@ class GoogleConnector:
                 refreshed.get("expires_at"),
                 new_scope,
             )
-            new_ref = await self._vault.store(str(user_id), self.provider, new_scope, new_bundle)
+            try:
+                new_ref = await self._vault.store(str(user_id), self.provider, new_scope, new_bundle)
+            except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+                raise GoogleBackendError("credential store unavailable during refresh") from exc
+            except (TypeError, ValueError, KeyError) as exc:
+                raise GoogleValidationError("credential store rejected refreshed bundle") from exc
             if did:
                 self._update_binding_ref(str(did), new_ref)
             if new_ref != secret_ref:
@@ -507,8 +618,8 @@ class GoogleConnector:
                     revoke = getattr(self._vault, "revoke", None)
                     if callable(revoke):
                         await revoke(secret_ref)  # type: ignore[misc]
-                except Exception:
-                    pass
+                except (ConnectionError, TimeoutError, OSError, RuntimeError, TypeError) as exc:
+                    logger.warning("old google credential revoke failed: %s", _safe_error(exc))
             self._audit("OAUTH_TOKEN_REFRESH", {
                 "delegation_id": did,
                 "secret_ref": new_ref,
@@ -542,18 +653,36 @@ class GoogleConnector:
         url = f"{base}{path}"
         headers = {"Authorization": f"Bearer {access_token}"}
         factory = self._http_factory()
-        async with factory(timeout=15) as client:
-            resp = await client.get(url, headers=headers, params=params)
-            if getattr(resp, "status_code", 200) == 401:
-                raise PermissionError("google api unauthorized (token rejected)")
-            raise_for = getattr(resp, "raise_for_status", None)
-            if callable(raise_for):
-                raise_for()
+        try:
+            async with factory(timeout=15) as client:
+                resp = await client.get(url, headers=headers, params=params)
+        except _HTTP_TRANSPORT_ERRORS + (ConnectionError, TimeoutError, OSError) as exc:
+            raise GoogleBackendError("google api unavailable") from exc
+        status_code = getattr(resp, "status_code", 200)
+        if not isinstance(status_code, int):
+            raise GoogleValidationError("malformed google api status")
+        if status_code == 401:
+            raise GoogleCredentialError("google api unauthorized")
+        if status_code == 403:
+            raise GoogleScopeError("google api scope denied")
+        if status_code == 429:
+            raise GoogleRateLimitError("google api rate limited")
+        if 400 <= status_code < 500:
+            raise GoogleValidationError("google api request rejected")
+        if status_code >= 500:
+            raise GoogleBackendError("google api unavailable")
+        raise_for = getattr(resp, "raise_for_status", None)
+        if callable(raise_for):
             try:
-                data = resp.json()
-            except Exception:
-                text = getattr(resp, "text", "") or ""
-                data = {"text": text[:4000]}
+                raise_for()
+            except _HTTP_STATUS_ERRORS + (RuntimeError,) as exc:
+                raise GoogleBackendError("google api request failed") from exc
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError) as exc:
+            raise GoogleValidationError("malformed google api response") from exc
+        if not isinstance(data, (dict, list)):
+            raise GoogleValidationError("malformed google api response")
         self._audit("GOOGLE_API_CALL", {"tool": tool_name, "domain": domain, "status_code": getattr(resp, "status_code", None)})
         return {
             "tool": tool_name,
@@ -575,8 +704,8 @@ class GoogleConnector:
                     self._audit_ledger.append(evt)  # type: ignore
                 elif hasattr(self._audit_ledger, "record"):
                     self._audit_ledger.record(evt)  # type: ignore
-            except Exception:
-                pass
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                logger.warning("google audit ledger unavailable: %s", _safe_error(exc))
 
     def audit_events(self) -> list[dict[str, Any]]:
         return list(self._audit_events)
@@ -681,8 +810,9 @@ class GoogleConnector:
                 if allowed:
                     return True, 0.0
                 return False, self._rate_limiter.retry_after(key)
-            except Exception:
-                pass
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                logger.warning("google rate limiter unavailable: %s", _safe_error(exc))
+                self._rate_limiter = None
         now = time.monotonic()
         bucket = self._simple_buckets.get(key, [])
         window = [t for t in bucket if now - t < 1.0]
@@ -708,7 +838,10 @@ class GoogleConnector:
             return True, "ok"
         try:
             ref = self.resolve_secret_ref(agent_context)  # type: ignore[arg-type]
-        except Exception:
+        except GoogleBackendError:
+            if _is_production():
+                raise
+            logger.warning("google delegation lookup degraded in non-production")
             ref = None
         if ref:
             return True, "ok"
@@ -790,13 +923,21 @@ class GoogleConnector:
         if tool_name in READONLY_TOOLS and self._credential_configured():
             try:
                 access_token, secret_ref = await self.resolve_access_token(agent_context)
-            except (LookupError, RuntimeError) as e:
-                if _is_production():
-                    self._audit("DENY_NO_CREDENTIAL", {"tool": tool_name, "resource": resource, "reason": str(e)})
-                    raise PermissionError(f"no credential available for {tool_name}: {e}") from e
-                access_token, secret_ref = "", ""
+            except LookupError as exc:
+                self._audit("DENY_NO_CREDENTIAL", {"tool": tool_name, "resource": resource, "reason": _safe_error(exc)})
+                raise GoogleCredentialError(f"no credential available for {tool_name}") from exc
+            except GoogleCredentialError:
+                raise
+            except GoogleBackendError as exc:
+                self._audit("GOOGLE_CREDENTIAL_BACKEND_ERROR", {"tool": tool_name, "resource": resource, "error": _safe_error(exc)})
+                raise
+            except GoogleValidationError:
+                raise
             except PermissionError:
                 raise
+            except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+                self._audit("GOOGLE_CREDENTIAL_BACKEND_ERROR", {"tool": tool_name, "resource": resource, "error": _safe_error(exc)})
+                raise GoogleBackendError("google credential backend unavailable") from exc
             if access_token:
                 try:
                     result = await self.call_readonly_api(tool_name, args, access_token)
@@ -809,16 +950,16 @@ class GoogleConnector:
                         if retried is not None:
                             return retried
                     raise
-                except (ValueError, RuntimeError):
+                except (GoogleScopeError, GoogleRateLimitError, GoogleValidationError):
                     raise
-                except Exception as e:
+                except GoogleBackendError as exc:
                     if _is_production():
-                        self._audit("GOOGLE_API_ERROR", {"tool": tool_name, "resource": resource, "error": type(e).__name__})
-                        raise RuntimeError(f"google api call failed: {type(e).__name__}") from e
-                    logger.debug("google api direct path failed for %s, falling back: %s", tool_name, e)
+                        self._audit("GOOGLE_API_ERROR", {"tool": tool_name, "resource": resource, "error": _safe_error(exc)})
+                        raise
+                    logger.warning("google api direct path degraded for %s: %s", tool_name, _safe_error(exc))
             elif _is_production():
                 self._audit("DENY_NO_CREDENTIAL", {"tool": tool_name, "resource": resource, "reason": "unresolvable credential"})
-                raise PermissionError(f"no credential available for {tool_name} (fail-closed)")
+                raise GoogleCredentialError(f"no credential available for {tool_name} (fail-closed)")
         elif tool_name in READONLY_TOOLS and _is_production() and self._needs_credential(agent_context):
             self._audit("DENY_NO_CREDENTIAL", {"tool": tool_name, "resource": resource, "reason": "no vault/binding configured"})
             raise PermissionError(f"no credential available for {tool_name} (fail-closed)")
@@ -836,12 +977,14 @@ class GoogleConnector:
             result = await proxy_tool_call(tool_name, args, capability_token, ctx)
             self._audit("GATEWAY_PROXY", {"tool": tool_name, "resource": resource, "result_ok": result.get("ok")})
             return result
-        except Exception as e:
+        except PermissionError:
+            raise
+        except (ImportError, ModuleNotFoundError, ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
             # fallback to planned request (mock) — dev/test only
             if _is_production():
                 self._audit("DENY_GATEWAY_FALLBACK", {"tool": tool_name, "resource": resource})
-                raise RuntimeError(f"gateway proxy unavailable in production for {tool_name} (fail-closed)") from e
-            logger.debug("gateway proxy fallback for %s: %s", tool_name, e)
+                raise GoogleBackendError(f"gateway proxy unavailable in production for {tool_name} (fail-closed)") from exc
+            logger.warning("gateway proxy fallback for %s: %s", tool_name, _safe_error(exc))
             self._audit("GATEWAY_FALLBACK", {"tool": tool_name, "resource": resource})
             return {"tool": tool_name, "resource": resource, "request": planned, "via": "fallback", "action": self.tool_action(tool_name), "scope": self.required_scope(tool_name)}
 
@@ -865,24 +1008,36 @@ class GoogleConnector:
         via Vault; secrets are never logged.
         """
         if self._vault is None or not secret_ref:
+            logger.info("google token refresh unavailable: credential store or secret reference missing")
             return None
         ctx = self._ctx_dict(agent_context)
         requester = self._requester_agent_id(ctx)
         user_id = ctx.get("user_id")
         if not requester or not user_id:
+            logger.info("google token refresh unavailable: requester identity missing")
             return None
         try:
             raw = await self._vault.retrieve(secret_ref, requester)
             bundle = _parse_token_bundle(raw)
-        except Exception:
+        except (KeyError, LookupError) as exc:
+            logger.warning("google token refresh credential lookup failed: %s", _safe_error(exc))
             return None
+        except GoogleCredentialError:
+            raise
+        except GoogleValidationError:
+            raise
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+            raise GoogleBackendError("credential store unavailable during retry") from exc
         refresh_token = bundle.get("refresh_token")
         if not refresh_token:
+            logger.warning("google token refresh unavailable: refresh credential missing")
             return None
         try:
             refreshed = await self.refresh_access_token(refresh_token, bundle.get("scope", ""))
-        except Exception:
-            return None
+        except (GoogleCredentialError, GoogleValidationError, GoogleBackendError, GoogleRateLimitError):
+            raise
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+            raise GoogleBackendError("google token refresh unavailable") from exc
         new_scope = refreshed.get("scope", bundle.get("scope", ""))
         try:
             new_ref = await self._vault.store(str(user_id), self.provider, new_scope, _encode_token_bundle(
@@ -891,8 +1046,10 @@ class GoogleConnector:
                 refreshed.get("expires_at"),
                 new_scope,
             ))
-        except Exception:
-            return None
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+            raise GoogleBackendError("credential store unavailable during retry persist") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GoogleValidationError("credential store rejected refreshed bundle") from exc
         did = ctx.get("delegation_id")
         if did:
             self._update_binding_ref(str(did), new_ref)
@@ -901,8 +1058,10 @@ class GoogleConnector:
             result["resource"] = resource
             self._audit("OAUTH_TOKEN_REFRESH", {"delegation_id": did, "secret_ref": new_ref, "scope": new_scope})
             return result
-        except Exception:
-            return None
+        except (GoogleCredentialError, GoogleScopeError, GoogleRateLimitError, GoogleValidationError, GoogleBackendError):
+            raise
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+            raise GoogleBackendError("google api retry unavailable") from exc
 
     # Convenience wrappers — each is a thin alias to call_via_gateway with typed name
     async def gmail_search(self, args: dict[str, Any], agent_context: dict[str, Any] | Any, capability_token: Any | None = None) -> dict[str, Any]:
