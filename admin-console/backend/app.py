@@ -149,7 +149,10 @@ try:
     _pers_mod = _load_admin_sibling("persistence")
     ensure_admin_tables = _pers_mod.ensure_admin_tables
     get_database_url = _pers_mod.get_database_url
-except Exception:
+except ImportError as exc:
+    if os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod"):
+        raise RuntimeError("admin persistence module unavailable in production") from exc
+    logger.warning("Admin persistence module unavailable; non-prod in-memory fallback enabled: %s", exc)
     ensure_admin_tables = None  # type: ignore
     get_database_url = None  # type: ignore
 
@@ -172,8 +175,8 @@ async def _admin_persistence_startup() -> None:
         else:
             try:
                 await ensure_admin_tables()
-            except Exception as exc:  # pragma: no cover - safety net
-                logger.warning(f"Admin persistence startup fallback: {exc}")
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as exc:  # pragma: no cover - safety net
+                logger.warning("Admin persistence startup fallback: %s", exc)
     # Required log line per spec (exact substring match)
     logger.info("Admin persistence: oaos ready (or in-memory fallback)")
 
@@ -193,22 +196,22 @@ try:
     setup_router = _setup_mod.router
     app.include_router(setup_router)
     logger.info("Setup router mounted at /v1/setup")
-except Exception as e:
-    logger.warning(f"Setup router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Setup router not mounted: %s", e)
 try:
     _acp_mod = _load_admin_sibling("acp_config")
     acp_router = _acp_mod.router
     app.include_router(acp_router)
     logger.info("ACP router mounted at /v1/acp")
-except Exception as e:
-    logger.warning(f"ACP router not mounted: {e}")
+except ImportError as e:
+    logger.warning("ACP router not mounted: %s", e)
 try:
     _mcp_mod = _load_admin_sibling("mcp_config")
     mcp_router = _mcp_mod.router
     app.include_router(mcp_router)
     logger.info("MCP router mounted at /v1/mcp")
-except Exception as e:
-    logger.warning(f"MCP router not mounted: {e}")
+except ImportError as e:
+    logger.warning("MCP router not mounted: %s", e)
 
 
 def _mount_router_alias(source_router, old_prefix: str, new_prefix: str, label: str) -> None:
@@ -241,120 +244,114 @@ def _mount_router_alias(source_router, old_prefix: str, new_prefix: str, label: 
             )
             count += 1
         logger.info(f"{label} alias mounted at {new_prefix} ({count} routes, canonical {old_prefix} kept)")
-    except Exception as e:
-        logger.warning(f"{label} alias not mounted: {e}")
+    except (AttributeError, TypeError, ValueError) as e:
+        logger.warning("%s alias not mounted: %s", label, e)
 
 
-try:
-    _mount_router_alias(globals().get("acp_router"), "/v1/acp", "/v1/control/acp", "ACP")
-except Exception as e:
-    logger.warning(f"ACP alias not mounted: {e}")
-try:
-    _mount_router_alias(globals().get("mcp_router"), "/v1/mcp", "/v1/execution/mcp", "MCP")
-except Exception as e:
-    logger.warning(f"MCP alias not mounted: {e}")
+_mount_router_alias(globals().get("acp_router"), "/v1/acp", "/v1/control/acp", "ACP")
+_mount_router_alias(globals().get("mcp_router"), "/v1/mcp", "/v1/execution/mcp", "MCP")
 try:
     _mm_mod = _load_admin_sibling("mattermost_config")
     mm_router = _mm_mod.router
     app.include_router(mm_router)
     logger.info("Mattermost router mounted at /v1/mattermost")
-except Exception as e:
-    logger.warning(f"Mattermost router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Mattermost router not mounted: %s", e)
 try:
     _ol_mod = _load_admin_sibling("outline_config")
     ol_router = _ol_mod.router
     app.include_router(ol_router)
     logger.info("Outline router mounted at /v1/outline")
-except Exception as e:
-    logger.warning(f"Outline router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Outline router not mounted: %s", e)
 try:
     _notion_mod = _load_admin_sibling("notion_config")
     notion_router = _notion_mod.router
     app.include_router(notion_router)
     logger.info("Notion router mounted at /v1/notion")
-except Exception as e:
-    logger.warning(f"Notion router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Notion router not mounted: %s", e)
 try:
     _slack_mod = _load_admin_sibling("slack_config")
     slack_router = _slack_mod.router
     app.include_router(slack_router)
     logger.info("Slack router mounted at /v1/slack")
-except Exception as e:
-    logger.warning(f"Slack router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Slack router not mounted: %s", e)
 try:
     _oauth_mod = _load_admin_sibling("oauth_config")
     oauth_router = _oauth_mod.router
     app.include_router(oauth_router)
     logger.info("OAuth router mounted at /v1/oauth")
-except Exception as e:
-    logger.warning(f"OAuth router not mounted: {e}")
+except ImportError as e:
+    logger.warning("OAuth router not mounted: %s", e)
 try:
     _smtp_mod = _load_admin_sibling("smtp_config")
     smtp_router = _smtp_mod.router
     app.include_router(smtp_router)
     logger.info("SMTP router mounted at /v1/smtp")
-except Exception as e:
-    logger.warning(f"SMTP router not mounted: {e}")
+except ImportError as e:
+    logger.warning("SMTP router not mounted: %s", e)
 # P2 write surfaces — quota/embedding/secrets/feature-flags (additive; no enforcement/auth changes)
 try:
     _quota_admin_mod = _load_admin_sibling("quota_admin")
     quota_admin_router = _quota_admin_mod.router
     app.include_router(quota_admin_router)
     logger.info("Quota admin router mounted at /v1/quota")
-except Exception as e:
-    logger.warning(f"Quota admin router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Quota admin router not mounted: %s", e)
 try:
     _embedding_mod = _load_admin_sibling("embedding_config")
     embedding_router = _embedding_mod.router
     app.include_router(embedding_router)
     logger.info("Embedding router mounted at /v1/embedding")
-except Exception as e:
-    logger.warning(f"Embedding router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Embedding router not mounted: %s", e)
 try:
     _secrets_admin_mod = _load_admin_sibling("secrets_admin")
     secrets_admin_router = _secrets_admin_mod.router
     app.include_router(secrets_admin_router)
     logger.info("Secrets admin router mounted at /v1/secrets")
-except Exception as e:
-    logger.warning(f"Secrets admin router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Secrets admin router not mounted: %s", e)
 try:
     _flags_mod = _load_admin_sibling("feature_flags")
     flags_router = _flags_mod.router
     app.include_router(flags_router)
     logger.info("Feature flags router mounted at /v1/feature-flags")
-except Exception as e:
-    logger.warning(f"Feature flags router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Feature flags router not mounted: %s", e)
 # P3 ops surfaces — profile/knowledge sync operation views (additive; no pipeline logic changes)
 try:
     _profile_ops_mod = _load_admin_sibling("profile_ops")
     profile_ops_router = _profile_ops_mod.router
     app.include_router(profile_ops_router)
     logger.info("Profile ops router mounted at /v1/profile-ops")
-except Exception as e:
-    logger.warning(f"Profile ops router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Profile ops router not mounted: %s", e)
 try:
     _knowledge_ops_mod = _load_admin_sibling("knowledge_ops")
     knowledge_ops_router = _knowledge_ops_mod.router
     app.include_router(knowledge_ops_router)
     logger.info("Knowledge ops router mounted at /v1/knowledge-ops")
-except Exception as e:
-    logger.warning(f"Knowledge ops router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Knowledge ops router not mounted: %s", e)
 # Policy config router (Draft -> validation/simulation -> approval -> publish -> rollback)
 try:
     _policy_mod = _load_admin_sibling("policy")
     policy_router = _policy_mod.router
     app.include_router(policy_router)
     logger.info("Policy router mounted at /v1/policy")
-except Exception as _pe:
-    logger.warning(f"Policy router not mounted: {_pe}")
+except ImportError as _pe:
+    logger.warning("Policy router not mounted: %s", _pe)
 
 # ── Runtime Configuration Plane Stage-1 (versioned/signed, fail-graceful) ──
 try:
     _rc_mod = _load_admin_sibling("runtime_config")
     app.include_router(_rc_mod.router)
     logger.info("Runtime Config Plane router mounted at /v1/runtime/config")
-except Exception as _rce:
-    logger.warning(f"Runtime Config router not mounted: {_rce}")
+except ImportError as _rce:
+    logger.warning("Runtime Config router not mounted: %s", _rce)
 
 # ── Personal Wiki (skeleton, lazy, fail-graceful) ──────────────────
 try:
@@ -362,8 +359,8 @@ try:
     personal_wiki_router = _pw_mod.router
     app.include_router(personal_wiki_router)
     logger.info("Personal Wiki router mounted at /v1/personal-wiki")
-except Exception as e:
-    logger.warning(f"Personal Wiki router not mounted: {e}")
+except ImportError as e:
+    logger.warning("Personal Wiki router not mounted: %s", e)
 
 # ── Personal Wiki consolidation scheduler (02:00 KST daily, fail gracefully) ─
 try:
@@ -390,16 +387,16 @@ try:
                 try:
                     _sched_res = register_consolidation_scheduler()
                     logger.info(f"Wiki consolidation scheduler: {_sched_res}")
-                except Exception as _se:
-                    logger.warning(f"Wiki consolidation scheduler not registered: {_se}")
+                except (ImportError, ModuleNotFoundError) as _se:
+                    logger.warning("Wiki consolidation scheduler not registered: %s", _se)
             else:
                 logger.info("Wiki consolidation scheduler idle (set OAOS_WIKI_CONSOLIDATION_CRON=1 to enable APScheduler 02:00 KST)")
         else:
             logger.warning("Wiki consolidation scheduler import skipped: spec failed")
     else:
         logger.warning("Wiki consolidation scheduler import skipped: consolidate.py missing")
-except Exception as _e:
-    logger.warning(f"Wiki consolidation scheduler import skipped: {_e}")
+except (ImportError, ModuleNotFoundError, OSError) as _e:
+    logger.warning("Wiki consolidation scheduler import skipped: %s", _e)
 
 
 # ── Health ───────────────────────────────────────────────────────
@@ -419,7 +416,8 @@ def _get_security():
             getattr(sec, "audit_ledger", None),
             getattr(sec, "delegation_service", None),
         )
-    except Exception:
+    except ImportError as exc:
+        logger.warning("Security stores unavailable; dependent admin views will fail closed: %s", exc)
         return None, None, None
 
 
@@ -452,7 +450,7 @@ def _is_pending(v) -> bool:
     # enum or string
     try:
         val = dec.value if hasattr(dec, "value") else str(dec)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         val = str(dec)
     return val.upper() == "PENDING"
 
@@ -470,25 +468,14 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
     audit_count = 0
     pending_approvals: list = []
 
-    # try to collect from security app stores (if available via import)
-    try:
-        import importlib.util
-        from pathlib import Path
-
-        sec_app_path = Path(__file__).resolve().parents[2] / "security" / "app.py"
-        if sec_app_path.exists():
-            pass
-    except (OSError, RuntimeError):
-        pass
-
     # admin-local counts (always available) — isolated, no bare auth collision
     try:
         users_count = len(_auth_mod.list_users())
     except (ImportError, ModuleNotFoundError, SQLAlchemyError, AttributeError):
         try:
             users_count = len(sys.modules["admin_console.backend.auth"].list_users())  # type: ignore
-        except (ImportError, ModuleNotFoundError, SQLAlchemyError, AttributeError, KeyError):
-            pass
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, AttributeError, KeyError) as exc:
+            logger.warning("Admin user count unavailable; returning degraded dashboard stats: %s", exc)
 
     infra_count = 0
     # Prefer DB count (authoritative) over in-memory _services — isolated, no bare infra
@@ -511,20 +498,17 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
                     if row is not None:
                         db_count = int(row[0])
                 eng.dispose()
-        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError):
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, OSError) as exc:
+            if url:
+                raise HTTPException(status_code=503, detail="admin infrastructure backend unavailable") from exc
+            logger.warning("Admin infrastructure DB probe unavailable; using non-persistent count: %s", exc)
             db_count = None
         if db_count is not None:
             infra_count = db_count
         else:
             infra_count = len(_infra_services)
-    except Exception:
-        infra_count = 0
-
-    try:
-        from delegation.delegation_service.service import DelegationService  # type: ignore
-        pass
-    except Exception:
-        pass
+    except (AttributeError, TypeError, ValueError, SQLAlchemyError) as exc:
+        logger.warning("Infrastructure count unavailable; returning degraded dashboard stats: %s", exc)
 
     # Attempt to read security app globals if already imported
     try:
@@ -536,16 +520,16 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
                 users_count = max(users_count, len(getattr(ds, "_delegations", {})))
             elif hasattr(ds, "_store"):
                 users_count = max(users_count, len(getattr(ds, "_store", {})))
-    except Exception:
-        pass
+    except (ImportError, AttributeError, TypeError, ValueError) as exc:
+        logger.warning("Delegation count unavailable; returning degraded dashboard stats: %s", exc)
     try:
         import security.app as sec  # type: ignore
 
         al = getattr(sec, "audit_ledger", None)
         if al is not None:
             audit_count = al.count
-    except Exception:
-        pass
+    except (ImportError, AttributeError, TypeError, ValueError) as exc:
+        logger.warning("Audit count unavailable; returning degraded dashboard stats: %s", exc)
     try:
         import security.app as sec  # type: ignore
 
@@ -553,8 +537,8 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
         if pe is not None:
             bundles = getattr(pe, "bundles", [])
             policy_count = len(bundles)
-    except Exception:
-        pass
+    except (ImportError, AttributeError, TypeError, ValueError) as exc:
+        logger.warning("Policy count unavailable; returning degraded dashboard stats: %s", exc)
     try:
         import security.app as sec  # type: ignore
 
@@ -568,8 +552,8 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
                 pending_approvals = [v for v in store.values() if _is_pending(v)]
             elif hasattr(aps, "list_pending"):
                 pending_approvals = aps.list_pending()  # type: ignore
-    except Exception:
-        pass
+    except (ImportError, AttributeError, TypeError, ValueError) as exc:
+        logger.warning("Approval count unavailable; returning degraded dashboard stats: %s", exc)
 
     pending_n = len(pending_approvals) if isinstance(pending_approvals, list) else 0
     # Frontend compat keys (DashboardPage expects these) + legacy keys
@@ -590,24 +574,25 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
 def _list_pending_approvals() -> list[dict]:
     pending = []
     aps, _, _ = _get_security()
-    if aps is not None:
-        try:
-            if hasattr(aps, "_requests"):
-                store = getattr(aps, "_requests", {})
-                for v in store.values():
-                    if _is_pending(v):
-                        pending.append(_serialize_approval(v))
-            elif hasattr(aps, "_store"):
-                store = getattr(aps, "_store", {})
-                for v in store.values():
-                    if _is_pending(v):
-                        pending.append(_serialize_approval(v))
-            elif hasattr(aps, "list_pending"):
-                raw = aps.list_pending()  # type: ignore
-                for v in raw:
+    if aps is None:
+        raise HTTPException(status_code=503, detail="approval backend unavailable")
+    try:
+        if hasattr(aps, "_requests"):
+            store = getattr(aps, "_requests", {})
+            for v in store.values():
+                if _is_pending(v):
                     pending.append(_serialize_approval(v))
-        except Exception:
-            pass
+        elif hasattr(aps, "_store"):
+            store = getattr(aps, "_store", {})
+            for v in store.values():
+                if _is_pending(v):
+                    pending.append(_serialize_approval(v))
+        elif hasattr(aps, "list_pending"):
+            raw = aps.list_pending()  # type: ignore
+            for v in raw:
+                pending.append(_serialize_approval(v))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="approval backend unavailable") from exc
     return pending
 
 
@@ -652,7 +637,7 @@ def approvals_decide(body: ApprovalDecideRequest, admin: AdminUser = Depends(get
     # normalize: allow DENIED / APPROVED_ONCE etc
     allowed = {"DENIED", "APPROVED_ONCE", "APPROVED_USER_ALWAYS", "APPROVED_GROUP_ALWAYS", "PENDING"}
     if decision_str not in allowed:
-        raise HTTPException(status_code=400, detail=f"decision must be one of {allowed}")
+        raise HTTPException(status_code=422, detail=f"decision must be one of {allowed}")
 
     # need enum instance if approval_store expects ApprovalDecision
     decision_val = decision_str
@@ -662,10 +647,10 @@ def approvals_decide(body: ApprovalDecideRequest, admin: AdminUser = Depends(get
         # try to get enum member
         try:
             decision_val = ApprovalDecision(decision_str)  # type: ignore
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             decision_val = ApprovalDecision[decision_str]  # type: ignore
-    except Exception:
-        pass
+    except ImportError as exc:
+        logger.warning("ApprovalDecision enum unavailable; using normalized decision string: %s", exc)
 
     decided_by = body.decided_by or admin.email
 
@@ -695,8 +680,8 @@ def approvals_decide(body: ApprovalDecideRequest, admin: AdminUser = Depends(get
                     decision=str(decision_str),
                 )
                 al.append(evt)
-        except Exception:
-            pass
+        except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=503, detail="audit backend unavailable") from exc
         return _serialize_approval(result)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -704,8 +689,8 @@ def approvals_decide(body: ApprovalDecideRequest, admin: AdminUser = Depends(get
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ConnectionError, TimeoutError, OSError) as e:
+        raise HTTPException(status_code=503, detail="approval backend unavailable") from e
 
 
 # ── Audit proxy (Section 30-31) ──────────────────────────────────
@@ -714,18 +699,22 @@ def audit_events(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/audit/events — audit ledger events."""
     _, al, _ = _get_security()
     if al is None:
-        return {"events": [], "count": 0, "head": None}
+        raise HTTPException(status_code=503, detail="audit backend unavailable")
     try:
         events = [e.model_dump(mode="json") for e in al.events]
         return {"events": events, "count": al.count, "head": al.head}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (SQLAlchemyError, ConnectionError, TimeoutError, OSError) as e:
+        raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+    except (AttributeError, TypeError, ValueError, KeyError) as e:
+        raise HTTPException(status_code=500, detail="audit response serialization failed") from e
 
 
 @app.get("/v1/audit/chain")
 def audit_chain(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/audit/chain — frontend compat (AuditChain {head_hash, chain_length, verified})."""
     _, _, al = _get_security()
+    if al is None:
+        raise HTTPException(status_code=503, detail="audit backend unavailable")
     chain_length = 0
     head_hash = None
     verified = True
@@ -746,8 +735,10 @@ def audit_chain(admin: AdminUser = Depends(get_current_admin)):
             elif hasattr(al, "events"):
                 ev = getattr(al, "events")
                 chain_length = len(ev) if isinstance(ev, list) else 0
-    except Exception:
-        pass
+    except (SQLAlchemyError, ConnectionError, TimeoutError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="audit backend unavailable") from exc
+    except (AttributeError, TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=500, detail="audit chain response failed") from exc
     return {"head_hash": head_hash, "chain_length": chain_length, "verified": verified, "last_checkpoint": None}
 
 @app.get("/v1/audit/verify")
@@ -755,7 +746,7 @@ def audit_verify(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/audit/verify — hash-chain + checkpoint verification."""
     _, al, _ = _get_security()
     if al is None:
-        return {"chain_valid": True, "checkpoint_valid": True, "event_count": 0, "head": None}
+        raise HTTPException(status_code=503, detail="audit backend unavailable")
     try:
         chain_valid = al.verify_chain()
         event_count = al.count
@@ -767,7 +758,8 @@ def audit_verify(admin: AdminUser = Depends(get_current_admin)):
             cp = al.checkpoint()
             checkpoint = cp.model_dump(mode="json") if hasattr(cp, "model_dump") else dict(cp)
             checkpoint_valid = al.verify_checkpoint(cp)
-        except Exception:
+        except (AttributeError, TypeError, ValueError, KeyError) as exc:
+            logger.warning("Audit checkpoint verification unavailable: %s", exc)
             checkpoint_valid = None
         result: dict = {
             "chain_valid": chain_valid,
@@ -778,8 +770,10 @@ def audit_verify(admin: AdminUser = Depends(get_current_admin)):
         if checkpoint_valid is not None:
             result["checkpoint_valid"] = checkpoint_valid
         return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (SQLAlchemyError, ConnectionError, TimeoutError, OSError) as e:
+        raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+    except (AttributeError, TypeError, ValueError, KeyError) as e:
+        raise HTTPException(status_code=500, detail="audit verification failed") from e
 
 
 @app.get("/v1/audit/checkpoint")
@@ -787,14 +781,16 @@ def audit_checkpoint(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/audit/checkpoint — current checkpoint (head hash + signature)."""
     _, al, _ = _get_security()
     if al is None:
-        return {"chain_head_hash": "", "event_count": 0, "created_at": None, "signature": ""}
+        raise HTTPException(status_code=503, detail="audit backend unavailable")
     try:
         cp = al.checkpoint()
         if hasattr(cp, "model_dump"):
             return cp.model_dump(mode="json")
         return dict(cp)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (SQLAlchemyError, ConnectionError, TimeoutError, OSError) as e:
+        raise HTTPException(status_code=503, detail="audit backend unavailable") from e
+    except (AttributeError, TypeError, ValueError, KeyError) as e:
+        raise HTTPException(status_code=500, detail="audit checkpoint serialization failed") from e
 
 
 # ── Policy bundles proxy (Section 25) ──────────────────────────
@@ -804,7 +800,7 @@ try:
     _policy_mod_legacy = sys.modules.get("admin_console.backend.policy") or _load_admin_sibling("policy")
     _legacy_active = getattr(_policy_mod_legacy, "get_active_published_bundle", None)
     _legacy_draft = getattr(_policy_mod_legacy, "get_draft_bundle", None)
-except Exception:
+except ImportError:
     _legacy_active = None
     _legacy_draft = None
 
@@ -824,12 +820,12 @@ def policy_bundles(admin: AdminUser = Depends(get_current_admin)):
                             _sys2.path.insert(0, _p)
                     from policy_model import POLICY_EVALUATION_ORDER  # type: ignore
                     order = [s.value for s in POLICY_EVALUATION_ORDER]
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     order = ["explicit_deny","security_boundary_deny","personal_delegation","persistent_user_grant","group_grant","default_bundle","jit_approval","default_deny"]
                 bundle = {"id": active.get("bundle_id") or "default-bundle-v1", "tenant_id": active.get("tenant_id") or "default", "name": active.get("name") or "Default Policy Bundle", "version": active.get("version"), "rules": active.get("rules") or []}
                 return {"bundles": [bundle], "evaluation_order": order, "draft": _legacy_draft("default") if _legacy_draft else None, "active_version": active.get("version")}
-    except Exception:
-        pass
+    except (SQLAlchemyError, ConnectionError, TimeoutError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="policy backend unavailable") from exc
     bundles_data: list[dict] = []
     policy_order: list[str] = []
     try:
@@ -840,7 +836,7 @@ def policy_bundles(admin: AdminUser = Depends(get_current_admin)):
                 _sys2.path.insert(0, _p)
         from policy_model import POLICY_EVALUATION_ORDER  # type: ignore
         policy_order = [s.value for s in POLICY_EVALUATION_ORDER]
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         policy_order = ["explicit_deny","security_boundary_deny","personal_delegation","persistent_user_grant","group_grant","default_bundle","jit_approval","default_deny"]
     try:
         import security.app as sec  # type: ignore
@@ -849,17 +845,17 @@ def policy_bundles(admin: AdminUser = Depends(get_current_admin)):
             for b in getattr(pe, "bundles", []):
                 try:
                     bundles_data.append(b.model_dump(mode="json"))
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     bundles_data.append({"id": getattr(b,"id",""),"tenant_id": getattr(b,"tenant_id",""),"version": getattr(b,"version",""),"rules": []})
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError) as exc:
+        logger.warning("Policy engine state unavailable; returning degraded policy data: %s", exc)
     if not bundles_data:
         try:
             from policy_engine.default_bundle import default_bundle as _db  # type: ignore
             b = _db(tenant_id="default")
             bundles_data = [b.model_dump(mode="json")]
-        except Exception:
-            pass
+        except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError) as exc:
+            logger.warning("Default policy bundle unavailable: %s", exc)
     return {"bundles": bundles_data, "evaluation_order": policy_order}
 
 
@@ -869,14 +865,7 @@ def credentials_status(admin: AdminUser = Depends(get_current_admin)):
     """GET /v1/credentials/status — provider별 active/revoked counts + recent delegations."""
     _, _, ds = _get_security()
     if ds is None:
-        return {
-            "providers": [],
-            "total": 0,
-            "active": 0,
-            "revoked": 0,
-            "expired": 0,
-            "recent": [],
-        }
+        raise HTTPException(status_code=503, detail="credential backend unavailable")
     try:
         store: dict = getattr(ds, "_store", {})
         bindings: dict = getattr(ds, "_bindings", {})
@@ -916,9 +905,10 @@ def credentials_status(admin: AdminUser = Depends(get_current_admin)):
                         else:
                             provider_stats[prov]["active"] += 1
                             active += 1
-                    except Exception:
-                        provider_stats[prov]["active"] += 1
-                        active += 1
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        logger.warning("Invalid credential expiry for provider %s; treating as expired: %s", prov, exc)
+                        provider_stats[prov]["expired"] += 1
+                        expired += 1
                 else:
                     provider_stats[prov]["active"] += 1
                     active += 1
@@ -941,7 +931,8 @@ def credentials_status(admin: AdminUser = Depends(get_current_admin)):
             if isinstance(c, str):
                 try:
                     return datetime.fromisoformat(c.replace("Z", "+00:00"))
-                except Exception:
+                except (TypeError, ValueError, OverflowError) as exc:
+                    logger.warning("Invalid delegation timestamp; using oldest ordering: %s", exc)
                     return datetime.min.replace(tzinfo=timezone.utc)
             return c
 
@@ -950,7 +941,7 @@ def credentials_status(admin: AdminUser = Depends(get_current_admin)):
         for d in sorted_delegations:
             try:
                 recent.append(d.model_dump(mode="json"))  # type: ignore
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 recent.append(
                     {
                         "id": getattr(d, "id", ""),
@@ -984,5 +975,7 @@ def credentials_status(admin: AdminUser = Depends(get_current_admin)):
             "expired": expired,
             "recent": recent,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (SQLAlchemyError, ConnectionError, TimeoutError, OSError) as e:
+        raise HTTPException(status_code=503, detail="credential backend unavailable") from e
+    except (AttributeError, TypeError, ValueError, KeyError) as e:
+        raise HTTPException(status_code=500, detail="credential status serialization failed") from e
