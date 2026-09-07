@@ -65,11 +65,11 @@ def _record_dead_letter(secret_ref: str, error: str) -> None:
     try:
         from execution_gateway.metrics import default_metrics  # type: ignore
         default_metrics.record_vault_revoke_failure()
-    except Exception:
+    except ImportError:
         try:
             from execution_gateway.execution_gateway.metrics import default_metrics as _dm2  # type: ignore
             _dm2.record_vault_revoke_failure()
-        except Exception:
+        except ImportError:
             pass
 
 
@@ -273,7 +273,7 @@ class EncryptedPostgresVault(CredentialVault):
         if self._external is not None:
             try:
                 return self._external.backend_name()
-            except Exception:
+            except (AttributeError, TypeError):
                 return "external"
         return "encrypted_postgres"
 
@@ -319,8 +319,8 @@ class EncryptedPostgresVault(CredentialVault):
                         row_kwargs["vault_path"] = None
                 if "version" in mapper_cols:
                     row_kwargs["version"] = 1  # type: ignore[assignment]
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as e:
+                logger.debug("vault mapper column probe failed: %s", type(e).__name__)
             row = VaultCredentialORM(**row_kwargs)  # type: ignore[arg-type]
             sess.add(row)
             await sess.commit()
@@ -358,9 +358,9 @@ class EncryptedPostgresVault(CredentialVault):
                 # dual-write: also store Fernet ciphertext for rollback window
                 try:
                     encrypted = self._fernet.encrypt(token)
-                except Exception:
+                except (ValueError, TypeError) as e:
                     encrypted = None
-                    logger.warning("dual-write Fernet encrypt failed for %s", ref)
+                    logger.warning("dual-write Fernet encrypt failed for %s: %s", ref, type(e).__name__)
 
             # 3) write DB metadata row (or fallback to memory)
             if self._session_maker is not None:
@@ -454,7 +454,10 @@ class EncryptedPostgresVault(CredentialVault):
                 else:
                     meta = self._meta.get(secret_ref)
                     encrypted = self._store.get(secret_ref)
-            except Exception:
+            except Exception as e:
+                # DB read fallback to process-local memory (owner check below still
+                # denies on unknown owner; external path raises in production).
+                logger.debug("vault DB read failed for %s, memory fallback: %s", secret_ref, type(e).__name__)
                 meta = self._meta.get(secret_ref)
                 encrypted = self._store.get(secret_ref)
         else:
@@ -576,8 +579,10 @@ class EncryptedPostgresVault(CredentialVault):
                     action="RETRIEVE",
                 )
                 self._audit_ledger.append(ae)
-            except Exception:
-                pass
+            except Exception as e:
+                # Credential-use audit mirror — retrieval already authorized; degradation
+                # allowed only with warning and the local audit event preserved above.
+                logger.warning("vault credential-use audit mirror failed for %s: %s", secret_ref, type(e).__name__)
 
         return plaintext
 
@@ -647,10 +652,11 @@ class EncryptedPostgresVault(CredentialVault):
                             owner = fut.result(timeout=2)
                             if owner:
                                 return owner
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+                        except (OSError, AttributeError, TypeError, ValueError) as e:
+                            logger.debug("vault owner DB probe failed: %s", type(e).__name__)
+            except (RuntimeError, OSError, AttributeError, TypeError, ValueError) as e:
+                # Ownership probe is best-effort; failure => None => retrieve denies below
+                logger.debug("vault owner lookup failed for %s: %s", secret_ref, type(e).__name__)
         return None
 
     # Back-compat: allow tests to query ownership even when DB holds truth
@@ -661,6 +667,6 @@ class EncryptedPostgresVault(CredentialVault):
             row = await self._db_get(secret_ref)
             if row is not None:
                 return row.owner_agent_id
-        except Exception:
-            pass
+        except (OSError, AttributeError, TypeError, ValueError, KeyError) as e:
+            logger.debug("vault owner DB fetch failed for %s: %s", secret_ref, type(e).__name__)
         return self.owner_of(secret_ref)

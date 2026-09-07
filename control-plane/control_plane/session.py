@@ -7,12 +7,15 @@ Prod uses RedisSessionStore via factory `create_session_store(backend="redis", .
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional, Protocol
+
+logger = logging.getLogger(__name__)
 
 
 def new_session_id() -> str:
@@ -94,7 +97,8 @@ class SessionRecord:
             if isinstance(v, str):
                 try:
                     data[k] = datetime.fromisoformat(v)
-                except Exception:
+                except (ValueError, TypeError):
+                    # Corrupt timestamp — fall back to now, record stays attributable to its owner
                     data[k] = _now()
         return cls(**data)
 
@@ -235,7 +239,7 @@ class RedisSessionStore(BaseSessionStore):
             try:
                 from .env_gate import is_production as _ip
                 return _ip()
-            except:
+            except (ImportError, AttributeError):
                 return os.environ.get("OAOS_ENV","").lower() in ("production","prod")
         def _allow_fallback() -> bool:
             if _is_prod():
@@ -278,7 +282,10 @@ class RedisSessionStore(BaseSessionStore):
         try:
             data = json.loads(raw)
             return SessionRecord.from_dict(data)
-        except Exception:
+        except (ValueError, TypeError, AttributeError) as e:
+            # Corrupt/unparseable session payload — treated as missing (caller raises
+            # KeyError/PermissionError); ownership checks still apply to valid records.
+            logger.debug("session payload decode failed: %s", type(e).__name__)
             return None
 
     def _save(self, rec: SessionRecord) -> None:
@@ -335,7 +342,8 @@ class RedisSessionStore(BaseSessionStore):
                     continue
                 try:
                     rec = SessionRecord.from_dict(json.loads(raw))
-                except Exception:
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug("session scan skipping corrupt entry: %s", type(e).__name__)
                     continue
                 if rec.tenant_id == tenant_id and rec.user_id == user_id:
                     matches.append(rec)

@@ -60,12 +60,12 @@ def delegation_vault_revoke_metrics_prometheus() -> str:
         from vault.vault import get_vault_revoke_failures_total  # type: ignore
 
         total += get_vault_revoke_failures_total()
-    except Exception:
+    except ImportError:
         try:
             from security.credential_vault.vault.vault import get_vault_revoke_failures_total as _g  # type: ignore
 
             total += _g()
-        except Exception:
+        except ImportError:
             pass
     lines = [
         "# HELP oaos_vault_revoke_failures_total Vault revoke failures after retries (dead-letter)",
@@ -99,11 +99,11 @@ def _record_delegation_dead_letter(secret_ref: str, delegation_id: str, error: s
     try:
         from execution_gateway.metrics import default_metrics  # type: ignore
         default_metrics.record_vault_revoke_failure()
-    except Exception:
+    except ImportError:
         try:
             from execution_gateway.execution_gateway.metrics import default_metrics as _dm2  # type: ignore
             _dm2.record_vault_revoke_failure()
-        except Exception:
+        except ImportError:
             pass
 
 
@@ -378,7 +378,10 @@ class DelegationService:
         if d is None and _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_production():
+                        raise RuntimeError("delegation database unavailable in production")
+                else:
                     try:
                         from security.models.orm import DelegationORM  # type: ignore
 
@@ -389,12 +392,17 @@ class DelegationService:
                             self._hash_store[d.id] = _delegation_hash(d)
                     finally:
                         _db_close(session, engine)
-            except Exception:
+            except Exception as e:
+                if _is_production():
+                    # Unknown vs backend-down must not conflate: RuntimeError => 503 upstream, never silent 404
+                    raise RuntimeError("delegation database unavailable in production") from e
                 pass
         if d is None:
             return None
         if d.status == DelegationStatus.REVOKED:
             return d
+        prev_status = d.status
+        prev_revoked_at = d.revoked_at
         d.status = DelegationStatus.REVOKED
         d.revoked_at = datetime.now(timezone.utc)
         self._hash_store[d.id] = _delegation_hash(d)
@@ -403,7 +411,13 @@ class DelegationService:
         if _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_production():
+                        d.status = prev_status
+                        d.revoked_at = prev_revoked_at
+                        self._hash_store[d.id] = _delegation_hash(d)
+                        raise RuntimeError("delegation database unavailable in production")
+                else:
                     try:
                         from security.models.orm import DelegationORM, CredentialBindingORM  # type: ignore
 
@@ -425,10 +439,21 @@ class DelegationService:
                             session.rollback()
                         except SQLAlchemyError:
                             pass
+                        if _is_production():
+                            # A revoke that is not durable must never be reported as REVOKED:
+                            # the row would resurrect as ACTIVE on restart (silent fail-open).
+                            d.status = prev_status
+                            d.revoked_at = prev_revoked_at
+                            self._hash_store[d.id] = _delegation_hash(d)
+                            raise RuntimeError("delegation revoke persist failed in production") from e
                         logger.debug("Delegation revoke DB update failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception:
+            except RuntimeError:
+                raise
+            except Exception as e:
+                if _is_production():
+                    raise RuntimeError("delegation revoke persist failed in production") from e
                 pass
         # cascade: 모든 연결된 binding 무효화 (in-memory)
         for bid in self._delegation_bindings.get(delegation_id, set()).copy():
@@ -456,11 +481,12 @@ class DelegationService:
                                     b2 = _binding_from_orm(r)
                                     b2.status = CredentialBindingStatus.REVOKED
                                     self._bindings[bid] = b2
-                                except Exception:
-                                    pass
+                                except (ValueError, TypeError, AttributeError, KeyError) as e:
+                                    logger.debug("revoke binding hydrate failed for %s: %s", bid, type(e).__name__)
                     finally:
                         _db_close(session, engine)
-            except Exception:
+            except Exception as e:
+                logger.debug("revoke binding DB scan failed: %s", type(e).__name__)
                 pass
         # ── revoke cascade: MemoryStore + Vault (lazy, best-effort) ──
         # MemoryStore.invalidate_by_delegation
@@ -476,17 +502,17 @@ class DelegationService:
                         from security.memory_governance.governance.governance import get_default_store as _gds  # type: ignore
 
                         store = _gds()
-                    except Exception:
+                    except ImportError:
                         store = None
-                except Exception:
-                    store = None
             if store is not None:
                 try:
                     store.invalidate_by_delegation(delegation_id, reason="delegation_revoked")
                 except Exception as e:
                     logger.debug("MemoryStore invalidate_by_delegation failed: %s", e)
-        except Exception:
-            pass
+        except Exception as e:
+            # Memory invalidation is defense-in-depth (the delegation itself is already
+            # REVOKED above, which denies authoritatively) — warn, never silent.
+            logger.warning("delegation revoke memory-invalidate cascade failed for %s: %s", delegation_id, type(e).__name__)
         # Vault revoke: revoke each secret_ref for this delegation
         try:
             vault = self._vault
@@ -620,10 +646,13 @@ class DelegationService:
                                         time.sleep(_VAULT_RETRY_DELAYS[2])
                                     _record_delegation_dead_letter(sr, delegation_id, str(e))
                         if last_exc is not None:
-                            logger.debug("Vault revoke failed for %s after retries: %s", sr, last_exc)
+                            # Vault secret may still exist, but the delegation/binding is already
+                            # REVOKED above so it can no longer authorize (fail-closed); the orphan
+                            # is tracked via dead-letter + metrics for retry/alerting.
+                            logger.warning("Vault revoke failed for %s after retries (delegation already REVOKED, dead-letter recorded): %s", sr, last_exc)
                         continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("delegation revoke cascade failed for %s: %s", delegation_id, type(e).__name__)
         return d
 
     def is_active(self, delegation_id: str) -> bool:

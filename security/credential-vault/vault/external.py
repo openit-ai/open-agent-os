@@ -84,7 +84,8 @@ class EnvFileBackend(VaultBackend):
             for k, v in data.items():
                 try:
                     self._store[k] = base64.b64decode(v)
-                except Exception:
+                except (ValueError, TypeError):
+                    # Corrupt file entry — skip single entry, keep the rest loadable
                     continue
         except Exception as e:
             logger.debug("EnvFileBackend load failed: %s", e)
@@ -289,34 +290,50 @@ class HashiCorpVaultBackend(VaultBackend):
     async def delete(self, secret_ref: str) -> None:
         if self._use_fallback:
             if _is_production():
-                raise RuntimeError("AWS Secrets fallback delete not allowed in production")
+                raise RuntimeError("HashiCorp Vault fallback delete not allowed in production")
             await self._fallback.delete(secret_ref)
             return
+        # Delete failures must surface: callers (vault revoke) rely on exceptions for
+        # retry + dead-letter. A silent success here would leave the secret live while
+        # the delegation is reported revoked (fail-open).
+        transport_errors: list[str] = []
         try:
             import hvac  # type: ignore
 
             client = hvac.Client(url=self.addr, token=self.token, namespace=self.namespace, verify=self.tls_ca_bundle or True)  # type: ignore
             try:
                 client.secrets.kv.v2.delete_metadata_and_all_versions(path=f"{self.kv_prefix}{secret_ref}", mount_point=self.kv_mount)  # type: ignore
-            except Exception:
-                pass
+            except Exception as e:
+                transport_errors.append(f"hvac: {type(e).__name__}")
         except ImportError:
-            pass
+            transport_errors.append("hvac: not installed")
         except Exception as e:
-            logger.debug("HashiCorpVaultBackend.delete hvac failed: %s", e)
+            transport_errors.append(f"hvac: {type(e).__name__}")
         try:
             import httpx  # type: ignore
 
             url = f"{self.addr}/v1/{self._path_metadata(secret_ref)}"
             async with httpx.AsyncClient(verify=self.tls_ca_bundle or True, timeout=5.0) as client:
-                await client.request("DELETE", url, headers=self._headers())
-        except Exception:
-            pass
+                resp = await client.request("DELETE", url, headers=self._headers())
+                if resp.status_code == 404:
+                    pass  # already gone — idempotent success
+                elif resp.status_code >= 400:
+                    transport_errors.append(f"httpx: status {resp.status_code}")
+        except ImportError:
+            transport_errors.append("httpx: not installed")
+        except Exception as e:
+            transport_errors.append(f"httpx: {type(e).__name__}")
         # also clear fallback
         try:
             await self._fallback.delete(secret_ref)
-        except (OSError, KeyError, AttributeError):
-            pass
+        except (OSError, KeyError, AttributeError) as e:
+            logger.debug("HashiCorpVaultBackend fallback delete failed: %s", type(e).__name__)
+        if len(transport_errors) == 2:
+            # Both transports failed — the secret may still be live.
+            msg = "; ".join(transport_errors)
+            if _is_production():
+                raise RuntimeError(f"HashiCorp Vault delete failed in production: {msg}")
+            logger.warning("HashiCorpVaultBackend.delete transports failed (non-prod, fallback cleared): %s", msg)
 
     async def health_check(self) -> bool:
         if self._use_fallback:
@@ -481,6 +498,8 @@ class AwsSecretsBackend(VaultBackend):
                 raise RuntimeError("AWS Secrets fallback delete not allowed in production")
             await self._fallback.delete(secret_ref)
             return
+        # Delete failures must surface for caller retry + dead-letter (see HashiCorp delete).
+        delete_errors: list[str] = []
         try:
             import asyncio
             sid = self._secret_id(secret_ref)
@@ -489,16 +508,24 @@ class AwsSecretsBackend(VaultBackend):
                 client = self._client()
                 try:
                     client.delete_secret(SecretId=sid, ForceDeleteWithoutRecovery=True)  # type: ignore
-                except Exception:
-                    pass
+                except Exception as e:
+                    msg = str(e)
+                    if "ResourceNotFound" in msg or "not found" in msg.lower():
+                        return  # already gone — idempotent success
+                    raise
 
             await asyncio.to_thread(_sync)
-        except Exception:
-            pass
+        except Exception as e:
+            delete_errors.append(f"secretsmanager: {type(e).__name__}")
         try:
             await self._fallback.delete(secret_ref)
-        except (OSError, KeyError, AttributeError):
-            pass
+        except (OSError, KeyError, AttributeError) as e:
+            logger.debug("AwsSecretsBackend fallback delete failed: %s", type(e).__name__)
+        if delete_errors:
+            msg = "; ".join(delete_errors)
+            if _is_production():
+                raise RuntimeError(f"AWS Secrets delete failed in production: {msg}")
+            logger.warning("AwsSecretsBackend.delete failed (non-prod, fallback cleared): %s", msg)
 
     async def health_check(self) -> bool:
         if self._use_fallback:

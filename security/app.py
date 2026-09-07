@@ -32,10 +32,13 @@ except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effor
 
 from datetime import datetime, timezone
 from typing import Optional
+import logging
 import time
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 # C1: verified bearer JWT or mTLS — health remains public
 # Robust import: use package-qualified or file location, never bare 'auth' which collides with admin-console/backend/auth.py
@@ -506,17 +509,22 @@ def policy_evaluate(req: PolicyEvaluationRequest, payload: dict = Depends(verify
             policy_version=result.policy_version,
         )
         audit_ledger.append(evt)
-    except Exception:
-        pass
+    except Exception as e:
+        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
+        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
     return result
 
 
 # ── Delegation ─────────────────────────────────────────────────
 @app.post("/v1/delegation/grant", response_model=Delegation)
 def delegation_grant(req: DelegationGrantRequest, payload: dict = Depends(verify_security_auth)):
-    d = delegation_service.grant(
-        user_id=req.user_id, agent_id=req.agent_id, provider=req.provider, scope=req.scope
-    )
+    try:
+        d = delegation_service.grant(
+            user_id=req.user_id, agent_id=req.agent_id, provider=req.provider, scope=req.scope
+        )
+    except RuntimeError as e:
+        # Delegation backend unavailable in production (fail-closed) — 503, not 500
+        raise HTTPException(status_code=503, detail=str(e))
     try:
         evt = AuditEvent(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -528,14 +536,19 @@ def delegation_grant(req: DelegationGrantRequest, payload: dict = Depends(verify
             delegation_id=d.id,
         )
         audit_ledger.append(evt)
-    except Exception:
-        pass
+    except Exception as e:
+        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
+        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
     return d
 
 
 @app.post("/v1/delegation/revoke")
 def delegation_revoke(req: DelegationRevokeRequest, payload: dict = Depends(verify_security_auth)):
-    d = delegation_service.revoke(req.delegation_id)
+    try:
+        d = delegation_service.revoke(req.delegation_id)
+    except RuntimeError as e:
+        # Delegation backend unavailable / revoke not durable in production — 503, never silent 404
+        raise HTTPException(status_code=503, detail=str(e))
     if d is None:
         raise HTTPException(status_code=404, detail="delegation not found")
     try:
@@ -549,8 +562,9 @@ def delegation_revoke(req: DelegationRevokeRequest, payload: dict = Depends(veri
             delegation_id=d.id,
         )
         audit_ledger.append(evt)
-    except Exception:
-        pass
+    except Exception as e:
+        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
+        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
     return {"status": "revoked", "delegation_id": d.id, "delegation": d}
 
 
@@ -594,8 +608,9 @@ def token_issue(req: TokenIssueRequest, payload: dict = Depends(verify_security_
             delegation_id=req.delegation_id,
         )
         audit_ledger.append(evt)
-    except Exception:
-        pass
+    except Exception as e:
+        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
+        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
     return {"token": token}
 
 
@@ -604,6 +619,9 @@ def token_verify(req: TokenVerifyRequest, payload: dict = Depends(verify_securit
     try:
         inner = token_service.verify(req.token)
         return {"valid": True, "payload": inner}
+    except RuntimeError as e:
+        # Backend unavailable (Redis/DB in production) — 503, never conflated with invalid credential
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
@@ -637,8 +655,9 @@ def approval_request(req: ApprovalRequestBody, payload: dict = Depends(verify_se
             action=req.action,
         )
         audit_ledger.append(evt)
-    except Exception:
-        pass
+    except Exception as e:
+        # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
+        logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
     return ar
 
 
@@ -664,9 +683,13 @@ def approval_decide(req: ApprovalDecideBody, payload: dict = Depends(verify_secu
                 decision=req.decision.value,
             )
             audit_ledger.append(evt)
-        except Exception:
-            pass
+        except Exception as e:
+            # Optional audit mirror — degradation allowed only with warning; the decision itself is preserved.
+            logger.warning("audit mirror append failed (decision preserved): %s", type(e).__name__)
         return ar
+    except RuntimeError as e:
+        # Approval backend unavailable in production (fail-closed) — 503, not 400/500
+        raise HTTPException(status_code=503, detail=str(e))
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 

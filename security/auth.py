@@ -23,11 +23,14 @@ Other guarantees:
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional
 
 from fastapi import Header, HTTPException, Request
 from jose import jwt, JWTError, ExpiredSignatureError
+
+logger = logging.getLogger(__name__)
 
 _DEV_SIGNING_KEY = "dev-signing-key-please-change"
 ALLOWED_AUDIENCE = "security"
@@ -67,8 +70,9 @@ def _get_verified_mtls_cn(request: Request) -> Optional[str]:
             v = getattr(request.state, attr, None)
             if v:
                 candidates.append(v)
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as e:
+            # Server-side state read only — never affects the auth decision (deny by default)
+            logger.debug("verified mTLS state read failed for %s: %s", attr, type(e).__name__)
     # 2. ASGI scope injected by trusted proxy (not client-controllable headers)
     try:
         if "verified_mtls_cn" in request.scope:
@@ -83,8 +87,9 @@ def _get_verified_mtls_cn(request: Request) -> Optional[str]:
         tv = request.scope.get("tls_verified")
         if isinstance(tv, dict) and tv.get("cn"):
             candidates.append(tv["cn"])
-    except Exception:
-        pass
+    except (AttributeError, KeyError, TypeError) as e:
+        # ASGI scope read only — never affects the auth decision (deny by default)
+        logger.debug("verified mTLS scope read failed: %s", type(e).__name__)
     for cn in candidates:
         if isinstance(cn, str) and cn.strip():
             return cn.strip()
@@ -155,8 +160,8 @@ def verify_security_auth(
             verified_tenant = None
             try:
                 verified_tenant = getattr(request.state, "verified_tenant_id", None) or request.scope.get("verified_tenant_id")
-            except Exception:
-                pass
+            except (AttributeError, KeyError, TypeError) as e:
+                logger.debug("verified tenant read failed: %s", type(e).__name__)
             tenant = (verified_tenant.strip() if isinstance(verified_tenant, str) and verified_tenant.strip() else "acme")
             return {
                 "iss": "mtls",

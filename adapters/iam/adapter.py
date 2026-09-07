@@ -18,6 +18,7 @@ Env:
 from __future__ import annotations
 
 import os
+import logging
 import re
 import sys
 import uuid
@@ -25,6 +26,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Ensure security + packages on path even when imported outside pytest conftest
 _ROOT = Path(__file__).resolve().parents[2]
@@ -56,7 +59,7 @@ try:
     from policy_engine.engine import PolicyEngine
     from policy_engine.default_bundle import default_bundle
     _has_policy = True
-except Exception:
+except ImportError:
     _has_policy = False  # type: ignore
     PolicyBundle = Any  # type: ignore
     PolicyEngine = Any  # type: ignore
@@ -67,12 +70,12 @@ try:
     from audit_model import AuditEvent, AuditEventType
     from audit_ledger.ledger import AuditLedger  # type: ignore
     _has_audit = True
-except Exception:
+except ImportError:
     try:
         from audit_ledger.ledger import AuditLedger  # type: ignore
         from audit_model import AuditEvent, AuditEventType  # type: ignore
         _has_audit = True
-    except Exception:
+    except ImportError:
         _has_audit = False  # type: ignore
         AuditEvent = Any  # type: ignore
         AuditEventType = Any  # type: ignore
@@ -81,11 +84,11 @@ try:
     from delegation_model import DelegationStatus
     from delegation_service.service import DelegationService  # type: ignore
     _has_delegation = True
-except Exception:
+except ImportError:
     try:
         from delegation_service.service import DelegationService  # type: ignore
         _has_delegation = False
-    except Exception:
+    except ImportError:
         _has_delegation = False  # type: ignore
 
 
@@ -590,8 +593,10 @@ class IamAdapter:
                             self._user_groups[user_id] = set()
                         self._user_groups[user_id].update(fetched)
                         cached_groups = cached_groups | fetched
-            except Exception:
-                pass
+            except Exception as e:
+                # Provider unreachable — stale cached groups are used below.
+                # Logged loudly: revoked-at-IdP groups may still appear until next sync.
+                logger.warning("iam group sync from provider failed, using cached groups for %s: %s", user_id, type(e).__name__)
         effective_user = self._users.get(user_id, {"id": user_id, "email": email or user_id, "groups": list(cached_groups)})
         effective_user["groups"] = list(cached_groups)
         sec_domain = self.assign_security_domain(effective_user)
@@ -621,8 +626,8 @@ class IamAdapter:
         if d_bundle is not None and getattr(d_bundle, "id", None) != "default-bundle-v1":
             try:
                 d_bundle.id = "default-bundle-v1"
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as e:
+                logger.debug("iam bundle id normalize failed: %s", type(e).__name__)
         bundles: list[Any] = []
         bundles.extend(group_bundles)
         if d_bundle:
@@ -654,8 +659,8 @@ class IamAdapter:
                 globals()["PolicyRule"] = PR
                 globals()["PolicySource"] = PS
                 _has_policy = True
-            except Exception:
-                pass
+            except ImportError as e:
+                logger.debug("iam lazy policy re-import failed: %s", type(e).__name__)
         if not _has_policy:
             try:
                 from policy_model import PolicyDecision as PD, PolicySource as PS  # type: ignore
@@ -666,7 +671,8 @@ class IamAdapter:
                         self.reason = "policy engine unavailable"
                         self.matched_rule = None
                 return _Res()
-            except Exception:
+            except ImportError as e:
+                logger.debug("iam policy DENY fallback without engine: %s", type(e).__name__)
                 return {"decision": "DENY", "reason": "no policy engine"}
         tid = tenant_id or self.tenant_id or self.resolve_tenant(principal)
         agent_id = self.to_agent_principal(principal) if principal.startswith("employee:") else f"agent:assistant:{principal}"
@@ -731,6 +737,7 @@ class IamAdapter:
             if self._principal_map[k] == principal or k in candidates:
                 del self._principal_map[k]
         revoked: list[str] = []
+        revoke_failures: list[str] = []
         if ds is not None:
             try:
                 if hasattr(ds, "list_by_user"):
@@ -751,14 +758,17 @@ class IamAdapter:
                                     cur = ds.get(did)
                                     if cur is not None and getattr(getattr(cur, "status", None), "value", "") == "REVOKED":
                                         continue
-                            except Exception:
-                                pass
+                            except (AttributeError, TypeError, ValueError, KeyError, RuntimeError) as e:
+                                logger.debug("iam deprovision active-probe failed for %s: %s", did, type(e).__name__)
                             ds.revoke(did)
                             revoked.append(did)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+                        except Exception as e:
+                            # Revoke failure affects security state — never silent.
+                            # The delegation stays active; surfaced via revoke_failures for retry/alerting.
+                            logger.warning("iam deprovision revoke failed did=%s principal=%s: %s", did, principal, type(e).__name__)
+                            revoke_failures.append(did)
+            except Exception as e:
+                logger.warning("iam deprovision delegation enumeration failed principal=%s: %s", principal, type(e).__name__)
         audit_events: list[Any] = []
         if ledger is not None:
             try:
@@ -783,8 +793,9 @@ class IamAdapter:
                         if hasattr(ledger, "append"):
                             ledger.append(evt)
                         audit_events.append(evt)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Audit mirror loss during deprovision — warn; revocation itself already applied above.
+                        logger.warning("iam deprovision audit append failed did=%s: %s", did, type(e).__name__)
                 try:
                     if _has_audit:
                         evt2 = AuditEvent(  # type: ignore
@@ -801,10 +812,12 @@ class IamAdapter:
                         if hasattr(ledger, "append"):
                             ledger.append(evt2)
                         audit_events.append(evt2)
-                except Exception:
-                    pass
-            except Exception:
-                pass
+                except Exception as e:
+                    logger.warning("iam deprovision summary audit append failed principal=%s: %s", principal, type(e).__name__)
+            except Exception as e:
+                logger.warning("iam deprovision audit block failed principal=%s: %s", principal, type(e).__name__)
+        if revoke_failures:
+            logger.warning("iam deprovision completed with %d revoke failures principal=%s: %s", len(revoke_failures), principal, revoke_failures)
         return {
             "user_id": user_id,
             "principal": principal,
@@ -812,6 +825,8 @@ class IamAdapter:
             "groups_removed_from": groups_removed,
             "revoked_delegations": revoked,
             "revoked_count": len(revoked),
+            "revoke_failures": revoke_failures,
+            "revoke_failed_count": len(revoke_failures),
             "audit_events": len(audit_events),
             "reason": reason,
         }

@@ -50,11 +50,19 @@ try:
         salt_len=16,
     )
     logger.info("Password hashing: Argon2id available (argon2-cffi)")
-except Exception as _argon2_import_exc:  # pragma: no cover - missing lib path
+except ImportError as _argon2_import_exc:  # pragma: no cover - missing lib path
     _argon2_hasher = None
     _logging.getLogger(__name__).warning(
         f"Password hashing: argon2-cffi unavailable, falling back to bcrypt ({_argon2_import_exc})"
     )
+
+# Domain exceptions for password verification (fail-closed: any of these => wrong password).
+# Argon2 verify raises VerifyMismatchError/InvalidHash; bcrypt raises ValueError/TypeError.
+_VERIFY_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError)
+for _verify_err_name in ("_Argon2VerifyError", "_Argon2InvalidHash"):
+    _verify_err_cls = globals().get(_verify_err_name)
+    if isinstance(_verify_err_cls, type) and issubclass(_verify_err_cls, BaseException):
+        _VERIFY_ERRORS = _VERIFY_ERRORS + (_verify_err_cls,)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -166,19 +174,22 @@ def _verify_password(password: str, hashed: str) -> bool:
             return False
         try:
             return _argon2_hasher.verify(hashed, password)
-        except Exception:
-            # VerifyMismatchError, InvalidHash, etc. -> wrong password
+        except _VERIFY_ERRORS as e:
+            # VerifyMismatchError, InvalidHash, malformed input -> wrong password (fail-closed)
+            logger.debug("argon2 verify failed: %s", type(e).__name__)
             return False
     # legacy bcrypt (and fallback)
     try:
         return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.debug("bcrypt verify failed: %s", type(e).__name__)
         # In case hash was argon2 but without prefix detection edge — try argon2 as last resort
         if _argon2_hasher is not None:
             try:
                 return _argon2_hasher.verify(hashed, password)
-            except Exception:
-                pass
+            except _VERIFY_ERRORS as e2:
+                logger.debug("argon2 fallback verify failed: %s", type(e2).__name__)
+                return False
         return False
 
 
@@ -276,7 +287,8 @@ def _from_orm(orm_obj) -> AdminUser:
     # normalize role to AdminRole
     try:
         role = AdminRole(role_val)
-    except Exception:
+    except (ValueError, TypeError):
+        # Unknown role value from DB — least privilege (L4), explicit L5 string honored
         role = AdminRole.L4
         if str(role_val).upper() == "L5":
             role = AdminRole.L5
@@ -414,15 +426,16 @@ def _db_get_session():
 
 
 def _db_close(session, engine) -> None:
+    # Cleanup-only: close/dispose must never raise; narrowed to close-path errors.
     try:
         if session is not None:
             session.close()
-    except SQLAlchemyError:
+    except (SQLAlchemyError, AttributeError, TypeError):
         logger.debug("admin auth session close failed (best-effort)")
     try:
         if engine is not None:
             engine.dispose()
-    except SQLAlchemyError:
+    except (SQLAlchemyError, AttributeError, TypeError):
         logger.debug("admin auth engine dispose failed (best-effort)")
 
 
@@ -443,8 +456,10 @@ def _has_existing_admin() -> bool:
                     return cnt > 0
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except Exception as e:
+            # Startup probe only — failure means "no visible admin" which keeps
+            # production fail-closed (bootstrap-or-crash in _seed_admin).
+            logger.debug("admin existence probe failed: %s", type(e).__name__)
     return False
 
 def _seed_admin() -> None:
@@ -551,10 +566,16 @@ _seed_admin()
 # Helpers (for testing / infra) — DB first, fallback to cache
 # ---------------------------------------------------------------------------
 def get_user_by_email(email: str) -> Optional[AdminUser]:
+    # Distinguish "unknown user" (=> caller maps to 401, no user enumeration) from
+    # "auth backend down" (=> 503 in production, never silently treated as unknown user).
+    db_down = False
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                # DB configured but session unavailable => backend failure, not "no user"
+                db_down = True
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     row = session.query(AdminUserORM).filter(AdminUserORM.email == email).first()  # type: ignore
@@ -566,12 +587,17 @@ def get_user_by_email(email: str) -> Optional[AdminUser]:
                         return user
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except Exception as e:
+            db_down = True
+            logger.warning("auth DB lookup by email failed (backend, not unknown user): %s", type(e).__name__)
     user = _users_by_email.get(email)
     if user is not None:
+        if db_down and _is_production():
+            logger.warning("auth serving cached user while DB unavailable (degraded, still authenticated)")
         return user
     if _is_production():
+        if db_down:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
         return None
     for mod in list(sys.modules.values()):
         try:
@@ -581,16 +607,20 @@ def get_user_by_email(email: str) -> Optional[AdminUser]:
                 _users_by_id[found_user.id] = found_user
                 _users_by_email[email] = found_user
                 return found_user
-        except Exception:
+        except (AttributeError, TypeError):
             continue
     return None
 
 
 def get_user_by_id(uid: str) -> Optional[AdminUser]:
+    # Same backend-vs-unknown distinction as get_user_by_email (see above).
+    db_down = False
     if _db_enabled():
         try:
             session, engine = _db_get_session()
-            if session is not None:
+            if session is None:
+                db_down = True
+            else:
                 try:
                     from security.models.orm import AdminUserORM  # type: ignore
                     row = session.query(AdminUserORM).filter(AdminUserORM.id == uid).first()  # type: ignore
@@ -601,12 +631,17 @@ def get_user_by_id(uid: str) -> Optional[AdminUser]:
                         return user
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except Exception as e:
+            db_down = True
+            logger.warning("auth DB lookup by id failed (backend, not unknown user): %s", type(e).__name__)
     user = _users_by_id.get(uid)
     if user is not None:
+        if db_down and _is_production():
+            logger.warning("auth serving cached user while DB unavailable (degraded, still authenticated)")
         return user
     if _is_production():
+        if db_down:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
         return None
     for mod in list(sys.modules.values()):
         try:
@@ -616,7 +651,7 @@ def get_user_by_id(uid: str) -> Optional[AdminUser]:
                 _users_by_id[uid] = found_user
                 _users_by_email[found_user.email] = found_user
                 return found_user
-        except Exception:
+        except (AttributeError, TypeError):
             continue
     return None
 
@@ -741,19 +776,24 @@ def register(req: RegisterRequest, admin: AdminUser = Depends(require_l5)):
                     except SQLAlchemyError:
                         logger.debug("admin auth rollback failed (best-effort)")
                     raise
-                except Exception:
+                except Exception as e:
                     try:
                         session.rollback()
-                    except SQLAlchemyError:
+                    except (SQLAlchemyError, AttributeError, TypeError):
                         logger.debug("admin auth rollback failed (best-effort)")
-                    # fall through to cache fallback
+                    # DB write failed — never silently degrade to cache-only in production
+                    logger.warning("admin register DB persist failed: %s", type(e).__name__)
+                    if _is_production():
+                        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
+                    # fall through to cache fallback (non-prod only)
                 finally:
                     _db_close(session, engine)
         except HTTPException:
             raise
         except Exception as e:
-            if _db_enabled() and _is_production():
-                raise HTTPException(status_code=503, detail="admin database unavailable")
+            logger.warning("admin register DB unavailable: %s", type(e).__name__)
+            if _is_production():
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
             logger.debug(f"admin register DB fallback (non-prod): {e}")
     _users_by_id[uid] = user
     _users_by_email[req.email] = user
@@ -807,17 +847,24 @@ def delete_admin_user(user_id: str, admin: AdminUser = Depends(require_l5)):
                     except SQLAlchemyError:
                         logger.debug("admin auth rollback failed (best-effort)")
                     raise
-                except Exception:
+                except Exception as e:
+                    # Credential delete failed in durable store — must not claim "deleted"
+                    # while the DB row persists (would resurrect on re-hydrate).
                     try:
                         session.rollback()
-                    except SQLAlchemyError:
+                    except (SQLAlchemyError, AttributeError, TypeError):
                         logger.debug("admin auth rollback failed (best-effort)")
+                    logger.warning("admin delete DB failed for %s: %s", user_id, type(e).__name__)
+                    if _is_production():
+                        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
                 finally:
                     _db_close(session, engine)
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("admin delete DB unavailable for %s: %s", user_id, type(e).__name__)
+            if _is_production():
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
     # remove from cache
     if user_id in _users_by_id:
         del _users_by_id[user_id]
@@ -848,15 +895,23 @@ def change_password(req: ChangePasswordRequest, admin: AdminUser = Depends(get_c
                     if row is not None:
                         row.hashed_password = new_hashed  # type: ignore
                         session.commit()
-                except Exception:
+                except Exception as e:
                     try:
                         session.rollback()
-                    except SQLAlchemyError:
+                    except (SQLAlchemyError, AttributeError, TypeError):
                         logger.debug("admin auth rollback failed (best-effort)")
+                    # Credential write failed — never report success on diverged state in production
+                    logger.warning("change-password DB persist failed: %s", type(e).__name__)
+                    if _is_production():
+                        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("change-password DB unavailable: %s", type(e).__name__)
+            if _is_production():
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
     # update cache object(s)
     fresh.hashed_password = new_hashed
     admin.hashed_password = new_hashed
@@ -883,15 +938,22 @@ def update_profile(req: UpdateProfileRequest, admin: AdminUser = Depends(get_cur
                     if row is not None:
                         row.display_name = req.display_name  # type: ignore
                         session.commit()
-                except Exception:
+                except Exception as e:
                     try:
                         session.rollback()
-                    except SQLAlchemyError:
+                    except (SQLAlchemyError, AttributeError, TypeError):
                         logger.debug("admin auth rollback failed (best-effort)")
+                    logger.warning("update-profile DB persist failed: %s", type(e).__name__)
+                    if _is_production():
+                        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
                 finally:
                     _db_close(session, engine)
-        except Exception:
-            pass
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("update-profile DB unavailable: %s", type(e).__name__)
+            if _is_production():
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth backend unavailable")
     fresh.display_name = req.display_name
     admin.display_name = req.display_name
     if fresh.id in _users_by_id:

@@ -152,7 +152,8 @@ class TokenService:
             ttl = int(exp_ts) - int(datetime.now(timezone.utc).timestamp()) + 60 if exp_ts else 600
             if ttl < 60:
                 ttl = 60
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
+            # Non-numeric/missing exp — fall back to default TTL (fail-closed: replay window unchanged)
             ttl = 600
 
         # Redis primary path (distributed) — try first if REDIS_URL set
@@ -324,7 +325,8 @@ def verify_capability_token(
             ttl = int(exp_ts) - int(datetime.now(timezone.utc).timestamp()) + 60 if exp_ts else 600
             if ttl < 60:
                 ttl = 60
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
+            # Non-numeric/missing exp — fall back to default TTL (fail-closed: replay window unchanged)
             ttl = 600
         try:
             if jti:

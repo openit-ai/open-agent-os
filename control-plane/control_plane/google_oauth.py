@@ -96,7 +96,7 @@ def _scope_allowlist() -> set[str]:
             scopes = getattr(mod, attr, None)
             if isinstance(scopes, dict):
                 allow.update(str(v) for v in scopes.values())
-        except Exception:
+        except (ImportError, AttributeError):
             continue
     if not allow:
         allow.update(DEFAULT_SCOPES)
@@ -319,7 +319,8 @@ class RedisOAuthStateStore:
             return None  # unknown or already consumed (replay)
         try:
             entry = OAuthStateEntry.from_dict(_json.loads(raw))
-        except Exception:
+        except (ValueError, TypeError, AttributeError, KeyError):
+            # Corrupt/tampered state payload — treated as unknown (replay-safe deny)
             return None
         if entry.expired():
             return None
@@ -528,7 +529,8 @@ def _resolve_secret_ref(svc: Any | None, delegation_id: str) -> tuple[str | None
             if callable(list_fn):
                 listed = list_fn(delegation_id)
                 candidates = list(listed) if isinstance(listed, (list, tuple, set)) else []
-        except Exception:
+        except (AttributeError, TypeError, ValueError, KeyError, RuntimeError):
+            # Binding lookup failure => no candidates => deny (never fall through to stale ref)
             candidates = []
         if not candidates:
             store = getattr(svc, "_bindings", None)
@@ -544,7 +546,8 @@ def _resolve_secret_ref(svc: Any | None, delegation_id: str) -> tuple[str | None
                 try:
                     if not svc.is_binding_active(binding_id):
                         continue
-                except Exception:
+                except (AttributeError, TypeError, ValueError, KeyError, RuntimeError):
+                    # Activity probe failed => skip this binding (deny direction)
                     continue
             ref = getattr(binding, "secret_ref", None)
             if ref:
@@ -623,7 +626,10 @@ def _resolve_owner(
         agent_id = mapping.agent_principal
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        # Deterministic fallback derived from the already-verified caller (never from
+        # client input); explicit X-Agent-Id mismatch below still raises 403.
+        logger.debug("agent mapping fallback for %s: %s", caller, type(e).__name__)
         suffix = caller.split(":", 1)[-1] if ":" in caller else caller
         agent_id = f"agent:assistant:{suffix}"
     if x_agent_id and x_agent_id.strip() and x_agent_id.strip() != agent_id:
@@ -665,7 +671,8 @@ def _registered_email(tenant_id: str, user_id: str) -> str | None:
         except ImportError:  # pragma: no cover
             from control_plane.user_mapping_lookup import lookup_registered_owner  # type: ignore
         mapping = lookup_registered_owner(tenant_id, user_id)
-    except Exception:
+    except Exception as e:
+        logger.debug("registered-email lookup failed: %s", type(e).__name__)
         return None
     if not mapping:
         return None
@@ -680,7 +687,7 @@ def _registered_email(tenant_id: str, user_id: str) -> str | None:
                 val = str(extra.get(key) or "").strip()
                 if val and "@" in val:
                     return val.lower()
-    except Exception:
+    except (AttributeError, TypeError):
         pass
     return None
 

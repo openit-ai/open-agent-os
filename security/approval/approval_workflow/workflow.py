@@ -507,8 +507,10 @@ class ApprovalStore:
                             return req
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                # Read-path DB fallback to memory (deny-direction: missing rows => not approved);
+                # durable writes stay prod-guarded in create()/decide().
+                logger.debug("ApprovalStore get DB fallback to memory: %s", type(e).__name__)
         return self._requests.get(approval_id)
 
     # ── 검증 ───────────────────────────────────────────────────
@@ -588,8 +590,8 @@ class ApprovalStore:
                             if group_id is not None:
                                 try:
                                     row.group_id = group_id
-                                except Exception:
-                                    pass
+                                except (AttributeError, TypeError) as e:
+                                    logger.debug("ApprovalStore group_id assign failed: %s", type(e).__name__)
                             session.commit()
                             db_ok = True
                         else:
@@ -598,8 +600,8 @@ class ApprovalStore:
                             if group_id:
                                 try:
                                     orm.group_id = group_id
-                                except Exception:
-                                    pass
+                                except (AttributeError, TypeError) as e:
+                                    logger.debug("ApprovalStore decide group_id assign failed: %s", type(e).__name__)
                             session.add(orm)
                             session.commit()
                             db_ok = True
@@ -615,6 +617,14 @@ class ApprovalStore:
             except Exception as e:
                 last_err = e
             if _is_prod() and not db_ok:
+                # Restore in-memory pre-decision state: a decision that is not durable
+                # must never authorize on this replica (would fail open after restart).
+                req.decision = ApprovalDecision.PENDING
+                req.decided_at = None
+                req.decided_by = None
+                self._user_grants.discard((req.user_id, req.action, req.resource))
+                if group_id:
+                    self._group_grants.discard((group_id, req.action, req.resource))
                 raise RuntimeError(f"ApprovalStore decide failed — DB persist required in production: {last_err}")
         elif _is_prod():
             raise RuntimeError("ApprovalStore decide failed — no DB in production (fail-closed)")
@@ -646,8 +656,9 @@ class ApprovalStore:
                             self._user_grants.add((str(r.user_id), str(r.action), str(r.resource)))
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                # Grant hydrate fallback to memory-only (deny-direction: fewer grants => deny)
+                logger.debug("ApprovalStore user-grant hydrate failed, memory-only: %s", type(e).__name__)
         for (u, a, pattern) in self._user_grants:
             if u == user_id and a == action and fnmatch.fnmatch(resource, pattern):
                 return True
@@ -670,8 +681,9 @@ class ApprovalStore:
                                 self._group_grants.add((str(gid), str(r.action), str(r.resource)))
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                # Grant hydrate fallback to memory-only (deny-direction: fewer grants => deny)
+                logger.debug("ApprovalStore group-grant hydrate failed, memory-only: %s", type(e).__name__)
         for (g, a, pattern) in self._group_grants:
             if g == group_id and a == action and fnmatch.fnmatch(resource, pattern):
                 return True

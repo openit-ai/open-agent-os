@@ -42,8 +42,8 @@ def _db_sync_url() -> Optional[str]:
                         if _cand:
                             url = _cand
                             break
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as e:
+            logger.debug("active_policy_loader repo .env read failed: %s", type(e).__name__)
         if not url or not url.strip():
             return None
     u = url.strip()
@@ -78,8 +78,8 @@ def _get_db_active_dict(tenant_id: str = "default") -> Optional[dict]:
                             # also allow OAOS_CP_DATABASE_URL (control-plane systemd) as authoritative DB URL
                             if not os.environ.get("OAOS_CP_DATABASE_URL"):
                                 return None
-                    except Exception:
-                        pass
+                    except (AttributeError, TypeError, ValueError) as e:
+                        logger.debug("active_policy_loader persistence probe failed: %s", type(e).__name__)
                     break
             else:
                 # Fallback direct env check. OAOS_CP_DATABASE_URL is a
@@ -91,8 +91,8 @@ def _get_db_active_dict(tenant_id: str = "default") -> Optional[dict]:
                     or os.environ.get("DATABASE_URL")
                 ):
                     return None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("active_policy_loader env probe failed: %s", type(e).__name__)
     url = _db_sync_url()
     if not url:
         return None
@@ -126,7 +126,8 @@ def _get_db_active_dict(tenant_id: str = "default") -> Optional[dict]:
             raw = dict(row)
             try:
                 rules = json.loads(raw.get("rules_json") or "[]") if isinstance(raw.get("rules_json"), str) else (raw.get("rules_json") or [])
-            except Exception:
+            except (ValueError, TypeError):
+                # Corrupt rules_json — empty rules => _dict_to_bundle returns None => default deny bundle
                 rules = []
             return {
                 "id": raw.get("id"),
@@ -155,7 +156,7 @@ def _get_db_active_dict(tenant_id: str = "default") -> Optional[dict]:
         if engine is not None:
             try:
                 engine.dispose()
-            except Exception:
+            except (AttributeError, TypeError):
                 pass
 
 def _get_mem_active_dict(tenant_id: str = "default") -> Optional[dict]:
@@ -246,7 +247,8 @@ def get_active_published_dict(tenant_id: str = "default") -> Optional[dict]:
             return None
     try:
         return _get_mem_active_dict(tenant_id)
-    except Exception:
+    except Exception as e:
+        logger.debug("active_policy_loader mem fallback failed, no published bundle: %s", type(e).__name__)
         return None
 
 def _dict_to_bundle(rec: dict):
@@ -280,12 +282,14 @@ def _dict_to_bundle(rec: dict):
             # map source/effect strings to enums (case-insensitive)
             try:
                 source = PolicySource(src_raw)
-            except Exception:
+            except ValueError:
                 # try lowercased lookup
                 source = PolicySource(src_raw.lower())
             try:
                 effect = PolicyDecision(eff_raw)
-            except Exception:
+            except ValueError:
+                # Unknown effect strings fail safe: explicit ALLOW only when spelled out,
+                # otherwise APPROVAL_REQUIRED (DENY handled by exact match above)
                 effect = PolicyDecision.DENY if eff_raw == "DENY" else (PolicyDecision.ALLOW if eff_raw == "ALLOW" else PolicyDecision.APPROVAL_REQUIRED)
             out_rules.append(PolicyRule(id=rid, source=source, action=act, resource_pattern=pat, effect=effect, priority=pri, description=desc))
         except Exception as e:

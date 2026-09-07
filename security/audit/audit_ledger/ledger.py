@@ -115,7 +115,8 @@ def _db_get_session():
     try:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-    except (ImportError, ModuleNotFoundError):
+    except (ImportError, ModuleNotFoundError) as e:
+        logger.debug("AuditLedger sqlalchemy import failed: %s", type(e).__name__)
         return None, None
     try:
         connect_args = {}
@@ -136,8 +137,8 @@ def _db_get_session():
                 from security.models.db import Base  # type: ignore
                 from security.models.orm import AuditEventORM  # noqa: F401  # type: ignore
                 Base.metadata.create_all(bind=engine)
-            except (ImportError, ModuleNotFoundError):
-                pass
+            except (ImportError, ModuleNotFoundError, AttributeError) as e:
+                logger.debug("AuditLedger metadata fallback import failed: %s", type(e).__name__)
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         session = Session()
         return session, engine
@@ -147,15 +148,16 @@ def _db_get_session():
 
 
 def _db_close(session, engine) -> None:
+    # Cleanup-only: close/dispose must never raise; narrowed to close-path errors.
     try:
         if session is not None:
             session.close()
-    except SQLAlchemyError:
+    except (SQLAlchemyError, AttributeError, TypeError) as e:
         logger.debug("audit session close failed (best-effort)")
     try:
         if engine is not None:
             engine.dispose()
-    except SQLAlchemyError:
+    except (SQLAlchemyError, AttributeError, TypeError) as e:
         logger.debug("audit engine dispose failed (best-effort)")
 
 
@@ -199,8 +201,8 @@ def _orm_to_event(row) -> AuditEvent:
     evt_type_val = getattr(row, "event_type", "USER_MESSAGE")
     try:
         evt_type = AuditEventType(evt_type_val)
-    except Exception:
-        # fallback: try string
+    except (ValueError, TypeError):
+        # fallback: try enum name lookup, else default (read-path mapping only)
         try:
             evt_type = AuditEventType[evt_type_val]
         except (KeyError, TypeError):
@@ -262,12 +264,13 @@ class AuditLedger:
                                 evt = _orm_to_event(r)
                                 self._events.append(evt)
                                 self._head = evt.event_hash
-                            except Exception:
+                            except (ValueError, TypeError, AttributeError, KeyError):
+                                # Corrupt row mapping — skip single row, keep the chain verifiable
                                 continue
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("AuditLedger hydrate failed, memory-only: %s", type(e).__name__)
 
     def append(self, event: AuditEvent) -> AuditEvent:
         if _is_prod():
@@ -331,8 +334,8 @@ class AuditLedger:
                             return getattr(row, "event_hash", None)
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("AuditLedger head DB lookup failed, memory head: %s", type(e).__name__)
         return self._head
 
     @property
@@ -354,7 +357,8 @@ class AuditLedger:
                         for r in rows:
                             try:
                                 evts.append(_orm_to_event(r))
-                            except Exception:
+                            except (ValueError, TypeError, AttributeError, KeyError):
+                                # Corrupt row mapping — skip single row, keep the chain verifiable
                                 continue
                         if evts:
                             self._events = evts
@@ -362,8 +366,8 @@ class AuditLedger:
                             return list(evts)
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("AuditLedger events DB lookup failed, memory-only: %s", type(e).__name__)
         return list(self._events)
 
     @property
