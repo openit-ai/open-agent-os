@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 import uuid
@@ -28,7 +29,37 @@ except ImportError:
 try:
     from sqlalchemy.exc import SQLAlchemyError
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
-    SQLAlchemyError = Exception  # type: ignore
+    class SQLAlchemyError(Exception):
+        """Fallback marker when SQLAlchemy is not installed."""
+
+logger = logging.getLogger(__name__)
+
+
+class InfraBackendUnavailable(HTTPException):
+    """Production infra persistence failure exposed as an explicit 503."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(status_code=503, detail=f"infra backend unavailable during {operation}")
+
+
+def _is_production() -> bool:
+    return os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")
+
+
+_DB_FAILURES = (
+    SQLAlchemyError,
+    ImportError,
+    ModuleNotFoundError,
+    OSError,
+    ValueError,
+)
+
+
+def _backend_failure(operation: str, exc: BaseException):
+    logger.warning("Infra backend operation failed (%s): %s", operation, type(exc).__name__)
+    if _is_production():
+        raise InfraBackendUnavailable(operation) from exc
+    return None
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -131,8 +162,8 @@ def clear_services() -> None:
     if _is_db_enabled():
         try:
             _db_clear_all()
-        except Exception:
-            pass
+        except InfraBackendUnavailable:
+            raise
 
 
 def _validate_name(name: str) -> None:
@@ -155,11 +186,7 @@ def _db_url() -> str | None:
 
 
 def _is_db_enabled() -> bool:
-    try:
-        u = _db_url()
-        return bool(u)
-    except Exception:
-        return False
+    return bool(_db_url())
 
 
 def _normalize_sync_url(url: str) -> str:
@@ -199,8 +226,8 @@ def _get_session_factory():
         _db_engine = create_engine(sync_url, **kwargs)
         _db_session_factory = sessionmaker(bind=_db_engine, autoflush=False, autocommit=False)
         return _db_session_factory
-    except Exception:
-        return None
+    except _DB_FAILURES as exc:
+        return _backend_failure("session factory", exc)
 
 
 def _orm_to_service(row) -> InfraService:
@@ -208,7 +235,8 @@ def _orm_to_service(row) -> InfraService:
     status_val = getattr(row, "status", "unknown") or "unknown"
     try:
         status = InfraStatus(status_val)
-    except Exception:
+    except ValueError as exc:
+        logger.warning("Invalid persisted infra status %r; using unknown: %s", status_val, exc)
         status = InfraStatus.unknown
     return InfraService(
         id=row.id,
@@ -227,6 +255,7 @@ def _orm_to_service(row) -> InfraService:
 def _db_clear_all() -> None:
     factory = _get_session_factory()
     if factory is None:
+        _backend_failure("clear services", RuntimeError("database session factory unavailable"))
         return
     try:
         # lazy ORM import
@@ -235,8 +264,8 @@ def _db_clear_all() -> None:
         with factory() as s:
             s.query(AdminInfraServiceORM).delete()
             s.commit()
-    except Exception:
-        pass
+    except _DB_FAILURES as exc:
+        _backend_failure("clear services", exc)
 
 
 def _db_list_services() -> list[InfraService] | None:
@@ -244,15 +273,15 @@ def _db_list_services() -> list[InfraService] | None:
         return None
     factory = _get_session_factory()
     if factory is None:
-        return None
+        return _backend_failure("list services", RuntimeError("database session factory unavailable"))
     try:
         from security.models.orm import AdminInfraServiceORM  # type: ignore
 
         with factory() as s:
             rows = s.query(AdminInfraServiceORM).all()
             return [_orm_to_service(r) for r in rows]
-    except Exception:
-        return None
+    except _DB_FAILURES as exc:
+        return _backend_failure("list services", exc)
 
 
 def _db_get_service(sid: str) -> InfraService | None:
@@ -260,7 +289,7 @@ def _db_get_service(sid: str) -> InfraService | None:
         return None
     factory = _get_session_factory()
     if factory is None:
-        return None
+        return _backend_failure("get service", RuntimeError("database session factory unavailable"))
     try:
         from security.models.orm import AdminInfraServiceORM  # type: ignore
 
@@ -269,8 +298,8 @@ def _db_get_service(sid: str) -> InfraService | None:
             if row is None:
                 return None
             return _orm_to_service(row)
-    except Exception:
-        return None
+    except _DB_FAILURES as exc:
+        return _backend_failure("get service", exc)
 
 
 def _db_get_service_exists(sid: str) -> bool | None:
@@ -279,15 +308,15 @@ def _db_get_service_exists(sid: str) -> bool | None:
         return None
     factory = _get_session_factory()
     if factory is None:
-        return None
+        return _backend_failure("check service existence", RuntimeError("database session factory unavailable"))
     try:
         from security.models.orm import AdminInfraServiceORM  # type: ignore
 
         with factory() as s:
             exists = s.query(AdminInfraServiceORM).filter(AdminInfraServiceORM.id == sid).first() is not None
             return exists
-    except Exception:
-        return None
+    except _DB_FAILURES as exc:
+        return _backend_failure("check service existence", exc)
 
 
 def _db_create_service(svc: InfraService) -> bool:
@@ -295,7 +324,7 @@ def _db_create_service(svc: InfraService) -> bool:
         return False
     factory = _get_session_factory()
     if factory is None:
-        return False
+        return bool(_backend_failure("create service", RuntimeError("database session factory unavailable")))
     try:
         from security.models.orm import AdminInfraServiceORM  # type: ignore
 
@@ -315,14 +344,14 @@ def _db_create_service(svc: InfraService) -> bool:
             s.add(orm)
             s.commit()
             return True
-    except Exception:
+    except _DB_FAILURES as exc:
         try:
             # rollback on error
             with factory() as s2:
                 s2.rollback()
-        except SQLAlchemyError:
-            pass
-        return False
+        except (SQLAlchemyError, OSError, RuntimeError) as rollback_exc:
+            logger.debug("Infra create rollback failed (best-effort): %s", rollback_exc)
+        return bool(_backend_failure("create service", exc))
 
 
 def _db_update_service(sid: str, data: dict) -> InfraService | None:
@@ -330,7 +359,7 @@ def _db_update_service(sid: str, data: dict) -> InfraService | None:
         return None
     factory = _get_session_factory()
     if factory is None:
-        return None
+        return _backend_failure("update service", RuntimeError("database session factory unavailable"))
     try:
         from security.models.orm import AdminInfraServiceORM  # type: ignore
 
@@ -345,8 +374,8 @@ def _db_update_service(sid: str, data: dict) -> InfraService | None:
             s.commit()
             s.refresh(row)
             return _orm_to_service(row)
-    except Exception:
-        return None
+    except _DB_FAILURES as exc:
+        return _backend_failure("update service", exc)
 
 
 def _db_delete_service(sid: str) -> bool | None:
@@ -355,7 +384,7 @@ def _db_delete_service(sid: str) -> bool | None:
         return None
     factory = _get_session_factory()
     if factory is None:
-        return None
+        return _backend_failure("delete service", RuntimeError("database session factory unavailable"))
     try:
         from security.models.orm import AdminInfraServiceORM  # type: ignore
 
@@ -366,8 +395,8 @@ def _db_delete_service(sid: str) -> bool | None:
             s.delete(row)
             s.commit()
             return True
-    except Exception:
-        return None
+    except _DB_FAILURES as exc:
+        return _backend_failure("delete service", exc)
 
 
 def _db_persist_probe(svc: InfraService) -> None:
@@ -375,6 +404,7 @@ def _db_persist_probe(svc: InfraService) -> None:
         return
     factory = _get_session_factory()
     if factory is None:
+        _backend_failure("persist probe", RuntimeError("database session factory unavailable"))
         return
     try:
         from security.models.orm import AdminInfraServiceORM  # type: ignore
@@ -387,8 +417,8 @@ def _db_persist_probe(svc: InfraService) -> None:
             row.latency_ms = svc.latency_ms
             row.last_check = svc.last_check
             s.commit()
-    except Exception:
-        pass
+    except _DB_FAILURES as exc:
+        _backend_failure("persist probe", exc)
 
 # ---------------------------------------------------------------------------
 # Health probe logic
@@ -407,15 +437,16 @@ async def _probe_tcp(service: InfraService) -> InfraService:
             writer.close()
             try:
                 await writer.wait_closed()
-            except OSError:
-                pass
-        except OSError:
-            pass
+            except OSError as exc:
+                logger.debug("Infra TCP probe writer close failed: %s", exc)
+        except OSError as exc:
+            logger.debug("Infra TCP probe writer cleanup failed: %s", exc)
         latency = (time.perf_counter() - start) * 1000
         service.latency_ms = round(latency, 2)
         service.last_check = datetime.now(timezone.utc)
         service.status = InfraStatus.healthy
-    except Exception:
+    except (OSError, TimeoutError, ValueError) as exc:
+        logger.info("Infra TCP probe unavailable for %s: %s", service.name, type(exc).__name__)
         latency = (time.perf_counter() - start) * 1000
         service.latency_ms = round(latency, 2)
         service.last_check = datetime.now(timezone.utc)
@@ -454,7 +485,8 @@ async def _probe_one(service: InfraService) -> InfraService:
                 service.status = InfraStatus.healthy
             else:
                 service.status = InfraStatus.unhealthy
-    except Exception:
+    except (httpx.HTTPError, OSError, TimeoutError, ValueError) as exc:
+        logger.info("Infra HTTP probe unavailable for %s: %s", service.name, type(exc).__name__)
         latency = (time.perf_counter() - start) * 1000
         service.latency_ms = round(latency, 2)
         service.last_check = datetime.now(timezone.utc)
@@ -471,7 +503,8 @@ async def probe_all_services() -> list[InfraService]:
             db_items = _db_list_services()
             if db_items is not None:
                 services = db_items
-        except Exception:
+        except _DB_FAILURES as exc:
+            _backend_failure("list services for probe", exc)
             services = None
     if services is None:
         services = list(_services.values())
@@ -483,8 +516,8 @@ async def probe_all_services() -> list[InfraService]:
         # persist to DB if enabled
         try:
             _db_persist_probe(updated)
-        except Exception:
-            pass
+        except InfraBackendUnavailable:
+            raise
         results.append(updated)
         # audit event
         _audit_events.append(
@@ -510,8 +543,8 @@ async def periodic_health_check(interval_seconds: int = 30) -> None:
     while True:
         try:
             await probe_all_services()
-        except Exception:
-            pass
+        except InfraBackendUnavailable as exc:
+            logger.warning("Periodic infra probe backend unavailable: %s", exc.detail)
         await asyncio.sleep(interval_seconds)
 
 
@@ -704,7 +737,8 @@ def _parse_host_port_from_url(url: str, default_host: str, default_port: int) ->
             else:
                 pt = default_port
         return h, pt
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Malformed infra URL; using configured default: %s", exc)
         return default_host, default_port
 
 
@@ -743,13 +777,14 @@ def _resolve_postgres_live() -> dict:
                 h = (p.hostname or "127.0.0.1").strip()
                 pt = p.port or 5432
                 return _live_tcp_entry("live_postgres", "postgres", "PostgreSQL", h, pt, extra={"category": "datastore", "db": "oaos"})
-            except Exception:
-                pass
+            except (TypeError, ValueError) as exc:
+                logger.warning("Malformed PostgreSQL URL; using host/port fallback: %s", exc)
     # fallback to explicit POSTGRES_HOST/PORT or loopback
     host = (os.environ.get("POSTGRES_HOST") or "127.0.0.1").strip() or "127.0.0.1"
     try:
         port = int(os.environ.get("POSTGRES_PORT") or "5432")
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Malformed POSTGRES_PORT; using 5432: %s", exc)
         port = 5432
     return _live_tcp_entry("live_postgres", "postgres", "PostgreSQL", host, port, extra={"category": "datastore", "db": "oaos"})
 
@@ -770,12 +805,13 @@ def _resolve_redis_live() -> dict:
             h = (p.hostname or "127.0.0.1").strip()
             pt = p.port or 6379
             return _live_tcp_entry("live_redis", "redis", "Redis", h, pt, extra={"category": "datastore"})
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            logger.warning("Malformed Redis URL; using host/port fallback: %s", exc)
     host = (os.environ.get("REDIS_HOST") or "127.0.0.1").strip() or "127.0.0.1"
     try:
         port = int(os.environ.get("REDIS_PORT") or "6379")
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.warning("Malformed REDIS_PORT; using 6379: %s", exc)
         port = 6379
     return _live_tcp_entry("live_redis", "redis", "Redis", host, port, extra={"category": "datastore"})
 
@@ -987,7 +1023,8 @@ def _get_db_services_map() -> dict[str, "InfraService"]:
     if _is_db_enabled():
         try:
             items = _db_list_services()
-        except Exception:
+        except _DB_FAILURES as exc:
+            _backend_failure("load service map", exc)
             items = None
     if items is None:
         items = list(_services.values())
@@ -1007,8 +1044,8 @@ async def _build_unified_rows(probe: bool = True) -> list[dict]:
             tmp = _db_list_services()
             if tmp is not None:
                 all_db_items = tmp
-        except Exception:
-            pass
+        except _DB_FAILURES as exc:
+            _backend_failure("load unified service rows", exc)
     if not all_db_items:
         all_db_items = list(_services.values())
 
@@ -1020,7 +1057,8 @@ async def _build_unified_rows(probe: bool = True) -> list[dict]:
             results = await asyncio.gather(*[_probe_live_one(e) for e in LIVE_INVENTORY])
             for r in results:
                 probed[r.get("name") or r.get("service") or ""] = r
-        except Exception:
+        except (KeyError, TypeError, ValueError, OSError, httpx.HTTPError) as exc:
+            logger.warning("Live infra inventory probe degraded: %s", exc)
             probed = {}
     else:
         for name, e in live_by_name.items():
@@ -1099,9 +1137,14 @@ async def _build_unified_rows(probe: bool = True) -> list[dict]:
                     _services[db_svc.id] = db_probed
                     try:
                         _db_persist_probe(db_probed)
-                    except Exception:
-                        pass
-                except Exception:
+                    except InfraBackendUnavailable:
+                        raise
+                    except _DB_FAILURES as exc:
+                        logger.warning("DB probe persistence degraded: %s", exc)
+                except InfraBackendUnavailable:
+                    raise
+                except (AttributeError, TypeError, ValueError, OSError, httpx.HTTPError) as exc:
+                    logger.warning("DB service probe degraded for %s: %s", name, exc)
                     # fallback to live_res if DB probe failed, but still build URL from DB
                     if live_res is not None:
                         status = live_res.get("status", "unknown")
@@ -1192,13 +1235,18 @@ async def _build_unified_rows(probe: bool = True) -> list[dict]:
                 _services[db_svc.id] = svc_probe
                 try:
                     _db_persist_probe(svc_probe)
-                except Exception:
-                    pass
+                except InfraBackendUnavailable:
+                    raise
+                except _DB_FAILURES as exc:
+                    logger.warning("DB probe persistence degraded: %s", exc)
                 probe_type = "tcp" if db_svc.name in _TCP_NAMES else "http"
                 category = None
                 url = f"tcp://{db_svc.host}:{db_svc.port}" if probe_type == "tcp" else f"http://{db_svc.host}:{db_svc.port}{db_svc.health_path}"
                 source = "db"
-            except Exception:
+            except InfraBackendUnavailable:
+                raise
+            except (AttributeError, TypeError, ValueError, OSError, httpx.HTTPError) as exc:
+                logger.warning("Extra DB service probe degraded for %s: %s", db_svc.name, exc)
                 status = "unknown"
                 latency_ms = None
                 last_check = None
@@ -1287,14 +1335,17 @@ def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
             dump = [s.model_dump(mode="json") if hasattr(s, "model_dump") else dict(s) for s in (existing_items or [])]
             backup_file.write_text(json.dumps(dump, ensure_ascii=False, indent=2), encoding="utf-8")
             backup_path = str(backup_file)
-        except Exception:
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Primary infra seed backup failed; trying fallback path: %s", exc)
             try:
                 flat = pathlib.Path(f".backup_infra_seed_{ts}.json")
                 flat.write_text(json.dumps([s.model_dump(mode="json") if hasattr(s, "model_dump") else dict(s) for s in (existing_items or [])], ensure_ascii=False, indent=2), encoding="utf-8")
                 backup_path = str(flat)
-            except Exception:
+            except (OSError, TypeError, ValueError) as fallback_exc:
+                logger.warning("Fallback infra seed backup failed: %s", fallback_exc)
                 backup_path = None
-    except Exception:
+    except (OSError, TypeError, ValueError, AttributeError) as exc:
+        logger.warning("Infra seed backup preparation degraded: %s", exc)
         backup_path = None
 
     existing_names: set[str] = set()
@@ -1307,7 +1358,8 @@ def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
                 existing_names = {s.name for s in _services.values()}
         else:
             existing_names = {s.name for s in _services.values()}
-    except Exception:
+    except _DB_FAILURES as exc:
+        _backend_failure("load services for seed", exc)
         existing_names = {s.name for s in _services.values()}
 
     created: list[dict] = []
@@ -1325,7 +1377,8 @@ def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
             if _is_db_enabled():
                 try:
                     exists = _db_get_service(check_id) is not None
-                except Exception:
+                except _DB_FAILURES as exc:
+                    _backend_failure("check seed service id", exc)
                     exists = check_id in _services
             else:
                 exists = check_id in _services
@@ -1363,7 +1416,8 @@ def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
                     else:
                         _services[check_id] = svc
                         created.append(_to_alias_dict(svc))
-                except Exception:
+                except _DB_FAILURES as exc:
+                    logger.warning("Infra seed create race check degraded: %s", exc)
                     _services[check_id] = svc
                     created.append(_to_alias_dict(svc))
         existing_names.add(name)
@@ -1434,7 +1488,8 @@ def upsert_service_alias(req: InfraAliasCreate, admin: AdminUser = Depends(requi
         if _is_db_enabled():
             try:
                 exists = _db_get_service(new_id) is not None
-            except Exception:
+            except _DB_FAILURES as exc:
+                _backend_failure("check upsert service id", exc)
                 exists = new_id in _services
         else:
             exists = new_id in _services
@@ -1560,8 +1615,8 @@ def patch_service_alias(service_id: str, req: InfraAliasUpdate, admin: AdminUser
             raise HTTPException(status_code=400, detail="host and port are required for live registration")
         try:
             port = int(port)  # type: ignore
-        except Exception:
-            raise HTTPException(status_code=400, detail="port must be integer 1-65535")
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="port must be integer 1-65535") from exc
         if not (1 <= port <= 65535):
             raise HTTPException(status_code=400, detail="port must be integer 1-65535")
         health_path = data.get("health_path") or (live_def.get("health_path") if live_def else None) or "/health"
@@ -1576,7 +1631,8 @@ def patch_service_alias(service_id: str, req: InfraAliasUpdate, admin: AdminUser
             if _is_db_enabled():
                 try:
                     exists = _db_get_service(new_id) is not None
-                except Exception:
+                except _DB_FAILURES as exc:
+                    _backend_failure("check live service id", exc)
                     exists = new_id in _services
             else:
                 exists = new_id in _services
@@ -1664,8 +1720,10 @@ async def probe_one_alias(service_id: str, admin: AdminUser = Depends(get_curren
     _services[service_id] = updated
     try:
         _db_persist_probe(updated)
-    except Exception:
-        pass
+    except InfraBackendUnavailable:
+        raise
+    except _DB_FAILURES as exc:
+        logger.warning("Alias probe persistence degraded: %s", exc)
     _audit_events.append(
         {
             "event_id": f"evt_{uuid.uuid4().hex[:8]}",
