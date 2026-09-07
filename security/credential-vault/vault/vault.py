@@ -27,6 +27,11 @@ import time
 
 from cryptography.fernet import Fernet, InvalidToken
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):
+    SQLAlchemyError = RuntimeError  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 # ── Prometheus counter + dead-letter log for revoke failures ──────────
@@ -70,7 +75,7 @@ def _record_dead_letter(secret_ref: str, error: str) -> None:
             from execution_gateway.execution_gateway.metrics import default_metrics as _dm2  # type: ignore
             _dm2.record_vault_revoke_failure()
         except ImportError:
-            pass
+            logger.debug("execution gateway metrics module unavailable")
 
 
 def get_vault_dead_letters() -> list[dict]:
@@ -115,7 +120,7 @@ async def _retry_async(coro_fn, *, delays: tuple[float, ...] = _VAULT_RETRY_DELA
         try:
             await coro_fn()
             return
-        except Exception as e:
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             last_exc = e
             if attempt < 2:
                 delay = delays[attempt] if attempt < len(delays) else delays[-1]
@@ -123,8 +128,8 @@ async def _retry_async(coro_fn, *, delays: tuple[float, ...] = _VAULT_RETRY_DELA
                 if not _should_skip_sleep():
                     try:
                         await asyncio.sleep(delay)
-                    except Exception:
-                        pass
+                    except (OSError, RuntimeError, TypeError, ValueError) as e:
+                        logger.debug("vault retry sleep interrupted: %s", type(e).__name__)
             else:
                 # final attempt failed — also respect 4s delay before dead-letter if caller expects 1/2/4
                 # sleep 4s before giving up to honor 3rd delay value
@@ -134,8 +139,8 @@ async def _retry_async(coro_fn, *, delays: tuple[float, ...] = _VAULT_RETRY_DELA
                 if not _should_skip_sleep():
                     try:
                         await asyncio.sleep(delay)
-                    except Exception:
-                        pass
+                    except (OSError, RuntimeError, TypeError, ValueError) as e:
+                        logger.debug("vault final retry sleep interrupted: %s", type(e).__name__)
     # all retries exhausted — caller will handle dead-letter
     if last_exc is not None:
         raise last_exc
@@ -223,7 +228,7 @@ class EncryptedPostgresVault(CredentialVault):
                     _url = _url.replace("postgresql://", "postgresql+asyncpg://", 1)
                 _engine = create_async_engine(_url, pool_pre_ping=True)
                 self._session_maker = async_sessionmaker(_engine, expire_on_commit=False)
-            except Exception:
+            except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError):
                 self._session_maker = None
 
         if _is_production() and self._session_maker is None and not os.getenv("VAULT_ADDR", "").strip():
@@ -236,7 +241,7 @@ class EncryptedPostgresVault(CredentialVault):
             self._external = get_vault_backend()
         except ValueError:
             raise
-        except Exception as e:
+        except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
             if _is_production():
                 raise
             logger.debug("vault external backend init skipped: %s", e)
@@ -281,7 +286,8 @@ class EncryptedPostgresVault(CredentialVault):
         if self._external is not None:
             try:
                 return await self._external.health_check()
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+                logger.debug("vault health probe failed: %s", type(e).__name__)
                 return False
         return True
 
@@ -374,14 +380,21 @@ class EncryptedPostgresVault(CredentialVault):
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
                     return ref
-                except Exception as e:
+                except (AttributeError, ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
                     # DB failed after external write — cleanup external secret to avoid orphan
                     logger.warning("vault DB insert failed after external put %s: %s", ref, e)
                     try:
                         await self._external.delete(ref)  # type: ignore
-                    except Exception as ce:
+                    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as ce:
                         logger.debug("external cleanup failed for %s: %s", ref, ce)
                     raise
+
+            if _is_production():
+                try:
+                    await self._external.delete(ref)  # type: ignore
+                except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as cleanup_error:
+                    logger.warning("vault external compensation delete failed for %s: %s", ref, type(cleanup_error).__name__)
+                raise RuntimeError("credential vault metadata database is unavailable in production")
 
             # DB not available: keep in memory meta + external already holds bytes
             # For in-memory fallback we keep encrypted only if dual_write else None
@@ -414,14 +427,14 @@ class EncryptedPostgresVault(CredentialVault):
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
                 return ref
-            except Exception as exc:
+            except (AttributeError, ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as exc:
                 # A configured production database is the persistence
                 # boundary. Never silently downgrade OAuth credentials to a
                 # process-local store when that boundary fails.
                 if _is_production():
                     raise RuntimeError("credential vault database insert failed in production") from exc
                 # non-production keeps the historical in-memory fallback
-                pass
+                logger.warning("vault DB insert failed; using non-production memory fallback: %s", type(exc).__name__)
 
         self._store[ref] = encrypted
         self._meta[ref] = {
@@ -454,10 +467,10 @@ class EncryptedPostgresVault(CredentialVault):
                 else:
                     meta = self._meta.get(secret_ref)
                     encrypted = self._store.get(secret_ref)
-            except Exception as e:
-                # DB read fallback to process-local memory (owner check below still
-                # denies on unknown owner; external path raises in production).
-                logger.debug("vault DB read failed for %s, memory fallback: %s", secret_ref, type(e).__name__)
+            except (AttributeError, ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
+                if _is_production():
+                    raise RuntimeError(f"credential vault database read failed in production: {secret_ref}") from e
+                logger.warning("vault DB read failed for %s, memory fallback: %s", secret_ref, type(e).__name__)
                 meta = self._meta.get(secret_ref)
                 encrypted = self._store.get(secret_ref)
         else:
@@ -491,7 +504,7 @@ class EncryptedPostgresVault(CredentialVault):
             # owner check already done if meta present; if meta missing we already attempted DB fetch so remain.
             try:
                 ext_bytes = await self._external.get(secret_ref)  # type: ignore
-            except Exception as e:
+            except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
                 if _is_production():
                     raise RuntimeError(f"external vault get failed in production: {e}") from e
                 logger.warning("external vault get failed for %s: %s", secret_ref, e)
@@ -513,8 +526,8 @@ class EncryptedPostgresVault(CredentialVault):
                                 raise PermissionError(f"credential isolation violation: owner=None requester={requester_agent_id}")
                         except PermissionError:
                             raise
-                        except Exception:
-                            raise PermissionError(f"credential isolation violation: owner=None requester={requester_agent_id}")
+                        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+                            raise PermissionError(f"credential isolation violation: owner=None requester={requester_agent_id}") from e
                     else:
                         raise PermissionError(f"credential isolation violation: owner={owner} requester={requester_agent_id}")
                 # decrypt is not needed — external already holds plaintext
@@ -579,7 +592,7 @@ class EncryptedPostgresVault(CredentialVault):
                     action="RETRIEVE",
                 )
                 self._audit_ledger.append(ae)
-            except Exception as e:
+            except (AttributeError, ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
                 # Credential-use audit mirror — retrieval already authorized; degradation
                 # allowed only with warning and the local audit event preserved above.
                 logger.warning("vault credential-use audit mirror failed for %s: %s", secret_ref, type(e).__name__)
@@ -593,6 +606,7 @@ class EncryptedPostgresVault(CredentialVault):
         records dead-letter log and increments oaos_vault_revoke_failures_total.
         In-memory cleanup always happens to avoid orphan in this process.
         """
+        failures: list[Exception] = []
         # ── external delete with retry ──
         if self._use_external:
 
@@ -601,9 +615,10 @@ class EncryptedPostgresVault(CredentialVault):
 
             try:
                 await _retry_async(_do_external, label=f"vault external delete {secret_ref}")
-            except Exception as e:
+            except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
                 _record_dead_letter(secret_ref, f"external delete failed after 3 retries: {e}")
                 logger.debug("external vault delete dead-letter for %s: %s", secret_ref, e)
+                failures.append(e)
 
         # ── DB delete with retry ──
         if self._session_maker is not None:
@@ -613,12 +628,15 @@ class EncryptedPostgresVault(CredentialVault):
 
             try:
                 await _retry_async(_do_db, label=f"vault db delete {secret_ref}")
-            except Exception as e:
+            except (AttributeError, ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
                 _record_dead_letter(secret_ref, f"db delete failed after 3 retries: {e}")
                 logger.debug("vault DB delete dead-letter for %s: %s", secret_ref, e)
+                failures.append(e)
 
         self._store.pop(secret_ref, None)
         self._meta.pop(secret_ref, None)
+        if failures and _is_production():
+            raise RuntimeError(f"credential vault revoke failed in production: {secret_ref}") from failures[0]
 
     def audit_events(self) -> list[dict]:
         return list(self._audit_events)

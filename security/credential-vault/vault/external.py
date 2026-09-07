@@ -87,7 +87,7 @@ class EnvFileBackend(VaultBackend):
                 except (ValueError, TypeError):
                     # Corrupt file entry — skip single entry, keep the rest loadable
                     continue
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             logger.debug("EnvFileBackend load failed: %s", e)
 
     def _save_file(self) -> None:
@@ -99,7 +99,7 @@ class EnvFileBackend(VaultBackend):
             self._file_path.parent.mkdir(parents=True, exist_ok=True)
             data = {k: base64.b64encode(v).decode() for k, v in self._store.items()}
             self._file_path.write_text(json.dumps(data))
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             logger.debug("EnvFileBackend save failed: %s", e)
 
     async def put(self, secret_ref: str, secret: bytes, metadata: dict | None = None) -> None:
@@ -199,8 +199,8 @@ class HashiCorpVaultBackend(VaultBackend):
             )
             return
         except ImportError:
-            pass
-        except Exception as e:
+            logger.debug("hvac transport unavailable; trying httpx")
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning("HashiCorpVaultBackend.put hvac failed, trying httpx: %s", e)
 
         # try httpx
@@ -217,8 +217,13 @@ class HashiCorpVaultBackend(VaultBackend):
                 logger.warning("HashiCorpVaultBackend.put httpx status=%s body=%s", resp.status_code, resp.text[:500])
                 raise RuntimeError(f"vault put {resp.status_code}: {resp.text[:200]}")
         except ImportError:
-            pass
-        except Exception as e:
+            logger.debug("httpx transport unavailable")
+        except httpx.HTTPError as e:  # type: ignore[name-defined]
+            _require_external_transport(False, f"HashiCorp Vault put failed in production: {e}")
+            logger.warning("HashiCorpVaultBackend.put failed, falling back to memory: %s", e)
+            await self._fallback.put(secret_ref, secret, metadata)
+            return
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             _require_external_transport(False, f"HashiCorp Vault put failed in production: {e}")
             logger.warning("HashiCorpVaultBackend.put failed, falling back to memory: %s", e)
             await self._fallback.put(secret_ref, secret, metadata)
@@ -244,8 +249,8 @@ class HashiCorpVaultBackend(VaultBackend):
                     return base64.b64decode(b64)
             return None
         except ImportError:
-            pass
-        except Exception as e:
+            logger.debug("hvac transport unavailable; trying httpx")
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             if _is_production():
                 raise RuntimeError(f"HashiCorp Vault get hvac failed in production: {e}") from e
             logger.debug("HashiCorpVaultBackend.get hvac failed: %s", e)
@@ -277,8 +282,12 @@ class HashiCorpVaultBackend(VaultBackend):
                     return fb
                 return None
         except ImportError:
-            pass
-        except Exception as e:
+            logger.debug("httpx transport unavailable")
+        except httpx.HTTPError as e:  # type: ignore[name-defined]
+            if _is_production():
+                raise RuntimeError(f"HashiCorp Vault get httpx failed in production: {e}") from e
+            logger.debug("HashiCorpVaultBackend.get httpx failed: %s", e)
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             if _is_production():
                 raise RuntimeError(f"HashiCorp Vault get httpx failed in production: {e}") from e
             logger.debug("HashiCorpVaultBackend.get httpx failed: %s", e)
@@ -303,11 +312,11 @@ class HashiCorpVaultBackend(VaultBackend):
             client = hvac.Client(url=self.addr, token=self.token, namespace=self.namespace, verify=self.tls_ca_bundle or True)  # type: ignore
             try:
                 client.secrets.kv.v2.delete_metadata_and_all_versions(path=f"{self.kv_prefix}{secret_ref}", mount_point=self.kv_mount)  # type: ignore
-            except Exception as e:
+            except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
                 transport_errors.append(f"hvac: {type(e).__name__}")
         except ImportError:
             transport_errors.append("hvac: not installed")
-        except Exception as e:
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             transport_errors.append(f"hvac: {type(e).__name__}")
         try:
             import httpx  # type: ignore
@@ -316,12 +325,14 @@ class HashiCorpVaultBackend(VaultBackend):
             async with httpx.AsyncClient(verify=self.tls_ca_bundle or True, timeout=5.0) as client:
                 resp = await client.request("DELETE", url, headers=self._headers())
                 if resp.status_code == 404:
-                    pass  # already gone — idempotent success
+                    logger.debug("HashiCorp Vault delete already absent: %s", secret_ref)
                 elif resp.status_code >= 400:
                     transport_errors.append(f"httpx: status {resp.status_code}")
         except ImportError:
             transport_errors.append("httpx: not installed")
-        except Exception as e:
+        except httpx.HTTPError as e:  # type: ignore[name-defined]
+            transport_errors.append(f"httpx: {type(e).__name__}")
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             transport_errors.append(f"httpx: {type(e).__name__}")
         # also clear fallback
         try:
@@ -348,14 +359,17 @@ class HashiCorpVaultBackend(VaultBackend):
             async with httpx.AsyncClient(verify=self.tls_ca_bundle or True, timeout=3.0) as client:
                 resp = await client.get(url, headers=self._headers())
                 return resp.status_code in (200, 204, 429, 472, 473)
-        except Exception:
-            pass
+        except httpx.HTTPError as e:  # type: ignore[name-defined]
+            logger.debug("HashiCorp Vault health HTTP probe failed: %s", type(e).__name__)
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.debug("HashiCorp Vault health HTTP probe failed: %s", type(e).__name__)
         try:
             import hvac  # type: ignore
 
             client = hvac.Client(url=self.addr, token=self.token, namespace=self.namespace, verify=self.tls_ca_bundle or True)  # type: ignore
             return not client.is_authenticated() or client.is_authenticated()  # type: ignore
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.debug("HashiCorp Vault health hvac probe failed: %s", type(e).__name__)
             return False
 
     def backend_name(self) -> str:
@@ -413,7 +427,7 @@ class AwsSecretsBackend(VaultBackend):
         try:
             client = boto3.client("secretsmanager", **kwargs)  # type: ignore
             return client
-        except Exception as e:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug("AwsSecretsBackend client creation failed: %s", e)
             raise
 
@@ -449,8 +463,8 @@ class AwsSecretsBackend(VaultBackend):
             await asyncio.to_thread(_sync)
             return
         except ImportError:
-            pass
-        except Exception as e:
+            logger.debug("boto3 transport unavailable")
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             _require_external_transport(False, f"AWS Secrets put failed in production: {e}")
             logger.warning("AwsSecretsBackend.put failed (%s), falling back to memory", e)
             await self._fallback.put(secret_ref, secret, metadata)
@@ -482,7 +496,7 @@ class AwsSecretsBackend(VaultBackend):
             if result is not None:
                 return result
             return None
-        except Exception as e:
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             # If secret not found, AWS raises ResourceNotFoundException
             msg = str(e)
             if "ResourceNotFound" in msg or "not found" in msg.lower():
@@ -508,14 +522,14 @@ class AwsSecretsBackend(VaultBackend):
                 client = self._client()
                 try:
                     client.delete_secret(SecretId=sid, ForceDeleteWithoutRecovery=True)  # type: ignore
-                except Exception as e:
+                except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
                     msg = str(e)
                     if "ResourceNotFound" in msg or "not found" in msg.lower():
                         return  # already gone — idempotent success
                     raise
 
             await asyncio.to_thread(_sync)
-        except Exception as e:
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             delete_errors.append(f"secretsmanager: {type(e).__name__}")
         try:
             await self._fallback.delete(secret_ref)
@@ -542,7 +556,7 @@ class AwsSecretsBackend(VaultBackend):
 
             await asyncio.to_thread(_sync)
             return True
-        except Exception as e:
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug("AwsSecretsBackend health_check failed: %s", e)
             return False
 

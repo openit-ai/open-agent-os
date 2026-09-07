@@ -155,12 +155,12 @@ def _db_get_session():
                 from security.models.db import Base  # type: ignore
                 from security.models.orm import ApprovalRequestORM, ApprovalNonceORM  # noqa: F401  # type: ignore
                 Base.metadata.create_all(bind=engine)
-            except (ImportError, ModuleNotFoundError):
-                pass
+            except (ImportError, ModuleNotFoundError) as e:
+                logger.debug("approval ORM import fallback unavailable: %s", type(e).__name__)
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         session = Session()
         return session, engine
-    except Exception as e:
+    except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
         logger.debug("ApprovalStore DB session failed: %s", e)
         return None, None
 
@@ -185,9 +185,10 @@ class _SeenNonces(dict):  # type: ignore
     def add(self, nonce: str) -> None:  # set-like
         self[nonce] = datetime.now(timezone.utc) + timedelta(seconds=NONCE_TTL_SECONDS)
         try:
-            _db_nonce_insert(nonce)
-        except Exception:
-            pass
+            if not _db_nonce_insert(nonce):
+                logger.warning("approval nonce persistence unavailable; using non-production memory fallback")
+        except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
+            logger.warning("approval nonce persistence failed: %s", type(e).__name__)
 
     def discard(self, nonce: str) -> None:
         self.pop(nonce, None)
@@ -204,13 +205,15 @@ def _db_nonce_cleanup(session) -> int:
         deleted = session.query(ApprovalNonceORM).filter(ApprovalNonceORM.expires_at < now).delete()  # type: ignore
         try:
             session.commit()
-        except Exception:
+        except SQLAlchemyError as e:
+            logger.debug("approval nonce commit failed: %s", type(e).__name__)
             try:
                 session.rollback()
             except SQLAlchemyError:
                 logger.debug("approval nonce rollback failed (best-effort)")
         return int(deleted or 0)
-    except Exception:
+    except (ImportError, AttributeError, SQLAlchemyError, TypeError, ValueError) as e:
+        logger.debug("approval nonce cleanup failed: %s", type(e).__name__)
         return 0
 
 
@@ -223,16 +226,13 @@ def _db_nonce_exists(nonce: str) -> bool:
         return False
     try:
         # opportunistic GC
-        try:
-            _db_nonce_cleanup(session)
-        except Exception:
-            pass
+        _db_nonce_cleanup(session)
         try:
             from security.models.orm import ApprovalNonceORM  # type: ignore
 
             row = session.query(ApprovalNonceORM).filter(ApprovalNonceORM.nonce == nonce).first()  # type: ignore
             return row is not None
-        except Exception as e:
+        except (ImportError, AttributeError, SQLAlchemyError, TypeError, ValueError) as e:
             logger.debug("nonce DB exists check failed: %s", e)
             return False
     finally:
@@ -252,10 +252,7 @@ def _db_nonce_insert(nonce: str, expires_at: datetime | None = None) -> bool:
         return False
     try:
         # GC expired first
-        try:
-            _db_nonce_cleanup(session)
-        except Exception:
-            pass
+        _db_nonce_cleanup(session)
         from security.models.orm import ApprovalNonceORM  # type: ignore
 
         # dedup: if already exists, keep it (replay)
@@ -263,8 +260,8 @@ def _db_nonce_insert(nonce: str, expires_at: datetime | None = None) -> bool:
             existing = session.query(ApprovalNonceORM).filter(ApprovalNonceORM.nonce == nonce).first()  # type: ignore
             if existing is not None:
                 return True
-        except Exception:
-            pass
+        except (ImportError, AttributeError, SQLAlchemyError, TypeError, ValueError) as e:
+            logger.debug("nonce deduplication query failed: %s", type(e).__name__)
         now = datetime.now(timezone.utc)
         exp = expires_at
         if exp is None:
@@ -281,7 +278,7 @@ def _db_nonce_insert(nonce: str, expires_at: datetime | None = None) -> bool:
         session.add(row)
         session.commit()
         return True
-    except Exception as e:
+    except (ImportError, AttributeError, SQLAlchemyError, TypeError, ValueError) as e:
         try:
             session.rollback()
         except SQLAlchemyError:
@@ -330,8 +327,9 @@ def _from_orm(row) -> ApprovalRequest:
     dec_val = getattr(row, "decision", "PENDING")
     try:
         dec = ApprovalDecision(dec_val)
-    except Exception:
-        dec = ApprovalDecision.PENDING
+    except (TypeError, ValueError) as e:
+        logger.warning("invalid persisted approval decision: %s", type(e).__name__)
+        raise ValueError("invalid persisted approval decision") from e
     expires_at = getattr(row, "expires_at")
     if expires_at is not None and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
@@ -413,17 +411,17 @@ class ApprovalStore:
             ttl_exp = datetime.now(timezone.utc) + timedelta(seconds=NONCE_TTL_SECONDS)
             if exp > ttl_exp:
                 exp = ttl_exp
-        self._seen_nonces[nonce] = exp
         # persist to DB — primary in prod (fail-closed), fallback in non-prod
         if _db_should_use():
-            try:
-                _db_nonce_insert(nonce, exp)
-            except Exception as e:
+            persisted = _db_nonce_insert(nonce, exp)
+            if not persisted:
                 if _is_prod():
-                    raise RuntimeError(f"ApprovalStore nonce persist failed in production: {e}") from e
+                    raise RuntimeError("ApprovalStore nonce persist failed in production")
+                logger.warning("ApprovalStore nonce persist failed; retaining non-production memory fallback")
         else:
             if _is_prod():
                 raise RuntimeError("ApprovalStore nonce persist failed — no DB in production (fail-closed)")
+        self._seen_nonces[nonce] = exp
 
     # ── 생성 ───────────────────────────────────────────────────
     def create(
@@ -460,13 +458,16 @@ class ApprovalStore:
             last_err = None
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_prod():
+                        raise RuntimeError("ApprovalStore create DB unavailable in production")
+                else:
                     try:
                         orm = _to_orm(req)
                         session.add(orm)
                         session.commit()
                         db_ok = True
-                    except Exception as e:
+                    except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
                         last_err = e
                         try:
                             session.rollback()
@@ -475,7 +476,7 @@ class ApprovalStore:
                         logger.debug("ApprovalStore create DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
                 last_err = e
             if _is_prod() and not db_ok:
                 self._requests.pop(req.approval_id, None)
@@ -489,7 +490,10 @@ class ApprovalStore:
         if _db_should_use():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_prod():
+                        raise RuntimeError("ApprovalStore get DB unavailable in production")
+                else:
                     try:
                         from security.models.orm import ApprovalRequestORM  # type: ignore
 
@@ -505,12 +509,14 @@ class ApprovalStore:
                                 if gid:
                                     self._group_grants.add((str(gid), req.action, req.resource))
                             return req
+                        if _is_prod():
+                            return None
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
-                # Read-path DB fallback to memory (deny-direction: missing rows => not approved);
-                # durable writes stay prod-guarded in create()/decide().
-                logger.debug("ApprovalStore get DB fallback to memory: %s", type(e).__name__)
+            except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
+                if _is_prod():
+                    raise RuntimeError("ApprovalStore get failed — DB unavailable in production") from e
+                logger.warning("ApprovalStore get DB fallback to memory: %s", type(e).__name__)
         return self._requests.get(approval_id)
 
     # ── 검증 ───────────────────────────────────────────────────
@@ -553,6 +559,8 @@ class ApprovalStore:
             raise ValueError("approval expired")
         if req.decision != ApprovalDecision.PENDING:
             raise ValueError(f"already decided: {req.decision}")
+        if decision == ApprovalDecision.APPROVED_GROUP_ALWAYS and not group_id:
+            raise ValueError("group_id required for group-always")
         # nonce replay 방지: 결정 시 nonce 를 seen 에 기록 (DB + memory with TTL)
         if self._is_nonce_seen(req.nonce):
             raise ValueError("nonce replay detected")
@@ -566,8 +574,6 @@ class ApprovalStore:
         if decision == ApprovalDecision.APPROVED_USER_ALWAYS:
             self._user_grants.add((req.user_id, req.action, req.resource))
         elif decision == ApprovalDecision.APPROVED_GROUP_ALWAYS:
-            if not group_id:
-                raise ValueError("group_id required for group-always")
             self._group_grants.add((group_id, req.action, req.resource))
 
         # update in-memory
@@ -605,7 +611,7 @@ class ApprovalStore:
                             session.add(orm)
                             session.commit()
                             db_ok = True
-                    except Exception as e:
+                    except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
                         last_err = e
                         try:
                             session.rollback()
@@ -614,7 +620,7 @@ class ApprovalStore:
                         logger.debug("ApprovalStore decide DB update failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
                 last_err = e
             if _is_prod() and not db_ok:
                 # Restore in-memory pre-decision state: a decision that is not durable
@@ -627,6 +633,12 @@ class ApprovalStore:
                     self._group_grants.discard((group_id, req.action, req.resource))
                 raise RuntimeError(f"ApprovalStore decide failed — DB persist required in production: {last_err}")
         elif _is_prod():
+            req.decision = ApprovalDecision.PENDING
+            req.decided_at = None
+            req.decided_by = None
+            self._user_grants.discard((req.user_id, req.action, req.resource))
+            if group_id:
+                self._group_grants.discard((group_id, req.action, req.resource))
             raise RuntimeError("ApprovalStore decide failed — no DB in production (fail-closed)")
         return req
 
@@ -647,7 +659,10 @@ class ApprovalStore:
         if _db_should_use() and not self._user_grants:
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_prod():
+                        raise RuntimeError("ApprovalStore user-grant DB unavailable in production")
+                else:
                     try:
                         from security.models.orm import ApprovalRequestORM  # type: ignore
 
@@ -656,9 +671,11 @@ class ApprovalStore:
                             self._user_grants.add((str(r.user_id), str(r.action), str(r.resource)))
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
+                if _is_prod():
+                    raise RuntimeError("ApprovalStore user-grant lookup failed in production") from e
                 # Grant hydrate fallback to memory-only (deny-direction: fewer grants => deny)
-                logger.debug("ApprovalStore user-grant hydrate failed, memory-only: %s", type(e).__name__)
+                logger.warning("ApprovalStore user-grant hydrate failed, memory-only: %s", type(e).__name__)
         for (u, a, pattern) in self._user_grants:
             if u == user_id and a == action and fnmatch.fnmatch(resource, pattern):
                 return True
@@ -670,7 +687,10 @@ class ApprovalStore:
         if _db_should_use() and not self._group_grants:
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_prod():
+                        raise RuntimeError("ApprovalStore group-grant DB unavailable in production")
+                else:
                     try:
                         from security.models.orm import ApprovalRequestORM  # type: ignore
 
@@ -681,9 +701,11 @@ class ApprovalStore:
                                 self._group_grants.add((str(gid), str(r.action), str(r.resource)))
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except (ImportError, OSError, RuntimeError, SQLAlchemyError, TypeError, ValueError) as e:
+                if _is_prod():
+                    raise RuntimeError("ApprovalStore group-grant lookup failed in production") from e
                 # Grant hydrate fallback to memory-only (deny-direction: fewer grants => deny)
-                logger.debug("ApprovalStore group-grant hydrate failed, memory-only: %s", type(e).__name__)
+                logger.warning("ApprovalStore group-grant hydrate failed, memory-only: %s", type(e).__name__)
         for (g, a, pattern) in self._group_grants:
             if g == group_id and a == action and fnmatch.fnmatch(resource, pattern):
                 return True

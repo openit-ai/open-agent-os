@@ -26,6 +26,17 @@ try:
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
     SQLAlchemyError = Exception  # type: ignore
 
+_EXPECTED_ERRORS = (
+    AttributeError,
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    SQLAlchemyError,
+    TypeError,
+    ValueError,
+)
+
 # ── Vault revoke retry metrics (shared with vault module) ─────────────
 # Prometheus counter oaos_vault_revoke_failures_total + dead-letter log
 _delegation_vault_revoke_failures_total: int = 0
@@ -66,7 +77,7 @@ def delegation_vault_revoke_metrics_prometheus() -> str:
 
             total += _g()
         except ImportError:
-            pass
+            logger.debug("delegation vault metrics module unavailable")
     lines = [
         "# HELP oaos_vault_revoke_failures_total Vault revoke failures after retries (dead-letter)",
         "# TYPE oaos_vault_revoke_failures_total counter",
@@ -104,7 +115,7 @@ def _record_delegation_dead_letter(secret_ref: str, delegation_id: str, error: s
             from execution_gateway.execution_gateway.metrics import default_metrics as _dm2  # type: ignore
             _dm2.record_vault_revoke_failure()
         except ImportError:
-            pass
+            logger.debug("execution gateway metrics module unavailable")
 
 
 def _delegation_hash(d: Delegation) -> str:
@@ -173,12 +184,12 @@ def _db_get_session():
                 from security.models.db import Base  # type: ignore
                 from security.models.orm import DelegationORM, CredentialBindingORM  # noqa: F401  # type: ignore
                 Base.metadata.create_all(bind=engine)
-            except (ImportError, ModuleNotFoundError):
-                pass
+            except (ImportError, ModuleNotFoundError) as e:
+                logger.debug("delegation ORM import fallback unavailable: %s", type(e).__name__)
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         session = Session()
         return session, engine
-    except Exception as e:
+    except _EXPECTED_ERRORS as e:
         logger.debug("DelegationService DB session failed: %s", e)
         return None, None
 
@@ -223,7 +234,7 @@ def _delegation_from_orm(row) -> Delegation:
     status_val = getattr(row, "status", "ACTIVE")
     try:
         status = DelegationStatus(status_val)
-    except Exception:
+    except _EXPECTED_ERRORS:
         status = DelegationStatus.ACTIVE if status_val == "ACTIVE" else DelegationStatus.REVOKED
     created_at = getattr(row, "created_at")
     if created_at is not None and created_at.tzinfo is None:
@@ -273,7 +284,7 @@ def _binding_from_orm(row) -> CredentialBinding:
     status_val = getattr(row, "status", "ACTIVE")
     try:
         status = CredentialBindingStatus(status_val)
-    except Exception:
+    except _EXPECTED_ERRORS:
         status = CredentialBindingStatus.ACTIVE if status_val == "ACTIVE" else CredentialBindingStatus.REVOKED
     expires_at = getattr(row, "expires_at")
     if expires_at is not None and expires_at.tzinfo is None:
@@ -352,17 +363,17 @@ class DelegationService:
                         orm = _delegation_to_orm(d)
                         session.add(orm)
                         session.commit()
-                    except Exception as e:
+                    except _EXPECTED_ERRORS as e:
                         try:
                             session.rollback()
                         except SQLAlchemyError:
-                            pass
+                            logger.debug("delegation grant rollback failed (best-effort)")
                         if _is_production():
                             raise RuntimeError("delegation database persist failed in production") from e
                         logger.debug("Delegation grant DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception:
+            except _EXPECTED_ERRORS:
                 if _is_production():
                     self._store.pop(d.id, None)
                     self._hash_store.pop(d.id, None)
@@ -392,11 +403,11 @@ class DelegationService:
                             self._hash_store[d.id] = _delegation_hash(d)
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except _EXPECTED_ERRORS as e:
                 if _is_production():
                     # Unknown vs backend-down must not conflate: RuntimeError => 503 upstream, never silent 404
                     raise RuntimeError("delegation database unavailable in production") from e
-                pass
+                logger.warning("delegation revoke lookup fell back to memory: %s", type(e).__name__)
         if d is None:
             return None
         if d.status == DelegationStatus.REVOKED:
@@ -431,14 +442,15 @@ class DelegationService:
                             for br in bindings:
                                 if getattr(br, "status", "ACTIVE") == "ACTIVE":
                                     br.status = "REVOKED"
-                        except Exception:
-                            pass
+                        except _EXPECTED_ERRORS as e:
+                            logger.warning("delegation binding cascade query failed: %s", type(e).__name__)
+                            raise
                         session.commit()
-                    except Exception as e:
+                    except _EXPECTED_ERRORS as e:
                         try:
                             session.rollback()
                         except SQLAlchemyError:
-                            pass
+                            logger.debug("delegation revoke rollback failed (best-effort)")
                         if _is_production():
                             # A revoke that is not durable must never be reported as REVOKED:
                             # the row would resurrect as ACTIVE on restart (silent fail-open).
@@ -451,10 +463,10 @@ class DelegationService:
                         _db_close(session, engine)
             except RuntimeError:
                 raise
-            except Exception as e:
+            except _EXPECTED_ERRORS as e:
                 if _is_production():
                     raise RuntimeError("delegation revoke persist failed in production") from e
-                pass
+                logger.warning("delegation revoke persistence degraded outside production: %s", type(e).__name__)
         # cascade: 모든 연결된 binding 무효화 (in-memory)
         for bid in self._delegation_bindings.get(delegation_id, set()).copy():
             b = self._bindings.get(bid)
@@ -485,9 +497,9 @@ class DelegationService:
                                     logger.debug("revoke binding hydrate failed for %s: %s", bid, type(e).__name__)
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except _EXPECTED_ERRORS as e:
                 logger.debug("revoke binding DB scan failed: %s", type(e).__name__)
-                pass
+                logger.warning("delegation binding in-memory cascade is incomplete: %s", type(e).__name__)
         # ── revoke cascade: MemoryStore + Vault (lazy, best-effort) ──
         # MemoryStore.invalidate_by_delegation
         try:
@@ -507,9 +519,9 @@ class DelegationService:
             if store is not None:
                 try:
                     store.invalidate_by_delegation(delegation_id, reason="delegation_revoked")
-                except Exception as e:
+                except _EXPECTED_ERRORS as e:
                     logger.debug("MemoryStore invalidate_by_delegation failed: %s", e)
-        except Exception as e:
+        except _EXPECTED_ERRORS as e:
             # Memory invalidation is defense-in-depth (the delegation itself is already
             # REVOKED above, which denies authoritatively) — warn, never silent.
             logger.warning("delegation revoke memory-invalidate cascade failed for %s: %s", delegation_id, type(e).__name__)
@@ -525,7 +537,8 @@ class DelegationService:
                     if "security_app_module" in sys.modules:
                         mod = sys.modules["security_app_module"]
                         vault = getattr(mod, "vault_instance", None) or getattr(mod, "vault", None)
-                except Exception:
+                except _EXPECTED_ERRORS as e:
+                    logger.debug("delegation vault discovery failed: %s", type(e).__name__)
                     vault = None
             if vault is not None:
                 # collect secret_refs for this delegation
@@ -549,8 +562,8 @@ class DelegationService:
                                         secret_refs.append(sr)
                             finally:
                                 _db_close(session2, engine2)
-                    except Exception:
-                        pass
+                    except _EXPECTED_ERRORS as e:
+                        logger.warning("delegation vault binding lookup failed: %s", type(e).__name__)
                 for sr in secret_refs:
                     import asyncio as _asyncio
                     import inspect as _inspect
@@ -569,7 +582,7 @@ class DelegationService:
                                     try:
                                         await vault.revoke(_sr)
                                         return
-                                    except Exception as e2:
+                                    except _EXPECTED_ERRORS as e2:
                                         if a < 2:
                                             dly = _VAULT_RETRY_DELAYS[a]
                                             logger.warning(
@@ -589,7 +602,7 @@ class DelegationService:
 
                             try:
                                 _loop.create_task(_deleg_async_retry())  # type: ignore[attr-defined]
-                            except Exception as e:
+                            except _EXPECTED_ERRORS as e:
                                 logger.debug("Failed to schedule vault revoke task for %s: %s", sr, e)
                             continue
                         else:
@@ -599,7 +612,7 @@ class DelegationService:
                                     _asyncio.run(vault.revoke(sr))  # type: ignore[arg-type]
                                     last_exc = None
                                     break
-                                except Exception as e:
+                                except _EXPECTED_ERRORS as e:
                                     last_exc = e
                                     if attempt < 2:
                                         dly = _VAULT_RETRY_DELAYS[attempt]
@@ -627,7 +640,7 @@ class DelegationService:
                                 vault.revoke(sr)  # type: ignore
                                 last_exc = None
                                 break
-                            except Exception as e:
+                            except _EXPECTED_ERRORS as e:
                                 last_exc = e
                                 if attempt < 2:
                                     dly = _VAULT_RETRY_DELAYS[attempt]
@@ -651,7 +664,7 @@ class DelegationService:
                             # is tracked via dead-letter + metrics for retry/alerting.
                             logger.warning("Vault revoke failed for %s after retries (delegation already REVOKED, dead-letter recorded): %s", sr, last_exc)
                         continue
-        except Exception as e:
+        except _EXPECTED_ERRORS as e:
             logger.warning("delegation revoke cascade failed for %s: %s", delegation_id, type(e).__name__)
         return d
 
@@ -682,11 +695,14 @@ class DelegationService:
                             self._store[d.id] = d
                             self._hash_store[d.id] = _delegation_hash(d)
                             return d
+                        if _is_production():
+                            return None
                     finally:
                         _db_close(session, engine)
-            except Exception:
+            except _EXPECTED_ERRORS as e:
                 if _is_production():
-                    raise
+                    raise RuntimeError("delegation lookup failed in production") from e
+                logger.warning("delegation lookup fell back to memory: %s", type(e).__name__)
             # if DB enabled but row not found in DB, fallback to memory (may be uncommitted)
             return self._store.get(delegation_id)
         return self._store.get(delegation_id)
@@ -708,7 +724,10 @@ class DelegationService:
         if _db_enabled():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    if _is_production():
+                        raise RuntimeError("delegation list DB unavailable in production")
+                else:
                     try:
                         from security.models.orm import DelegationORM  # type: ignore
 
@@ -722,8 +741,10 @@ class DelegationService:
                         return result
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except _EXPECTED_ERRORS as e:
+                if _is_production():
+                    raise RuntimeError("delegation list lookup failed in production") from e
+                logger.warning("delegation list DB lookup fell back to memory: %s", type(e).__name__)
         return [d for d in self._store.values() if d.user_id == user_id]
 
     # ── CredentialBinding ───────────────────────────────────────
@@ -762,17 +783,18 @@ class DelegationService:
                         orm = _binding_to_orm(b)
                         session.add(orm)
                         session.commit()
-                    except Exception as e:
+                    except _EXPECTED_ERRORS as e:
                         try:
                             session.rollback()
                         except SQLAlchemyError:
-                            pass
+                            logger.debug("credential binding rollback failed (best-effort)")
+                        raise
                         if _is_production():
                             raise RuntimeError("credential binding database persist failed in production") from e
                         logger.debug("bind_credential DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
-            except Exception:
+            except _EXPECTED_ERRORS as e:
                 if _is_production():
                     self._bindings.pop(b.id, None)
                     self._delegation_bindings.get(delegation_id, set()).discard(b.id)
@@ -795,11 +817,14 @@ class DelegationService:
                             b = _binding_from_orm(row)
                             self._bindings[b.id] = b
                             return b
+                        if _is_production():
+                            return None
                     finally:
                         _db_close(session, engine)
-            except Exception:
+            except _EXPECTED_ERRORS as e:
                 if _is_production():
-                    raise
+                    raise RuntimeError("credential binding lookup failed in production") from e
+                logger.warning("credential binding lookup fell back to memory: %s", type(e).__name__)
         return self._bindings.get(binding_id)
 
     def list_bindings_for_delegation(self, delegation_id: str) -> list[CredentialBinding]:
@@ -837,7 +862,7 @@ class DelegationService:
                         return result
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except _EXPECTED_ERRORS as e:
                 if _is_production():
                     raise RuntimeError("credential binding lookup failed in production") from e
                 logger.debug("binding list DB lookup failed: %s", e)
@@ -873,12 +898,16 @@ class DelegationService:
                             if row is not None:
                                 row.status = "REVOKED"
                                 session.commit()
-                        except Exception:
+                        except _EXPECTED_ERRORS as e:
                             try:
                                 session.rollback()
                             except SQLAlchemyError:
-                                pass
+                                logger.debug("credential binding revoke rollback failed (best-effort)")
+                            raise
                         finally:
                             _db_close(session, engine)
-                except Exception:
-                    pass
+                except _EXPECTED_ERRORS as e:
+                    if _is_production():
+                        b.status = CredentialBindingStatus.ACTIVE
+                        raise RuntimeError("credential binding revoke failed in production") from e
+                    logger.warning("credential binding revoke DB update failed: %s", type(e).__name__)
