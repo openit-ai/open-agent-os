@@ -11,7 +11,7 @@ from typing import Optional
 
 try:
     from jose import jwt  # type: ignore
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     jwt = None  # type: ignore
 
 _DEV_SIGNING_KEY = "dev-signing-key-please-change"

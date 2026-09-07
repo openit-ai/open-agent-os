@@ -22,7 +22,7 @@ from fastapi import HTTPException
 
 try:
     from jose import jwt, JWTError, ExpiredSignatureError  # type: ignore
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     jwt = None  # type: ignore
     JWTError = Exception  # type: ignore
     ExpiredSignatureError = Exception  # type: ignore

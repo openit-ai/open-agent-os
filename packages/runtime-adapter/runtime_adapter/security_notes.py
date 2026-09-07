@@ -80,7 +80,7 @@ Compromised 시 영향:
 # Re-export blast radius check for convenience (optional — execution-gateway may not be on PYTHONPATH outside gateway)
 try:
     from execution_gateway.data_access import DataAccessPolicy, get_data_access_policy  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     DataAccessPolicy = None  # type: ignore
     get_data_access_policy = None  # type: ignore
 
@@ -97,7 +97,7 @@ try:
 
     IsolationLevel = _IsolationLevel  # type: ignore
     ISOLATION_LEVELS = _ISOLATION_LEVELS  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     from enum import Enum as _Enum  # fallback
 
     class IsolationLevel(_Enum):  # type: ignore

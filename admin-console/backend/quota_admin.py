@@ -273,7 +273,7 @@ def _usage_summary_best_effort(tenant_id: str) -> tuple[dict | None, str]:
         if mod is None:
             try:
                 import llm_providers as mod  # type: ignore
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 mod = None
         if mod is not None and hasattr(mod, "_admin_usage_summary"):
             summary = mod._admin_usage_summary(tenant_id=tenant_id)  # type: ignore

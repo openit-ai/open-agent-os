@@ -372,11 +372,11 @@ def _collect_llm_providers() -> list[dict]:
             try:
                 from . import llm_providers as _lp  # type: ignore
                 mod = _lp
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 try:
                     import llm_providers as _lp2  # type: ignore
                     mod = _lp2
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     mod = None
         if mod is not None:
             source = "in-memory:llm_providers"
@@ -438,11 +438,11 @@ def _collect_fallback() -> dict:
             try:
                 from . import fallback as _fb  # type: ignore
                 mod = _fb
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 try:
                     import fallback as _fb2  # type: ignore
                     mod = _fb2
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     mod = None
         if mod is not None:
             cfg = mod._load_config()  # type: ignore
@@ -477,11 +477,11 @@ def _collect_infra() -> dict:
             try:
                 from . import infra as _im  # type: ignore
                 mod = _im
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 try:
                     import infra as _im2  # type: ignore
                     mod = _im2
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     mod = None
         if mod is not None:
             lst = None
@@ -545,11 +545,11 @@ def _collect_user_mappings() -> dict:
             try:
                 from . import user_mappings as _um  # type: ignore
                 mod = _um
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 try:
                     import user_mappings as _um2  # type: ignore
                     mod = _um2
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     mod = None
         if mod is not None:
             lst = None

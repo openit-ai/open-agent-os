@@ -21,25 +21,25 @@ except ImportError:
     httpx = None  # type: ignore
 try:
     from execution_gateway.data_access import get_data_access_policy  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     try:
         from data_access import get_data_access_policy  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         get_data_access_policy = None  # type: ignore
 try:
     from execution_gateway.tool_policy import ToolPolicy, validate_tool_call  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     try:
         from tool_policy import ToolPolicy, validate_tool_call  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         ToolPolicy = None  # type: ignore
         validate_tool_call = None  # type: ignore
 try:
     from governance.governance import MemoryStore, MemoryScope  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     try:
         from security.memory_governance.governance.governance import MemoryStore, MemoryScope  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         MemoryStore = None  # type: ignore
         MemoryScope = None  # type: ignore
 

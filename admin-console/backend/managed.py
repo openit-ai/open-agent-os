@@ -200,7 +200,7 @@ def managed_health(admin: AdminUser = Depends(get_current_admin)):
         import business as biz  # type: ignore
         # not a real store — leave as unknown
         _ = biz
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
 
     overall = "healthy"

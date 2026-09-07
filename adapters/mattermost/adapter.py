@@ -147,11 +147,11 @@ class MattermostAdapter:
             try:
                 from audit_model import AuditEvent, AuditEventType  # type: ignore
                 from security.audit.audit_ledger.ledger import AuditLedger  # type: ignore
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 try:
                     from audit.audit_ledger.ledger import AuditLedger  # type: ignore
                     from audit_model.model import AuditEvent, AuditEventType  # type: ignore
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     AuditLedger = None  # type: ignore
                     AuditEvent = None  # type: ignore
             if AuditEvent is not None and AuditLedger is not None:

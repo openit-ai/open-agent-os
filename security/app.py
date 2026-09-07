@@ -150,7 +150,7 @@ try:
     except ImportError:
         try:
             from security.credential_vault.vault.vault import EncryptedPostgresVault  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             EncryptedPostgresVault = None  # type: ignore
     if EncryptedPostgresVault is not None:
         try:

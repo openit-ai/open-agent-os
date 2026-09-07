@@ -70,10 +70,10 @@ from security.models.orm import (  # noqa: F401,E402
 # Knowledge Index (v1.7.1 §0.4.1) — pgvector 1536 + SQLite fallback
 try:
     from knowledge_index.orm import KnowledgeIndexORM  # noqa: F401,E402
-except Exception:
+except (ImportError, ModuleNotFoundError):
     try:
         from packages.knowledge_index.knowledge_index.orm import KnowledgeIndexORM  # type: ignore  # noqa: F401,E402
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
 
 target_metadata = Base.metadata

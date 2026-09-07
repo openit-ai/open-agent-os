@@ -472,7 +472,7 @@ async def sync_outline_to_index(
                         if _is_production() or acl_on_error == "strict":
                             try:
                                 from .outline_acl import _restrict_doc as _acl_restrict
-                            except Exception:
+                            except (ImportError, ModuleNotFoundError):
                                 _acl_restrict = None  # type: ignore
                             if _acl_restrict is not None:
                                 restricted: list[SourceDocument] = []

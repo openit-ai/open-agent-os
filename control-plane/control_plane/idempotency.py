@@ -206,7 +206,7 @@ def _redis_atomic_reclaim(client, key: str, new_record: dict[str, Any], ttl_sec:
     try:
         # redis-py WatchError is in redis.exceptions
         from redis.exceptions import WatchError as _WE  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         _WE = Exception  # type: ignore
     try:
         # Use pipeline with watch

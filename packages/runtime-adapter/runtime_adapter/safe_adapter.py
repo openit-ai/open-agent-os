@@ -211,10 +211,10 @@ class SafeRuntimeAdapter(AgentRuntimeAdapter):
         try:
             try:
                 from agent_runtime.model_guard import is_blocked_entry  # type: ignore
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 try:
                     from packages.agent_runtime.agent_runtime.model_guard import is_blocked_entry  # type: ignore
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     is_blocked_entry = None  # type: ignore
             if is_blocked_entry is not None:
                 blocked, reason = is_blocked_entry({"provider": provider or "safe", "model": model})

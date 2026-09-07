@@ -308,10 +308,10 @@ def _get_runtime_router():
     """
     try:
         from runtime_adapter.router import RuntimeRouter  # canonical
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         try:
             from .runtime_router import RuntimeRouter  # shim
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             return None
     checker = None
     try:
@@ -326,7 +326,7 @@ def _get_runtime_router():
             from policy_engine.engine import PolicyEngine  # type: ignore
             from policy_model import PolicyEvaluationRequest  # type: ignore
             checker = None
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             pass
     except Exception:
         pass

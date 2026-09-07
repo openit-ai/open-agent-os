@@ -20,7 +20,7 @@ from .adapter import AgentRuntimeAdapter
 # Reuse router logic if available; otherwise inline minimal mapping.
 try:
     from control_plane.router import select_worker_pool  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover — standalone package without control-plane on path
+except (ImportError, ModuleNotFoundError):  # pragma: no cover — standalone package without control-plane on path
     _DOMAIN_POOLS = {
         "general": "hermes-general",
         "development": "hermes-dev",
@@ -265,10 +265,10 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             # reuse OAOS model_guard when available — otherwise inline minimal check
             try:
                 from agent_runtime.model_guard import is_blocked_entry, sanitize_entry  # type: ignore
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 try:
                     from packages.agent_runtime.agent_runtime.model_guard import is_blocked_entry, sanitize_entry  # type: ignore
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     is_blocked_entry = None  # type: ignore
                     sanitize_entry = None  # type: ignore
             if is_blocked_entry is not None:

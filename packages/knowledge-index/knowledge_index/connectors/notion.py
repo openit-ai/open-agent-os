@@ -18,7 +18,7 @@ try:
         NotionAPIError,
         NotionSourceConfig,
     )
-except Exception:  # pragma: no cover - http_notion missing on minimal installs
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - http_notion missing on minimal installs
     HttpNotionSourceAdapter = None  # type: ignore
     NotionAPIError = RuntimeError  # type: ignore
     NotionSourceConfig = None  # type: ignore

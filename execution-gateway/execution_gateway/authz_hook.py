@@ -24,14 +24,14 @@ except ImportError:
 
 try:
     from policy_model.model import PolicyDecision, PolicyEvaluationRequest  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     PolicyDecision = None  # type: ignore
     PolicyEvaluationRequest = None  # type: ignore
 
 try:
     from policy_engine.engine import PolicyEngine  # type: ignore
     from policy_engine.default_bundle import default_bundle  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     PolicyEngine = None  # type: ignore
     default_bundle = None  # type: ignore
 

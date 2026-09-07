@@ -123,7 +123,7 @@ def _db_sync_url() -> Optional[str]:
 def _ensure_policy_tables_sync(engine) -> None:
     try:
         from sqlalchemy import text  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return
     is_sqlite = str(getattr(engine,"url","")).startswith("sqlite")
     if is_sqlite:
@@ -179,7 +179,7 @@ def _db_get_sync_engine():
         return None
     try:
         from sqlalchemy import create_engine  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
     try:
         connect_args = {}

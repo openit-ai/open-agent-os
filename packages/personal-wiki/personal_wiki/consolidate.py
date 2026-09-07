@@ -21,7 +21,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 try:
     from personal_wiki.vault import get_vault_root, ensure_vault_dirs  # type: ignore
-except Exception:  # fallback
+except (ImportError, ModuleNotFoundError):  # fallback
     def get_vault_root() -> Path:  # type: ignore[no-redef]
         for k in ("OAOS_WIKI_VAULT", "PERSONAL_WIKI_VAULT", "VAULT_ROOT", "PERSONAL_WIKI_ROOT"):
             v = os.getenv(k)

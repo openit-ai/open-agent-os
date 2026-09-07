@@ -80,7 +80,7 @@ def _verify_memory_jwt(token: str, required_scope: str | None = None) -> dict:
     # reject none alg early
     try:
         from jose import jwt as _jwt, JWTError as _JE, ExpiredSignatureError as _ESE
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         raise HTTPException(status_code=500, detail="jwt library unavailable")
     key = _memory_signing_key()
     if _is_production() and key == _DEV_KEY_SENTINEL:
@@ -272,7 +272,7 @@ def _get_store():
         sys.path.insert(0, _sec)
     try:
         from governance.governance import MemoryStore  # type: ignore  # when security/memory-governance on path
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError) as e:
         # last resort: load via importlib from file
         import importlib.util
 
@@ -320,7 +320,7 @@ async def _get_db_maker():
     # lazy imports
     try:
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
     try:
         _db_engine = create_async_engine(url, echo=False, pool_pre_ping=True)
@@ -328,7 +328,7 @@ async def _get_db_maker():
         try:
             from security.models.db import Base  # type: ignore
             from security.models.orm import MemoryORM, MemorySourceORM  # noqa: F401  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             # try alternative import path
             import importlib.util, sys
             from pathlib import Path
@@ -662,7 +662,7 @@ async def _db_physical_delete(memory_ids: list[str]) -> int:
         # lazy ORM imports
         try:
             from security.models.orm import MemoryORM, MemorySourceORM, MemoryEmbeddingORM, MemoryAccessBindingORM  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             import sys
             from pathlib import Path
             root = Path(__file__).resolve().parents[1]
@@ -718,7 +718,7 @@ async def _db_collect_ids_by_delegation(delegation_id: str) -> list[str]:
         from sqlalchemy import select  # type: ignore
         try:
             from security.models.orm import MemoryORM  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             import sys
             from pathlib import Path
             root = Path(__file__).resolve().parents[1]
@@ -745,7 +745,7 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
         from sqlalchemy import select  # type: ignore
         try:
             from security.models.orm import MemoryORM, MemorySourceORM  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             import sys
             from pathlib import Path
             root = Path(__file__).resolve().parents[1]
@@ -988,7 +988,7 @@ async def memory_write(payload: dict, request: Request):
                 from security.models.orm import MemoryORM, MemorySourceORM  # type: ignore
 
                 # Also handle import via alternative path
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 from pathlib import Path as _P
                 import sys as _sys
 
@@ -1218,7 +1218,7 @@ async def memory_search(payload: dict, request: Request):
     try:
         from security.models.orm import MemoryORM, MemorySourceORM  # type: ignore
         from sqlalchemy import select, or_, and_  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         results = store.search(query=query, scope=scope, owner=owner, classification=classification, requester=requester, tenant_id=effective_tenant, include_invalidated=include_invalidated)  # type: ignore
         results = results[:limit]
         return {"results": [r.to_dict() for r in results], "count": len(results), "tenant_id": effective_tenant}
@@ -1351,7 +1351,7 @@ async def memory_search(payload: dict, request: Request):
                 # Build a MemoryRecord-like object for ACL check
                 try:
                     from governance.governance import MemoryScope, MemoryRecord  # type: ignore
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     from security.memory_governance.governance.governance import MemoryScope, MemoryRecord  # type: ignore
 
                 # normalize scope for MemoryRecord
@@ -1458,7 +1458,7 @@ async def memory_get(memory_id: str, request: Request):
                         classification_val = getattr(row, "classification", None) or prov.get("classification") or "INTERNAL"
                         try:
                             from governance.governance import MemoryScope, MemoryRecord  # type: ignore
-                        except Exception:
+                        except (ImportError, ModuleNotFoundError):
                             from security.memory_governance.governance.governance import MemoryScope, MemoryRecord  # type: ignore
 
                         try:

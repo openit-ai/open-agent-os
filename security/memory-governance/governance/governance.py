@@ -32,7 +32,7 @@ class MemoryScope(str, Enum):
 try:
     from common_types.types import DataClassification as _CommonDC  # type: ignore
     DataClassification = _CommonDC  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     class DataClassification(str, Enum):  # type: ignore[no-redef]
         PUBLIC = "PUBLIC"
         INTERNAL = "INTERNAL"

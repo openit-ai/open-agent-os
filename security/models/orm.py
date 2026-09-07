@@ -21,7 +21,7 @@ from .db import Base
 try:
     from sqlalchemy.dialects.postgresql import JSONB as _JSONB  # noqa
     JSONType = JSONB
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     from sqlalchemy import JSON as JSONType  # type: ignore
 
 # ── pgvector ready: Vector(1536) on Postgres, fallback to Text for SQLite/tests ──
@@ -29,7 +29,7 @@ try:
     from pgvector.sqlalchemy import Vector as _PgVector  # type: ignore
 
     _VECTOR_1536 = _PgVector(1536)  # type: ignore
-except Exception:  # pragma: no cover - pgvector not installed or SQLite
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - pgvector not installed or SQLite
     _VECTOR_1536 = Text  # fallback column type for sqlite compat
 
 

@@ -40,15 +40,15 @@ except ImportError:
 
 try:
     from agent_context.context import AgentContext  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     AgentContext = None  # type: ignore
 
 try:
     from .signed_context import parse_and_verify_context  # H2: signed AgentContext JWT
-except Exception:
+except (ImportError, ModuleNotFoundError):
     try:
         from execution_gateway.signed_context import parse_and_verify_context  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         parse_and_verify_context = None  # type: ignore  # fallback defined below
 
 app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.3")

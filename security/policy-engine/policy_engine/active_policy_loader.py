@@ -259,7 +259,7 @@ def _dict_to_bundle(rec: dict):
             pass
     try:
         from policy_model import PolicyBundle, PolicyRule, PolicyDecision, PolicySource  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         # try alternative import path
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "policy-model"))
         from policy_model import PolicyBundle, PolicyRule, PolicyDecision, PolicySource  # type: ignore

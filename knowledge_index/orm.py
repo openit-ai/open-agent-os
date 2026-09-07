@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 try:
     from security.models.db import Base  # type: ignore
-except Exception:  # fallback when security not on path
+except (ImportError, ModuleNotFoundError):  # fallback when security not on path
     from sqlalchemy.orm import DeclarativeBase
 
     class Base(DeclarativeBase):  # type: ignore[no-redef]
@@ -25,7 +25,7 @@ except Exception:  # fallback when security not on path
 # pgvector fallback
 try:
     from pgvector.sqlalchemy import Vector as _PgVector  # type: ignore
-except Exception:  # pragma: no cover - package absent in lightweight test env
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - package absent in lightweight test env
     _PgVector = None  # type: ignore
 
 _VECTOR_1536 = Text  # legacy fallback; migration/runtime contract is 1024

@@ -27,7 +27,7 @@ except ImportError:
 
 try:
     from mcp_resource_model.model import MCPTool, MCPResource  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     MCPTool = Any  # type: ignore
     MCPResource = Any  # type: ignore
 

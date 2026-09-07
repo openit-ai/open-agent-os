@@ -30,12 +30,12 @@ from typing import Any
 
 try:
     from common_types.types import RiskLevel as CommonRiskLevel  # type: ignore
-except Exception:  # fallback when package not installed as distribution
+except (ImportError, ModuleNotFoundError):  # fallback when package not installed as distribution
     CommonRiskLevel = None  # type: ignore
 
 try:
     from common_types.types import DataClassification as CommonDC  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     CommonDC = None  # type: ignore
 
 

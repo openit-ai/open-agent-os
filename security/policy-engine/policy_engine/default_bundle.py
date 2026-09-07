@@ -9,7 +9,7 @@ from policy_model import PolicyBundle, PolicyRule, PolicySource, PolicyDecision
 # Re-export small-business primitives for call sites that import from here
 try:
     from policy_engine.small_business_bundle import small_business_bundle, classify_risk, TASK_RISK, PERMISSION_LEVELS  # noqa: F401
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     small_business_bundle = None  # type: ignore
     classify_risk = None  # type: ignore
     TASK_RISK = {}  # type: ignore

@@ -278,7 +278,7 @@ async def _write_via_sqlalchemy(
     # lazy imports
     try:
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker  # type: ignore
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError) as e:
         raise RuntimeError(f"sqlalchemy not available: {e}")
 
     url = _db_url()
@@ -295,7 +295,7 @@ async def _write_via_sqlalchemy(
     try:
         from security.models.db import Base  # type: ignore
         from security.models.orm import MemoryORM, MemorySourceORM  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         # fallback path
         import sys
 
@@ -306,7 +306,7 @@ async def _write_via_sqlalchemy(
         try:
             from security.models.db import Base  # type: ignore
             from security.models.orm import MemoryORM, MemorySourceORM  # type: ignore
-        except Exception as e:
+        except (ImportError, ModuleNotFoundError) as e:
             raise RuntimeError(f"ORM import failed: {e}")
 
     # ensure aiosqlite / asyncpg driver available

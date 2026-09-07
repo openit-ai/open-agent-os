@@ -31,15 +31,15 @@ for p in [ROOT / "examples"]:
 
 try:
     from orchestrator import run_morning_briefing  # type: ignore
-except Exception:
+except (ImportError, ModuleNotFoundError):
     try:
         from morning_briefing.orchestrator import run_morning_briefing  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         run_morning_briefing = None  # type: ignore
 
 try:
     from execution_gateway.mock_executor import get_ledger
-except Exception:
+except (ImportError, ModuleNotFoundError):
     get_ledger = lambda: None  # type: ignore
 
 from control_plane.session import session_store, new_trace_id, new_request_id  # type: ignore

@@ -28,7 +28,7 @@ try:
 except ImportError:
     try:
         from execution_gateway.data_access import get_data_access_policy  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         get_data_access_policy = None  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ def _mock_fallback(tool_name: str, args: dict, context: dict) -> dict | None:
     except ImportError:
         try:
             from execution_gateway.mock_executor import MockToolExecutor  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             return None
     # Colleague DM tools need full args passthrough
     if method_name in ("notify_colleague", "mattermost_send_direct_message", "mattermost_send_dm"):
@@ -561,7 +561,7 @@ async def proxy_tool_call(
     except ImportError:
         try:
             from execution_gateway.wiki_archive import auto_archive  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             auto_archive = None  # type: ignore
     if "auto_archive" in locals() and auto_archive is not None:
         try:

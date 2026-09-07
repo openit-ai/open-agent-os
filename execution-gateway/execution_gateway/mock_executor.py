@@ -20,11 +20,11 @@ from typing import Any
 try:
     from audit.audit_ledger.ledger import AuditLedger
     from audit_model import AuditEvent, AuditEventType
-except Exception:
+except (ImportError, ModuleNotFoundError):
     try:
         from audit_model.model import AuditEvent, AuditEventType  # type: ignore
         from security.audit.audit_ledger.ledger import AuditLedger  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         AuditLedger = None  # type: ignore
         AuditEvent = None  # type: ignore
         AuditEventType = None  # type: ignore

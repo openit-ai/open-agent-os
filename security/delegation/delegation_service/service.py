@@ -145,7 +145,7 @@ def _db_get_session():
     try:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None, None
     try:
         connect_args = {}

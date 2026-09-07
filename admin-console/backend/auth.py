@@ -344,7 +344,7 @@ def _db_ensure_table(engine) -> None:
         pass
     try:
         from sqlalchemy import text
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return
     ddl_sqlite = """
     CREATE TABLE IF NOT EXISTS admin_users (
@@ -391,7 +391,7 @@ def _db_get_session():
     try:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None, None
     try:
         # sqlite memory needs check_same_thread=False for test compatibility
