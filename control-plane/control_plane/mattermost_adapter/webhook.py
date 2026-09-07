@@ -33,8 +33,9 @@ import sys
 import threading
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
+import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from ..acp_adapter import ACPAdapter
@@ -43,7 +44,70 @@ from ..identity import map_user_to_agent
 from ..router import route_session
 from ..session import new_request_id, session_store
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):
+    class SQLAlchemyError(Exception):
+        """Fallback marker when SQLAlchemy is unavailable."""
+
 router = APIRouter()
+
+
+_BACKEND_FAILURES = (
+    ConnectionError,
+    OSError,
+    TimeoutError,
+    RuntimeError,
+    ImportError,
+    ModuleNotFoundError,
+    httpx.HTTPError,
+    SQLAlchemyError,
+)
+_OPTIONAL_FAILURES = _BACKEND_FAILURES + (TypeError, ValueError)
+
+
+def _raise_backend_unavailable(operation: str, exc: BaseException) -> NoReturn:
+    raise HTTPException(status_code=503, detail=f"Mattermost {operation} unavailable") from exc
+
+
+def _validate_attachment_inputs(file_ids: list[str] | None, attachment_refs: list[dict] | None) -> None:
+    if file_ids is not None and (not isinstance(file_ids, list) or any(not isinstance(value, str) for value in file_ids)):
+        raise HTTPException(status_code=422, detail="file_ids must be a list of strings")
+    if attachment_refs is not None and (
+        not isinstance(attachment_refs, list) or any(not isinstance(value, dict) for value in attachment_refs)
+    ):
+        raise HTTPException(status_code=422, detail="attachment_refs must be a list of objects")
+
+
+def _validate_object_fields(payload: dict[str, Any], *fields: str) -> None:
+    for field in fields:
+        value = payload.get(field)
+        if value is not None and not isinstance(value, dict):
+            raise HTTPException(status_code=422, detail=f"{field} must be an object")
+
+
+def _validate_string_fields(payload: dict[str, Any], *fields: str) -> None:
+    for field in fields:
+        value = payload.get(field)
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(status_code=422, detail=f"{field} must be a string")
+
+
+def _validate_nested_string_fields(payload: dict[str, Any], field: str, *nested_fields: str) -> None:
+    nested = payload.get(field)
+    if isinstance(nested, dict):
+        _validate_string_fields(nested, *nested_fields)
+
+
+def _validate_deep_object_string_fields(payload: dict[str, Any], outer: str, inner: str, *fields: str) -> None:
+    nested = payload.get(outer)
+    if not isinstance(nested, dict):
+        return
+    value = nested.get(inner)
+    if value is not None and not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail=f"{outer}.{inner} must be an object")
+    if isinstance(value, dict):
+        _validate_string_fields(value, *fields)
 
 
 def _archive_conversation_turn(tenant_id: str, agent_id: str, user_id: str, session_id: str, request_id: str, text: str) -> None:
@@ -70,7 +134,7 @@ def _archive_conversation_turn(tenant_id: str, agent_id: str, user_id: str, sess
             extra={"tenant_id": tenant_id, "agent_id": agent_id, "source": "mattermost"},
             vault_root=owner_root,
         )
-    except Exception as exc:
+    except _OPTIONAL_FAILURES as exc:
         log.warning("personal wiki conversation archive failed session=%s request=%s: %s", session_id, request_id, exc)
 
 log = logging.getLogger(__name__)
@@ -87,14 +151,14 @@ def _get_policy_engine(tenant_id: str):  # compat shim — delegates to mattermo
     try:
         from ..mattermost_policy_gate import _get_small_business_engine  # type: ignore
         return _get_small_business_engine(tenant_id)
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
 
 def _get_audit_ledger():  # compat shim
     try:
         from ..mattermost_policy_gate import _get_audit_ledger as _gal  # type: ignore
         return _gal()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
 
 def _emit_policy_audit(*args, **kwargs):  # compat shim — fail-closed via gate
@@ -125,9 +189,8 @@ async def _evaluate_ingress_policy(
         return decision, reason, pv
     except HTTPException:
         raise
-    except Exception as e:
-        # Fallback direct (should not happen) — fail-closed
-        raise HTTPException(status_code=403, detail=f"policy denied: gate error: {e}")
+    except _BACKEND_FAILURES as exc:
+        _raise_backend_unavailable("policy gate", exc)
 
 # Per-owner async serialization: preserve prompt order within one session while
 # allowing different users to continue concurrently. Locks are process-local;
@@ -169,12 +232,12 @@ def _load_orchestrator():
         from orchestrator import run_morning_briefing  # type: ignore
 
         return run_morning_briefing
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         try:
             from morning_briefing.orchestrator import run_morning_briefing  # type: ignore
 
             return run_morning_briefing
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             return None
 
 
@@ -234,8 +297,8 @@ def _resolve_user_id(raw_user_id: str, raw_user_name: str | None = None) -> str:
             adapter = _get_mattermost_adapter()
             if adapter is not None:
                 return adapter.map_mattermost_user(suffix or uid, uname or suffix)
-        except Exception:
-            pass
+        except _OPTIONAL_FAILURES as exc:
+            log.warning("Mattermost identity adapter mapping degraded: %s", type(exc).__name__)
         import re as _re2
         raw2 = uname or suffix or uid
         suf2 = _re2.sub(r"[^a-z0-9_.-]", "", raw2.lower()) or "unknown"
@@ -245,8 +308,8 @@ def _resolve_user_id(raw_user_id: str, raw_user_name: str | None = None) -> str:
         adapter = _get_mattermost_adapter()
         if adapter is not None:
             return adapter.map_mattermost_user(uid, uname)
-    except Exception:
-        pass
+    except _OPTIONAL_FAILURES as exc:
+        log.warning("Mattermost identity adapter mapping degraded: %s", type(exc).__name__)
     # Fallback deterministic sanitize
     import re as _re
     raw = uname or uid
@@ -311,8 +374,8 @@ def _get_personal_display_name(agent_id: str) -> tuple[str | None, str | None]:
                     row = conn.execute(sa_text("SELECT display_name, avatar_url FROM admin_user_mappings WHERE agent_id=:aid LIMIT 1"), {"aid": agent_id}).mappings().first()
                     if row and (row.get("display_name") or row.get("avatar_url")):
                         return row.get("display_name"), row.get("avatar_url")
-            except Exception:
-                pass
+            except _OPTIONAL_FAILURES as exc:
+                log.debug("personal display-name DB lookup degraded: %s", type(exc).__name__)
             # try psycopg directly
             try:
                 import psycopg  # type: ignore
@@ -322,10 +385,10 @@ def _get_personal_display_name(agent_id: str) -> tuple[str | None, str | None]:
                         r = cur.fetchone()
                         if r:
                             return r[0], r[1]
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except _OPTIONAL_FAILURES as exc:
+                log.debug("personal display-name direct lookup degraded: %s", type(exc).__name__)
+    except _OPTIONAL_FAILURES as exc:
+        log.debug("personal display-name lookup degraded: %s", type(exc).__name__)
     return None, None
 
 
@@ -383,12 +446,10 @@ async def _post_with_retry_collect(adapter: Any, channel_id: str, text: str, roo
                     raise RuntimeError("empty post_id from mattermost adapter")
                 success = True
                 break
-            except Exception as exc:
+            except _OPTIONAL_FAILURES as exc:
                 log.warning("mattermost response post failed channel=%s root=%s trace=%s session=%s attempt=%d error=%s", channel_id, root_id, trace_id, session_id, attempt, str(exc)[:300], exc_info=attempt == 3)
                 if attempt < 3:
                     await asyncio.sleep(0.5 * attempt)
-                else:
-                    pass
         # if this chunk never succeeded, continue to next chunk but caller can detect partial by len(all_ids) < len(chunks)
         if not success:
             log.error("mattermost chunk ultimately failed channel=%s root=%s trace=%s session=%s chunk_len=%d", channel_id, root_id, trace_id, session_id, len(chunk))
@@ -428,8 +489,8 @@ async def _stream_and_post_to_mattermost(
                 display_name = dn
             if av and not avatar_url:
                 avatar_url = av
-        except Exception:
-            pass
+        except _OPTIONAL_FAILURES as exc:
+            log.warning("Mattermost display metadata degraded session=%s: %s", session_id, type(exc).__name__)
     buffer = ""
     full_text = ""
     all_response_post_ids: list[str] = []
@@ -476,20 +537,19 @@ async def _stream_and_post_to_mattermost(
                     _idem_fail2(idempotency_key, error="mattermost delivery failed (bounded retry exhausted)", retryable=True, response_post_ids=all_response_post_ids, response_marker=marker)
                 else:
                     _idem_complete(idempotency_key, response_post_id=all_response_post_ids[-1], response_post_ids=all_response_post_ids, response_marker=marker, session_id=session_id, trace_id=trace_id)
-            except Exception as _idem_e:
-                # if complete/fail itself is 503 in prod, propagate visibly
-                from fastapi import HTTPException as _HEc
-                if isinstance(_idem_e, _HEc):
-                    raise
-                pass
-    except Exception as exc:
+            except HTTPException:
+                raise
+            except _BACKEND_FAILURES as _idem_e:
+                log.error("Mattermost idempotency completion unavailable session=%s: %s", session_id, type(_idem_e).__name__)
+                raise
+    except _OPTIONAL_FAILURES as exc:
         log.error("mattermost response stream failed channel=%s root=%s trace=%s session=%s error=%s", channel_id, root_id, trace_id, session_id, str(exc)[:500], exc_info=True)
         if idempotency_key:
             try:
                 from control_plane.idempotency import fail as _idem_fail, is_retryable_error as _is_retry
                 _idem_fail(idempotency_key, error=str(exc)[:500], retryable=_is_retry(exc))
-            except Exception:
-                pass
+            except _BACKEND_FAILURES as fail_exc:
+                log.error("Mattermost idempotency failure recording unavailable session=%s: %s", session_id, type(fail_exc).__name__)
 
 
 async def _handle_core_logic(
@@ -535,6 +595,7 @@ async def _handle_core_logic_unserialized(
     runtime_context: dict | None = None,
 ) -> dict[str, Any]:
     """Shared session/briefing/ACP logic (reused by events + slash)."""
+    _validate_attachment_inputs(file_ids, attachment_refs)
     # Identity mapping — 1:1 logical agent
     mapping = map_user_to_agent(user_id, tenant_id)
     # Registration gate: admin_user_mappings is the source of truth. Only
@@ -542,9 +603,10 @@ async def _handle_core_logic_unserialized(
     try:
         from ..user_mapping_lookup import lookup_registered_owner
         registered = lookup_registered_owner(tenant_id, user_id)
-    except Exception as exc:
+    except _BACKEND_FAILURES as exc:
         if os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"}:
             raise HTTPException(status_code=503, detail="user registration lookup unavailable") from exc
+        log.warning("user registration lookup degraded in non-production: %s", type(exc).__name__)
         registered = None
     if registered is None and not os.getenv("PYTEST_CURRENT_TEST"):
         raise HTTPException(status_code=403, detail="OAOS user registration required")
@@ -588,10 +650,11 @@ async def _handle_core_logic_unserialized(
                     try:
                         from control_plane.mattermost_policy_gate import _get_audit_ledger as _gal, _emit_policy_audit as _epa  # type: ignore
                         _ledger2 = _gal()
-                        if _ledger2 is not None:
-                            _epa(_ledger2, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=dup_rec.get("session_id", _tmp_sid), trace_id=dup_rec.get("trace_id", _tmp_trace), request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{_tmp_sid}", decision="ALLOW", policy_version=None, reason=f"idempotency duplicate { _c.status} key={_k} response_post_id={dup_rec.get('response_post_id','')}")
-                    except Exception:
-                        pass
+                        if _ledger2 is None:
+                            _raise_backend_unavailable("policy audit", RuntimeError("audit ledger unavailable"))
+                        _epa(_ledger2, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=dup_rec.get("session_id", _tmp_sid), trace_id=dup_rec.get("trace_id", _tmp_trace), request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{_tmp_sid}", decision="ALLOW", policy_version=None, reason=f"idempotency duplicate { _c.status} key={_k} response_post_id={dup_rec.get('response_post_id','')}")
+                    except _BACKEND_FAILURES as audit_exc:
+                        _raise_backend_unavailable("policy audit", audit_exc)
                     return {
                         "received": True,
                         "duplicate": True,
@@ -613,17 +676,18 @@ async def _handle_core_logic_unserialized(
                     try:
                         from control_plane.mattermost_policy_gate import _get_audit_ledger as _gal2, _emit_policy_audit as _epa2  # type: ignore
                         _ledger3 = _gal2()
-                        if _ledger3 is not None:
-                            _epa2(_ledger3, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=_tmp_sid, trace_id=_tmp_trace, request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{_tmp_sid}", decision="ALLOW", policy_version=None, reason=f"idempotency claimed key={_k}")
-                    except Exception:
-                        pass
-        except Exception as _idem_exc:
-            from fastapi import HTTPException as _HE2
-            if isinstance(_idem_exc, _HE2):
-                raise
-            import logging as _lg
-            _lg.getLogger(__name__).warning("idempotency early claim failed non-prod fallback: %s", _idem_exc)
-            # fall through to normal flow (non-prod fallback will proceed)
+                        if _ledger3 is None:
+                            _raise_backend_unavailable("policy audit", RuntimeError("audit ledger unavailable"))
+                        _epa2(_ledger3, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=_tmp_sid, trace_id=_tmp_trace, request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{_tmp_sid}", decision="ALLOW", policy_version=None, reason=f"idempotency claimed key={_k}")
+                    except _BACKEND_FAILURES as audit_exc:
+                        _raise_backend_unavailable("policy audit", audit_exc)
+        except HTTPException:
+            raise
+        except _BACKEND_FAILURES as _idem_exc:
+            if _is_production():
+                _raise_backend_unavailable("idempotency backend", _idem_exc)
+            log.warning("idempotency early claim degraded in non-production: %s", type(_idem_exc).__name__)
+            # fall through to the explicit non-production fallback
 
     # Session: resume the owner's latest durable session when the bridge does
     # not provide one. This is the Mattermost conversation continuity boundary.
@@ -632,15 +696,17 @@ async def _handle_core_logic_unserialized(
             prior = session_store.find_latest_for_owner(tenant_id, mapping.human_principal)
             if prior is not None and prior.status == "active":
                 session_id = prior.session_id
-        except Exception as exc:
+        except _BACKEND_FAILURES as exc:
             if os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod"):
                 raise HTTPException(status_code=503, detail="durable session lookup unavailable") from exc
-            log.warning("latest session lookup failed: %s", exc)
+            log.warning("latest session lookup degraded in non-production: %s", type(exc).__name__)
     if session_id:
         try:
             rec = session_store.get(session_id, user_id)
         except (KeyError, PermissionError) as e:
             raise HTTPException(status_code=404 if isinstance(e, KeyError) else 403, detail=str(e))
+        except _BACKEND_FAILURES as exc:
+            _raise_backend_unavailable("session store", exc)
     else:
         routing = route_session(mapping.security_domain)
         # A안: resolve display_name/avatar_url for this agent before session create
@@ -688,10 +754,11 @@ async def _handle_core_logic_unserialized(
                         try:
                             from control_plane.mattermost_policy_gate import _get_audit_ledger as _gal3, _emit_policy_audit as _epa3  # type: ignore
                             _ledger4 = _gal3()
-                            if _ledger4 is not None:
-                                _epa3(_ledger4, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=dup_rec2.get("session_id", session_id), trace_id=dup_rec2.get("trace_id", rec.trace_id), request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{session_id}", decision="ALLOW", policy_version=None, reason=f"idempotency duplicate late { _idem_claim2.status} key={_idem_key2} response_post_id={dup_rec2.get('response_post_id','')}")
-                        except Exception:
-                            pass
+                            if _ledger4 is None:
+                                _raise_backend_unavailable("policy audit", RuntimeError("audit ledger unavailable"))
+                            _epa3(_ledger4, tenant_id=tenant_id, user_id=mapping.human_principal, agent_id=mapping.agent_principal, session_id=dup_rec2.get("session_id", session_id), trace_id=dup_rec2.get("trace_id", rec.trace_id), request_id=_pre_rid, action="INTERACT", resource=f"session/ingress/{tenant_id}/{session_id}", decision="ALLOW", policy_version=None, reason=f"idempotency duplicate late { _idem_claim2.status} key={_idem_key2} response_post_id={dup_rec2.get('response_post_id','')}")
+                        except _BACKEND_FAILURES as audit_exc:
+                            _raise_backend_unavailable("policy audit", audit_exc)
                         return {
                             "received": True,
                             "duplicate": True,
@@ -709,12 +776,12 @@ async def _handle_core_logic_unserialized(
                     if _idem_claim2 is not None and not _idem_claim2.is_duplicate:
                         _idem_key = _idem_claim2.key
                         _idem_claim = _idem_claim2
-            except Exception as _idem_exc2:
-                from fastapi import HTTPException as _HE2b
-                if isinstance(_idem_exc2, _HE2b):
-                    raise
-                import logging as _lg2
-                _lg2.getLogger(__name__).warning("idempotency late claim failed non-prod fallback: %s", _idem_exc2)
+            except HTTPException:
+                raise
+            except _BACKEND_FAILURES as _idem_exc2:
+                if _is_production():
+                    _raise_backend_unavailable("idempotency backend", _idem_exc2)
+                log.warning("idempotency late claim degraded in non-production: %s", type(_idem_exc2).__name__)
 
     # ── Phase 1 MVP: "정리해줘" keyword → demo orchestrator routing ──
     if _is_briefing_request(text):
@@ -744,8 +811,8 @@ async def _handle_core_logic_unserialized(
                     "task_type": mapping.security_domain,
                     "text": text,
                 })
-            except Exception:
-                pass
+            except _OPTIONAL_FAILURES as exc:
+                log.warning("adaptive profile briefing hook degraded session=%s: %s", session_id, type(exc).__name__)
             session_store.append_stream_event(session_id, {"type": "briefing", "data": briefing_result, "trace_id": rec.trace_id})
             # optional: post briefing summary to Mattermost threaded
             if channel_id:
@@ -755,8 +822,8 @@ async def _handle_core_logic_unserialized(
                         briefing_text = json.dumps(briefing_result.get("briefing", briefing_result), ensure_ascii=False)[:4000]
                         # fire-and-forget threaded post
                         asyncio.create_task(adapter.send_message(channel_id, briefing_text, root_id=post_id))
-                except Exception:
-                    pass
+                except _OPTIONAL_FAILURES as exc:
+                    log.warning("Mattermost briefing delivery degraded session=%s: %s", session_id, type(exc).__name__)
             return {
                 "received": True,
                 "routed": "morning-briefing",
@@ -780,7 +847,7 @@ async def _handle_core_logic_unserialized(
     context_text = ""
     retrieval_error: str | None = None
     try:
-        from ..context_retrieval import classify_context_route, format_context, retrieve_enterprise_context, retrieve_personal_context
+        from ..context_retrieval import EnterpriseRetrievalError, classify_context_route, format_context, retrieve_enterprise_context, retrieve_personal_context
         route = classify_context_route(text)
         if route == "personal":
             context_text = format_context(route, await retrieve_personal_context(mapping.human_principal, text))
@@ -792,9 +859,14 @@ async def _handle_core_logic_unserialized(
                 tenant_id, mapping.agent_principal, text,
                 allowed_group_ids=_verified_groups, user_id=mapping.human_principal,
             ))
-    except Exception as exc:
+    except EnterpriseRetrievalError as exc:
         retrieval_error = type(exc).__name__
-        log.warning("context retrieval unavailable session=%s: %s", session_id, type(exc).__name__)
+        log.warning("context retrieval degraded session=%s: %s", session_id, type(exc).__name__)
+    except (ImportError, ModuleNotFoundError, OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
+        retrieval_error = type(exc).__name__
+        log.warning("context retrieval degraded session=%s: %s", session_id, type(exc).__name__)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid retrieval context") from exc
     # Forward prompt (non-briefing path)
     rid = new_request_id()
     # multimodal: normalize runtime_context from caller (bridge) + canonical ids
@@ -827,7 +899,7 @@ async def _handle_core_logic_unserialized(
                 # Mattermost URLs never persist as file_ids.
                 _fid = [str(r.get("attachment_id") or r.get("vault_path") or r.get("file_id") or "") for r in _arefs if isinstance(r, dict)]
                 _fid = [x for x in _fid if x and not (x.startswith("/") or x.startswith("file://") or "://" in x)]
-        except Exception as _enrich_exc:
+        except _OPTIONAL_FAILURES as _enrich_exc:
             log.warning("attachment extraction unavailable session=%s: %s", session_id, type(_enrich_exc).__name__)
     session_store.append_prompt(session_id, user_id, text, rid, file_ids=_fid or None, attachment_refs=_arefs or None, runtime_context=_rctx or None)
     try:
@@ -835,7 +907,7 @@ async def _handle_core_logic_unserialized(
         queued = _enqueue(_archive_conversation_turn, tenant_id, mapping.agent_principal, mapping.human_principal, session_id, rid, text)
         if not queued:
             log.warning("personal wiki archive queue full session=%s request=%s", session_id, rid)
-    except Exception as exc:
+    except _OPTIONAL_FAILURES as exc:
         log.warning("personal wiki archive enqueue failed session=%s request=%s: %s", session_id, rid, exc)
     # Adaptive Profile: async evidence worker (fire-and-forget, never blocks response path)
     try:
@@ -849,8 +921,8 @@ async def _handle_core_logic_unserialized(
             "task_type": mapping.security_domain,
             "text": text,
         })
-    except Exception:
-        pass
+    except _OPTIONAL_FAILURES as exc:
+        log.warning("adaptive profile interaction hook degraded session=%s: %s", session_id, type(exc).__name__)
     acp = ACPAdapter(settings.hermes_base_url)
     prompt_for_llm = f"{context_text}\n\n[사용자 질문]\n{text}" if context_text else text
     if route:
@@ -862,14 +934,22 @@ async def _handle_core_logic_unserialized(
             _rctx["retrieval_used"] = False
     try:
         acp_result = await acp.send_prompt(rec, prompt_for_llm, rid, attachment_refs=_arefs or None, file_ids=_fid or None, runtime_context=_rctx or None)
-    except Exception as _acp_exc:
+    except HTTPException as _acp_exc:
         if _idem_key:
             try:
                 from control_plane.idempotency import fail as _idem_fail2, is_retryable_error as _is_retry2
                 _idem_fail2(_idem_key, error=str(_acp_exc)[:500], retryable=_is_retry2(_acp_exc))
-            except Exception:
-                pass
+            except _BACKEND_FAILURES as fail_exc:
+                log.error("idempotency failure recording unavailable session=%s: %s", session_id, type(fail_exc).__name__)
         raise
+    except _BACKEND_FAILURES as _acp_exc:
+        if _idem_key:
+            try:
+                from control_plane.idempotency import fail as _idem_fail2, is_retryable_error as _is_retry2
+                _idem_fail2(_idem_key, error=str(_acp_exc)[:500], retryable=_is_retry2(_acp_exc))
+            except _BACKEND_FAILURES as fail_exc:
+                log.error("idempotency failure recording unavailable session=%s: %s", session_id, type(fail_exc).__name__)
+        _raise_backend_unavailable("ACP", _acp_exc)
     session_store.append_stream_event(session_id, {"type": "prompt_queued", "data": {"text": text, "request_id": rid, "file_ids": _fid, "attachment_refs": _arefs, "runtime_context": _rctx}, "trace_id": rec.trace_id})
 
     # Streaming: fetch stream and post incremental updates via MattermostAdapter (threaded, root_id)
@@ -878,8 +958,8 @@ async def _handle_core_logic_unserialized(
         thread_root = root_id or post_id
         try:
             asyncio.create_task(_stream_and_post_to_mattermost(channel_id, thread_root, rec, idempotency_key=_idem_key))
-        except Exception:
-            pass
+        except (RuntimeError, OSError, TypeError, ValueError) as exc:
+            log.warning("Mattermost response task scheduling degraded session=%s: %s", session_id, type(exc).__name__)
 
     return {
         "received": True,
@@ -895,7 +975,7 @@ async def _handle_core_logic_unserialized(
 @router.post("/mattermost/events")
 async def mattermost_event(request: Request, x_signature: str | None = Header(default=None, alias="X-Mattermost-Signature")):
     body = await request.body()
-    secret = getattr(settings, "mattermost_webhook_secret", None) or getattr(settings, "mattermost_webhook_secret", "")  # noqa
+    secret = getattr(settings, "mattermost_webhook_secret", None) or getattr(settings, "mattermost_webhook_secret", "")
     # also support MATTERMOST_WEBHOOK_SECRET env via settings
     if not secret:
         secret = getattr(settings, "mattermost_webhook_secret", None)
@@ -904,8 +984,15 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
 
     try:
         payload: dict[str, Any] = json.loads(body) if body else {}
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="invalid JSON")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="JSON payload must be an object")
+    _validate_object_fields(payload, "user", "channel", "data")
+    _validate_string_fields(payload, "tenant_id", "user_id", "user_name", "username", "text", "message", "session_id", "channel_id", "post_id", "id", "root_id", "rootId")
+    _validate_nested_string_fields(payload, "user", "id", "username")
+    _validate_nested_string_fields(payload, "channel", "id")
+    _validate_deep_object_string_fields(payload, "data", "post", "id", "root_id")
 
     # Expected payload (MVP): {"tenant_id": "...", "user_id": "employee:kim", "text": "...", "channel_id": "...", "session_id": "...?"}
     # Tenant: never trust payload tenant_id — use server-configured tenant (HMAC only proves Mattermost origin, not tenant scope)
@@ -924,7 +1011,7 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     root_id: str | None = payload.get("root_id") or payload.get("data", {}).get("post", {}).get("root_id") or payload.get("rootId")
 
     if not user_id:
-        raise HTTPException(status_code=400, detail="user_id (employee:...) required")
+        raise HTTPException(status_code=422, detail="user_id (employee:...) required")
     # Allow image-only posts (no text) when file_ids/attachments present — forwarded via Agent Runtime
     _raw_fids = payload.get("file_ids") if isinstance(payload.get("file_ids"), list) else None
     _raw_arefs = payload.get("attachment_refs") or payload.get("attachments") or ([payload.get("attachment_ref")] if payload.get("attachment_ref") else None)
@@ -933,7 +1020,7 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     _raw_rctx = payload.get("runtime_context") if isinstance(payload.get("runtime_context"), dict) else {}
     # normalize runtime_context from bridge (already contains channel/root/post)
     if not text and not (_raw_fids or _raw_arefs):
-        raise HTTPException(status_code=400, detail="text/message required (or file_ids/attachment_refs for image)")
+        raise HTTPException(status_code=422, detail="text/message required (or file_ids/attachment_refs for image)")
     # ensure text is at least placeholder for multimodal runtime (ACP builds list)
     if not text and (_raw_fids or _raw_arefs):
         text = payload.get("text") or ""  # allow empty; ACP will handle image-only via multimodal
@@ -981,13 +1068,19 @@ async def mattermost_slash(request: Request, x_signature: str | None = Header(de
             _payload_tenant_form = _get("tenant_id")
             tenant_id = _resolve_tenant_id(_payload_tenant_form) if _payload_tenant_form else tenant_id
             # also allow explicit payload json in text? keep text as-is
-        except Exception:
-            raise HTTPException(status_code=400, detail="invalid form payload")
+        except (UnicodeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="invalid form payload") from exc
     else:
         try:
             payload = json.loads(body) if body else {}
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="invalid JSON")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="JSON payload must be an object")
+        _validate_object_fields(payload, "user", "channel")
+        _validate_string_fields(payload, "command", "text", "message", "user_id", "user_name", "session_id", "channel_id", "team_id", "tenant_id")
+        _validate_nested_string_fields(payload, "user", "id", "username")
+        _validate_nested_string_fields(payload, "channel", "id")
         command = payload.get("command") or ""
         text = payload.get("text") or payload.get("message") or ""
         _raw_uid = payload.get("user_id") or payload.get("user", {}).get("id", "") or ""
@@ -1003,9 +1096,9 @@ async def mattermost_slash(request: Request, x_signature: str | None = Header(de
         tenant_id = _resolve_tenant_id(_payload_tenant_json) if _payload_tenant_json else tenant_id
 
     if not user_id:
-        raise HTTPException(status_code=400, detail="user_id required")
+        raise HTTPException(status_code=422, detail="user_id required")
     if not text and not command:
-        raise HTTPException(status_code=400, detail="text/command required")
+        raise HTTPException(status_code=422, detail="text/command required")
 
     # If text empty but command provided, use command as text
     effective_text = text or command
@@ -1050,15 +1143,21 @@ async def mattermost_actions(request: Request, x_signature: str | None = Header(
             else:
                 # fallback: flatten qs
                 payload = {k: v[0] for k, v in parsed.items()}
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="invalid JSON")
-        except Exception:
-            raise HTTPException(status_code=400, detail="invalid form payload")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="invalid JSON") from exc
+        except (UnicodeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="invalid form payload") from exc
     else:
         try:
             payload = json.loads(body) if body else {}
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="invalid JSON")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="JSON payload must be an object")
+        _validate_object_fields(payload, "context", "user")
+        _validate_string_fields(payload, "approval_id", "decision", "action", "user_id", "user_name", "channel_id", "post_id", "group_id")
+        _validate_nested_string_fields(payload, "context", "approval_id", "decision", "group_id")
+        _validate_nested_string_fields(payload, "user", "id", "username")
 
     # Extract fields — support multiple shapes
     context = payload.get("context") or {}
@@ -1082,9 +1181,9 @@ async def mattermost_actions(request: Request, x_signature: str | None = Header(
     post_id = payload.get("post_id") or ""
 
     if not approval_id:
-        raise HTTPException(status_code=400, detail="approval_id required")
+        raise HTTPException(status_code=422, detail="approval_id required")
     if decision not in VALID_DECISIONS:
-        raise HTTPException(status_code=400, detail=f"invalid decision: {decision}, must be one of {VALID_DECISIONS}")
+        raise HTTPException(status_code=422, detail=f"invalid decision: {decision}, must be one of {VALID_DECISIONS}")
 
     # Map Mattermost user to employee principal for decided_by
     decided_by = user_id
@@ -1093,13 +1192,16 @@ async def mattermost_actions(request: Request, x_signature: str | None = Header(
         adapter = _get_mattermost_adapter()
         if adapter is not None and user_id:
             decided_by = adapter.map_mattermost_user(user_id, user_name)
-    except Exception:
-        pass
+    except _BACKEND_FAILURES as exc:
+        _raise_backend_unavailable("Mattermost identity mapping", exc)
 
     # Call approval service
-    store = _get_approval_store()
+    try:
+        store = _get_approval_store()
+    except _BACKEND_FAILURES as exc:
+        _raise_backend_unavailable("approval store", exc)
     if store is None:
-        raise HTTPException(status_code=500, detail="approval service unavailable")
+        raise HTTPException(status_code=503, detail="approval service unavailable")
 
     # If approval not found in this store instance, try to synthesize minimal request for test/dev
     # In prod, approvals are persisted in DB/Redis — here we support in-memory for tests
@@ -1120,17 +1222,19 @@ async def mattermost_actions(request: Request, x_signature: str | None = Header(
                 adapter = _get_mattermost_adapter()
                 if adapter is not None:
                     asyncio.create_task(adapter.send_message(channel_id, f"Approval {approval_id} → {decision} by {decided_by}", root_id=post_id or None))
-            except Exception:
-                pass
+            except (RuntimeError, OSError, TypeError, ValueError) as exc:
+                log.warning("Mattermost approval confirmation delivery degraded: %s", type(exc).__name__)
         return {"approval_id": approval_id, "decision": decision, "decided_by": decided_by, "status": result.decision.value if hasattr(result.decision, "value") else str(result.decision)}
     except HTTPException:
         raise
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except _BACKEND_FAILURES as e:
+        _raise_backend_unavailable("approval store", e)
 
 
 @router.get("/mattermost/health")
