@@ -18,11 +18,6 @@ from typing import Any
 
 from sqlalchemy import select, or_, and_
 
-try:
-    from sqlalchemy.exc import SQLAlchemyError
-except (ImportError, ModuleNotFoundError):  # sqlalchemy is required here; best-effort fallback
-    SQLAlchemyError = Exception  # type: ignore
-
 from .repository import KnowledgeIndexRepository
 from .orm import KnowledgeIndexORM
 from .models import KnowledgeIndexEntry
@@ -234,9 +229,9 @@ class KnowledgeIndexRetriever:
             if not is_pg:
                 try:
                     is_pg = "vector" in str(KnowledgeIndexORM.__table__.c.embedding.type).lower()
-                except (AttributeError, TypeError):
+                except Exception:
                     pass
-        except (AttributeError, TypeError):
+        except Exception:
             pass
 
         # Try pgvector path if postgres
@@ -287,7 +282,7 @@ class KnowledgeIndexRetriever:
                             )
                             hits.append(RetrievalHit.from_entry(entry, score=score))
                         return hits
-                    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError):
+                    except Exception:
                         # pg query failed, fall through to deterministic fallback handling
                         pass
 

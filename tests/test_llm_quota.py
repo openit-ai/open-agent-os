@@ -183,7 +183,6 @@ def test_per_minute_exceeded_429():
 
 def test_prod_db_failure_fail_closed_503(monkeypatch):
     """12.5: production DB-backed quota failure must 503, not fall back to in-memory."""
-    import os
     from fastapi import HTTPException
     monkeypatch.setenv("OAOS_ENV", "production")
     monkeypatch.setenv("OAOS_ALLOW_TEST_FALLBACK", "1")
@@ -205,7 +204,6 @@ def test_prod_db_failure_fail_closed_503(monkeypatch):
 
 def test_nonprod_db_failure_falls_back(monkeypatch):
     """12.5 contrast: non-prod DB failure keeps in-memory fallback (no raise)."""
-    import os
     monkeypatch.setenv("OAOS_ENV", "development")
     monkeypatch.delenv("OAOS_ALLOW_TEST_FALLBACK", raising=False)
     for k in ("OAOS_QUOTA_REDIS_URL", "OAOS_REDIS_URL", "REDIS_URL", "OAOS_CP_REDIS_URL"):

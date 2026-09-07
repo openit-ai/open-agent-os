@@ -17,8 +17,8 @@ Env:
 """
 from __future__ import annotations
 
-import os
 import logging
+import os
 import re
 import sys
 import uuid
@@ -890,4 +890,3 @@ class IamAdapter:
 
     def describe(self) -> dict[str, Any]:
         return {"name": self.name, "provider": self.iam_provider, "provider_impl": self._provider_impl.provider_name, "tools": list(self.TOOL_ACTION.keys()), "resources": ["iam/*"], "domain": self.domain, "tenant_id": self.tenant_id, "default_security_domain": self.default_security_domain, "has_api_key": bool(self.api_key)}
-
