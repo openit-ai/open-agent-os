@@ -777,7 +777,7 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
                 res2 = await session.execute(stmt2)
                 for row in res2.all():
                     ids.add(row[0])
-            except Exception:
+            except (SQLAlchemyError, IndexError, TypeError):
                 pass
             # via MemoryORM source_ids JSON column (GenericJSON list) — python filter for sqlite/postgres compat
             try:
@@ -795,9 +795,9 @@ async def _db_collect_ids_by_resource(source_resource_id: str) -> list[str]:
                             parsed = _json.loads(src_ids)
                             if isinstance(parsed, list) and source_resource_id in parsed:
                                 ids.add(mem_id)
-                        except Exception:
+                        except ValueError:
                             pass
-            except Exception:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError):
                 pass
         return list(ids)
     except Exception as e:
@@ -1025,7 +1025,7 @@ async def memory_write(payload: dict, request: Request):
                 try:
                     from security.models.orm import _VECTOR_1536 as _vec_check  # type: ignore
                     is_text_fallback = _vec_check is Text or getattr(_vec_check, '__name__', '') == 'Text' or isinstance(_vec_check, type(Text))
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     is_text_fallback = True
                 # pgvector Vector type has attribute 'dim' or is not string type; fallback is Text
                 try:
@@ -1035,7 +1035,7 @@ async def memory_write(payload: dict, request: Request):
                     else:
                         # if pgvector Vector, keep list
                         is_text_fallback = False
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     pass
                 if is_text_fallback:
                     import json as _json
@@ -1275,7 +1275,7 @@ async def memory_search(payload: dict, request: Request):
                 # if pgvector installed and embedding column is Vector, we could do vector distance
                 # but query is text, so fallback to LIKE unless embedding search requested
                 has_pgvector = False
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 has_pgvector = False
 
             if query:
@@ -1986,7 +1986,7 @@ async def knowledge_search(payload: dict, request: Request):
                 "indexed_at": h.indexed_at.isoformat() if getattr(h, "indexed_at", None) else None,
                 "source_updated_at": h.source_updated_at.isoformat() if getattr(h, "source_updated_at", None) else None,
             })
-        except Exception:
+        except (AttributeError, TypeError):
             # Fallback: use dict form if hit already dict
             if isinstance(h, dict):
                 results.append(h)

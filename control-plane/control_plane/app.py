@@ -424,7 +424,7 @@ async def create_session(req: CreateSessionRequest, authorization: str | None = 
         except ValueError:
             # No runtime available — propagate as 403/500? Keep legacy fallback
             selected_runtime = None
-        except Exception:
+        except (ImportError, ModuleNotFoundError, AttributeError, TypeError):
             selected_runtime = None
     routing = route_session(req.security_domain)
     # If router selected a runtime, optionally refine pool: hermes->hermes pool, llm/safe->hermes-general still valid

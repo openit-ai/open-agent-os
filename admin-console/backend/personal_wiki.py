@@ -817,7 +817,7 @@ async def upload_attachment(
     is_mock = False
     try:
         is_mock = not saved_path.exists()
-    except Exception:
+    except OSError:
         is_mock = False
     if _is_production() and is_mock:
         _no_mock_in_production()

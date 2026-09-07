@@ -109,7 +109,7 @@ def _verify_snapshot(snapshot: dict, key: str | None = None) -> bool:
         return False
     except RuntimeError:
         raise
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return False
 
 def _db_url() -> str | None:

@@ -481,7 +481,7 @@ async def enrich_attachment_refs(
         limit_bytes = _max_bytes()
     try:
         root = _canonical_root(vault_root)
-    except Exception:
+    except OSError:
         root = Path.home() / ".open-agent-os" / "wiki-vault"
 
     enriched: list[dict] = []

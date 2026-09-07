@@ -751,8 +751,10 @@ def register(req: RegisterRequest, admin: AdminUser = Depends(require_l5)):
                     _db_close(session, engine)
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as e:
+            if _db_enabled() and _is_production():
+                raise HTTPException(status_code=503, detail="admin database unavailable")
+            logger.debug(f"admin register DB fallback (non-prod): {e}")
     _users_by_id[uid] = user
     _users_by_email[req.email] = user
     return AdminUserPublic(**user.model_dump(exclude={"hashed_password"}))

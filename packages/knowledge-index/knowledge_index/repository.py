@@ -25,7 +25,7 @@ def _coerce_embedding_for_write(emb: Any) -> Any:
 
         # if pgvector available, return list directly (SQLAlchemy will adapt)
         return emb
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         # fallback: serialize to JSON string for Text column
         if isinstance(emb, list):
             return json.dumps(emb)

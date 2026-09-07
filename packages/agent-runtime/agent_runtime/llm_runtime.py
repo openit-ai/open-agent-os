@@ -41,6 +41,10 @@ try:
     from sqlalchemy.exc import SQLAlchemyError
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
     SQLAlchemyError = Exception  # type: ignore
+try:
+    from redis.exceptions import RedisError
+except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effort fallback
+    RedisError = Exception  # type: ignore
 
 from pydantic import BaseModel, ValidationError
 
@@ -490,7 +494,7 @@ def _get_quota_redis_client():
         c = _r.Redis.from_url(url, decode_responses=True, socket_timeout=2, socket_connect_timeout=2)
         c.ping()
         return c
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, RedisError, ValueError) as e:
         if _is_quota_production() and not _allow_quota_fallback():
             raise _quota_db_failure_exc(f"quota redis unavailable in production: {e}")
         # non-prod: let caller fall through to DB/memory with telemetry
@@ -506,11 +510,11 @@ def _quota_redis_eval(client, daily_key: str, minute_key: str, dlim: int, mlim: 
             dc = client.incr(daily_key)
             if dc == 1:
                 try: client.expire(daily_key, 86400)
-                except: pass
+                except RedisError: pass
             mc = client.incr(minute_key)
             if mc == 1:
                 try: client.expire(minute_key, 120)
-                except: pass
+                except RedisError: pass
             if dc > dlim:
                 return [-1, dc, mc]
             if mc > mlim:
@@ -528,21 +532,21 @@ def _quota_http_exc(msg):
     try:
         from fastapi import HTTPException
         return HTTPException(status_code=429, detail={"code":"QUOTA_EXCEEDED","message":msg})
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         e=Exception(f"QUOTA_EXCEEDED: {msg}"); e.status_code=429; return e
 
 def _quota_db_failure_exc(msg: str):
     try:
         from fastapi import HTTPException
         return HTTPException(status_code=503, detail={"code":"QUOTA_BACKEND_UNAVAILABLE","message":msg})
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         e=Exception(f"QUOTA_BACKEND_UNAVAILABLE: {msg}"); e.status_code=503; return e
 
 def _is_quota_production() -> bool:
     try:
         from .env_gate import is_production as _is_prod
         return _is_prod()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return (os.getenv("OAOS_ENV","").lower() in ("production","prod"))
 
 def _llm_quota_check(tenant_id):
@@ -584,7 +588,7 @@ def _llm_quota_check(tenant_id):
                     try: eng2.dispose()
                     except SQLAlchemyError:
                         logger.debug("llm_runtime engine dispose failed (best-effort)")
-            except Exception:
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError):
                 pass
         daily_key = f"oaos:quota:{tid}:daily:{now.strftime('%Y-%m-%d')}"
         minute_key = f"oaos:quota:{tid}:minute:{now.strftime('%Y-%m-%dT%H:%M')}"
@@ -693,9 +697,9 @@ def _llm_quota_check(tenant_id):
                 try:
                     from .env_gate import fail_open_telemetry
                     fail_open_telemetry("quota","db_orm_missing_fallback_to_memory", tenant_id=tid)
-                except Exception:
+                except (ImportError, ModuleNotFoundError):
                     logger.warning("[fail-open] quota db_orm_missing tenant=%s", tid)
-        except Exception as e:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError) as e:
             # Preserve 429
             if getattr(e, "status_code", None) == 429 or "QUOTA_EXCEEDED" in str(e):
                 raise
@@ -705,7 +709,7 @@ def _llm_quota_check(tenant_id):
                 detail = getattr(e, "detail", None)
                 if isinstance(detail, dict) and detail.get("code") == "QUOTA_EXCEEDED":
                     raise
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
             if _is_quota_production():
                 logger.error("quota DB failure fail-closed tenant=%s err=%s", tid, str(e)[:300])
@@ -714,7 +718,7 @@ def _llm_quota_check(tenant_id):
             try:
                 from .env_gate import fail_open_telemetry
                 fail_open_telemetry("quota","db_failure_fail_open_nonprod", tenant_id=tid, error=str(e)[:200])
-            except Exception:
+            except (ImportError, ModuleNotFoundError):
                 logger.warning("[fail-open] quota DB failure non-prod tenant=%s err=%s", tid, str(e)[:200])
             # fall through to in-memory
     # in-memory (per-replica) — non-prod fallback only; prod uses Redis Lua above (no fallback)
@@ -739,7 +743,7 @@ def _llm_quota_clear():
     try:
         if _quota_redis_override is not None:
             _quota_redis_override.flushdb()
-    except: pass
+    except RedisError: pass
 
 # ---------------------------------------------------------------------------
 # LLM usage tracking (011) — latency/token/cost, tenant_id aggregated
@@ -1075,7 +1079,7 @@ def _is_mock_allowed() -> bool:
     try:
         from .env_gate import is_mock_allowed as _gate_mock
         return _gate_mock()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         mf = os.getenv("OAOS_MOCK_FALLBACK", "").lower()
         if mf in ("1", "true", "yes", "on"):
             return True
@@ -1787,7 +1791,7 @@ class LLMProviderAdapter:
                         pt = tt // 2
                         ct = tt - pt
                 return pt, ct
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 return 0, 0
         def _record_success(resp: dict | None, latency: float):
             try:
@@ -2031,7 +2035,7 @@ class LLMProviderAdapter:
                     yield {"id": mock.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
                     self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True, "runtime_mode": "hermes", "tool_calls": True})
                     return
-            except Exception:
+            except (AttributeError, TypeError, IndexError, KeyError):
                 content = ""
             for ch in _mock_stream_chunks(resolved, content or "mock stream response"):
                 yield ch
@@ -2061,7 +2065,7 @@ class LLMProviderAdapter:
                         yield {"id": mock.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
                         self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True, "provider": str(self.provider_type.value), "tool_calls": True})
                         return
-                except Exception:
+                except (AttributeError, TypeError, IndexError, KeyError):
                     content = ""
                 for ch in _mock_stream_chunks(resolved, content or "mock stream response"):
                     yield ch
@@ -2081,7 +2085,7 @@ class LLMProviderAdapter:
                     yield {"id": mock.get("id", ""), "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
                     self._emit("model_response", trace_id=trace_id, model=resolved, data={"stream": True, "tool_calls": True})
                     return
-            except Exception:
+            except (AttributeError, TypeError, IndexError, KeyError):
                 content = ""
             for ch in _mock_stream_chunks(resolved, content or "mock stream response"):
                 yield ch
@@ -2615,7 +2619,7 @@ class LLMRuntime:
             text = ""
             try:
                 text = resp.choices[0].message.content or ""  # type: ignore
-            except Exception:
+            except (AttributeError, TypeError, IndexError):
                 text = str(resp)
             if not text:
                 return None

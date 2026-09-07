@@ -26,6 +26,11 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 def _ensure_admin_package():
     for pkg in ("admin_console", "admin_console.backend"):
         if pkg not in sys.modules:
@@ -422,7 +427,7 @@ def _serialize_approval(v) -> dict:
     """Best-effort serialize ApprovalRequest."""
     try:
         return v.model_dump(mode="json")  # type: ignore
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         # fallback manual
         return {
             "approval_id": getattr(v, "approval_id", getattr(v, "id", "")),
@@ -473,16 +478,16 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
         sec_app_path = Path(__file__).resolve().parents[2] / "security" / "app.py"
         if sec_app_path.exists():
             pass
-    except Exception:
+    except (OSError, RuntimeError):
         pass
 
     # admin-local counts (always available) — isolated, no bare auth collision
     try:
         users_count = len(_auth_mod.list_users())
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, AttributeError):
         try:
             users_count = len(sys.modules["admin_console.backend.auth"].list_users())  # type: ignore
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, AttributeError, KeyError):
             pass
 
     infra_count = 0
@@ -506,7 +511,7 @@ def dashboard_stats(admin: AdminUser = Depends(get_current_admin)):
                     if row is not None:
                         db_count = int(row[0])
                 eng.dispose()
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError):
             db_count = None
         if db_count is not None:
             infra_count = db_count

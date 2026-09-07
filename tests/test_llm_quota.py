@@ -180,3 +180,40 @@ def test_per_minute_exceeded_429():
     r3=c.post(f"/v1/llm/providers/{pid}/test", headers={**h, "X-Tenant-Id":"tenant-permin"})
     assert r3.status_code==429, r3.text
     assert r3.json()["detail"]["code"]=="QUOTA_EXCEEDED"
+
+def test_prod_db_failure_fail_closed_503(monkeypatch):
+    """12.5: production DB-backed quota failure must 503, not fall back to in-memory."""
+    import os
+    from fastapi import HTTPException
+    monkeypatch.setenv("OAOS_ENV", "production")
+    monkeypatch.setenv("OAOS_ALLOW_TEST_FALLBACK", "1")
+    for k in ("OAOS_QUOTA_REDIS_URL", "OAOS_REDIS_URL", "REDIS_URL", "OAOS_CP_REDIS_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OAOS_DATABASE_URL", "sqlite:////tmp/test_llm_quota_125.db")
+    from sqlalchemy.exc import OperationalError
+
+    def _boom():
+        raise OperationalError("SELECT 1", {}, Exception("db down"))
+    monkeypatch.setattr(llm_mod, "_get_session_factory", _boom)
+    try:
+        llm_mod._check_quota_or_raise("tenant-prod-db-down-125")
+    except HTTPException as e:
+        assert e.status_code == 503, e.status_code
+        assert e.detail["code"] == "QUOTA_BACKEND_UNAVAILABLE"
+    else:
+        raise AssertionError("prod DB quota failure must raise 503")
+
+def test_nonprod_db_failure_falls_back(monkeypatch):
+    """12.5 contrast: non-prod DB failure keeps in-memory fallback (no raise)."""
+    import os
+    monkeypatch.setenv("OAOS_ENV", "development")
+    monkeypatch.delenv("OAOS_ALLOW_TEST_FALLBACK", raising=False)
+    for k in ("OAOS_QUOTA_REDIS_URL", "OAOS_REDIS_URL", "REDIS_URL", "OAOS_CP_REDIS_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OAOS_DATABASE_URL", "sqlite:////tmp/test_llm_quota_125.db")
+    from sqlalchemy.exc import OperationalError
+
+    def _boom():
+        raise OperationalError("SELECT 1", {}, Exception("db down"))
+    monkeypatch.setattr(llm_mod, "_get_session_factory", _boom)
+    llm_mod._check_quota_or_raise("tenant-nonprod-db-down-125")

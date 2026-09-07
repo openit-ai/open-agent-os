@@ -954,7 +954,7 @@ def get_published_snapshot(tenant_id: str = "default") -> dict | None:
                 return snap
             # fallback to in-memory if DB snapshot missing but published pointer exists
             return _snapshots.get(tenant_id, {}).get(pub_ver)
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError):
         pass
     ver = _published.get(tenant_id)
     if ver is None:

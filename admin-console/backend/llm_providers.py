@@ -47,6 +47,10 @@ try:
     from sqlalchemy.exc import SQLAlchemyError
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
     SQLAlchemyError = Exception  # type: ignore
+try:
+    from redis.exceptions import RedisError
+except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effort fallback
+    RedisError = Exception  # type: ignore
 
 router = APIRouter(prefix="/v1/llm", tags=["llm"])
 
@@ -935,7 +939,7 @@ def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends
         # record quota-exceeded as failed usage then re-raise (fail-open: record best-effort)
         try:
             _admin_record_usage(tenant_id=tenant_id, provider="unknown", model="", prompt_tokens=0, completion_tokens=0, latency_ms=0, status="failed", error="quota exceeded")
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError):
             pass
         raise
     except Exception:
@@ -945,7 +949,7 @@ def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends
         # record failed usage
         try:
             _admin_record_usage(tenant_id=tenant_id, provider="unknown", model="", prompt_tokens=0, completion_tokens=0, latency_ms=0, status="failed", error="provider not found")
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError):
             pass
         raise HTTPException(status_code=404, detail="provider not found")
     start = time.perf_counter()
@@ -976,7 +980,7 @@ def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends
         pt, ct = 0, 0
         cost = _admin_estimate_cost(pt, ct, model)
         _admin_record_usage(tenant_id=tenant_id, provider=prov_str, model=model, prompt_tokens=pt, completion_tokens=ct, latency_ms=latency, status="success" if ok else "failed", error=None if ok else reason)
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError):
         pass
     return {"status": "ok" if ok else "failed", "latency_ms": latency, "detail": reason, "provider_id": provider_id}
 
@@ -1021,7 +1025,7 @@ def clear_quota_redis_client() -> None:
     global _quota_redis_override
     try:
         if _quota_redis_override is not None: _quota_redis_override.flushdb()
-    except: pass
+    except RedisError: pass
     _quota_redis_override = None
 
 def _quota_redis_url() -> str | None:
@@ -1040,7 +1044,7 @@ def _get_quota_redis_client():
         c = redis.Redis.from_url(url, decode_responses=True, socket_timeout=2, socket_connect_timeout=2)
         c.ping()
         return c
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, RedisError, ValueError) as e:
         if _is_quota_prod() and not _allow_quota_fallback():
             raise HTTPException(status_code=503, detail={"code":"QUOTA_BACKEND_UNAVAILABLE","message":f"quota redis unavailable: {e}"})
         return None
@@ -1053,11 +1057,11 @@ def _quota_redis_eval(client, daily_key: str, minute_key: str, dlim: int, mlim: 
             dc = int(client.incr(daily_key))
             if dc == 1:
                 try: client.expire(daily_key, 86400)
-                except: pass
+                except RedisError: pass
             mc = int(client.incr(minute_key))
             if mc == 1:
                 try: client.expire(minute_key, 120)
-                except: pass
+                except RedisError: pass
             if dc > dlim: return [-1, dc, mc]
             if mc > mlim: return [-2, dc, mc]
             return [0, dc, mc]
@@ -1079,7 +1083,7 @@ def clear_quotas() -> None:
     _quota_window_counts.clear()
     try:
         if _quota_redis_override is not None: _quota_redis_override.flushdb()
-    except: pass
+    except RedisError: pass
     if _is_db_enabled():
         try:
             factory = _get_session_factory()
@@ -1096,7 +1100,7 @@ def _ensure_quota_table(engine) -> None:
         from security.models.orm import AdminLLMQuotaORM  # noqa
         from security.models.db import Base
         Base.metadata.create_all(bind=engine)
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError):
         pass
     try:
         from sqlalchemy import text
@@ -1118,7 +1122,7 @@ def _check_quota_or_raise(tenant_id: str) -> None:
         rc = _get_quota_redis_client()
     except HTTPException:
         raise
-    except Exception:
+    except (ImportError, ModuleNotFoundError, RedisError, ValueError):
         rc = None
     if rc is not None:
         dlim, mlim = _get_quota_limits_fallback(tid)
@@ -1132,7 +1136,7 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                         row = s.query(_Q).filter(_Q.tenant_id == tid).first()
                         if row is not None:
                             dlim = int(row.daily_limit); mlim = int(row.per_minute_limit)
-            except: pass
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError): pass
         daily_key = f"oaos:quota:{tid}:daily:{now.strftime('%Y-%m-%d')}"
         minute_key = f"oaos:quota:{tid}:minute:{now.strftime('%Y-%m-%dT%H:%M')}"
         try:
@@ -1162,7 +1166,7 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                 # ensure table exists
                 try:
                     _ensure_quota_table(factory.bind if hasattr(factory, "bind") else _db_engine)
-                except Exception:
+                except (ImportError, ModuleNotFoundError, SQLAlchemyError):
                     pass
                 with factory() as s:
                     row = s.query(AdminLLMQuotaORM).filter(AdminLLMQuotaORM.tenant_id == tid).first()
@@ -1194,8 +1198,13 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                     return
     except HTTPException:
         raise
-    except Exception:
-        # fail-open on DB error
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError) as e:
+        # Production DB failure is fail-closed (mirrors agent-runtime llm_runtime:
+        # the test-fallback hatch covers redis-unavailable only, never DB failure).
+        # Non-prod falls through to in-memory.
+        if _is_quota_prod():
+            raise HTTPException(status_code=503, detail={"code": "QUOTA_BACKEND_UNAVAILABLE", "message": f"quota backend unavailable: {e}"})
+        # fail-open on DB error (non-prod only)
         pass
     # in-memory fallback
     rec = _quota_store.get(tid)
@@ -1236,7 +1245,7 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                         row.daily_limit = rec["daily_limit"]
                         row.per_minute_limit = rec["per_minute_limit"]
                     s.commit()
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError):
         pass
 
 # ---------------------------------------------------------------------------
@@ -1330,7 +1339,7 @@ def _admin_record_usage(*, tenant_id: str, provider: str, model: str, prompt_tok
     _admin_usage_records.append(rec)
     try:
         _admin_db_insert_usage(rec)
-    except Exception:
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError):
         pass
     return rec
 
@@ -1344,7 +1353,7 @@ def _admin_clear_usage() -> None:
                 with factory() as s:
                     s.query(AdminLlmUsageORM).delete()
                     s.commit()
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError):
             pass
 
 def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[dict]:
@@ -1401,7 +1410,7 @@ def _admin_usage_summary(tenant_id: str | None = None) -> dict:
                     pass
                 else:
                     recs = [dict(r) for r in _admin_usage_records if (not tenant_id or r["tenant_id"] == tenant_id)]
-        except Exception:
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, AttributeError):
             recs = [dict(r) for r in _admin_usage_records if (not tenant_id or r["tenant_id"] == tenant_id)]
     else:
         recs = [dict(r) for r in _admin_usage_records if (not tenant_id or r["tenant_id"] == tenant_id)]

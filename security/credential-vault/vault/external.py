@@ -315,7 +315,7 @@ class HashiCorpVaultBackend(VaultBackend):
         # also clear fallback
         try:
             await self._fallback.delete(secret_ref)
-        except Exception:
+        except (OSError, KeyError, AttributeError):
             pass
 
     async def health_check(self) -> bool:
@@ -497,7 +497,7 @@ class AwsSecretsBackend(VaultBackend):
             pass
         try:
             await self._fallback.delete(secret_ref)
-        except Exception:
+        except (OSError, KeyError, AttributeError):
             pass
 
     async def health_check(self) -> bool:

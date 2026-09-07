@@ -51,7 +51,7 @@ class KnowledgeIndexORM(Base):
     try:
         from pgvector.sqlalchemy import Vector as _PgVectorRuntime  # type: ignore
         _VECTOR_RUNTIME = _PgVectorRuntime(1024)
-    except Exception:  # pragma: no cover - SQLite/test fallback
+    except (ImportError, ModuleNotFoundError):  # pragma: no cover - SQLite/test fallback
         _VECTOR_RUNTIME = Text
     embedding: Mapped[str | None] = mapped_column(_VECTOR_RUNTIME, nullable=True)  # type: ignore[arg-type]
     content_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)

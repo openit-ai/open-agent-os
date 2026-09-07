@@ -138,3 +138,46 @@ def test_no_hardcoded_secret_literals_in_tracked_configs():
     auth_txt = (BACKEND / "auth.py").read_text()
     assert "fail-closed" in auth_txt.lower()
     assert "OAOS_ADMIN_BOOTSTRAP_PASSWORD" in auth_txt
+
+
+def test_production_register_db_down_fails_closed_503():
+    """12.5: production register with DB configured but unreachable must 503, not silently seed memory."""
+    from fastapi import HTTPException
+
+    mod = _load_auth_fresh(
+        {
+            "OAOS_ENV": "production",
+            "ADMIN_JWT_SECRET": "strong-prod-secret-32-bytes-min-xyz!3",
+            "OAOS_ADMIN_BOOTSTRAP_PASSWORD": "StrongBootstrap!1234",
+            "OAOS_ADMIN_BOOTSTRAP_EMAIL": "admin@openit.co.kr",
+        },
+        clear_env_keys=["OAOS_DATABASE_URL", "DATABASE_URL"],
+    )
+    prev = os.environ.get("OAOS_ENV")
+    os.environ["OAOS_ENV"] = "production"
+    try:
+        mod._db_enabled = lambda: True
+
+        def _boom():
+            raise RuntimeError("db down")
+
+        mod._db_get_session = _boom
+        admin = mod.get_user_by_email("admin@openit.co.kr")
+        assert admin is not None
+        req = mod.RegisterRequest(
+            email="newadmin@openit.co.kr",
+            password="NewPass123!",
+            display_name="New",
+            role=mod.AdminRole.L4,
+        )
+        try:
+            mod.register(req, admin)
+        except HTTPException as e:
+            assert e.status_code == 503, e.status_code
+        else:
+            raise AssertionError("prod register with DB down must raise 503")
+    finally:
+        if prev is None:
+            os.environ.pop("OAOS_ENV", None)
+        else:
+            os.environ["OAOS_ENV"] = prev

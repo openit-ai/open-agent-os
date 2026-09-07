@@ -12,12 +12,12 @@ def _is_mock_allowed() -> bool:
     try:
         from agent_runtime.env_gate import is_mock_allowed as _g
         return _g()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     try:
         from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
         return _g2()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     import os as _os
     # immutable prod gate — no OAOS_MOCK_FALLBACK bypass in production
@@ -103,7 +103,7 @@ class GeminiProvider:
                                     p_list = getattr(parts, "parts", None) or []
                                     txt = " ".join(getattr(p, "text", "") for p in p_list)
                         return txt or str(resp)
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError, IndexError):
                         return str(resp)
                 text = await asyncio.to_thread(_sync_call)
                 return {
@@ -136,7 +136,7 @@ class GeminiProvider:
                 resp = mdl.generate_content(last_user or "hello")  # type: ignore
                 try:
                     return getattr(resp, "text", "") or str(resp)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     return str(resp)
             text = await asyncio.to_thread(_old_call)
             return {

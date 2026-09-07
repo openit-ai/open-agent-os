@@ -12,12 +12,12 @@ def _is_mock_allowed() -> bool:
     try:
         from agent_runtime.env_gate import is_mock_allowed as _g
         return _g()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     try:
         from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
         return _g2()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     import os as _os
     # immutable prod gate — no OAOS_MOCK_FALLBACK bypass in production
@@ -121,7 +121,7 @@ class ClaudeProvider:
                     # fallback if content is string
                     if not content_text and not tool_calls:
                         content_text = str(resp.content) if hasattr(resp, "content") else ""
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     content_text = str(resp)
                 finish = getattr(resp, "stop_reason", "stop") or "stop"
                 # map anthropic stop_reason to openai finish_reason

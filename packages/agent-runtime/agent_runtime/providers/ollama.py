@@ -12,12 +12,12 @@ def _is_mock_allowed() -> bool:
     try:
         from agent_runtime.env_gate import is_mock_allowed as _g
         return _g()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     try:
         from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
         return _g2()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     import os as _os
     # immutable prod gate — no OAOS_MOCK_FALLBACK bypass in production
@@ -99,7 +99,7 @@ class OllamaProvider:
                             }
                         if "choices" in data:
                             return data
-                except Exception:
+                except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError, KeyError):
                     pass
                 # Try OpenAI compat
                 try:
@@ -108,7 +108,7 @@ class OllamaProvider:
                         data2 = resp2.json()
                         if "choices" in data2:
                             return data2
-                except Exception:
+                except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError, KeyError):
                     pass
             if not _is_mock_allowed():
                 raise RuntimeError("LLM provider unavailable: ollama — mock fallback disabled in production")

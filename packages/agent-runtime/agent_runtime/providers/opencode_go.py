@@ -30,12 +30,12 @@ def _is_mock_allowed() -> bool:
     try:
         from agent_runtime.env_gate import is_mock_allowed as _g
         return _g()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     try:
         from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
         return _g2()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     import os as _os
     # immutable prod gate — no OAOS_MOCK_FALLBACK bypass in production
@@ -547,7 +547,7 @@ class OpenCodeProvider:
                             data.setdefault("object", "chat.completion")
                             data.setdefault("model", model)
                             return data
-                except Exception:
+                except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError, KeyError):
                     pass
                 # fallback /api/chat
                 try:
@@ -566,9 +566,9 @@ class OpenCodeProvider:
                                 "choices": [{"index": 0, "message": {"role": "assistant", "content": str(content), "tool_calls": []}, "finish_reason": "stop"}],
                                 "usage": data2.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
                             }
-                except Exception:
+                except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError, KeyError):
                     pass
-        except Exception:
+        except (httpx.HTTPError, OSError, RuntimeError, ValueError, AttributeError, TypeError, KeyError):
             return None
         return None
 
@@ -662,7 +662,7 @@ class OpenCodeProvider:
                                         try:
                                             chunk = json.loads(data_str)
                                             yield chunk
-                                        except Exception:
+                                        except ValueError:
                                             yield {"id": f"opencode-{uuid.uuid4().hex[:8]}", "object": "chat.completion.chunk", "model": resolved, "choices": [{"index": 0, "delta": {"content": data_str}, "finish_reason": None}]}
                                 # stream succeeded — Check if we yielded anything
                                 # if we got here without error and status ok, consider stream done

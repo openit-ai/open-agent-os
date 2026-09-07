@@ -40,7 +40,7 @@ def _is_prod_gate() -> bool:
         try:
             from agent_runtime.env_gate import is_production as _p2  # type: ignore
             return _p2()
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             import os
             return os.getenv("OAOS_ENV","").lower() in ("production","prod")
 
@@ -49,12 +49,12 @@ def _is_mock_allowed_gate() -> bool:
     try:
         from .env_gate import is_mock_allowed as _m
         return _m()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     try:
         from agent_runtime.env_gate import is_mock_allowed as _m2  # type: ignore
         return _m2()
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     import os as _os
     for k in ("OAOS_ENV","ENV","OAOS_ENVIRONMENT","APP_ENV","ENVIRONMENT"):

@@ -203,7 +203,7 @@ def _orm_to_event(row) -> AuditEvent:
         # fallback: try string
         try:
             evt_type = AuditEventType[evt_type_val]
-        except Exception:
+        except (KeyError, TypeError):
             evt_type = AuditEventType.USER_MESSAGE
     ts = getattr(row, "timestamp")
     if ts is not None and ts.tzinfo is None:
@@ -446,7 +446,7 @@ class AuditLedger:
                         with open(fallback, "w") as f:
                             json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
                             f.write("\n")
-                    except Exception:
+                    except (OSError, ValueError, TypeError):
                         pass
                 try:
                     os.unlink(tmp.name)
@@ -461,7 +461,7 @@ class AuditLedger:
             p = Path(path)
             try:
                 p.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
+            except OSError:
                 pass
             tmp_path = str(p) + ".tmp"
             try:
@@ -477,13 +477,13 @@ class AuditLedger:
                         json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
                         f.write("\n")
                     logger.debug("Audit checkpoint fallback to %s (original %s not writable: %s)", fallback, path, e)
-                except Exception:
+                except (OSError, ValueError, TypeError):
                     pass
                 # consider fallback success as true if fallback file exists
                 try:
                     if Path(fallback).exists():
                         return True
-                except Exception:
+                except OSError:
                     pass
                 return False
             logger.info("Audit checkpoint anchored to %s head=%s count=%s", path, data.get("chain_head_hash", "")[:8], data.get("event_count"))
