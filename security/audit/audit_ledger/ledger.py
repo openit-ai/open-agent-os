@@ -142,8 +142,8 @@ def _db_get_session():
         Session = sessionmaker(bind=engine, expire_on_commit=False)
         session = Session()
         return session, engine
-    except Exception as e:
-        logger.debug("AuditLedger DB session failed: %s", e)
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
+        logger.warning("AuditLedger DB session unavailable: %s", type(e).__name__)
         return None, None
 
 
@@ -254,7 +254,12 @@ class AuditLedger:
         if _db_should_use():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    error = RuntimeError("AuditLedger hydration failed — audit database unavailable")
+                    logger.warning("AuditLedger hydration unavailable")
+                    if _is_prod():
+                        raise error
+                else:
                     try:
                         from security.models.orm import AuditEventORM  # type: ignore
 
@@ -269,8 +274,10 @@ class AuditLedger:
                                 continue
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
-                logger.debug("AuditLedger hydrate failed, memory-only: %s", type(e).__name__)
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
+                logger.warning("AuditLedger hydrate failed: %s", type(e).__name__)
+                if _is_prod():
+                    raise RuntimeError("AuditLedger hydration failed — audit database unavailable") from e
 
     def append(self, event: AuditEvent) -> AuditEvent:
         if _is_prod():
@@ -288,30 +295,33 @@ class AuditLedger:
             last_err: Exception | None = None
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    last_err = RuntimeError("audit database session unavailable")
+                else:
                     try:
                         orm = _event_to_orm(event)
                         session.add(orm)
                         session.commit()
                         db_ok = True
-                    except Exception as e:
+                    except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
                         last_err = e
                         try:
                             session.rollback()
-                        except SQLAlchemyError:
-                            pass
-                        logger.debug("AuditLedger append DB persist failed: %s", e)
+                        except SQLAlchemyError as rollback_error:
+                            logger.debug("AuditLedger append rollback failed: %s", type(rollback_error).__name__)
+                        logger.warning("AuditLedger append DB persist failed: %s", type(e).__name__)
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
                 last_err = e
             if _is_prod() and not db_ok:
                 try:
                     self._events.pop()
                     self._head = self._events[-1].event_hash if self._events else None
-                except Exception:
-                    pass
-                raise RuntimeError(f"AuditLedger append failed — DB persist required in production but failed: {last_err}")
+                except (IndexError, AttributeError) as rollback_error:
+                    logger.debug("AuditLedger in-memory rollback failed: %s", type(rollback_error).__name__)
+                error = RuntimeError(f"AuditLedger append failed — DB persist required in production but failed: {last_err}")
+                raise error from last_err
         else:
             if _is_prod():
                 raise RuntimeError("AuditLedger append failed — no DB in production (fail-closed)")
@@ -325,7 +335,12 @@ class AuditLedger:
                 return self._head
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    error = RuntimeError("AuditLedger head lookup failed — audit database unavailable")
+                    logger.warning("AuditLedger head lookup unavailable")
+                    if _is_prod():
+                        raise error
+                else:
                     try:
                         from security.models.orm import AuditEventORM  # type: ignore
 
@@ -334,8 +349,10 @@ class AuditLedger:
                             return getattr(row, "event_hash", None)
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
-                logger.debug("AuditLedger head DB lookup failed, memory head: %s", type(e).__name__)
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
+                logger.warning("AuditLedger head DB lookup failed: %s", type(e).__name__)
+                if _is_prod():
+                    raise RuntimeError("AuditLedger head lookup failed — audit database unavailable") from e
         return self._head
 
     @property
@@ -348,7 +365,12 @@ class AuditLedger:
                 return list(self._events)
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    error = RuntimeError("AuditLedger events lookup failed — audit database unavailable")
+                    logger.warning("AuditLedger events lookup unavailable")
+                    if _is_prod():
+                        raise error
+                else:
                     try:
                         from security.models.orm import AuditEventORM  # type: ignore
 
@@ -366,8 +388,10 @@ class AuditLedger:
                             return list(evts)
                     finally:
                         _db_close(session, engine)
-            except Exception as e:
-                logger.debug("AuditLedger events DB lookup failed, memory-only: %s", type(e).__name__)
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
+                logger.warning("AuditLedger events DB lookup failed: %s", type(e).__name__)
+                if _is_prod():
+                    raise RuntimeError("AuditLedger events lookup failed — audit database unavailable") from e
         return list(self._events)
 
     @property
@@ -375,7 +399,12 @@ class AuditLedger:
         if _db_should_use():
             try:
                 session, engine = _db_get_session()
-                if session is not None:
+                if session is None:
+                    error = RuntimeError("AuditLedger count failed — audit database unavailable")
+                    logger.warning("AuditLedger count lookup unavailable")
+                    if _is_prod():
+                        raise error
+                else:
                     try:
                         from security.models.orm import AuditEventORM  # type: ignore
 
@@ -384,8 +413,10 @@ class AuditLedger:
                             return c
                     finally:
                         _db_close(session, engine)
-            except Exception:
-                pass
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
+                logger.warning("AuditLedger count lookup failed: %s", type(e).__name__)
+                if _is_prod():
+                    raise RuntimeError("AuditLedger count failed — audit database unavailable") from e
             # fallback to memory count if DB count is 0 but memory has events (race)
             if self._events:
                 return len(self._events)
@@ -416,10 +447,12 @@ class AuditLedger:
         path = self._external_checkpoint_path()
         try:
             data = cp.model_dump(mode="json") if hasattr(cp, "model_dump") else dict(cp)
-        except Exception:
+        except (AttributeError, TypeError, ValueError) as serialization_error:
+            logger.warning("Audit checkpoint serialization fallback: %s", type(serialization_error).__name__)
             try:
                 data = json.loads(cp.model_dump_json())  # type: ignore
-            except Exception:
+            except (AttributeError, TypeError, ValueError) as json_error:
+                logger.warning("Audit checkpoint JSON serialization fallback failed: %s", type(json_error).__name__)
                 data = {"chain_head_hash": getattr(cp, "chain_head_hash", ""), "event_count": getattr(cp, "event_count", 0), "created_at": str(getattr(cp, "created_at", "")), "signature": getattr(cp, "signature", "")}
         if path.startswith("s3://"):
             import tempfile, subprocess, pathlib
@@ -434,14 +467,14 @@ class AuditLedger:
                     logger.info("Audit checkpoint anchored to S3 %s", path)
                     try:
                         os.unlink(tmp.name)
-                    except OSError:
-                        pass
+                    except OSError as cleanup_error:
+                        logger.debug("S3 checkpoint temporary file cleanup failed: %s", type(cleanup_error).__name__)
                     return True
                 except FileNotFoundError:
                     logger.debug("aws CLI not found, fallback to local anchor for s3 path %s", path)
                 except subprocess.CalledProcessError as e:
                     logger.warning("S3 checkpoint upload failed %s: %s", path, e)
-                except Exception as e:
+                except (OSError, ValueError, TypeError, subprocess.SubprocessError) as e:
                     logger.warning("S3 checkpoint anchor failed %s: %s", path, e)
                 finally:
                     try:
@@ -450,23 +483,23 @@ class AuditLedger:
                         with open(fallback, "w") as f:
                             json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
                             f.write("\n")
-                    except (OSError, ValueError, TypeError):
-                        pass
+                    except (OSError, ValueError, TypeError) as fallback_error:
+                        logger.debug("S3 checkpoint local fallback failed: %s", type(fallback_error).__name__)
                 try:
                     os.unlink(tmp.name)
-                except OSError:
-                    pass
+                except OSError as cleanup_error:
+                    logger.debug("S3 checkpoint temporary file cleanup failed: %s", type(cleanup_error).__name__)
                 return False
-            except Exception as e:
-                logger.debug("External checkpoint S3 anchor failed: %s", e)
+            except (OSError, ValueError, TypeError, RuntimeError) as e:
+                logger.warning("External checkpoint S3 anchor failed: %s", e)
                 return False
         try:
             from pathlib import Path
             p = Path(path)
             try:
                 p.parent.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                pass
+            except OSError as directory_error:
+                logger.debug("Audit checkpoint directory creation failed: %s", type(directory_error).__name__)
             tmp_path = str(p) + ".tmp"
             try:
                 with open(tmp_path, "w") as f:
@@ -481,19 +514,19 @@ class AuditLedger:
                         json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
                         f.write("\n")
                     logger.debug("Audit checkpoint fallback to %s (original %s not writable: %s)", fallback, path, e)
-                except (OSError, ValueError, TypeError):
-                    pass
+                except (OSError, ValueError, TypeError) as fallback_error:
+                    logger.debug("Audit checkpoint file fallback failed: %s", type(fallback_error).__name__)
                 # consider fallback success as true if fallback file exists
                 try:
                     if Path(fallback).exists():
                         return True
-                except OSError:
-                    pass
+                except OSError as fallback_check_error:
+                    logger.debug("Audit checkpoint fallback existence check failed: %s", type(fallback_check_error).__name__)
                 return False
             logger.info("Audit checkpoint anchored to %s head=%s count=%s", path, data.get("chain_head_hash", "")[:8], data.get("event_count"))
             return True
-        except Exception as e:
-            logger.debug("External checkpoint anchor failed for %s: %s", path, e)
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
+            logger.warning("External checkpoint anchor failed for %s: %s", path, e)
             return False
 
     def read_external_checkpoint(self):
@@ -511,16 +544,18 @@ class AuditLedger:
                         raw = _json.load(f)
                     os.unlink(tmp.name)
                     return AuditCheckpoint(**raw)
-                except Exception:
+                except (OSError, ValueError, TypeError, subprocess.SubprocessError) as download_error:
+                    logger.warning("External S3 checkpoint read failed: %s", type(download_error).__name__)
                     try:
                         os.unlink(tmp.name)
-                    except OSError:
-                        pass
+                    except OSError as cleanup_error:
+                        logger.debug("External S3 checkpoint temporary cleanup failed: %s", type(cleanup_error).__name__)
                     try:
                         with open("/tmp/oaos-audit-checkpoint.json") as f:
                             raw = _json.load(f)
                         return AuditCheckpoint(**raw)
-                    except Exception:
+                    except (OSError, ValueError, TypeError, KeyError) as fallback_error:
+                        logger.warning("External checkpoint local fallback read failed: %s", type(fallback_error).__name__)
                         return None
             else:
                 from pathlib import Path
@@ -531,10 +566,11 @@ class AuditLedger:
                         try:
                             raw = json.loads(cand.read_text())
                             return AuditCheckpoint(**raw)
-                        except Exception:
-                            continue
+                        except (OSError, ValueError, TypeError, KeyError) as parse_error:
+                            logger.warning("External checkpoint candidate parse failed: %s", type(parse_error).__name__)
                 return None
-        except Exception:
+        except (OSError, ImportError, ModuleNotFoundError, ValueError, TypeError) as read_error:
+            logger.warning("External checkpoint read failed: %s", type(read_error).__name__)
             return None
 
     def verify_external_checkpoint(self, signing_key: str | None = None) -> dict:
@@ -565,8 +601,8 @@ class AuditLedger:
         )
         try:
             self._write_external_checkpoint(cp)
-        except Exception as e:
-            logger.debug("Checkpoint external anchor error (ignored): %s", e)
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
+            logger.warning("Checkpoint external anchor degraded: %s", e)
         try:
             ts = int(cp.created_at.timestamp()) if hasattr(cp.created_at, "timestamp") else int(datetime.now(timezone.utc).timestamp())
             for metric_path in ["/var/lib/node_exporter/textfile/oaos_audit.prom", "/tmp/oaos_audit.prom"]:
@@ -580,8 +616,8 @@ class AuditLedger:
                             for line in txt.splitlines():
                                 if "oaos_audit_last_checkpoint_timestamp" not in line:
                                     lines.append(line)
-                        except Exception:
-                            pass
+                        except (OSError, UnicodeError) as read_error:
+                            logger.debug("Audit metrics read failed: %s", type(read_error).__name__)
                     lines.append("# HELP oaos_audit_last_checkpoint_timestamp Last audit checkpoint unix timestamp")
                     lines.append("# TYPE oaos_audit_last_checkpoint_timestamp gauge")
                     lines.append(f"oaos_audit_last_checkpoint_timestamp {ts}")
@@ -590,10 +626,10 @@ class AuditLedger:
                     break
                 except PermissionError:
                     continue
-                except Exception:
-                    continue
-        except Exception:
-            pass
+                except (OSError, ValueError, TypeError, RuntimeError) as metric_error:
+                    logger.debug("Audit metrics write failed: %s", type(metric_error).__name__)
+        except (OSError, ValueError, TypeError, RuntimeError) as metrics_error:
+            logger.warning("Audit metrics update degraded: %s", type(metrics_error).__name__)
         return cp
 
     def verify_checkpoint(
@@ -637,12 +673,13 @@ class AuditLedger:
                                     if hasattr(row, k):
                                         setattr(row, k, v)
                                 session.commit()
-                        except Exception:
+                        except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as persist_error:
                             try:
                                 session.rollback()
-                            except SQLAlchemyError:
-                                pass
+                            except SQLAlchemyError as rollback_error:
+                                logger.debug("Audit tamper rollback failed: %s", type(rollback_error).__name__)
+                            logger.debug("Audit tamper DB update failed: %s", type(persist_error).__name__)
                         finally:
                             _db_close(session, engine)
-                except Exception:
-                    pass
+                except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as lookup_error:
+                    logger.debug("Audit tamper DB lookup failed: %s", type(lookup_error).__name__)
