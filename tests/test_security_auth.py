@@ -10,7 +10,9 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
+from fastapi import routing as fastapi_routing
 from jose import jwt
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,14 +127,22 @@ PUBLIC_ENDPOINTS = [
     ("GET", "/v1/health/detailed", None),
 ]
 
-def test_health_endpoints_remain_public():
-    c = TestClient(app)
-    for method, path, body in PUBLIC_ENDPOINTS:
-        if method == "GET":
-            r = c.get(path)
-        else:
-            r = c.post(path, json=body or {})
-        assert r.status_code == 200, f"{method} {path} should be public, got {r.status_code} {r.text}"
+async def test_health_endpoints_remain_public(monkeypatch):
+    """Exercise public health routes without the broken local sync executor path."""
+    async def _direct_run_in_threadpool(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    # The local Python/AnyIO executor hangs during shutdown; health semantics
+    # are synchronous, so keep this compatibility shim inside the test only.
+    monkeypatch.setattr(fastapi_routing, "run_in_threadpool", _direct_run_in_threadpool)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        for method, path, body in PUBLIC_ENDPOINTS:
+            if method == "GET":
+                r = await c.get(path)
+            else:
+                r = await c.post(path, json=body or {})
+            assert r.status_code == 200, f"{method} {path} should be public, got {r.status_code} {r.text}"
 
 def test_anon_rejected_on_protected_endpoints():
     c = TestClient(app)

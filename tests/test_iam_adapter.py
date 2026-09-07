@@ -195,7 +195,7 @@ class TestGroupPolicyBinding:
         r = PolicyRule(id="r1", source=PolicySource.GROUP_GRANT, action="READ", resource_pattern="crm/*", effect=PolicyDecision.ALLOW)
         a.bind_group_policy("eng", rules=[r])
         import asyncio
-        asyncio.get_event_loop().run_until_complete(a.sync_groups({"eng": ["kim@example.com"]}))
+        asyncio.run(a.sync_groups({"eng": ["kim@example.com"]}))
         bundles = a.build_policy_bundles_for_user("employee:kim", groups=["eng"], tenant_id="t1")
         assert any(getattr(b, "id", "") == "group-bundle-eng" or "eng" in getattr(b, "id", "") for b in bundles)
         assert any(getattr(b, "id", "") == "default-bundle-v1" for b in bundles)
