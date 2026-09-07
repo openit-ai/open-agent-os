@@ -26,6 +26,14 @@ try:
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
     SQLAlchemyError = Exception  # type: ignore
 
+
+class RuntimeConfigValidationError(ValueError):
+    """The durable runtime-config payload is malformed or not serializable."""
+
+
+class RuntimeConfigBackendError(RuntimeError):
+    """The configured runtime-config backend cannot serve the request."""
+
 router = APIRouter(prefix="/v1/runtime-config", tags=["runtime-config"])
 internal_router = APIRouter(prefix="/v1/internal/runtime-config", tags=["runtime-config-internal"])
 
@@ -54,39 +62,28 @@ def _canonical_bytes(payload: dict) -> bytes:
 def _config_hash(config: dict) -> str:
     try:
         return hashlib.sha256(_canonical_bytes(config)).hexdigest()
-    except Exception:
-        return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise RuntimeConfigValidationError("runtime config is not JSON serializable") from exc
 
 def _ensure_runtime_tables_sync(engine) -> None:
     try:
         from sqlalchemy import text
         with engine.begin() as conn:
-            try:
-                conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_snapshots (
-                    tenant_id TEXT NOT NULL, version INTEGER NOT NULL, snapshot_json TEXT NOT NULL,
-                    signature TEXT NOT NULL, config_hash TEXT NOT NULL, created_by TEXT NOT NULL,
-                    created_at TEXT NOT NULL, parent_version INTEGER, rollback_from INTEGER, extra TEXT,
-                    PRIMARY KEY (tenant_id, version))""" ))
-            except Exception:
-                pass
-            try:
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_rc_snapshots_tenant_created ON admin_runtime_config_snapshots (tenant_id, created_at)" ))
-            except Exception:
-                pass
-            try:
-                conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_published (
-                    tenant_id TEXT PRIMARY KEY, published_version INTEGER NOT NULL, config_hash TEXT,
-                    updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, extra TEXT)""" ))
-            except Exception:
-                pass
-            try:
-                conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_applied (
-                    tenant_id TEXT PRIMARY KEY, applied_version INTEGER, config_hash TEXT, applied_at TEXT,
-                    applied_by TEXT, process_identity TEXT, error TEXT, updated_at TEXT NOT NULL)""" ))
-            except Exception:
-                pass
-    except Exception as e:
-        logger.debug(f"ensure runtime tables failed: {e}")
+            conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_snapshots (
+                tenant_id TEXT NOT NULL, version INTEGER NOT NULL, snapshot_json TEXT NOT NULL,
+                signature TEXT NOT NULL, config_hash TEXT NOT NULL, created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL, parent_version INTEGER, rollback_from INTEGER, extra TEXT,
+                PRIMARY KEY (tenant_id, version))""" ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_rc_snapshots_tenant_created ON admin_runtime_config_snapshots (tenant_id, created_at)" ))
+            conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_published (
+                tenant_id TEXT PRIMARY KEY, published_version INTEGER NOT NULL, config_hash TEXT,
+                updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, extra TEXT)""" ))
+            conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_applied (
+                tenant_id TEXT PRIMARY KEY, applied_version INTEGER, config_hash TEXT, applied_at TEXT,
+                applied_by TEXT, process_identity TEXT, error TEXT, updated_at TEXT NOT NULL)""" ))
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError) as exc:
+        logger.warning(f"runtime-config schema unavailable: {exc}")
+        raise RuntimeConfigBackendError("runtime-config schema unavailable") from exc
 
 def _verify_snapshot(snapshot: dict, key: str | None = None) -> bool:
     sig = snapshot.get("signature","")
@@ -122,8 +119,8 @@ def _db_url() -> str | None:
         u=_g()
         if u and u.strip():
             return u.strip()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError, OSError) as exc:
+        logger.warning(f"runtime-config persistence URL lookup failed; environment fallback unavailable: {exc}")
     return None
 
 def _normalize_sync_url(url: str) -> str:
@@ -138,6 +135,20 @@ def _normalize_sync_url(url: str) -> str:
     if u.startswith("sqlite+"):
         u=u.replace("sqlite+","sqlite",1)
     return u
+
+
+def _validate_snapshot_shape(snapshot: object) -> dict:
+    if not isinstance(snapshot, dict):
+        raise RuntimeConfigValidationError("published runtime config snapshot must be an object")
+    config = snapshot.get("config", {})
+    if config is not None and not isinstance(config, dict):
+        raise RuntimeConfigValidationError("runtime config snapshot config must be an object")
+    providers = (config or {}).get("llm_providers", [])
+    if not isinstance(providers, list):
+        raise RuntimeConfigValidationError("runtime config llm_providers must be a list")
+    if any(not isinstance(provider, dict) for provider in providers):
+        raise RuntimeConfigValidationError("runtime config provider entries must be objects")
+    return snapshot
 
 def _fetch_via_db(tenant_id: str = "default") -> dict | None:
     url=_db_url()
@@ -160,57 +171,66 @@ def _fetch_via_db(tenant_id: str = "default") -> dict | None:
             # 1) try durable published pointer table
             snap=None
             ver=None
-            ch=None
-            try:
-                row=conn.execute(text("SELECT published_version, config_hash FROM admin_runtime_config_published WHERE tenant_id=:t"),{"t": tenant_id}).fetchone()
-                if row is not None:
-                    ver=int(row[0])
-                    ch=row[1]
-            except Exception:
-                ver=None
-            if ver is not None:
+            row=conn.execute(text("SELECT published_version, config_hash FROM admin_runtime_config_published WHERE tenant_id=:t"),{"t": tenant_id}).fetchone()
+            if row is not None:
                 try:
-                    row2=conn.execute(text("SELECT snapshot_json FROM admin_runtime_config_snapshots WHERE tenant_id=:t AND version=:v"),{"t": tenant_id, "v": ver}).fetchone()
-                    if row2 is not None and row2[0]:
+                    ver=int(row[0])
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeConfigValidationError("published runtime config version is invalid") from exc
+            if ver is not None:
+                row2=conn.execute(text("SELECT snapshot_json FROM admin_runtime_config_snapshots WHERE tenant_id=:t AND version=:v"),{"t": tenant_id, "v": ver}).fetchone()
+                if row2 is not None and row2[0]:
+                    try:
                         snap=json.loads(row2[0])
-                except Exception:
-                    snap=None
+                    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                        raise RuntimeConfigValidationError("published runtime config snapshot JSON is malformed") from exc
             # 2) fallback legacy admin_settings mirror
             if snap is None:
                 row=conn.execute(text("SELECT value FROM admin_settings WHERE key=:k"),{"k": f"runtime_config:published:{tenant_id}"}).fetchone()
                 if row is None or not row[0]:
                     return None
-                ver=int(str(row[0]).strip())
+                try:
+                    ver=int(str(row[0]).strip())
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeConfigValidationError("legacy published runtime config version is invalid") from exc
                 row2=conn.execute(text("SELECT value FROM admin_settings WHERE key=:k"),{"k": f"runtime_config:snapshot:{tenant_id}:{ver}"}).fetchone()
                 if row2 is None or not row2[0]:
                     return None
-                snap=json.loads(row2[0])
+                try:
+                    snap=json.loads(row2[0])
+                except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                    raise RuntimeConfigValidationError("legacy runtime config snapshot JSON is malformed") from exc
+            _validate_snapshot_shape(snap)
             # verify
             if not _verify_snapshot(snap):
                 if _is_production():
-                    raise RuntimeError("published snapshot signature invalid — fail-closed")
+                    raise RuntimeConfigBackendError("published snapshot signature invalid — fail-closed")
                 # non-prod: return None to signal invalid
+                logger.warning("published runtime config signature invalid; non-production fallback remains unavailable")
                 return None
             # ensure config_hash filled
             if snap.get("config_hash") is None and snap.get("config") is not None:
-                try:
-                    snap["config_hash"]=_config_hash(snap.get("config",{}))
-                except Exception:
-                    pass
+                snap["config_hash"]=_config_hash(snap.get("config",{}))
             # defense: secret raw leak check
             for prov in snap.get("config",{}).get("llm_providers",[]):
                 if "encrypted_api_key" in prov or "api_key" in prov:
                     if _is_production():
-                        raise RuntimeError("snapshot contains secret raw — fail-closed")
+                        raise RuntimeConfigBackendError("snapshot contains secret raw — fail-closed")
+                    logger.warning("snapshot contains secret raw; non-production fallback remains unavailable")
                     return None
             return snap
-    except RuntimeError:
+    except RuntimeConfigValidationError:
         raise
-    except Exception as e:
-        logger.debug(f"runtime-config DB fetch failed: {e}")
+    except RuntimeConfigBackendError as exc:
+        logger.warning(f"runtime-config DB backend degraded: {exc}")
+        if _is_production():
+            raise
+        return None
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError) as exc:
+        logger.warning(f"runtime-config DB fetch unavailable: {exc}")
         # fail-closed in production on DB outage
         if _is_production():
-            raise RuntimeError(f"runtime-config DB unavailable fail-closed: {e}")
+            raise RuntimeConfigBackendError("runtime-config DB unavailable fail-closed") from exc
         return None
     finally:
         if eng is not None:
@@ -221,48 +241,53 @@ def _fetch_via_db(tenant_id: str = "default") -> dict | None:
 
 def _fetch_via_admin_module(tenant_id: str="default") -> dict | None:
     # Try in-process import of admin runtime_config module (tests run both in same process)
-    try:
-        import sys
-        # admin_api app may have loaded runtime_config; try to find it
-        for name in ("admin_console.backend.runtime_config","runtime_config","admin_runtime_config"):
-            mod=sys.modules.get(name)
-            if mod is not None and hasattr(mod,"get_published_snapshot_internal"):
-                try:
-                    snap=mod.get_published_snapshot_internal(tenant_id)  # type: ignore
-                    if snap is not None:
-                        # verify again under CP key (should match admin key in tests via conftest unified key)
-                        if not _verify_snapshot(snap):
-                            if _is_production():
-                                raise RuntimeError("signature invalid fail-closed")
-                            return None
-                        return snap
-                except Exception:
-                    pass
-        # also try direct admin_settings read via admin module dict
-        for name in ("admin_console.backend.runtime_config","runtime_config"):
-            mod=sys.modules.get(name)
-            if mod is not None and hasattr(mod,"_snapshots"):
-                d=getattr(mod,"_snapshots",{})
-                pub=getattr(mod,"_published",{})
-                ver=pub.get(tenant_id)
-                if ver is not None:
-                    snap=d.get(tenant_id,{}).get(ver)
-                    if snap is not None:
-                        if not _verify_snapshot(snap):
-                            if _is_production():
-                                raise RuntimeError("signature invalid fail-closed")
-                            return None
-                        return snap
-    except RuntimeError:
-        raise
-    except Exception as e:
-        logger.debug(f"runtime-config admin module fetch failed: {e}")
+    import sys
+    # admin_api app may have loaded runtime_config; try to find it
+    for name in ("admin_console.backend.runtime_config","runtime_config","admin_runtime_config"):
+        mod=sys.modules.get(name)
+        if mod is not None and hasattr(mod,"get_published_snapshot_internal"):
+            try:
+                snap=mod.get_published_snapshot_internal(tenant_id)  # type: ignore
+            except RuntimeError:
+                raise
+            except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, TypeError, ValueError, AttributeError, KeyError) as exc:
+                logger.warning(f"runtime-config admin module unavailable: {exc}")
+                snap=None
+            if snap is not None:
+                _validate_snapshot_shape(snap)
+                # verify again under CP key (should match admin key in tests via conftest unified key)
+                if not _verify_snapshot(snap):
+                    if _is_production():
+                        raise RuntimeConfigBackendError("signature invalid fail-closed")
+                    logger.warning("admin runtime-config signature invalid; trying durable source")
+                    return None
+                return snap
+    # also try direct admin_settings read via admin module dict
+    for name in ("admin_console.backend.runtime_config","runtime_config"):
+        mod=sys.modules.get(name)
+        if mod is not None and hasattr(mod,"_snapshots"):
+            d=getattr(mod,"_snapshots",{})
+            pub=getattr(mod,"_published",{})
+            ver=pub.get(tenant_id)
+            if ver is not None:
+                snap=d.get(tenant_id,{}).get(ver)
+                if snap is not None:
+                    _validate_snapshot_shape(snap)
+                    if not _verify_snapshot(snap):
+                        if _is_production():
+                            raise RuntimeConfigBackendError("signature invalid fail-closed")
+                        logger.warning("admin in-memory runtime-config signature invalid")
+                        return None
+                    return snap
     return None
 
 def fetch_published_snapshot(tenant_id: str="default") -> dict | None:
     """Fetch canonical published snapshot via DB or admin module (in-process).
     Verifies signature; returns None if none published. Raises in prod on invalid sig."""
-    # 1. try admin module (fast, no DB)
+    # Production never treats the in-process admin module as a durable DB substitute.
+    if _is_production():
+        return _fetch_via_db(tenant_id)
+    # Non-production keeps the explicit in-process fallback used by local/test runs.
     snap=_fetch_via_admin_module(tenant_id)
     if snap is not None:
         return snap
@@ -302,8 +327,10 @@ def _db_fetch_applied(tenant_id: str) -> dict | None:
             row=conn.execute(text("SELECT applied_version, config_hash, applied_at, applied_by, process_identity, error, updated_at FROM admin_runtime_config_applied WHERE tenant_id=:t"),{"t":tenant_id}).fetchone()
             if row is not None:
                 return {"tenant_id": tenant_id, "applied_version": row[0], "config_hash": row[1], "applied_at": row[2], "applied_by": row[3], "process_identity": row[4], "error": row[5], "updated_at": row[6]}
-    except Exception as e:
-        logger.debug(f"db fetch applied failed: {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, TypeError, AttributeError) as exc:
+        logger.warning(f"runtime-config applied-state read unavailable: {exc}")
+        if _is_production():
+            raise RuntimeConfigBackendError("applied state read failed fail-closed") from exc
     finally:
         if eng is not None:
             try:
@@ -333,13 +360,13 @@ def _db_upsert_applied(tenant_id: str, applied_version: int, config_hash: str, a
             try:
                 conn.execute(text("INSERT INTO admin_runtime_config_applied (tenant_id, applied_version, config_hash, applied_at, applied_by, process_identity, error, updated_at) VALUES (:t,:v,:ch,:at,:by,:pi,:err,:now) ON CONFLICT (tenant_id) DO UPDATE SET applied_version=:v, config_hash=:ch, applied_at=:at, applied_by=:by, process_identity=:pi, error=:err, updated_at=:now"),
                     {"t":tenant_id,"v":applied_version,"ch":config_hash,"at":now,"by":applied_by,"pi":process_identity,"err":error,"now":now})
-            except Exception:
+            except (SQLAlchemyError, OSError):
                 conn.execute(text("INSERT OR REPLACE INTO admin_runtime_config_applied (tenant_id, applied_version, config_hash, applied_at, applied_by, process_identity, error, updated_at) VALUES (:t,:v,:ch,:at,:by,:pi,:err,:now)"),
                     {"t":tenant_id,"v":applied_version,"ch":config_hash,"at":now,"by":applied_by,"pi":process_identity,"err":error,"now":now})
-    except Exception as e:
-        logger.debug(f"db upsert applied failed: {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, TypeError, AttributeError) as exc:
+        logger.warning(f"runtime-config applied-state write unavailable: {exc}")
         if _is_production():
-            raise RuntimeError(f"applied state durable failed fail-closed: {e}")
+            raise RuntimeConfigBackendError("applied state durable write failed fail-closed") from exc
     finally:
         if eng is not None:
             try:
@@ -368,8 +395,8 @@ def _apply_hot_reload(tenant_id: str, snapshot: dict) -> tuple[bool, str | None]
             os.environ["OAOS_CP_HERMES_BASE_URL"]=hermes.get("base_url")
         # fallback chain metadata stored only
         return True, None
-    except Exception as e:
-        return False, str(e)[:300]
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        return False, str(exc)[:300]
 
 def mark_applied(tenant_id: str, snapshot: dict, applied_by: str) -> dict:
     ver=snapshot.get("version")
@@ -392,30 +419,22 @@ def mark_applied(tenant_id: str, snapshot: dict, applied_by: str) -> dict:
     }
     _applied[tenant_id]=rec
     # durable
-    try:
-        _db_upsert_applied(tenant_id, int(ver) if ver is not None else 0, ch, applied_by, pid, err)
-    except RuntimeError:
-        raise
-    except Exception as e:
-        logger.debug(f"mark_applied durable failed: {e}")
+    _db_upsert_applied(tenant_id, int(ver) if ver is not None else 0, ch, applied_by, pid, err)
     return rec
 
 def get_applied(tenant_id: str="default") -> dict | None:
     # DB primary if available
-    try:
-        db_rec=_db_fetch_applied(tenant_id)
-        if db_rec is not None and db_rec.get("applied_version") is not None:
-            # merge with in-memory for richer fields
-            mem=_applied.get(tenant_id)
-            if mem is not None:
-                # prefer DB timestamps but keep mem signature etc
-                merged={**db_rec, **mem}
-                merged["config_hash"]=db_rec.get("config_hash") or mem.get("config_hash")
-                return merged
-            # construct minimal
-            return {"tenant_id": tenant_id, "version": db_rec.get("applied_version"), "applied_version": db_rec.get("applied_version"), "applied_at": db_rec.get("applied_at"), "applied_by": db_rec.get("applied_by"), "process_identity": db_rec.get("process_identity"), "config_hash": db_rec.get("config_hash"), "error": db_rec.get("error")}
-    except Exception:
-        pass
+    db_rec=_db_fetch_applied(tenant_id)
+    if db_rec is not None and db_rec.get("applied_version") is not None:
+        # merge with in-memory for richer fields
+        mem=_applied.get(tenant_id)
+        if mem is not None:
+            # prefer DB timestamps but keep mem signature etc
+            merged={**db_rec, **mem}
+            merged["config_hash"]=db_rec.get("config_hash") or mem.get("config_hash")
+            return merged
+        # construct minimal
+        return {"tenant_id": tenant_id, "version": db_rec.get("applied_version"), "applied_version": db_rec.get("applied_version"), "applied_at": db_rec.get("applied_at"), "applied_by": db_rec.get("applied_by"), "process_identity": db_rec.get("process_identity"), "config_hash": db_rec.get("config_hash"), "error": db_rec.get("error")}
     return _applied.get(tenant_id)
 
 def _is_destructive_allowed() -> bool:
@@ -466,8 +485,10 @@ def clear_runtime_config_state() -> None:
             _ensure_runtime_tables_sync(eng)
             with eng.begin() as conn:
                 conn.execute(text("DELETE FROM admin_runtime_config_applied WHERE 1=1"))
-        except Exception:
-            pass
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, TypeError, AttributeError) as exc:
+            # This is isolated test cleanup only; preserve the primary test
+            # result while making cleanup degradation visible.
+            logger.warning(f"clear runtime-config state cleanup failed: {exc}")
         finally:
             if eng is not None:
                 try:
@@ -475,17 +496,18 @@ def clear_runtime_config_state() -> None:
                 except SQLAlchemyError:
                     logger.debug("cp runtime-config engine dispose failed (best-effort)")
 
-# ── auth helper (reuse CP auth; fallback to X-User-Id for tests) ────────────
+# ── auth helper (reuse CP auth; never hide an auth backend failure) ─────────
 def _resolve_caller(authorization: str | None, x_user_id: str | None) -> str:
     try:
         from .auth import resolve_caller_user  # type: ignore
         return resolve_caller_user(authorization, x_user_id)
-    except Exception:
-        if x_user_id:
-            return x_user_id
-        if _is_production():
-            raise HTTPException(status_code=401, detail="JWT required in production")
-        raise HTTPException(status_code=401, detail="X-User-Id or Bearer required")
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="runtime-config authentication backend unavailable") from exc
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.error(f"runtime-config authentication module unavailable: {exc}")
+        raise HTTPException(status_code=503, detail="runtime-config authentication backend unavailable") from exc
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @router.get("")
@@ -500,8 +522,12 @@ def get_runtime_config_cp(
     tenant=(tenant_id or x_tenant_id or "default").strip() or "default"
     try:
         snap=fetch_published_snapshot(tenant)
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeConfigValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeConfigBackendError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if snap is None:
         # Production fail-closed: missing published config means control plane has no canonical config
         if _is_production():
@@ -514,8 +540,13 @@ def get_runtime_config_cp(
                 raise HTTPException(status_code=503, detail="snapshot contains secret raw — fail-closed")
             raise HTTPException(status_code=502, detail="snapshot contains secret raw — rejected")
     # augment with config_hash/process info
-    ch=snap.get("config_hash") or (_config_hash(snap.get("config",{})) if snap.get("config") else None)
-    applied=get_applied(tenant)
+    try:
+        ch=snap.get("config_hash") or (_config_hash(snap.get("config",{})) if snap.get("config") else None)
+        applied=get_applied(tenant)
+    except RuntimeConfigValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeConfigBackendError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"tenant_id": tenant, "snapshot": snap, "verified": True, "caller": caller, "config_hash": ch, "published_version": snap.get("version"), "applied_version": (applied.get("applied_version") if isinstance(applied, dict) else None), "process_identity": _process_identity()}
 
 @router.get("/status")
@@ -545,13 +576,16 @@ def get_status_cp(
         # also surface tamper as error even if snap is None non-prod
     except HTTPException:
         raise
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        if _is_production():
-            raise HTTPException(status_code=503, detail=str(e))
-        error=str(e)[:300]
-    applied=get_applied(tenant)
+    except RuntimeConfigValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeConfigBackendError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        applied=get_applied(tenant)
+    except RuntimeConfigBackendError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     applied_version=None
     applied_at=None
     applied_ch=None
@@ -591,8 +625,12 @@ def apply_runtime_config(
     tenant=(tenant_id or x_tenant_id or "default").strip() or "default"
     try:
         snap=fetch_published_snapshot(tenant)
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeConfigValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeConfigBackendError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if snap is None:
         if _is_production():
             raise HTTPException(status_code=503, detail="no published config to apply — fail-closed")
@@ -603,12 +641,16 @@ def apply_runtime_config(
     if snap.get("config_hash") is None and snap.get("config"):
         try:
             snap["config_hash"]=_config_hash(snap.get("config",{}))
-        except Exception:
-            pass
+        except RuntimeConfigValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         rec=mark_applied(tenant, snap, caller)
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeConfigValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeConfigBackendError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"tenant_id": tenant, "applied": rec, "snapshot_version": snap.get("version"), "published_version": snap.get("version"), "applied_version": rec.get("applied_version") or rec.get("version"), "config_hash": snap.get("config_hash") or rec.get("config_hash"), "process_identity": rec.get("process_identity"), "applied_at": rec.get("applied_at"), "error": rec.get("error")}
 
 # internal (unauthenticated but tenant-scoped, for health probes)
@@ -616,9 +658,20 @@ def apply_runtime_config(
 @internal_router.get("/")
 def internal_get(tenant_id: str = "default", x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id")):
     tenant=(tenant_id or x_tenant_id or "default").strip() or "default"
-    snap=fetch_published_snapshot(tenant)
+    try:
+        snap=fetch_published_snapshot(tenant)
+    except RuntimeConfigValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeConfigBackendError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if snap is None:
         if _is_production():
-            return {"tenant_id": tenant, "snapshot": None, "verified": False, "error": "no published config — fail-closed"}
+            raise HTTPException(status_code=503, detail={"code":"NO_PUBLISHED_CONFIG","message":"no published config — fail-closed"})
         return {"tenant_id": tenant, "snapshot": None, "verified": None}
-    return {"tenant_id": tenant, "snapshot": snap, "verified": _verify_snapshot(snap)}
+    try:
+        verified=_verify_snapshot(snap)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="malformed runtime config snapshot") from exc
+    return {"tenant_id": tenant, "snapshot": snap, "verified": verified}
