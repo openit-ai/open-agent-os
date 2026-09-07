@@ -86,8 +86,8 @@ def _load_vault_module():
             _sys.modules["personal_wiki"] = pkg
         from personal_wiki import vault as _vault  # type: ignore
         return _vault
-    except Exception as e:
-        logger.debug(f"vault load failed: {e}")
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, OSError, ValueError) as e:
+        logger.debug("vault module unavailable: %s: %s", type(e).__name__, e)
         return None
 
 def _owner_vault_root(tenant_id: str, agent_id: str) -> Path:
@@ -99,8 +99,8 @@ def _owner_vault_root(tenant_id: str, agent_id: str) -> Path:
             # tenant/agent isolated root
             ow = vault_mod.vault_path_for_tenant_agent(tenant_id, agent_id, vault_root=base)
             return _P(ow)
-        except Exception:
-            pass
+        except (OSError, ValueError, AttributeError, TypeError) as e:
+            logger.warning("vault owner path unavailable; using configured filesystem root: %s", e)
     # fallback: env vault root or default
     for k in ("OAOS_WIKI_VAULT","PERSONAL_WIKI_VAULT","VAULT_ROOT"):
         v=os.environ.get(k)
@@ -136,8 +136,8 @@ def _persist_attachment_fs(tenant_id: str, agent_id: str, filename: str, content
     if vault_mod is not None and hasattr(vault_mod, "safe_join_vault"):
         try:
             dest = vault_mod.safe_join_vault(root, "attachments", safe_name)
-        except Exception:
-            pass
+        except (OSError, ValueError, TypeError) as e:
+            logger.warning("vault safe-join unavailable; retaining owner-scoped path: %s", e)
     # de-dupe
     if dest.exists():
         stem = dest.stem; suf = dest.suffix
@@ -165,19 +165,21 @@ def _extract_text_for_file(path: Path, max_chars: int = 5000) -> str:
             if mod and hasattr(mod, "extract_text"):
                 try:
                     return mod.extract_text(path, max_chars=max_chars)  # type: ignore
-                except Exception as e:
-                    logger.debug(f"extractor failed: {e}")
-    except (ImportError, ModuleNotFoundError, FileNotFoundError):
-        pass
+                except OSError as e:
+                    raise HTTPException(status_code=503, detail="wiki extractor storage unavailable") from e
+                except (ValueError, TypeError, RuntimeError) as e:
+                    raise HTTPException(status_code=422, detail=f"wiki content extraction failed: {e}") from e
+    except (ImportError, ModuleNotFoundError, FileNotFoundError) as e:
+        logger.debug("optional wiki extractor unavailable: %s", e)
     # fallback: utf8 decode or hex preview
     try:
         data = path.read_bytes() if isinstance(path, Path) else Path(path).read_bytes()
         try:
             return data.decode("utf-8")[:max_chars]
-        except Exception:
+        except UnicodeDecodeError:
             return data[:200].hex() + " ... (binary preview)"
-    except Exception as e:
-        return f"[extraction failed: {e}]"
+    except OSError as e:
+        raise HTTPException(status_code=503, detail="wiki attachment storage unavailable") from e
 
 def _list_notes_fs(tenant_id: str, agent_id: str, limit: int = 10, offset: int = 0) -> list[dict]:
     root = _owner_vault_root(tenant_id, agent_id)
@@ -200,7 +202,8 @@ def _list_notes_fs(tenant_id: str, agent_id: str, limit: int = 10, offset: int =
                 out.append({"id": f.stem, "title": title, "content": content[:500], "vault_path": rel, "path": str(f), "created_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(), "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()})
                 if len(out) >= limit:
                     break
-            except Exception:
+            except (OSError, UnicodeError, ValueError) as e:
+                logger.warning("wiki note skipped during filesystem read: %s", e)
                 continue
     # also include journal-derived notes? keep simple
     return out[:limit]
@@ -224,7 +227,8 @@ def _search_notes_fs(tenant_id: str, agent_id: str, q: str, limit: int = 10) -> 
                     score = txt.lower().count(ql) * 0.1 + (1.0 if ql in f.name.lower() else 0)
                     score = min(0.99, 0.5+score)
                     candidates.append({"id": f.stem, "title": f.stem, "content": txt[:500], "vault_path": rel, "score": round(score,3), "path": str(f)})
-            except Exception:
+            except (OSError, UnicodeError, ValueError) as e:
+                logger.warning("wiki search item skipped during filesystem read: %s", e)
                 continue
     # sort by score
     candidates.sort(key=lambda x: x.get("score",0), reverse=True)
@@ -253,7 +257,8 @@ def _build_image_attachment_ref(saved_path: Path, vault_path: str, attachment_id
     mime = _IMAGE_MIME.get(ext, "application/octet-stream")
     try:
         size = saved_path.stat().st_size if saved_path.exists() else 0
-    except Exception:
+    except OSError as e:
+        logger.warning("image attachment metadata unavailable: %s", e)
         size = 0
     # The active ACP/Hermes runtime must receive bytes, not only a local path.
     # Keep the reference owner-scoped and path-free while providing an accepted
@@ -262,7 +267,7 @@ def _build_image_attachment_ref(saved_path: Path, vault_path: str, attachment_id
     try:
         encoded = base64.b64encode(saved_path.read_bytes()).decode("ascii")
         data_url = f"data:{mime};base64,{encoded}"
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=f"image bytes unavailable for runtime forwarding: {exc}") from exc
     return {
         "kind": IMAGE_RUNTIME_KIND,
@@ -407,8 +412,8 @@ def _audit(request: Request | None, event_type: str, detail: dict[str, Any]) -> 
         if sec_path not in sys.path:
             sys.path.insert(0, sec_path)
         # we just log; actual ledger wiring is optional
-    except (OSError, AttributeError):
-        pass
+    except (OSError, AttributeError) as e:
+        logger.debug("personal wiki audit ledger probe unavailable: %s", e)
 
 # ---------------------------------------------------------------------------
 # Auth helper — H3 verified JWT owner resolution (no unverified claims)
@@ -471,7 +476,8 @@ def _verify_wiki_jwt(token: str, required_scope: str | None = None) -> dict:
                 return _v(token, required_scope=required_scope)
     except HTTPException:
         raise
-    except Exception:
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, OSError) as e:
+        logger.warning("wiki JWT verifier module unavailable: %s", e)
         from jose import jwt as _jwt, JWTError as _JWTError, ExpiredSignatureError as _Exp  # type: ignore
         ALLOWED_ISSUERS = {"control-plane", "security", "open-agent-os-auth"}
         ALLOWED_AUDIENCES = {"wiki-fs", "memory-service", "wiki", "security"}
@@ -628,8 +634,10 @@ async def upload_attachment(
 
     try:
         content = await file.read()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"failed to read attachment: {e}")
+    except OSError as e:
+        raise HTTPException(status_code=503, detail=f"attachment storage unavailable: {e}") from e
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"malformed attachment: {e}") from e
 
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="file too large (max 10MB)")
@@ -646,10 +654,12 @@ async def upload_attachment(
         safe_filename = saved_path.name
     except HTTPException:
         raise
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         logger.warning(f"vault persist failed: {e}")
         # Fail-closed: do not fall back to /tmp (owner isolation bypass); surface error so caller knows storage failed
-        raise HTTPException(status_code=503, detail=f"vault persist failed: {e}")
+        raise HTTPException(status_code=503, detail=f"vault persist failed: {e}") from e
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"invalid attachment metadata: {e}") from e
 
     # --- Common IDs / vault paths ---
     attachment_id = f"att_{uuid.uuid4().hex[:12]}"
@@ -661,8 +671,8 @@ async def upload_attachment(
         from personal_wiki.vault import get_vault_root as _gvr
         base = _gvr()
         vault_path = saved_path.relative_to(base).as_posix()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, OSError, ValueError) as e:
+        logger.debug("vault-relative attachment path unavailable: %s", e)
 
     is_image = _is_image_file(safe_filename)
     # For images: attachment reference + runtime instruction (NO OCR, NO LLM selection)
@@ -724,16 +734,19 @@ async def upload_attachment(
                         if resp.status_code in (200, 201, 202):
                             try:
                                 j = resp.json()
-                            except Exception:
+                            except (ValueError, TypeError) as e:
+                                logger.warning("control-plane forwarding response was not JSON: %s", e)
                                 j = {"status_code": resp.status_code}
                             forward_result.update({"status": "forwarded", "response": j, "http_status": resp.status_code})
                         else:
                             forward_result.update({"status": "queued", "http_status": resp.status_code, "body": resp.text[:500]})
                 except asyncio.TimeoutError:
                     forward_result.update({"status": "queued", "reason": "control plane timeout (2.0s bounded)", "payload": fwd_payload})
-                except Exception as e:
+                except (httpx.HTTPError, OSError, ValueError, TypeError, RuntimeError) as e:
+                    logger.warning("control-plane forwarding degraded: %s", e)
                     forward_result.update({"status": "queued", "reason": f"control plane unreachable: {e}", "payload": fwd_payload})
-            except Exception as e:
+            except (ImportError, ModuleNotFoundError, OSError, ValueError, TypeError, RuntimeError) as e:
+                logger.warning("control-plane forwarding adapter unavailable: %s", e)
                 forward_result.update({"status": "queued", "reason": f"forward attempt failed: {e}", "payload": fwd_payload})
             # Build explicit forwarding event
             if forward_result.get("status") == "forwarded":
@@ -788,22 +801,26 @@ async def upload_attachment(
                 np = vault_mod.upsert_note(note_id, extracted_text[:5000], frontmatter=note_frontmatter, vault_root=owner_root)
                 if np is not None:
                     note_path = Path(np)
-            except Exception as e:
-                logger.debug(f"upsert_note failed: {e}")
+            except (OSError, RuntimeError, ValueError, TypeError) as e:
+                logger.warning("wiki note adapter failed; using filesystem materialization: %s", e)
                 note_path.write_text(f"---\nsource: {safe_filename}\n---\n\n" + extracted_text[:5000], encoding="utf-8")
         else:
             note_path.write_text(f"---\nsource: {safe_filename}\n---\n\n" + extracted_text[:5000], encoding="utf-8")
-    except Exception as e:
-        logger.warning(f"note create failed: {e}")
+    except OSError as e:
+        raise HTTPException(status_code=503, detail=f"wiki note storage unavailable: {e}") from e
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"wiki note materialization failed: {e}") from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"wiki note backend unavailable: {e}") from e
     try:
         vault_mod = _load_vault_module()
         if vault_mod is not None and hasattr(vault_mod, "append_journal"):
             try:
                 vault_mod.append_journal(f"att-{attachment_id}", "attachment_upload", {"filename": safe_filename, "extracted": extracted_text[:2000]}, vault_root=owner_root, when=datetime.now(timezone.utc))
-            except Exception as e:
-                logger.debug(f"journal append failed: {e}")
-    except Exception:
-        pass
+            except (OSError, RuntimeError, ValueError, TypeError) as e:
+                logger.warning("wiki journal archive degraded for attachment %s: %s", attachment_id, e)
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, OSError, ValueError) as e:
+        logger.warning("wiki journal adapter unavailable for attachment %s: %s", attachment_id, e)
     _audit(request, "PERSONAL_WIKI_ATTACHMENT_UPLOAD", {
         "user_id": user_id,
         "agent_id": agent_id,
@@ -825,8 +842,8 @@ async def upload_attachment(
     try:
         note_rel = note_path.relative_to(owner_root).as_posix()
         note_vault_path = note_rel
-    except Exception:
-        pass
+    except (OSError, ValueError) as e:
+        logger.warning("wiki note relative path unavailable: %s", e)
     # --- Build response — explicit contract for images vs documents ---
     base_resp: dict[str, Any] = {
         "attachment_id": attachment_id,
@@ -881,6 +898,7 @@ async def search_notes(
     tenant_id = owner["tenant_id"]; agent_id = owner["agent_id"]
     # try memory service if DB configured (pgvector); else FS substring search
     # FS first (owner-isolated)
+    fs_error: str | None = None
     try:
         fs_results = _search_notes_fs(tenant_id, agent_id, q, limit=limit)
         if fs_results:
@@ -895,12 +913,17 @@ async def search_notes(
                 "source": "vault_fs",
             }
     except (OSError, ValueError) as e:
-        logger.debug(f"fs search failed: {e}")
+        fs_error = str(e)
+        logger.warning("wiki filesystem search unavailable: %s", e)
     # if no FS hits and DB not configured -> mock fallback only in non-prod
     if not _is_db_configured():
         if _is_production():
+            if fs_error:
+                raise HTTPException(status_code=503, detail="wiki filesystem search unavailable") from None
             _no_mock_in_production()
-        # non-prod mock for backwards compat when vault empty
+        elif fs_error:
+            logger.warning("wiki search degraded to non-production mock after filesystem failure: %s", fs_error)
+        # non-prod mock for backwards compat when vault is not configured and empty
         results = _mock_search_results(q, owner, limit=limit)
         return {
             "query": q,
@@ -913,23 +936,38 @@ async def search_notes(
             "source": "mock",
         }
     # DB configured — would query memory_service pgvector; for now FS results or empty, not mock
+    remote_error: str | None = None
     try:
         # attempt memory_service HTTP search if configured
         svc_url = os.environ.get("OAOS_MEMORY_SERVICE_URL") or os.environ.get("MEMORY_SERVICE_URL") or ""
         if svc_url:
-            import httpx
-            # best-effort remote search (sync via httpx)
             try:
-                with httpx.Client(timeout=5) as client:
-                    resp = client.post(f"{svc_url.rstrip('/')}/v1/memory/search", json={"query": q, "tenant_id": tenant_id, "agent_id": agent_id, "owner": owner["user_id"], "limit": limit}, headers={"X-Tenant-Id": tenant_id, "X-User-Id": owner["user_id"]})
-                    if resp.status_code == 200:
-                        j = resp.json()
-                        rs = j.get("results") or j.get("items") or []
-                        if rs:
-                            return {"query": q, "results": rs[:limit], "count": len(rs[:limit]), "mock": False, "pgvector": True, "owner": owner["user_id"], "vault_path": str(_owner_vault_root(tenant_id, agent_id)), "source": "memory_service"}
-            except Exception as e:
-                logger.debug(f"memory_service search failed: {e}")
-        # fallback to FS (already empty) — return empty not mock in prod
+                import httpx
+            except (ImportError, ModuleNotFoundError) as e:
+                remote_error = f"memory service client unavailable: {e}"
+            else:
+                # bounded remote search; a failure is explicit degraded state below
+                try:
+                    with httpx.Client(timeout=5) as client:
+                        resp = client.post(f"{svc_url.rstrip('/')}/v1/memory/search", json={"query": q, "tenant_id": tenant_id, "agent_id": agent_id, "owner": owner["user_id"], "limit": limit}, headers={"X-Tenant-Id": tenant_id, "X-User-Id": owner["user_id"]})
+                        if resp.status_code == 200:
+                            try:
+                                j = resp.json()
+                            except (ValueError, TypeError) as e:
+                                remote_error = f"memory service returned malformed JSON: {e}"
+                            else:
+                                rs = j.get("results") or j.get("items") or []
+                                if rs:
+                                    return {"query": q, "results": rs[:limit], "count": len(rs[:limit]), "mock": False, "pgvector": True, "owner": owner["user_id"], "vault_path": str(_owner_vault_root(tenant_id, agent_id)), "source": "memory_service"}
+                        else:
+                            remote_error = f"memory service returned HTTP {resp.status_code}"
+                except (httpx.HTTPError, OSError, TimeoutError, ValueError, TypeError, RuntimeError) as e:
+                    remote_error = f"memory service search unavailable: {e}"
+        if remote_error:
+            logger.warning("wiki retrieval degraded: %s", remote_error)
+            if _is_production():
+                raise HTTPException(status_code=503, detail="wiki retrieval backend unavailable") from None
+        # fallback to FS only as an explicitly identified non-production/optional degradation
         fs_results = _search_notes_fs(tenant_id, agent_id, q, limit=limit)
         return {
             "query": q,
@@ -940,22 +978,24 @@ async def search_notes(
             "owner": owner["user_id"],
             "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
             "source": "vault_fs",
+            **({"degraded": True, "degraded_reason": remote_error} if remote_error else {}),
         }
-    except Exception as e:
+    except (OSError, ValueError, TypeError, TimeoutError, RuntimeError) as e:
         logger.warning(f"search fallback: {e}")
         if _is_production():
-            _no_mock_in_production()
-        results = _mock_search_results(q, owner, limit=limit)
+            raise HTTPException(status_code=503, detail=f"wiki retrieval backend unavailable: {e}") from e
+        logger.warning("wiki retrieval returned explicit non-production degraded empty result: %s", e)
         return {
             "query": q,
-            "results": results,
-            "count": len(results),
-            "mock": True,
+            "results": [],
+            "count": 0,
+            "mock": False,
             "pgvector": False,
             "owner": owner["user_id"],
             "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
-            "error": str(e),
-            "source": "mock",
+            "degraded": True,
+            "degraded_reason": str(e),
+            "source": "degraded",
         }
 
 @router.get("/notes")
@@ -969,6 +1009,7 @@ async def list_notes(
     owner = _resolve_owner(request, x_user_id=x_user_id, required_scope="wiki:read")
     _audit(request, "PERSONAL_WIKI_LIST_NOTES", {"user_id": owner["user_id"], "limit": limit, "offset": offset, "tenant_id": owner["tenant_id"], "agent_id": owner["agent_id"]})
     tenant_id = owner["tenant_id"]; agent_id = owner["agent_id"]
+    fs_error: str | None = None
     try:
         fs_notes = _list_notes_fs(tenant_id, agent_id, limit=limit, offset=offset)
         if fs_notes:
@@ -983,10 +1024,16 @@ async def list_notes(
                 "source": "vault_fs",
             }
     except (OSError, ValueError) as e:
-        logger.debug(f"fs list failed: {e}")
+        fs_error = str(e)
+        logger.warning("wiki filesystem list unavailable: %s", e)
     if not _is_db_configured():
         if _is_production():
+            if fs_error:
+                raise HTTPException(status_code=503, detail="wiki filesystem list unavailable") from None
             _no_mock_in_production()
+        if fs_error:
+            logger.warning("wiki list degraded to non-production empty result after filesystem failure: %s", fs_error)
+            return {"notes": [], "count": 0, "total": 0, "mock": False, "owner": owner["user_id"], "vault_path": str(_owner_vault_root(tenant_id, agent_id)), "degraded": True, "degraded_reason": fs_error, "source": "degraded"}
         # non-prod mock for backwards compat (vault empty)
         notes = _mock_notes(owner, limit=limit)
         paged = notes[offset: offset + limit]
@@ -1011,20 +1058,20 @@ async def list_notes(
             "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
             "source": "vault_fs",
         }
-    except Exception as e:
+    except (OSError, ValueError, TypeError, RuntimeError) as e:
         logger.warning(f"list notes fallback: {e}")
         if _is_production():
-            _no_mock_in_production()
-        notes = _mock_notes(owner, limit=limit)
+            raise HTTPException(status_code=503, detail=f"wiki storage unavailable: {e}") from e
         return {
-            "notes": notes[offset: offset + limit],
-            "count": len(notes),
-            "total": len(notes),
-            "mock": True,
+            "notes": [],
+            "count": 0,
+            "total": 0,
+            "mock": False,
             "owner": owner["user_id"],
             "vault_path": str(_owner_vault_root(tenant_id, agent_id)),
-            "error": str(e),
-            "source": "mock",
+            "degraded": True,
+            "degraded_reason": str(e),
+            "source": "degraded",
         }
 
 @router.post("/consolidate")
@@ -1048,10 +1095,12 @@ async def trigger_consolidation(
         result = consolidate_once(ws_id=ws_id, lang=lang, dry_run=dry_run)
         _audit(request, "CONSOLIDATION_RUN", {"user_id": user_id, "ws_id": ws_id, "result": result})
         return {"owner": user_id, "ws_id": ws_id, **result}
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, OSError, ValueError, TypeError, RuntimeError) as e:
         logger.warning(f"consolidate trigger failed for {user_id}: {e}")
         _audit(request, "CONSOLIDATION_RUN_FAILED", {"user_id": user_id, "ws_id": ws_id, "error": str(e)})
-        return {"owner": user_id, "ws_id": ws_id, "action": "error", "error": str(e), "mock": True}
+        if _is_production():
+            raise HTTPException(status_code=503, detail=f"wiki consolidation backend unavailable: {e}") from e
+        return {"owner": user_id, "ws_id": ws_id, "action": "error", "error": str(e), "degraded": True, "source": "degraded"}
 
 
 @router.get("/consolidation/status")
@@ -1083,5 +1132,8 @@ async def consolidation_status(
             "hermes_model": model,
             "scheduler": "02:00 KST (Asia/Seoul) via Hermes cron or APScheduler fallback — set OAOS_WIKI_CONSOLIDATION_CRON=1",
         }
-    except Exception as e:
-        return {"owner": user_id, "ws_id": ws_id, "error": str(e), "mock": True}
+    except (ImportError, ModuleNotFoundError, OSError, ValueError, TypeError, RuntimeError) as e:
+        logger.warning("consolidation status unavailable for %s: %s", user_id, e)
+        if _is_production():
+            raise HTTPException(status_code=503, detail=f"wiki consolidation status unavailable: {e}") from e
+        return {"owner": user_id, "ws_id": ws_id, "error": str(e), "degraded": True, "source": "degraded"}
