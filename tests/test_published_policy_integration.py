@@ -26,6 +26,9 @@ for p in [
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
+
 from policy_model import PolicyBundle, PolicyRule, PolicySource, PolicyDecision
 from policy_engine.engine import PolicyEngine
 from policy_engine.small_business_bundle import small_business_bundle

@@ -3,6 +3,10 @@
 Keeps 541+2 passing when added.
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 import sys
 from pathlib import Path
 import importlib.util

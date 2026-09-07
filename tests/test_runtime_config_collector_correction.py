@@ -6,6 +6,10 @@ Validates minimal correction per task:
 - Stale fallback prevented: snapshot reflects current fallback chain (DB/live), not stale empty
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import importlib.util, sys, pathlib, os, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]

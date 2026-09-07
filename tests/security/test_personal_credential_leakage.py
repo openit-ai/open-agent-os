@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
 from policy_model import PolicyDecision, PolicyEvaluationRequest, PolicyBundle, PolicyRule, PolicySource
 from policy_engine.default_bundle import default_bundle
 from policy_engine.engine import PolicyEngine

@@ -4,6 +4,9 @@ Covers §§9-10 personal delegation, §10.2 owner isolation, §16H rate limit, E
 import sys
 from pathlib import Path
 import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import AsyncMock, patch, MagicMock
 
 ROOT = Path(__file__).resolve().parents[1]

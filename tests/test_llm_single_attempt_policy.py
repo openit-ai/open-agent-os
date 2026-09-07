@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 import asyncio
 import os
 from pathlib import Path

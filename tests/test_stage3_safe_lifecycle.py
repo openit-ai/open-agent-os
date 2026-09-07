@@ -23,6 +23,9 @@ for p in [
         sys.path.insert(0, str(p))
 
 import pytest
+
+pytestmark = pytest.mark.integration
+
 from policy_model import PolicyDecision
 
 def _clear_loader_env(monkeypatch):

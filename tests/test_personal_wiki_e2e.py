@@ -9,6 +9,10 @@ Covers:
 Uses tmp_path / monkeypatch — no external services, no DB.
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 import sys
 import uuid

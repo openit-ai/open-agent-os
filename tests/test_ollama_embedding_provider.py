@@ -9,6 +9,10 @@ Verifies:
 - get_default_provider returns Ollama when URL set, else Fake or prod error
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 
 import os
 

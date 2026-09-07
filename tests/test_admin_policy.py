@@ -42,6 +42,9 @@ admin_app = _app_mod.app
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
 # Make control-plane imports work
 for p in [
     ROOT / "control-plane",

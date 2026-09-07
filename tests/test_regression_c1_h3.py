@@ -20,6 +20,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.integration
+
 from jose import jwt
 from fastapi.testclient import TestClient
 

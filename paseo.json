@@ -10,6 +10,12 @@
     "test": {
       "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test"
     },
+    "test-fast": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test-fast"
+    },
+    "test-integration": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test-integration"
+    },
     "test-full": {
       "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test-full"
     },

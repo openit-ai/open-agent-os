@@ -4,6 +4,9 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.subsystem
+
+
 from adapters.microsoft.adapter import MicrosoftAdapter
 
 

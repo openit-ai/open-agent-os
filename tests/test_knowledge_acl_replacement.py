@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 

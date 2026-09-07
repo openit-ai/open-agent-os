@@ -10,6 +10,9 @@ Coverage:
   normalize / mcp_registry / google connector / outline connector / risk / authz_hook / proxy / app
 """
 import pytest
+
+pytestmark = pytest.mark.integration
+
 import json
 import base64
 from datetime import datetime, timedelta, timezone

@@ -9,6 +9,9 @@
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.integration
+
 from pathlib import Path
 
 from runtime_adapter.workspace import (

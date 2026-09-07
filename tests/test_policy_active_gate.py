@@ -10,6 +10,9 @@ for p in [ROOT / "control-plane", ROOT / "security" / "policy-engine", ROOT / "p
         sys.path.insert(0, str(p))
 
 import pytest
+
+pytestmark = pytest.mark.integration
+
 from fastapi.testclient import TestClient
 import importlib.util
 

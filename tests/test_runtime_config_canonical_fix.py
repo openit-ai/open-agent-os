@@ -9,6 +9,10 @@ Validates:
 - Mismatch prevention: canonical env not silently replaced by stale localhost/qwen2.5
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import importlib.util, sys, pathlib, os, tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"

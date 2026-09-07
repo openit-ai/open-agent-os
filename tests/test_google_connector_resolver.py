@@ -15,6 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
 ROOT = Path(__file__).resolve().parents[1]
 for p in [
     ROOT / "execution-gateway",

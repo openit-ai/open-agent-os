@@ -1,4 +1,4 @@
-.PHONY: dev lint test test-full test-distributed test-external test-slow test-fast migrate verify-evidence
+.PHONY: dev lint test test-fast test-integration test-full test-distributed test-external test-slow migrate verify-evidence verify-evidence-full scaffold-verify
 
 dev:
 	docker compose -f deploy/docker-compose.dev.yml up -d
@@ -7,8 +7,14 @@ lint:
 	ruff check .
 	mypy packages control-plane execution-gateway security adapters
 
+test-fast:
+	pytest -q -m "unit"
+
 test:
-	pytest -q -m "not external and not distributed and not slow"
+	pytest -q -m "unit or subsystem"
+
+test-integration:
+	pytest -q -m "integration"
 
 test-full:
 	pytest -q
@@ -21,9 +27,6 @@ test-external:
 
 test-slow:
 	pytest -q -m "slow"
-
-test-fast:
-	pytest -q -m "not external and not distributed and not slow"
 
 verify-evidence:
 	python scripts/verify-evidence-tiers.py --check-only

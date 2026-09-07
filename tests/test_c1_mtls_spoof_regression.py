@@ -14,6 +14,9 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+pytestmark = pytest.mark.unit
+
 from jose import jwt
 
 ROOT = Path(__file__).resolve().parents[1]

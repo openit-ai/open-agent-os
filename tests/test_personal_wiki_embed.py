@@ -1,5 +1,9 @@
 """Test embed stub — no hard deps, hash fallback, vault wiring."""
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 import os
 import sys

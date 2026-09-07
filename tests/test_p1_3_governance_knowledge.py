@@ -11,6 +11,9 @@ All tests are deterministic (no LLM).
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 import sys
 from pathlib import Path
 

@@ -31,6 +31,9 @@ from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
 from control_plane.app import app
 from control_plane.session import session_store
 from control_plane.auth import issue_user_jwt

@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
 from execution_gateway.data_access import (
     DataAccessPolicy,
     allowed_read_sources,

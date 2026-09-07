@@ -1,5 +1,9 @@
 """P1: production memory service must fail closed on missing DB."""
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 import importlib.util
 import time
 import uuid

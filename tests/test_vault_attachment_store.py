@@ -19,6 +19,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
+
 REPO = Path(__file__).resolve().parents[1]
 PKG_WIKI = REPO / "packages" / "personal-wiki"
 SCRIPT = REPO / "scripts" / "oaos-mm-bridge.py"

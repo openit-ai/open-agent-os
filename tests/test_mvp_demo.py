@@ -8,6 +8,9 @@
   5. Explicit Deny (export) 차단 — personal Delegation override
 """
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from fastapi.testclient import TestClient
 
 from control_plane.app import app as cp_app

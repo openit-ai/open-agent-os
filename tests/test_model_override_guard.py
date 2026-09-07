@@ -15,6 +15,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.subsystem
+
+
 # Make packages importable (same as conftest.py)
 ROOT = Path(__file__).resolve().parents[1]
 for p in [

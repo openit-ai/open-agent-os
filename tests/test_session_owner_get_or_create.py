@@ -1,4 +1,8 @@
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 from control_plane.session import InMemorySessionStore
 

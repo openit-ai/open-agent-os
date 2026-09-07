@@ -14,6 +14,9 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from fastapi import HTTPException
 from jose import jwt
 

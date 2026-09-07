@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from pathlib import Path
 
 

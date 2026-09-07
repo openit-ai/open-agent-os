@@ -4,6 +4,9 @@ from pathlib import Path
 import os, asyncio
 from datetime import datetime, timezone
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]

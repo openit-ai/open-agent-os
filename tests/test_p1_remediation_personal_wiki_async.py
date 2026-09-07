@@ -8,6 +8,10 @@ Verifies:
 """
 
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 
 import asyncio
 import inspect

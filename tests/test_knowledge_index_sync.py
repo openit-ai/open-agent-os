@@ -11,6 +11,9 @@ if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from knowledge_index.chunking import ChunkConfig
 from knowledge_index.embedding import FakeEmbeddingProvider
 from knowledge_index.connectors.outline import OutlineSourceAdapter, make_outline_doc

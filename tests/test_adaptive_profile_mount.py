@@ -3,6 +3,10 @@
 Proves /v1/profile endpoints are exposed via control_plane.app.
 Does NOT apply migration or start service; verifies router mount only.
 """
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import os
 

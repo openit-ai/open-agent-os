@@ -6,6 +6,9 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from pydantic import BaseModel
 
 from agent_runtime.llm_runtime import (

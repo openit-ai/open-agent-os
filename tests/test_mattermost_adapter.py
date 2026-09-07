@@ -8,6 +8,9 @@ import hmac
 import json
 import urllib.parse
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch
 

@@ -1,4 +1,8 @@
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 from agent_runtime import env_gate as canonical
 from control_plane import env_gate as control_plane_gate

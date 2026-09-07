@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+
+pytestmark = pytest.mark.unit
+
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -13,6 +13,9 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.subsystem
+
+
 ROOT = Path(__file__).resolve().parents[1]
 for p in [
     ROOT / "packages" / "runtime-adapter",

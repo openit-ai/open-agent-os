@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.subsystem
+
+
 # Make agent_runtime importable without install
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "packages" / "agent-runtime"

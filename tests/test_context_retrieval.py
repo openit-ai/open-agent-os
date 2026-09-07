@@ -1,4 +1,8 @@
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 from control_plane.context_retrieval import classify_context_route, format_context
 

@@ -8,6 +8,10 @@ Covers defects described in P1 review:
 """
 
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 
 import json
 import sys

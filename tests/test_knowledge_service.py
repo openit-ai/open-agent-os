@@ -15,7 +15,7 @@ import pytest_asyncio
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.subsystem]
 
 # ---------------------------------------------------------------------------
 # helpers

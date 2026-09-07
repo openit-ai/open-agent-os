@@ -1,4 +1,8 @@
 """FastAPI integration — header-based isolation."""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from fastapi.testclient import TestClient
 from control_plane.app import app
 

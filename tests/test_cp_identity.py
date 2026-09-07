@@ -1,4 +1,8 @@
 """H1 — Control Plane identity tests (v1.7.1 I-H1-1..3)."""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import time
 import sys

@@ -7,6 +7,10 @@ tamper rejection.
 No DB/external network. Pure in-memory + admin_settings fallback path mocked.
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import importlib.util, sys, pathlib, os
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"

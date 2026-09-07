@@ -7,6 +7,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 import pytest
+
+pytestmark = pytest.mark.unit
+
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 

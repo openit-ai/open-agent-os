@@ -12,6 +12,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
 REPO = Path(__file__).resolve().parents[1]
 CP = REPO / "control-plane"
 if str(CP) not in sys.path:

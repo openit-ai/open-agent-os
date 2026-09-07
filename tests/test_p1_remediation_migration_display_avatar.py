@@ -5,6 +5,10 @@ and is idempotent. Uses SQLite in-memory to avoid DB dependency.
 """
 
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 
 import importlib.util
 from pathlib import Path

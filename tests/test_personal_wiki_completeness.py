@@ -1,5 +1,9 @@
 """Failing tests for Personal Wiki completeness slice — path consistency, extractor, vault FS, memory service, production fail-closed."""
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import os, sys, tempfile, uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone

@@ -9,6 +9,9 @@ import os
 import time
 
 import pytest
+
+pytestmark = pytest.mark.unit
+
 from collections.abc import Iterator
 from fastapi.testclient import TestClient
 

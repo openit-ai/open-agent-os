@@ -24,6 +24,9 @@ for p in [
         sys.path.insert(0, str(p))
 
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from fastapi.testclient import TestClient
 
 from policy_engine.small_business_bundle import small_business_bundle, classify_risk

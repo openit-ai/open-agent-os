@@ -17,6 +17,9 @@ import re
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
+
 ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = ROOT / "alembic" / "versions"
 REV_013 = VERSIONS / "013_admin_policy_versions.py"

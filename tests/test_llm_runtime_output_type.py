@@ -1,6 +1,9 @@
 """Test output_type validation with retry — pydantic-ai inspired pattern."""
 from __future__ import annotations
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from pydantic import BaseModel
 
 from agent_runtime.llm_runtime import LLMProviderAdapter, ToolOutputLimits, OAOSContext

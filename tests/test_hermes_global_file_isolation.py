@@ -1,5 +1,9 @@
 """Regression tests for OAOS/Hermes same-OS-account file boundaries."""
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import sys
 from pathlib import Path

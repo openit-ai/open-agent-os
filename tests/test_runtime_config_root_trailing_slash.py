@@ -5,6 +5,10 @@ case where frontend fetches /v1/runtime/config/?tenant_id=default vs
 /v1/runtime/config?tenant_id=default."""
 
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import importlib.util, sys, pathlib, os
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]

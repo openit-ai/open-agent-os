@@ -2,6 +2,9 @@
 import sys
 from pathlib import Path
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 ROOT = Path(__file__).resolve().parents[1]
 for p in [ ROOT / "adapters", ROOT / "execution-gateway", ROOT / "security" / "memory-governance", ROOT / "security" / "policy-engine", ROOT / "packages" / "common-types",]:
     if str(p) not in sys.path: sys.path.insert(0, str(p))

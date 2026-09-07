@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
 from datetime import datetime, timezone
 from pathlib import Path
 import sys

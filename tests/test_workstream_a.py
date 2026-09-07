@@ -6,6 +6,9 @@
 - user context 유지 (AgentContext = tenant/user/agent/session/trace)
 """
 import pytest
+
+pytestmark = pytest.mark.integration
+
 from control_plane.identity import map_user_to_agent
 from control_plane.personal_agent import derive_agent_id
 from control_plane.session import SessionStore

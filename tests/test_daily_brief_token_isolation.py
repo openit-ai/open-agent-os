@@ -1,5 +1,9 @@
 """Daily briefing must use only the verified requester's Google token."""
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import importlib.util
 from pathlib import Path

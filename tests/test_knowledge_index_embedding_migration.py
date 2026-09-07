@@ -1,5 +1,9 @@
 """Static and isolated checks for the 019 embedding contract migration."""
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.subsystem
+
 
 from pathlib import Path
 

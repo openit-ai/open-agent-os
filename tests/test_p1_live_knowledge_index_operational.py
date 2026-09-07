@@ -26,6 +26,9 @@ if str(PKG) not in sys.path:
 
 import pytest
 
+pytestmark = pytest.mark.subsystem
+
+
 from knowledge_index.chunking import ChunkConfig, content_hash
 from knowledge_index.connectors.base import InMemorySourceAdapter
 from knowledge_index.connectors.outline import OutlineSourceAdapter, make_outline_doc

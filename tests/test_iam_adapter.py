@@ -6,6 +6,9 @@ for p in [ROOT / "adapters",ROOT / "control-plane",ROOT / "security" / "policy-e
     if str(p) not in sys.path: sys.path.insert(0, str(p))
 if str(ROOT / "security") not in sys.path: sys.path.insert(0, str(ROOT / "security"))
 import pytest
+
+pytestmark = pytest.mark.unit
+
 from iam.adapter import IamAdapter, GoogleWorkspaceProvider, EntraProvider, OidcProvider, _provider_factory
 from policy_model import PolicyBundle, PolicyDecision, PolicyEvaluationRequest, PolicyRule, PolicySource, POLICY_EVALUATION_ORDER
 from policy_engine.engine import PolicyEngine

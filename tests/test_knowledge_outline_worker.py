@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+pytestmark = pytest.mark.subsystem
+
 from knowledge_index.connectors.base import SourceAdapter
 
 

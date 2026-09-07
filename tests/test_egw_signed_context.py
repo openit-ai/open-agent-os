@@ -1,4 +1,8 @@
 """H2 — EGW signed context tests (v1.7.1 I-H2-1..3)."""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import os
 import sys
 from pathlib import Path

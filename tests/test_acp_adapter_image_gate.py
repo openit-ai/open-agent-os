@@ -5,6 +5,10 @@ attachment_ref/file_id as image_url, so JSON/TXT/PDF refs were sent as
 image_url/file:// and the CP 200 never produced a new answer.
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 import sys
 from pathlib import Path

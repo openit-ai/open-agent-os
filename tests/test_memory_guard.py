@@ -7,6 +7,9 @@ so no DATABASE_URL / postgres dependency.
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.subsystem
+
 from pathlib import Path
 import sys
 

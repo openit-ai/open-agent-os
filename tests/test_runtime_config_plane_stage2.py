@@ -11,6 +11,10 @@ Validates:
 - Backwards compat: stage-1 tests still pass (additive fields)
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import importlib.util, sys, pathlib, os, tempfile, json, hashlib, hmac
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"

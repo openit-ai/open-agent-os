@@ -6,6 +6,9 @@ sys.path.insert(0, "admin-console")
 import tempfile
 import pytest
 
+pytestmark = pytest.mark.integration
+
+
 def test_runtime_mode_db_persistence_sqlite(monkeypatch):
     """set_mode() persists to admin_settings, get_mode() reads back."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:

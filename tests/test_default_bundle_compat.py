@@ -1,4 +1,8 @@
 """Regression: default_bundle compatibility id and DELETE unknown DEFAULT_DENY."""
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]

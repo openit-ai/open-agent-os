@@ -3,6 +3,10 @@
 Uses file-based import to avoid pollution from admin_console personal_wiki alias.
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 import json
 import sys

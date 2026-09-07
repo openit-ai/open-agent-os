@@ -3,6 +3,9 @@ import asyncio
 import os
 import pytest
 
+pytestmark = pytest.mark.integration
+
+
 # ensure vault key for imports
 os.environ.setdefault("OAOS_VAULT_KEY", "test-vault-key-for-failclosed-32bytes!!")
 

@@ -9,6 +9,10 @@ Verifies defense-in-depth guards added 2026-08-31:
 Does NOT write production DB; uses mocks for engine.
 """
 from __future__ import annotations
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import os, sys, pathlib, importlib, types, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
