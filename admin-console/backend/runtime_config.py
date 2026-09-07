@@ -67,13 +67,17 @@ def _verify_signature(payload: dict, signature: str, key: str | None = None) -> 
     try:
         expected = _sign_canonical(_canonical_bytes(payload), key=key)
         return hmac.compare_digest(expected, signature)
-    except Exception:
+    except (ValueError, TypeError, AttributeError, RuntimeError) as e:
+        # Crypto/encoding failure and prod missing-key are both fail-closed (False);
+        # concrete types only — no broad bug masking.
+        logger.debug(f"signature verify failed: {e}")
         return False
 
 def _config_hash(config: dict) -> str:
     try:
         return hashlib.sha256(_canonical_bytes(config)).hexdigest()
-    except Exception:
+    except (ValueError, TypeError, AttributeError) as e:
+        logger.debug(f"canonical config hash failed, non-canonical fallback: {e}")
         return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
 
 def _ensure_runtime_tables_sync(engine) -> None:
@@ -86,25 +90,25 @@ def _ensure_runtime_tables_sync(engine) -> None:
                     signature TEXT NOT NULL, config_hash TEXT NOT NULL, created_by TEXT NOT NULL,
                     created_at TEXT NOT NULL, parent_version INTEGER, rollback_from INTEGER, extra TEXT,
                     PRIMARY KEY (tenant_id, version))""" ))
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError) as e:
+                logger.debug(f"ensure snapshots table failed (best-effort): {e}")
             try:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_rc_snapshots_tenant_created ON admin_runtime_config_snapshots (tenant_id, created_at)" ))
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError) as e:
+                logger.debug(f"ensure snapshots index failed (best-effort): {e}")
             try:
                 conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_published (
                     tenant_id TEXT PRIMARY KEY, published_version INTEGER NOT NULL, config_hash TEXT,
                     updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, extra TEXT)""" ))
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError) as e:
+                logger.debug(f"ensure published table failed (best-effort): {e}")
             try:
                 conn.execute(text("""CREATE TABLE IF NOT EXISTS admin_runtime_config_applied (
                     tenant_id TEXT PRIMARY KEY, applied_version INTEGER, config_hash TEXT, applied_at TEXT,
                     applied_by TEXT, process_identity TEXT, error TEXT, updated_at TEXT NOT NULL)""" ))
-            except Exception:
-                pass
-    except Exception as e:
+            except (SQLAlchemyError, OSError) as e:
+                logger.debug(f"ensure applied table failed (best-effort): {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError) as e:
         logger.debug(f"ensure runtime tables failed: {e}")
 
 def _db_fetch_snapshot(tenant_id: str, version: int) -> dict | None:
@@ -119,10 +123,13 @@ def _db_fetch_snapshot(tenant_id: str, version: int) -> dict | None:
             if row and row[0]:
                 try:
                     return json.loads(row[0])
-                except Exception:
+                except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as e:
+                    # Corrupt durable row: visible via warning, surfaced as miss to
+                    # the caller (DB-up-but-corrupt stays distinct from DB-down logs).
+                    logger.warning(f"db snapshot corrupt tenant={tenant_id} version={version}: {e}")
                     return None
-    except Exception as e:
-        logger.debug(f"db fetch snapshot failed: {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.warning(f"db fetch snapshot failed (unavailable, not empty): {e}")
     finally:
         try:
             eng.dispose()
@@ -143,11 +150,12 @@ def _db_list_snapshots_raw(tenant_id: str) -> list[dict] | None:
             for r in rows:
                 try:
                     out.append(json.loads(r[0]))
-                except Exception:
+                except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as e:
+                    logger.warning(f"db snapshots list skipping corrupt row tenant={tenant_id}: {e}")
                     continue
             return out if out else []
-    except Exception as e:
-        logger.debug(f"db list snapshots failed: {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.warning(f"db list snapshots failed (unavailable, not empty): {e}")
         return None
     finally:
         try:
@@ -171,10 +179,11 @@ def _db_get_published_raw(tenant_id: str) -> tuple[int | None, str | None]:
             if row2 and row2[0]:
                 try:
                     return int(str(row2[0]).strip()), None
-                except Exception:
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.warning(f"db legacy published value malformed tenant={tenant_id}: {e!r}")
                     return None, None
-    except Exception as e:
-        logger.debug(f"db get published raw failed: {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.warning(f"db get published raw failed (unavailable, not empty): {e}")
     finally:
         try:
             eng.dispose()
@@ -194,11 +203,11 @@ def _db_insert_snapshot_durable(tenant_id: str, snapshot: dict) -> bool:
             try:
                 conn.execute(text("INSERT INTO admin_runtime_config_snapshots (tenant_id, version, snapshot_json, signature, config_hash, created_by, created_at, parent_version, rollback_from) VALUES (:t,:v,:j,:sig,:ch,:by,:at,:pv,:rf)"),
                     {"t": tenant_id, "v": snapshot["version"], "j": json.dumps(snapshot, ensure_ascii=False), "sig": snapshot.get("signature",""), "ch": snapshot.get("config_hash") or _config_hash(snapshot.get("config",{})), "by": snapshot.get("created_by",""), "at": snapshot.get("created_at",""), "pv": snapshot.get("parent_version"), "rf": snapshot.get("rollback_from")})
-            except Exception as e:
+            except (SQLAlchemyError, OSError) as e:
                 # optimistic conflict -> raise to caller as 409
                 msg=str(e).lower()
                 if "unique" in msg or "primary" in msg or "constraint" in msg or "duplicate" in msg:
-                    raise RuntimeError(f"VERSION_CONFLICT:{e}")
+                    raise RuntimeError(f"VERSION_CONFLICT:{e}") from e
                 logger.debug(f"db insert durable failed: {e}")
                 return False
             # mirror legacy
@@ -208,15 +217,16 @@ def _db_insert_snapshot_durable(tenant_id: str, snapshot: dict) -> bool:
                 now=_now_iso()
                 try:
                     conn.execute(text("INSERT INTO admin_settings (key, value, updated_at, updated_by) VALUES (:k,:v,:now,:by) ON CONFLICT (key) DO UPDATE SET value=:v, updated_at=:now, updated_by=:by"), {"k":key,"v":val,"now":now,"by":snapshot.get("created_by")})
-                except Exception:
+                except (SQLAlchemyError, OSError):
+                    # postgres vs sqlite dialect fallback (explicit retry, not masking)
                     conn.execute(text("INSERT OR REPLACE INTO admin_settings (key, value, updated_at, updated_by) VALUES (:k,:v,:now,:by)"), {"k":key,"v":val,"now":now,"by":snapshot.get("created_by")})
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+                logger.debug(f"db mirror legacy snapshot failed (best-effort): {e}")
         return True
     except RuntimeError:
         raise
-    except Exception as e:
-        logger.debug(f"db insert durable outer failed: {e}")
+    except (SQLAlchemyError, OSError, ValueError, AttributeError, ImportError, ModuleNotFoundError) as e:
+        logger.warning(f"db insert durable outer failed (unavailable): {e}")
         return False
     finally:
         try:
@@ -236,18 +246,19 @@ def _db_set_published_durable(tenant_id: str, version: int, config_hash: str | N
             try:
                 conn.execute(text("INSERT INTO admin_runtime_config_published (tenant_id, published_version, config_hash, updated_at, updated_by) VALUES (:t,:v,:ch,:now,:by) ON CONFLICT (tenant_id) DO UPDATE SET published_version=:v, config_hash=:ch, updated_at=:now, updated_by=:by"),
                     {"t":tenant_id,"v":version,"ch":config_hash,"now":now,"by":actor})
-            except Exception:
+            except (SQLAlchemyError, OSError):
+                # postgres vs sqlite dialect fallback (explicit retry, not masking)
                 try:
                     conn.execute(text("INSERT OR REPLACE INTO admin_runtime_config_published (tenant_id, published_version, config_hash, updated_at, updated_by) VALUES (:t,:v,:ch,:now,:by)"),
                         {"t":tenant_id,"v":version,"ch":config_hash,"now":now,"by":actor})
-                except Exception as e:
-                    logger.debug(f"db set published durable failed: {e}")
+                except (SQLAlchemyError, OSError) as e:
+                    logger.warning(f"db set published durable failed (unavailable): {e}")
                     return False
             # also update snapshot rollback flag is handled by caller via _db_mirror_set
         # legacy mirror already done in _db_mirror_published
         return True
-    except Exception as e:
-        logger.debug(f"db set published durable outer failed: {e}")
+    except (SQLAlchemyError, OSError, ValueError, AttributeError, ImportError, ModuleNotFoundError) as e:
+        logger.warning(f"db set published durable outer failed (unavailable): {e}")
         return False
     finally:
         try:
@@ -266,7 +277,9 @@ def _db_fetch_applied(tenant_id: str) -> dict | None:
             row = conn.execute(text("SELECT applied_version, config_hash, applied_at, applied_by, process_identity, error, updated_at FROM admin_runtime_config_applied WHERE tenant_id=:t"), {"t": tenant_id}).fetchone()
             if row:
                 return {"tenant_id": tenant_id, "applied_version": row[0], "config_hash": row[1], "applied_at": row[2], "applied_by": row[3], "process_identity": row[4], "error": row[5], "updated_at": row[6]}
-    except Exception as e:
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        # Applied state is CP-written best-effort telemetry: unavailable is logged,
+        # caller degrades to None (status endpoints stay available).
         logger.debug(f"db fetch applied failed: {e}")
     finally:
         try:
@@ -290,7 +303,9 @@ def _collect_runtime_mode() -> str:
             from runtime_mode import get_mode  # type: ignore
         m = get_mode()
         return m.value if hasattr(m, "value") else str(m)
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
+        # Mode probe failed: explicit env fallback (existing policy scope), telemetered.
+        logger.debug(f"runtime_mode probe failed, env fallback: {e}")
         return os.environ.get("OAOS_RUNTIME_MODE", "hermes")
 
 def _normalize_hermes_base_url(raw: str) -> str:
@@ -344,8 +359,9 @@ def _collect_hermes() -> dict:
                 elif cm:
                     # stale qwen2.5 — ignore, fall through to canonical default
                     pass
-        except Exception:
-            pass
+        except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
+            # Control-plane config probe failed: canonical env/default path below.
+            logger.debug(f"hermes control-plane probe failed, canonical fallback: {e}")
     if not base:
         base = _CANONICAL_HERMES_BASE_URL
         source_base = "default:canonical"
@@ -390,14 +406,17 @@ def _collect_llm_providers() -> list[dict]:
                 try:
                     providers = mod._db_list_providers()
                     source = "db:llm_providers" if providers is not None else source
-                except Exception:
+                except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, OSError) as e:
+                    # DB inventory unavailable: explicit in-memory fallback below.
+                    logger.debug(f"llm providers DB inventory failed, in-memory fallback: {e}")
                     providers = None
             if providers is None:
                 providers = list(getattr(mod, "_providers", {}).values())
             for p in providers:
                 try:
                     d = p.model_dump(mode="json") if hasattr(p, "model_dump") else dict(p)  # type: ignore
-                except Exception:
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"llm provider row serialize failed, empty placeholder: {e}")
                     d = {}
                 items.append({
                     "id": d.get("id", ""),
@@ -415,7 +434,7 @@ def _collect_llm_providers() -> list[dict]:
         else:
             source = "unavailable:llm_providers-module-not-loaded"
             inventory_status = "empty:unobserved:module-not-loaded"
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
         logger.debug(f"collect llm providers failed: {e}")
         source = "error:llm_providers-collect-failed"
         inventory_status = "empty:unobserved:collect-error"
@@ -456,7 +475,7 @@ def _collect_fallback() -> dict:
             chain = d.get("chain", [])
             inventory_status = "populated" if chain else "empty:observed:zero-chain"
             return {"enabled": bool(d.get("enabled", True)), "chain": chain, "fallback_model": d.get("fallback_model"), "source": source, "observed_at": observed_at, "inventory_status": inventory_status}
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
         logger.debug(f"collect fallback failed: {e}")
         source = "error:fallback-collect-failed"
         inventory_status = "empty:unobserved:collect-error"
@@ -497,7 +516,8 @@ def _collect_infra() -> dict:
                         source = "db:admin_infra_services"
                     else:
                         source = "in-memory:infra"
-                except Exception:
+                except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
+                    logger.debug(f"infra DB inventory failed, in-memory fallback: {e}")
                     lst = None
                     source = "in-memory:infra"
             if lst is None:
@@ -507,7 +527,8 @@ def _collect_infra() -> dict:
             for s in lst:
                 try:
                     d = s.model_dump(mode="json") if hasattr(s, "model_dump") else dict(s)
-                except Exception:
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"infra row serialize failed, empty placeholder: {e}")
                     d = {}
                 services.append({
                     "id": d.get("id"),
@@ -526,7 +547,7 @@ def _collect_infra() -> dict:
         else:
             source = "unavailable:infra-module-not-loaded"
             inventory_status = "empty:unobserved:module-not-loaded"
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
         logger.debug(f"collect infra failed: {e}")
         source = "error:infra-collect-failed"
         inventory_status = "empty:unobserved:collect-error"
@@ -565,7 +586,8 @@ def _collect_user_mappings() -> dict:
                         source = "db:admin_user_mappings"
                     else:
                         source = "in-memory:user_mappings"
-                except Exception:
+                except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
+                    logger.debug(f"mappings DB inventory failed, in-memory fallback: {e}")
                     lst = None
                     source = "in-memory:user_mappings"
             if lst is None:
@@ -575,7 +597,8 @@ def _collect_user_mappings() -> dict:
             for m in lst:
                 try:
                     d = m.model_dump(mode="json") if hasattr(m, "model_dump") else dict(m)
-                except Exception:
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"mapping row serialize failed, empty placeholder: {e}")
                     d = {}
                 mappings.append({
                     "id": d.get("id"),
@@ -591,7 +614,7 @@ def _collect_user_mappings() -> dict:
         else:
             source = "unavailable:user_mappings-module-not-loaded"
             inventory_status = "empty:unobserved:module-not-loaded"
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
         logger.debug(f"collect mappings failed: {e}")
         source = "error:user_mappings-collect-failed"
         inventory_status = "empty:unobserved:collect-error"
@@ -635,10 +658,10 @@ def _audit(tenant_id: str, version: int, action: str, actor: str, signature: str
         if ledger is not None and hasattr(ledger, "append"):
             try:
                 ledger.append(ev)  # type: ignore
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except (AttributeError, TypeError, ValueError, SQLAlchemyError, OSError, RuntimeError) as e:
+                logger.debug(f"runtime audit ledger mirror append failed (best-effort): {e}")
+    except (ImportError, ModuleNotFoundError, AttributeError) as e:
+        logger.debug(f"runtime audit ledger mirror unavailable (best-effort): {e}")
 
 # ── DB mirror via admin_settings (no new table, idempotent) ──────────────────
 def _db_url() -> str | None:
@@ -654,8 +677,8 @@ def _db_url() -> str | None:
         url = get_database_url()
         if url and url.strip():
             return url.strip()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, OSError) as e:
+        logger.debug(f"runtime_config persistence DB URL lookup failed, env fallback: {e}")
     return None
 
 def _normalize_sync_url(url: str) -> str:
@@ -684,7 +707,7 @@ def _db_engine():
             if ":memory:" in sync_url:
                 kwargs["connect_args"] = {"check_same_thread": False}
         return create_engine(sync_url, **kwargs)
-    except Exception as e:
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, OSError) as e:
         logger.debug(f"runtime_config DB engine failed: {e}")
         return None
 
@@ -699,19 +722,20 @@ def _db_mirror_set(tenant_id: str, version: int, snapshot: dict) -> None:
         with eng.begin() as conn:
             try:
                 conn.execute(text("CREATE TABLE IF NOT EXISTS admin_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT, extra TEXT)"))
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError) as e:
+                logger.debug(f"mirror admin_settings table ensure failed (best-effort): {e}")
             now = _now_iso()
             try:
                 conn.execute(text("INSERT INTO admin_settings (key, value, updated_at, updated_by) VALUES (:k, :v, :now, :by) ON CONFLICT (key) DO UPDATE SET value=:v, updated_at=:now, updated_by=:by"),
                              {"k": key, "v": val, "now": now, "by": snapshot.get("created_by")})
-            except Exception:
+            except (SQLAlchemyError, OSError):
+                # postgres vs sqlite dialect fallback (explicit retry, not masking)
                 try:
                     conn.execute(text("INSERT OR REPLACE INTO admin_settings (key, value, updated_at, updated_by) VALUES (:k, :v, :now, :by)"),
                                  {"k": key, "v": val, "now": now, "by": snapshot.get("created_by")})
-                except Exception:
-                    pass
-    except Exception as e:
+                except (SQLAlchemyError, OSError) as e:
+                    logger.debug(f"mirror snapshot write failed (best-effort): {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
         logger.debug(f"runtime_config DB mirror snapshot failed: {e}")
     finally:
         try:
@@ -728,17 +752,18 @@ def _db_mirror_published(tenant_id: str, version: int, actor: str) -> None:
         with eng.begin() as conn:
             try:
                 conn.execute(text("CREATE TABLE IF NOT EXISTS admin_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT, extra TEXT)"))
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError) as e:
+                logger.debug(f"mirror published admin_settings ensure failed (best-effort): {e}")
             now = _now_iso()
             key = f"runtime_config:published:{tenant_id}"
             try:
                 conn.execute(text("INSERT INTO admin_settings (key, value, updated_at, updated_by) VALUES (:k, :v, :now, :by) ON CONFLICT (key) DO UPDATE SET value=:v, updated_at=:now, updated_by=:by"),
                              {"k": key, "v": str(version), "now": now, "by": actor})
-            except Exception:
+            except (SQLAlchemyError, OSError):
+                # postgres vs sqlite dialect fallback (explicit retry, not masking)
                 conn.execute(text("INSERT OR REPLACE INTO admin_settings (key, value, updated_at, updated_by) VALUES (:k, :v, :now, :by)"),
                              {"k": key, "v": str(version), "now": now, "by": actor})
-    except Exception as e:
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
         logger.debug(f"runtime_config DB mirror published failed: {e}")
     finally:
         try:
@@ -792,8 +817,8 @@ def _collect_observed_system_inventory() -> dict:
                         "count": len(items),
                         "items": items,
                     }
-                except Exception:
-                    pass
+                except (AttributeError, TypeError, ValueError) as e:
+                    logger.debug(f"observed inventory parse failed for {_name}, next source: {e}")
         try:
             from . import infra as _im  # type: ignore
             if hasattr(_im, "LIVE_INVENTORY"):
@@ -816,10 +841,10 @@ def _collect_observed_system_inventory() -> dict:
                     "count": len(items),
                     "items": items,
                 }
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError) as e:
+            logger.debug(f"observed inventory infra import probe failed, static fallback: {e}")
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError, ValueError) as e:
+        logger.debug(f"observed inventory collect failed, static fallback: {e}")
     # Fallback static canonical list (non-secret, no probing)
     fallback = [
         {"id": "live_cp", "name": "control-plane", "host": "127.0.0.1", "port": 8100, "health_path": "/health"},
@@ -857,22 +882,22 @@ def clear_runtime_config() -> None:
             with eng.begin() as conn:
                 try:
                     conn.execute(text("DELETE FROM admin_settings WHERE key LIKE 'runtime_config:%'"))
-                except Exception:
-                    pass
+                except (SQLAlchemyError, OSError) as e:
+                    logger.debug(f"clear runtime_config admin_settings delete failed (best-effort): {e}")
                 try:
                     conn.execute(text("DELETE FROM admin_runtime_config_snapshots WHERE 1=1"))
-                except Exception:
-                    pass
+                except (SQLAlchemyError, OSError) as e:
+                    logger.debug(f"clear snapshots delete failed (best-effort): {e}")
                 try:
                     conn.execute(text("DELETE FROM admin_runtime_config_published WHERE 1=1"))
-                except Exception:
-                    pass
+                except (SQLAlchemyError, OSError) as e:
+                    logger.debug(f"clear published delete failed (best-effort): {e}")
                 try:
                     conn.execute(text("DELETE FROM admin_runtime_config_applied WHERE 1=1"))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except (SQLAlchemyError, OSError) as e:
+                    logger.debug(f"clear applied delete failed (best-effort): {e}")
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError) as e:
+            logger.debug(f"clear runtime_config DB branch failed (best-effort): {e}")
         try:
             eng.dispose()
         except SQLAlchemyError:
@@ -916,8 +941,8 @@ def _build_snapshot(tenant_id: str, actor: str, version: int, parent_version: in
         config["llm_providers_observed_at"] = llm_meta.get("observed_at")
         config["llm_providers_inventory_status"] = llm_meta.get("inventory_status")
         config["llm_providers_count"] = llm_meta.get("count")
-    except Exception:
-        pass
+    except (AttributeError, ValueError, TypeError) as e:
+        logger.debug(f"llm providers provenance attach failed (best-effort): {e}")
     # Guard: never store secret raw
     for prov in config.get("llm_providers", []):
         if "encrypted_api_key" in prov or "api_key" in prov or "apiKey" in prov:
@@ -954,8 +979,8 @@ def get_published_snapshot(tenant_id: str = "default") -> dict | None:
                 return snap
             # fallback to in-memory if DB snapshot missing but published pointer exists
             return _snapshots.get(tenant_id, {}).get(pub_ver)
-    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError):
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError) as e:
+        logger.debug(f"published snapshot DB primary miss, in-memory fallback: {e}")
     ver = _published.get(tenant_id)
     if ver is None:
         return None
@@ -964,8 +989,8 @@ def get_published_snapshot(tenant_id: str = "default") -> dict | None:
     if snap is None:
         try:
             snap = _db_fetch_snapshot(tenant_id, ver)
-        except Exception:
-            pass
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+            logger.debug(f"published snapshot DB fetch miss, in-memory fallback: {e}")
     return snap
 
 def list_snapshots(tenant_id: str = "default") -> list[dict]:
@@ -976,8 +1001,8 @@ def list_snapshots(tenant_id: str = "default") -> list[dict]:
             # merge with in-memory for completeness (in-mem may have newer not yet flushed)
             # prefer DB as canonical
             return sorted(db_items, key=lambda x: x.get("version",0))
-    except Exception:
-        pass
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError, TypeError) as e:
+        logger.debug(f"snapshots DB list miss, in-memory fallback: {e}")
     m = _snapshots.get(tenant_id, {})
     return [m[v] for v in sorted(m.keys())]
 
@@ -1005,6 +1030,33 @@ def _resolve_tenant(body_tenant: str | None, header_tenant: str | None) -> str:
     return raw
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+def _db_probe_reachable() -> bool | None:
+    """Distinguish DB empty from DB unavailable for runtime reads.
+
+    Returns None when no DB is configured, True when reachable, False when the
+    backend is configured but not responding (callers map False to 503 in prod
+    so an outage is never disguised as "not published" / empty).
+    """
+    if _db_url() is None:
+        return None
+    eng = _db_engine()
+    if eng is None:
+        return False
+    try:
+        from sqlalchemy import text
+
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except (SQLAlchemyError, OSError, ValueError, AttributeError) as e:
+        logger.warning(f"runtime_config DB probe failed (unavailable): {e}")
+        return False
+    finally:
+        try:
+            eng.dispose()
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
+
 @router.get("/")
 @router.get("")
 def get_runtime_config(
@@ -1017,6 +1069,10 @@ def get_runtime_config(
     # fail-closed in prod if no snapshot ever published? Return 404 with header, not 503
     snap = get_published_snapshot(tenant)
     if snap is None:
+        # DB empty vs DB unavailable: outage in production is 503, genuinely
+        # unpublished (or non-prod fallback) stays 404.
+        if _is_production() and _db_probe_reachable() is False:
+            raise HTTPException(status_code=503, detail={"code": "RUNTIME_BACKEND_UNAVAILABLE", "message": f"runtime config backend unavailable for tenant {tenant} — fail-closed"})
         raise HTTPException(status_code=404, detail={"code": "NOT_PUBLISHED", "message": f"no published snapshot for tenant {tenant}"})
     # verify signature before returning (fail-closed)
     payload = {k: v for k, v in snap.items() if k not in ("signature", "published", "published_at", "published_by", "rollback_from")}
@@ -1047,7 +1103,8 @@ def create_snapshot(
             cur_max = max(_max_version(tenant), db_max)
         else:
             cur_max = _max_version(tenant)
-    except Exception:
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError, TypeError) as e:
+        logger.debug(f"snapshot DB max lookup failed, in-memory max: {e}")
         cur_max = _max_version(tenant)
     expected = body.expected_version
     if expected is not None:
@@ -1064,27 +1121,30 @@ def create_snapshot(
             raise HTTPException(status_code=409, detail={"code": "VERSION_CONFLICT", "message": f"version {version} already exists (DB)"})
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.debug(f"snapshot DB existence check failed, proceeding (durable insert still guards): {e}")
     snapshot = _build_snapshot(tenant, admin.email, version, parent_version=cur_max if cur_max else None)
     # DB primary transaction (optimistic) — if DB available, insert durable first
     try:
         eng = _db_engine()
         if eng is not None:
-            _db_insert_snapshot_durable(tenant, snapshot)
+            if not _db_insert_snapshot_durable(tenant, snapshot) and _is_production():
+                raise HTTPException(status_code=503, detail="runtime snapshot durable DB write failed — fail-closed")
     except RuntimeError as re:
         if "VERSION_CONFLICT" in str(re):
             raise HTTPException(status_code=409, detail={"code": "VERSION_CONFLICT", "message": str(re)})
-    except Exception as e:
+    except HTTPException:
+        raise
+    except (SQLAlchemyError, OSError, ValueError, AttributeError, TypeError, ImportError, ModuleNotFoundError) as e:
         if _is_production():
-            raise HTTPException(status_code=503, detail="runtime snapshot durable DB write failed — fail-closed")
+            raise HTTPException(status_code=503, detail="runtime snapshot durable DB write failed — fail-closed") from e
         logger.debug(f"snapshot DB primary failed (fallback to mem): {e}")
     _snapshots.setdefault(tenant, {})[version] = snapshot
     # DB mirror legacy (also done inside durable)
     try:
         _db_mirror_set(tenant, version, snapshot)
-    except Exception:
-        pass
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+        logger.debug(f"snapshot legacy mirror failed (best-effort): {e}")
     _audit(tenant, version, "snapshot_created", admin.email, snapshot["signature"])
     return snapshot
 
@@ -1104,8 +1164,8 @@ def publish_snapshot(
             if snap is not None:
                 _snapshots.setdefault(tenant, {})[body.version] = snap
                 m = _snapshots.get(tenant, {})
-        except Exception:
-            pass
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+            logger.debug(f"publish snapshot resolve DB miss, in-memory only: {e}")
     if snap is None:
         raise HTTPException(status_code=404, detail=f"version {body.version} not found for tenant {tenant}")
     # verify signature before publish (fail-closed)
@@ -1122,14 +1182,20 @@ def publish_snapshot(
         pub_ver, _ = _db_get_published_raw(tenant)
         if pub_ver is not None:
             prev = pub_ver if prev is None else prev
-    except Exception:
-        pass
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.debug(f"publish previous-pointer DB miss, in-memory prev: {e}")
     # DB durable first
     ch = snap.get("config_hash") or _config_hash(snap.get("config",{}))
+    _durable_expected = _db_url() is not None
     try:
-        _db_set_published_durable(tenant, body.version, ch, admin.email)
-    except Exception as e:
-        logger.debug(f"publish durable failed: {e}")
+        _publish_ok = _db_set_published_durable(tenant, body.version, ch, admin.email)
+    except (SQLAlchemyError, OSError, ValueError, AttributeError, ImportError, ModuleNotFoundError) as e:
+        if _is_production():
+            raise HTTPException(status_code=503, detail="runtime publish durable DB write failed — fail-closed") from e
+        logger.warning(f"publish durable failed, non-prod in-memory fallback: {e}")
+        _publish_ok = False
+    if not _publish_ok and _durable_expected and _is_production():
+        raise HTTPException(status_code=503, detail="runtime publish durable DB write failed — fail-closed")
     _published[tenant] = body.version
     snap["published"] = True
     snap["published_at"] = _now_iso()
@@ -1141,16 +1207,16 @@ def publish_snapshot(
             s["published"] = False
             try:
                 _db_mirror_set(tenant, ver, s)
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+                logger.debug(f"publish clear-flag mirror failed (best-effort): {e}")
     _db_mirror_published(tenant, body.version, admin.email)
     try:
         _db_mirror_set(tenant, body.version, snap)
         # also update durable snapshot JSON for published flag (+ config_hash)
         try:
             _db_insert_snapshot_durable(tenant, snap)
-        except Exception:
-            # upsert snapshot_json directly if insert conflict
+        except RuntimeError:
+            # insert conflict (row exists): upsert snapshot_json directly
             try:
                 eng = _db_engine()
                 if eng is not None:
@@ -1159,10 +1225,10 @@ def publish_snapshot(
                     with eng.begin() as conn:
                         conn.execute(_t("UPDATE admin_runtime_config_snapshots SET snapshot_json=:j, config_hash=:ch WHERE tenant_id=:t AND version=:v"), {"j": __import__("json").dumps(snap, ensure_ascii=False), "ch": ch, "t": tenant, "v": body.version})
                     eng.dispose()
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+                logger.debug(f"publish snapshot_json upsert failed (best-effort): {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+        logger.debug(f"publish mirror failed (best-effort): {e}")
     _audit(tenant, body.version, "published", admin.email, snap["signature"])
     return {"tenant_id": tenant, "published_version": body.version, "previous_version": prev, "snapshot": snap, "config_hash": ch}
 
@@ -1190,7 +1256,8 @@ def get_snapshot_version(
             snap = _db_fetch_snapshot(tenant, version)
             if snap is not None:
                 _snapshots.setdefault(tenant, {})[version] = snap
-        except Exception:
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+            logger.debug(f"snapshot version DB fetch miss, in-memory only: {e}")
             snap = None
     if snap is None:
         raise HTTPException(status_code=404, detail=f"version {version} not found")
@@ -1211,8 +1278,8 @@ def rollback_snapshot(
             if target is not None:
                 _snapshots.setdefault(tenant, {})[body.version] = target
                 m = _snapshots.get(tenant, {})
-        except Exception:
-            pass
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+            logger.debug(f"rollback target DB fetch miss, in-memory only: {e}")
     if target is None:
         raise HTTPException(status_code=404, detail=f"version {body.version} not found for tenant {tenant}")
     current_published = _published.get(tenant)
@@ -1223,8 +1290,8 @@ def rollback_snapshot(
             # authoritative is DB if present
             if pub_ver != _published.get(tenant):
                 current_published = pub_ver
-    except Exception:
-        pass
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.debug(f"rollback current-published DB miss, in-memory pointer: {e}")
     if current_published is None:
         raise HTTPException(status_code=409, detail="no published version to rollback from")
     if current_published == body.version:
@@ -1241,13 +1308,19 @@ def rollback_snapshot(
             s["published"] = False
             try:
                 _db_mirror_set(tenant, ver, s)
-            except Exception:
-                pass
+            except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+                logger.debug(f"rollback clear-flag mirror failed (best-effort): {e}")
     _published[tenant] = body.version
+    _durable_expected = _db_url() is not None
     try:
-        _db_set_published_durable(tenant, body.version, ch, admin.email)
-    except Exception:
-        pass
+        _rollback_ok = _db_set_published_durable(tenant, body.version, ch, admin.email)
+    except (SQLAlchemyError, OSError, ValueError, AttributeError, ImportError, ModuleNotFoundError) as e:
+        if _is_production():
+            raise HTTPException(status_code=503, detail="runtime rollback durable DB write failed — fail-closed") from e
+        logger.warning(f"rollback durable failed, non-prod in-memory fallback: {e}")
+        _rollback_ok = False
+    if not _rollback_ok and _durable_expected and _is_production():
+        raise HTTPException(status_code=503, detail="runtime rollback durable DB write failed — fail-closed")
     _db_mirror_published(tenant, body.version, admin.email)
     try:
         _db_mirror_set(tenant, body.version, target)
@@ -1259,10 +1332,10 @@ def rollback_snapshot(
                 with eng.begin() as conn:
                     conn.execute(_t("UPDATE admin_runtime_config_snapshots SET snapshot_json=:j, config_hash=:ch WHERE tenant_id=:t AND version=:v"), {"j": __import__("json").dumps(target, ensure_ascii=False), "ch": ch, "t": tenant, "v": body.version})
                 eng.dispose()
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+            logger.debug(f"rollback snapshot_json upsert failed (best-effort): {e}")
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError) as e:
+        logger.debug(f"rollback mirror failed (best-effort): {e}")
     _audit(tenant, body.version, "rollback", admin.email, target.get("signature",""))
     return {"tenant_id": tenant, "published_version": body.version, "rolled_back_from": current_published, "snapshot": target, "config_hash": ch}
 
@@ -1279,20 +1352,21 @@ def get_status_api(
         db_pub, _ = _db_get_published_raw(tenant)
         if db_pub is not None:
             pub = db_pub
-    except Exception:
-        pass
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.debug(f"status published-pointer DB miss, in-memory pointer: {e}")
     snap = get_published_snapshot(tenant) if pub is not None else None
     # also try DB fetch if snap missing
     if snap is None and pub is not None:
         try:
             snap = _db_fetch_snapshot(tenant, pub)
-        except Exception:
-            pass
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+            logger.debug(f"status snapshot DB fetch miss: {e}")
     # applied info from DB (written by Control Plane)
     applied = None
     try:
         applied = _db_fetch_applied(tenant)
-    except Exception:
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.debug(f"status applied DB fetch miss: {e}")
         applied = None
     sig_valid = None
     ch = None
@@ -1330,7 +1404,8 @@ def get_applied_status_api(
         db_pub, db_ch = _db_get_published_raw(tenant)
         if db_pub is not None:
             pub = db_pub
-    except Exception:
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.debug(f"applied-status published-pointer DB miss: {e}")
         db_ch = None
     snap = get_published_snapshot(tenant) if pub is not None else None
     published_hash = None
@@ -1339,7 +1414,8 @@ def get_applied_status_api(
     applied = None
     try:
         applied = _db_fetch_applied(tenant)
-    except Exception:
+    except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        logger.debug(f"applied-status applied DB fetch miss: {e}")
         applied = None
     # Also try to proxy to Control Plane live status if CP URL available (optional, non-blocking)
     cp_live = None
@@ -1347,16 +1423,21 @@ def get_applied_status_api(
         import os as _os
         cp_url = _os.environ.get("OAOS_CP_BASE_URL") or _os.environ.get("OAOS_CONTROL_PLANE_URL") or "http://localhost:8100"
         # best-effort http fetch with short timeout, fail-soft
-        import urllib.request, json as _j, socket as _s
-        url = cp_url.rstrip("/") + f"/v1/runtime-config/status"
+        import http.client as _hc
+        import urllib.request, json as _j
+        url = cp_url.rstrip("/") + "/v1/runtime-config/status"
         req = urllib.request.Request(url, headers={"X-Tenant-Id": tenant, "X-User-Id": admin.email})
         with urllib.request.urlopen(req, timeout=0.7) as resp:  # type: ignore
-            body = resp.read().decode("utf-8", errors="ignore")
+            body_text = resp.read().decode("utf-8", errors="ignore")
             try:
-                cp_live = _j.loads(body)
-            except Exception:
-                cp_live = {"raw": body[:500]}
-    except Exception:
+                cp_live = _j.loads(body_text)
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.debug(f"CP live status body not JSON, raw fallback: {e}")
+                cp_live = {"raw": body_text[:500]}
+    except (OSError, ValueError, AttributeError, TypeError, _hc.HTTPException) as e:
+        # URLError/timeout (OSError), malformed URL (ValueError), bad status line
+        # (http.client.HTTPException): fail-soft, no CP live data.
+        logger.debug(f"CP live status proxy failed (fail-soft): {e}")
         cp_live = None
     return {
         "tenant_id": tenant,
