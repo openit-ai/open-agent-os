@@ -39,6 +39,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/llm", tags=["llm-fallback"])
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 ALLOWED_PROVIDERS = {"claude", "codex", "gemini", "opencode-go", "openrouter", "ollama", "opencode"}
 
 # Normalize alias
@@ -449,6 +454,6 @@ def clear_fallback_cache() -> None:
     if _db_engine is not None:
         try:
             _db_engine.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("fallback engine dispose failed (best-effort)")
     _db_engine = None

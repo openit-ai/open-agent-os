@@ -43,6 +43,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 router = APIRouter(prefix="/v1/llm", tags=["llm"])
 
 
@@ -325,8 +330,8 @@ def _reset_db_cache() -> None:
     if _db_engine is not None:
         try:
             _db_engine.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("llm_providers engine dispose failed (best-effort)")
     _db_engine = None
     _db_session_factory = None
     _db_cached_url = None
@@ -352,8 +357,8 @@ def _get_session_factory():
     if _db_engine is not None:
         try:
             _db_engine.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("llm_providers engine dispose failed (best-effort)")
         _db_engine = None
         _db_session_factory = None
         _db_cached_url = None
@@ -571,7 +576,7 @@ def _db_create_provider(p: LLMProvider, encrypted_api_key: str | None, secret_re
         try:
             with factory() as s2:
                 s2.rollback()
-        except Exception:
+        except SQLAlchemyError:
             pass
         return False
 

@@ -304,7 +304,7 @@ def store_attachment(
     dest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         os.chmod(dest_dir, 0o700)
-    except Exception:
+    except OSError:
         pass
     # Symlink/traversal containment: the resolved dir must stay inside the
     # resolved owner root (refuses pre-planted symlink escapes). Fail closed.
@@ -339,14 +339,14 @@ def store_attachment(
     try:
         try:
             os.chmod(tmp, 0o600)
-        except Exception:
+        except OSError:
             pass
         try:
             _fh = os.fdopen(_tmp_fd, "wb")
         except BaseException:
             try:
                 os.close(_tmp_fd)
-            except Exception:
+            except OSError:
                 pass
             raise
         with _fh:
@@ -364,13 +364,13 @@ def store_attachment(
         try:
             if tmp.exists():
                 tmp.unlink()
-        except Exception:
+        except OSError:
             pass
         raise
     # 0600 effective before the atomic publish so the dest never appears 0644.
     try:
         os.chmod(tmp, 0o600)
-    except Exception:
+    except OSError:
         pass
     # Re-validate containment just before publish (closes mkdir-check vs
     # replace TOCTOU: a swapped symlink at dest_dir fails closed here).
@@ -383,14 +383,14 @@ def store_attachment(
         try:
             if tmp.exists() or os.path.lexists(str(tmp)):
                 tmp.unlink()
-        except Exception:
+        except OSError:
             pass
         raise
     except Exception:
         try:
             if tmp.exists() or os.path.lexists(str(tmp)):
                 tmp.unlink()
-        except Exception:
+        except OSError:
             pass
         raise ValueError("vault destination validation failed")
     try:
@@ -399,11 +399,11 @@ def store_attachment(
         try:
             if tmp.exists():
                 tmp.unlink()
-        except Exception:
+        except OSError:
             pass
     try:
         os.chmod(dest, 0o600)
-    except Exception:
+    except OSError:
         pass
     # Post-publish containment: dest must resolve inside the vault root.
     # Fail closed — remove an escaped dest instead of returning a logical path.
@@ -414,7 +414,7 @@ def store_attachment(
             try:
                 if dest.exists() or os.path.lexists(str(dest)):
                     dest.unlink()
-            except Exception:
+            except OSError:
                 pass
         finally:
             pass

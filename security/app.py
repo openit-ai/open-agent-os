@@ -21,6 +21,15 @@ sys.path.insert(0, os.path.join(_sys_root, "credential-vault"))
 sys.path.insert(0, os.path.join(_sys_root, "token"))
 sys.path.insert(0, os.path.join(_sys_root, "crypto"))
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+try:
+    from redis.exceptions import RedisError
+except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effort fallback
+    RedisError = Exception  # type: ignore
+
 from datetime import datetime, timezone
 from typing import Optional
 import time
@@ -297,7 +306,7 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
                 ex.shutdown(wait=False)
         try:
             eng.dispose()
-        except Exception:
+        except SQLAlchemyError:
             pass
     except RuntimeError:
         raise
@@ -327,7 +336,7 @@ def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
                 ex.shutdown(wait=False)
         try:
             client.close()
-        except Exception:
+        except RedisError:
             pass
     except RuntimeError:
         raise

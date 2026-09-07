@@ -35,7 +35,7 @@ def test_runtime_mode_db_persistence_sqlite(monkeypatch):
     rm._db_engine = None
     try:
         os.unlink(db_path)
-    except Exception:
+    except OSError:
         pass
     os.environ.pop("DATABASE_URL", None)
     os.environ.pop("OAOS_DATABASE_URL", None)

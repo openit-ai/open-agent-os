@@ -99,7 +99,7 @@ class SSETransport(MCPBaseTransport):
         if self._client:
             try:
                 await self._client.aclose()
-            except Exception:
+            except (OSError, RuntimeError):
                 pass
             self._client = None
 

@@ -445,12 +445,12 @@ def test_db_backed_sqlite_memory():
             pass
         try:
             _tmp_path.unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             pass
         # also try legacy fixed path cleanup for old runs
         try:
             Path("/tmp/test_llm_provider_vault.db").unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             pass
         if old_url is not None:
             os.environ["OAOS_DATABASE_URL"] = old_url

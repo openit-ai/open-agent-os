@@ -21,6 +21,11 @@ from delegation_model import CredentialBinding, CredentialBindingStatus, Delegat
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 # ── Vault revoke retry metrics (shared with vault module) ─────────────
 # Prometheus counter oaos_vault_revoke_failures_total + dead-letter log
 _delegation_vault_revoke_failures_total: int = 0
@@ -182,13 +187,13 @@ def _db_close(session, engine) -> None:
     try:
         if session is not None:
             session.close()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("delegation session close failed (best-effort)")
     try:
         if engine is not None:
             engine.dispose()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("delegation engine dispose failed (best-effort)")
 
 
 def _delegation_to_orm(d: Delegation):
@@ -350,7 +355,7 @@ class DelegationService:
                     except Exception as e:
                         try:
                             session.rollback()
-                        except Exception:
+                        except SQLAlchemyError:
                             pass
                         if _is_production():
                             raise RuntimeError("delegation database persist failed in production") from e
@@ -418,7 +423,7 @@ class DelegationService:
                     except Exception as e:
                         try:
                             session.rollback()
-                        except Exception:
+                        except SQLAlchemyError:
                             pass
                         logger.debug("Delegation revoke DB update failed: %s", e)
                     finally:
@@ -731,7 +736,7 @@ class DelegationService:
                     except Exception as e:
                         try:
                             session.rollback()
-                        except Exception:
+                        except SQLAlchemyError:
                             pass
                         if _is_production():
                             raise RuntimeError("credential binding database persist failed in production") from e
@@ -842,7 +847,7 @@ class DelegationService:
                         except Exception:
                             try:
                                 session.rollback()
-                            except Exception:
+                            except SQLAlchemyError:
                                 pass
                         finally:
                             _db_close(session, engine)

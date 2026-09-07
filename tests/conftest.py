@@ -233,7 +233,7 @@ def _clear_canonical_admin_state():
     # clean up temp sqlite test file if any test left it
     try:
         Path("/tmp/test_llm_provider_vault.db").unlink(missing_ok=True)
-    except Exception:
+    except OSError:
         pass
 
     # reset llm_runtime in-memory quota/usage

@@ -30,6 +30,11 @@ from fastapi import FastAPI, Header, Request, HTTPException, Depends
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 # ---------------------------------------------------------------------------
 # H3 Memory Service Auth Hardening — verified JWT only, no unverified claims
 # ---------------------------------------------------------------------------
@@ -700,7 +705,10 @@ async def _db_physical_delete(memory_ids: list[str]) -> int:
                 return cnt
             except Exception as e:
                 logger.warning(f"db delete memories failed: {e}")
-                await session.rollback()
+                try:
+                    await session.rollback()
+                except SQLAlchemyError:
+                    logger.debug("db delete memories rollback failed (best-effort)")
                 return 0
     except Exception as e:
         logger.warning(f"_db_physical_delete failed: {e}")

@@ -38,6 +38,11 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
+try:
     from .auth import AdminUser, get_current_admin, require_l5, AdminRole  # type: ignore
 except ImportError:
     from auth import AdminUser, get_current_admin, require_l5, AdminRole  # type: ignore
@@ -346,7 +351,8 @@ def _db_list_versions(tenant_id: str = "default") -> list[dict]:
             return out
     finally:
         try: eng.dispose()
-        except: pass
+        except SQLAlchemyError:
+            logger.debug("policy engine dispose failed (best-effort)")
 
 def _db_get_active_published(tenant_id: str = "default") -> Optional[dict]:
     versions = _db_list_versions(tenant_id)
@@ -386,7 +392,8 @@ def _db_get_draft(tenant_id: str = "default") -> Optional[dict]:
             return d
     finally:
         try: eng.dispose()
-        except: pass
+        except SQLAlchemyError:
+            logger.debug("policy engine dispose failed (best-effort)")
 
 def _db_save_draft(tenant_id: str, bundle_id: str, name: str, rules: list[dict], created_by: str, version: str | None = None) -> dict:
     # draft is mutable until approved/published; but we treat as upsert of single draft per tenant
@@ -422,7 +429,8 @@ def _db_save_draft(tenant_id: str, bundle_id: str, name: str, rules: list[dict],
         return record
     finally:
         try: eng.dispose()
-        except: pass
+        except SQLAlchemyError:
+            logger.debug("policy engine dispose failed (best-effort)")
 
 def _db_mark_approved(tenant_id: str, approved_by: str) -> Optional[dict]:
     draft = _db_get_draft(tenant_id)
@@ -453,7 +461,8 @@ def _db_mark_approved(tenant_id: str, approved_by: str) -> Optional[dict]:
         return draft
     finally:
         try: eng.dispose()
-        except: pass
+        except SQLAlchemyError:
+            logger.debug("policy engine dispose failed (best-effort)")
 
 def _db_publish(tenant_id: str, published_by: str) -> dict:
     draft = _db_get_draft(tenant_id)
@@ -500,7 +509,8 @@ def _db_publish(tenant_id: str, published_by: str) -> dict:
         return published_record
     finally:
         try: eng.dispose()
-        except: pass
+        except SQLAlchemyError:
+            logger.debug("policy engine dispose failed (best-effort)")
 
 def _db_rollback(target_version: str, tenant_id: str, actor: str, allow_remove_mandatory: bool = False) -> dict:
     # find target historical published version
@@ -536,7 +546,8 @@ def _db_rollback(target_version: str, tenant_id: str, actor: str, allow_remove_m
         return record
     finally:
         try: eng.dispose()
-        except: pass
+        except SQLAlchemyError:
+            logger.debug("policy engine dispose failed (best-effort)")
 
 # ── simulation ───────────────────────────────────────────────────────
 def _evaluate_rules(rules: list[dict], action: str, resource: str) -> dict:

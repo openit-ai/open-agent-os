@@ -25,6 +25,11 @@ try:
 except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -315,7 +320,7 @@ def _db_create_service(svc: InfraService) -> bool:
             # rollback on error
             with factory() as s2:
                 s2.rollback()
-        except Exception:
+        except SQLAlchemyError:
             pass
         return False
 
@@ -402,10 +407,10 @@ async def _probe_tcp(service: InfraService) -> InfraService:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:
+            except OSError:
                 pass
-        except Exception:
-                pass
+        except OSError:
+            pass
         latency = (time.perf_counter() - start) * 1000
         service.latency_ms = round(latency, 2)
         service.last_check = datetime.now(timezone.utc)

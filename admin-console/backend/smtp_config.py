@@ -291,10 +291,10 @@ def smtp_test(body: dict | None = None, admin: AdminUser = Depends(require_l5)) 
         finally:
             try:
                 server.quit()
-            except Exception:
+            except (smtplib.SMTPException, OSError):
                 try:
                     server.close()
-                except Exception:
+                except OSError:
                     pass
     except Exception as e:
         return {"ok": False, "target": target,

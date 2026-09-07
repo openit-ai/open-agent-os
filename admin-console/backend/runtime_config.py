@@ -31,6 +31,11 @@ except ImportError:
 import logging
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 router = APIRouter(prefix="/v1/runtime/config", tags=["runtime-config"])
 
 # ── signing ────────────────────────────────────────────────────────────────────
@@ -121,8 +126,8 @@ def _db_fetch_snapshot(tenant_id: str, version: int) -> dict | None:
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
     return None
 
 def _db_list_snapshots_raw(tenant_id: str) -> list[dict] | None:
@@ -147,8 +152,8 @@ def _db_list_snapshots_raw(tenant_id: str) -> list[dict] | None:
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
 
 def _db_get_published_raw(tenant_id: str) -> tuple[int | None, str | None]:
     eng = _db_engine()
@@ -173,8 +178,8 @@ def _db_get_published_raw(tenant_id: str) -> tuple[int | None, str | None]:
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
     return None, None
 
 def _db_insert_snapshot_durable(tenant_id: str, snapshot: dict) -> bool:
@@ -216,8 +221,8 @@ def _db_insert_snapshot_durable(tenant_id: str, snapshot: dict) -> bool:
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
 
 def _db_set_published_durable(tenant_id: str, version: int, config_hash: str | None, actor: str) -> bool:
     eng = _db_engine()
@@ -247,8 +252,8 @@ def _db_set_published_durable(tenant_id: str, version: int, config_hash: str | N
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
 
 def _db_fetch_applied(tenant_id: str) -> dict | None:
     eng = _db_engine()
@@ -266,8 +271,8 @@ def _db_fetch_applied(tenant_id: str) -> dict | None:
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
     return None
 
 # ── helpers collecting current live config (references only) ───────────────────
@@ -711,8 +716,8 @@ def _db_mirror_set(tenant_id: str, version: int, snapshot: dict) -> None:
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
 
 def _db_mirror_published(tenant_id: str, version: int, actor: str) -> None:
     eng = _db_engine()
@@ -738,8 +743,8 @@ def _db_mirror_published(tenant_id: str, version: int, actor: str) -> None:
     finally:
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
 
 def _is_destructive_db_allowed() -> bool:
     # Guard: never wipe production DB from tests. Tests must use isolated sqlite.
@@ -870,8 +875,8 @@ def clear_runtime_config() -> None:
             pass
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("runtime_config engine dispose failed (best-effort)")
 
 def _max_version(tenant_id: str) -> int:
     m = _snapshots.get(tenant_id, {})

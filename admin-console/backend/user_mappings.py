@@ -35,6 +35,11 @@ except ImportError:
 router = APIRouter(prefix="/v1/user-mappings", tags=["user-mappings"])
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -291,8 +296,8 @@ def _db_create_mapping(m: MattermostMapping) -> bool:
         try:
             with factory() as s2:
                 s2.rollback()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("user_mappings rollback failed (best-effort)")
         return False
 
 

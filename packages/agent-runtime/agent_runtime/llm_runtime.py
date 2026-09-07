@@ -37,6 +37,11 @@ from typing import Any, AsyncGenerator, Callable, Awaitable, get_origin, get_arg
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 from pydantic import BaseModel, ValidationError
 
 from .session import SessionManager, OAOSContext  # re-export
@@ -577,7 +582,8 @@ def _llm_quota_check(tenant_id):
                             dlim = int(row2.daily_limit); mlim = int(row2.per_minute_limit)
                 finally:
                     try: eng2.dispose()
-                    except: pass
+                    except SQLAlchemyError:
+                        logger.debug("llm_runtime engine dispose failed (best-effort)")
             except Exception:
                 pass
         daily_key = f"oaos:quota:{tid}:daily:{now.strftime('%Y-%m-%d')}"
@@ -668,7 +674,8 @@ def _llm_quota_check(tenant_id):
                     row.used_today += 1; wc += 1; _llm_quota_window_counts[tid]=wc; row.updated_at = now
                     s.commit()
                 try: eng.dispose()
-                except Exception: pass
+                except SQLAlchemyError:
+                    logger.debug("llm_runtime engine dispose failed (best-effort)")
                 return
             except ImportError:
                 # raw SQL fallback
@@ -678,7 +685,8 @@ def _llm_quota_check(tenant_id):
                     except Exception:
                         pass
                 try: eng.dispose()
-                except Exception: pass
+                except SQLAlchemyError:
+                    logger.debug("llm_runtime engine dispose failed (best-effort)")
                 # fall through to in-memory with telemetry
                 if _is_quota_production():
                     raise _quota_db_failure_exc("quota DB unreachable — fail-closed in production")
@@ -832,8 +840,8 @@ def _usage_db_insert(rec: dict) -> None:
             s.commit()
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("llm_runtime engine dispose failed (best-effort)")
     except Exception:
         pass  # fail-open
 
@@ -896,8 +904,8 @@ def clear_llm_usage() -> None:
                 pass
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("llm_runtime engine dispose failed (best-effort)")
     except Exception:
         pass
 
@@ -953,8 +961,8 @@ def get_llm_usage_history(limit: int = 20, tenant_id: str | None = None) -> list
                     ]
                 try:
                     eng.dispose()
-                except Exception:
-                    pass
+                except SQLAlchemyError:
+                    logger.debug("llm_runtime engine dispose failed (best-effort)")
             except Exception:
                 pass
     # sort newest first
@@ -997,8 +1005,8 @@ def get_llm_usage_summary(tenant_id: str | None = None) -> dict:
                     ]
                 try:
                     eng.dispose()
-                except Exception:
-                    pass
+                except SQLAlchemyError:
+                    logger.debug("llm_runtime engine dispose failed (best-effort)")
             except Exception:
                 pass
     total = len(recs)

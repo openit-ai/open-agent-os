@@ -29,6 +29,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 DEFAULT_CHUNK_SIZE = 800
 DEFAULT_CHUNK_OVERLAP = 100
 DEFAULT_DIM = 1536
@@ -406,13 +411,13 @@ async def _write_via_sqlalchemy(
     except Exception as e:
         try:
             await engine.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("embed engine dispose failed (best-effort)")
         raise RuntimeError(f"sqlalchemy write failed: {e}")
     try:
         await engine.dispose()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("embed engine dispose failed (best-effort)")
     return {"mock": False, "inserted": len(created_ids), "ids": created_ids, "chunks": len(chunks)}
 
 

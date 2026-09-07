@@ -26,6 +26,11 @@ from pydantic import BaseModel, EmailStr, Field
 
 logger = _logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 # ---------------------------------------------------------------------------
 # Password hashing — Argon2id primary, bcrypt fallback + verify-both
 # ---------------------------------------------------------------------------
@@ -411,13 +416,13 @@ def _db_close(session, engine) -> None:
     try:
         if session is not None:
             session.close()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("admin auth session close failed (best-effort)")
     try:
         if engine is not None:
             engine.dispose()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("admin auth engine dispose failed (best-effort)")
 
 
 # ---------------------------------------------------------------------------
@@ -485,8 +490,8 @@ def _seed_admin() -> None:
                     except Exception:
                         try:
                             session.rollback()
-                        except Exception:
-                            pass
+                        except SQLAlchemyError:
+                            logger.debug("admin auth rollback failed (best-effort)")
                     finally:
                         _db_close(session, engine)
             except Exception:
@@ -530,8 +535,8 @@ def _seed_admin() -> None:
                 except Exception:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                 finally:
                     _db_close(session, engine)
         except Exception:
@@ -630,8 +635,8 @@ def clear_users() -> None:
                 except Exception:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                 finally:
                     _db_close(session, engine)
         except Exception:
@@ -732,14 +737,14 @@ def register(req: RegisterRequest, admin: AdminUser = Depends(require_l5)):
                 except HTTPException:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                     raise
                 except Exception:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                     # fall through to cache fallback
                 finally:
                     _db_close(session, engine)
@@ -796,14 +801,14 @@ def delete_admin_user(user_id: str, admin: AdminUser = Depends(require_l5)):
                 except HTTPException:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                     raise
                 except Exception:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                 finally:
                     _db_close(session, engine)
         except HTTPException:
@@ -843,8 +848,8 @@ def change_password(req: ChangePasswordRequest, admin: AdminUser = Depends(get_c
                 except Exception:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                 finally:
                     _db_close(session, engine)
         except Exception:
@@ -878,8 +883,8 @@ def update_profile(req: UpdateProfileRequest, admin: AdminUser = Depends(get_cur
                 except Exception:
                     try:
                         session.rollback()
-                    except Exception:
-                        pass
+                    except SQLAlchemyError:
+                        logger.debug("admin auth rollback failed (best-effort)")
                 finally:
                     _db_close(session, engine)
         except Exception:

@@ -25,6 +25,11 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 # ── constants ──────────────────────────────────────────────────
 NONCE_TTL_SECONDS = 300  # token expiry for replay protection
 
@@ -164,13 +169,13 @@ def _db_close(session, engine) -> None:
     try:
         if session is not None:
             session.close()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("approval session close failed (best-effort)")
     try:
         if engine is not None:
             engine.dispose()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("approval engine dispose failed (best-effort)")
 
 
 # ── in-memory fallback dict with set-compatible .add ───────────
@@ -202,8 +207,8 @@ def _db_nonce_cleanup(session) -> int:
         except Exception:
             try:
                 session.rollback()
-            except Exception:
-                pass
+            except SQLAlchemyError:
+                logger.debug("approval nonce rollback failed (best-effort)")
         return int(deleted or 0)
     except Exception:
         return 0
@@ -279,8 +284,8 @@ def _db_nonce_insert(nonce: str, expires_at: datetime | None = None) -> bool:
     except Exception as e:
         try:
             session.rollback()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("approval persist rollback failed (best-effort)")
         # unique violation means already exists -> treat as success (replay already persisted)
         msg = str(e).lower()
         if "unique" in msg or "duplicate" in msg or "already exists" in msg:
@@ -465,8 +470,8 @@ class ApprovalStore:
                         last_err = e
                         try:
                             session.rollback()
-                        except Exception:
-                            pass
+                        except SQLAlchemyError:
+                            logger.debug("approval persist rollback failed (best-effort)")
                         logger.debug("ApprovalStore create DB persist failed: %s", e)
                     finally:
                         _db_close(session, engine)
@@ -602,8 +607,8 @@ class ApprovalStore:
                         last_err = e
                         try:
                             session.rollback()
-                        except Exception:
-                            pass
+                        except SQLAlchemyError:
+                            logger.debug("approval persist rollback failed (best-effort)")
                         logger.debug("ApprovalStore decide DB update failed: %s", e)
                     finally:
                         _db_close(session, engine)

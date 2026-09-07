@@ -21,6 +21,11 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 import logging
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 router = APIRouter(prefix="/v1/runtime-config", tags=["runtime-config"])
 internal_router = APIRouter(prefix="/v1/internal/runtime-config", tags=["runtime-config-internal"])
 
@@ -211,8 +216,8 @@ def _fetch_via_db(tenant_id: str = "default") -> dict | None:
         if eng is not None:
             try:
                 eng.dispose()
-            except Exception:
-                pass
+            except SQLAlchemyError:
+                logger.debug("cp runtime-config engine dispose failed (best-effort)")
 
 def _fetch_via_admin_module(tenant_id: str="default") -> dict | None:
     # Try in-process import of admin runtime_config module (tests run both in same process)
@@ -303,8 +308,8 @@ def _db_fetch_applied(tenant_id: str) -> dict | None:
         if eng is not None:
             try:
                 eng.dispose()
-            except Exception:
-                pass
+            except SQLAlchemyError:
+                logger.debug("cp runtime-config engine dispose failed (best-effort)")
     return None
 
 def _db_upsert_applied(tenant_id: str, applied_version: int, config_hash: str, applied_by: str, process_identity: str, error: str | None) -> None:
@@ -339,8 +344,8 @@ def _db_upsert_applied(tenant_id: str, applied_version: int, config_hash: str, a
         if eng is not None:
             try:
                 eng.dispose()
-            except Exception:
-                pass
+            except SQLAlchemyError:
+                logger.debug("cp runtime-config engine dispose failed (best-effort)")
 
 def _apply_hot_reload(tenant_id: str, snapshot: dict) -> tuple[bool, str | None]:
     # Safe hot-reload for supported fields: runtime_mode, user/agent mapping reference, infra reference, provider/fallback metadata
@@ -467,8 +472,8 @@ def clear_runtime_config_state() -> None:
             if eng is not None:
                 try:
                     eng.dispose()
-                except Exception:
-                    pass
+                except SQLAlchemyError:
+                    logger.debug("cp runtime-config engine dispose failed (best-effort)")
 
 # ── auth helper (reuse CP auth; fallback to X-User-Id for tests) ────────────
 def _resolve_caller(authorization: str | None, x_user_id: str | None) -> str:

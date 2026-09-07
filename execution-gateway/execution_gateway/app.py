@@ -24,6 +24,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+try:
+    from redis.exceptions import RedisError
+except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effort fallback
+    RedisError = Exception  # type: ignore
+
+try:
     from .mcp_registry import default_registry, MCPRegistry
     from .proxy import proxy_tool_call
     from .authz_hook import AuthorizationHook
@@ -156,8 +165,8 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
                 ex.shutdown(wait=False)
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("gateway engine dispose failed (best-effort)")
     except RuntimeError:
         raise
     except Exception as e:
@@ -186,8 +195,8 @@ def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
                 ex.shutdown(wait=False)
         try:
             client.close()
-        except Exception:
-            pass
+        except RedisError:
+            logger.debug("gateway redis close failed (best-effort)")
     except RuntimeError:
         raise
     except Exception as e:

@@ -23,6 +23,11 @@ import os
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 
 def get_database_url() -> str | None:
     """Return DATABASE_URL for admin persistence or None if not configured.
@@ -374,5 +379,5 @@ async def ensure_admin_tables() -> None:
         if engine is not None:
             try:
                 await engine.dispose()
-            except Exception:
-                pass
+            except SQLAlchemyError:
+                logger.debug("admin persistence engine dispose failed (best-effort)")

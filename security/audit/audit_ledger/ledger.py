@@ -22,6 +22,11 @@ from audit_model import AuditCheckpoint, AuditEvent
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+
 # ── DB helpers (lazy, sync) + production fail-closed ──────────────
 # Distributed state: DB is primary in production; in-memory fallback is allowed
 # ONLY in non-prod (explicit test fallback). See §27/§31.
@@ -145,13 +150,13 @@ def _db_close(session, engine) -> None:
     try:
         if session is not None:
             session.close()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("audit session close failed (best-effort)")
     try:
         if engine is not None:
             engine.dispose()
-    except Exception:
-        pass
+    except SQLAlchemyError:
+        logger.debug("audit engine dispose failed (best-effort)")
 
 
 def _event_to_orm(event: AuditEvent):
@@ -290,7 +295,7 @@ class AuditLedger:
                         last_err = e
                         try:
                             session.rollback()
-                        except Exception:
+                        except SQLAlchemyError:
                             pass
                         logger.debug("AuditLedger append DB persist failed: %s", e)
                     finally:
@@ -425,7 +430,7 @@ class AuditLedger:
                     logger.info("Audit checkpoint anchored to S3 %s", path)
                     try:
                         os.unlink(tmp.name)
-                    except Exception:
+                    except OSError:
                         pass
                     return True
                 except FileNotFoundError:
@@ -445,7 +450,7 @@ class AuditLedger:
                         pass
                 try:
                     os.unlink(tmp.name)
-                except Exception:
+                except OSError:
                     pass
                 return False
             except Exception as e:
@@ -505,7 +510,7 @@ class AuditLedger:
                 except Exception:
                     try:
                         os.unlink(tmp.name)
-                    except Exception:
+                    except OSError:
                         pass
                     try:
                         with open("/tmp/oaos-audit-checkpoint.json") as f:
@@ -631,7 +636,7 @@ class AuditLedger:
                         except Exception:
                             try:
                                 session.rollback()
-                            except Exception:
+                            except SQLAlchemyError:
                                 pass
                         finally:
                             _db_close(session, engine)

@@ -96,7 +96,7 @@ class StreamableHTTPTransport(MCPBaseTransport):
                     pass
             try:
                 await self._client.aclose()
-            except Exception:
+            except (OSError, RuntimeError):
                 pass
             self._client = None
         self._session_id = None

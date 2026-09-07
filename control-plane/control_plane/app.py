@@ -36,6 +36,15 @@ import time
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
+    SQLAlchemyError = Exception  # type: ignore
+try:
+    from redis.exceptions import RedisError
+except (ImportError, ModuleNotFoundError):  # redis is lazy/optional; best-effort fallback
+    RedisError = Exception  # type: ignore
+
 app = FastAPI(title="Open Agent OS — Control Plane", version="0.1.3")
 
 # -- HA health helpers — liveness vs readiness (H4 strict) --
@@ -114,8 +123,8 @@ def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
                 ex.shutdown(wait=False)
         try:
             eng.dispose()
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            logger.debug("control-plane engine dispose failed (best-effort)")
     except RuntimeError:
         raise
     except Exception as e:
@@ -144,8 +153,8 @@ def _bounded_redis_ping(redis_url: str, timeout_s: float = 0.8) -> None:
                 ex.shutdown(wait=False)
         try:
             client.close()
-        except Exception:
-            pass
+        except RedisError:
+            logger.debug("control-plane redis close failed (best-effort)")
     except RuntimeError:
         raise
     except Exception as e:
