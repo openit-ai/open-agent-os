@@ -10,6 +10,18 @@
     "test": {
       "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test"
     },
+    "test-full": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test-full"
+    },
+    "test-distributed": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test-distributed"
+    },
+    "test-external": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test-external"
+    },
+    "test-slow": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test-slow"
+    },
     "verify-evidence": {
       "command": "PATH=\"$PWD/.venv/bin:$PATH\" make verify-evidence",
       "description": "주의: --check-only도 내부에서 pytest 전체(1539 tests)를 재실행하므로 일반 Worktree 완료 조건에서는 제외. 문서/evidence claim만 빠르게 검사하는 용도로는 부적합, 별도 verify-evidence-full로 구분"
