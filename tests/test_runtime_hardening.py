@@ -12,6 +12,9 @@ import os
 import asyncio
 import pytest
 
+pytestmark = pytest.mark.distributed
+
+
 def _set_env(**kwargs):
     old = {}
     for k,v in kwargs.items():
@@ -173,6 +176,8 @@ def test_liveness_always_ok_even_when_degraded():
     try:
         from control_plane.app import app as cp_app
         from fastapi.testclient import TestClient
+
+
         c = TestClient(cp_app)
         r = c.get("/healthz")
         assert r.status_code==200

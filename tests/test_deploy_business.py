@@ -16,6 +16,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.external
+
+
+
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "deploy" / "scripts"
 MONITORING = ROOT / "deploy" / "monitoring"

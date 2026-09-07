@@ -14,6 +14,9 @@ import asyncio
 from pathlib import Path
 import pytest
 
+pytestmark = pytest.mark.external
+
+
 def _set_env(**kwargs):
     old = {}
     for k, v in kwargs.items():
@@ -133,6 +136,8 @@ async def test_mcp_gateway_unreachable_503_in_prod():
             await c.call_tool("gmail_search", {"query": "hi"})
         # same via proxy_tool_call path
         from execution_gateway.proxy import proxy_tool_call
+
+
         ctx = {"trace_id": "trace_test", "request_id": "req_test", "user_id": "employee:test", "tenant_id": "default", "action": "SEARCH", "resource": "gmail/user/*"}
         res = await proxy_tool_call("gmail_search", {"query": "hi"}, None, ctx)
         assert res.get("error") == "MOCK_FALLBACK_DISABLED" or res.get("code") == "MOCK_FALLBACK_DISABLED"

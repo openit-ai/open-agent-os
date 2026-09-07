@@ -64,6 +64,9 @@ import pathlib as _pl
 import importlib.util as _ilu
 _root = _pl.Path(__file__).resolve().parents[1]
 import os as _os
+
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
 _os.environ.setdefault("OAOS_SIGNING_KEY", "test-unified-oaos-signing-key-32bytes-long-enough!!")
 _os.environ.pop("OAOS_ENV", None)
 # Ensure all signing-key env vars point to unified for verifier

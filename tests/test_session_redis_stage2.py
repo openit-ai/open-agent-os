@@ -9,13 +9,15 @@ import os
 import sys
 import importlib
 from pathlib import Path
+import pytest
+pytestmark = pytest.mark.distributed
+
 
 ROOT = Path(__file__).resolve().parents[1]
 for p in [ROOT / "control-plane", ROOT / "security" / "policy-engine", ROOT / "packages" / "policy-model"]:
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-import pytest
 
 def _fakeredis_client():
     try:
@@ -240,4 +242,6 @@ def test_non_prod_compatibility_memory_or_fallback():
     if "control_plane.session" in sys.modules:
         del sys.modules["control_plane.session"]
         import control_plane.session as m2
+
+
         importlib.reload(m2)

@@ -2,8 +2,13 @@ import asyncio
 import time
 from pathlib import Path
 import sys
+import pytest
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "control-plane"))
 from control_plane.adaptive_profile.queue import enqueue, reset_for_tests
+
+
 
 
 def test_enqueue_does_not_wait_for_slow_job():

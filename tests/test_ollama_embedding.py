@@ -12,6 +12,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytestmark = [pytest.mark.external, pytest.mark.slow]
+
+
 # Ensure knowledge-index packages on path (both ROOT and packages)
 ROOT = Path(__file__).resolve().parents[1]
 for cand in (str(ROOT / "packages" / "knowledge-index"), str(ROOT)):
@@ -117,6 +120,8 @@ class TestOllamaProviderMocked:
         # ensure raw_url empty -> embed raises fail-closed
         # construct without env: delenv and explicit empty
         import os as _os
+
+
         for k in ("OAOS_EMBED_API_URL", "OAOS_EMBEDDING_API_URL", "OLLAMA_API_URL", "OLLAMA_HOST"):
             _os.environ.pop(k, None)
         p2 = OllamaEmbeddingProvider(api_url="", dim=1024, http_client=_MockClient(_MockResp(200, {})))

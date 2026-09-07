@@ -1,8 +1,13 @@
 import asyncio
+import pytest
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
 
 
 async def test_profile_worker_serializes_same_owner_operations():
     from control_plane.adaptive_profile import worker
+
+
 
     active = 0
     maximum = 0

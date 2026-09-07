@@ -27,6 +27,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # ——— Ensure imports ———
@@ -446,6 +449,8 @@ class TestSlumEdge:
     def test_delegation_revoke_cascade_blocks_chain(self):
         """Revoked delegation must invalidate downstream policy + token path."""
         from delegation.delegation_service.service import DelegationService
+
+
         svc = DelegationService()
         d = svc.grant(user_id="employee:kim", agent_id="agent:assistant:kim", provider="google", scope="gmail.read")
         assert d.status.value in ("active", "ACTIVE", "pending", "PENDING") or str(d.status).lower() in ("active", "pending")

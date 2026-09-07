@@ -1,6 +1,9 @@
 """Legacy restore accepts old dump names for transition."""
 from pathlib import Path
 import subprocess, tempfile, gzip, json
+import pytest
+pytestmark = pytest.mark.distributed
+
 ROOT = Path(__file__).resolve().parents[1]
 def test_restore_accepts_legacy_dump_name():
     script = ROOT / "deploy" / "scripts" / "restore.sh"

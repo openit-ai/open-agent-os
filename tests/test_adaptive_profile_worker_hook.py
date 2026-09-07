@@ -14,6 +14,9 @@ import time
 import asyncio
 import uuid
 from datetime import datetime, timezone, timedelta
+import pytest
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
 
 UNIFIED_KEY = "test-unified-oaos-signing-key-32bytes-long-enough!!"
 for _k in ("OAOS_SIGNING_KEY","OAOS_USER_JWT_SIGNING_KEY","OAOS_SECURITY_SERVICE_SIGNING_KEY","OAOS_JWT_SIGNING_KEY","ADMIN_JWT_SECRET"):
@@ -23,7 +26,6 @@ os.environ.setdefault("OAOS_JWT_ISSUER","open-agent-os-auth")
 os.environ.setdefault("OAOS_USER_JWT_AUDIENCE","control-plane")
 os.environ.setdefault("OAOS_JWT_AUDIENCE","control-plane")
 
-import pytest
 
 # ── extractor deterministic ─────────────────────────────────────────────
 
@@ -237,6 +239,8 @@ async def test_hook_applied_at_acp_boundary_with_fallback():
 
 def test_hook_never_leaks_profile_details():
     from control_plane.adaptive_profile.hook import AdaptiveProfileHook
+
+
     hook = AdaptiveProfileHook()
     def loader(tid, uid, tt):
         return {"explicit_prefs": {}, "task_scores": {"verbosity": 0.9, "evidence_requirement": 0.8}, "global_scores": {"conclusion_first": 0.7}}

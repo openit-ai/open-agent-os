@@ -21,6 +21,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
+
 ROOT = Path(__file__).resolve().parents[1]
 for p in [
     ROOT / "execution-gateway",
@@ -281,6 +284,8 @@ class TestExpiryReplay:
         # also via helper verify_capability_token with store
         clear_global_stores()
         from jose import jwt as jose_jwt
+
+
         t2 = issue_capability_token(SIGNING_KEY, sub=ctx["agent_id"], on_behalf_of=ctx["user_id"], action="SEND", resource="gmail/user/kim/messages", session_id=ctx["session_id"], request_id="req-replay2", tenant_id=ctx["tenant_id"])
         first = verify_capability_token(SIGNING_KEY, t2)
         assert first is not None

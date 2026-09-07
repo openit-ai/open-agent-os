@@ -10,6 +10,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.distributed
+
+
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
 TEST_DB = "/tmp/oaos_setup_acp_mcp_test.db"
@@ -276,6 +279,8 @@ def test_mm_bridge_requires_auth(client):
 
 def _load_ol(client):
     import sys as _sys
+
+
     mod = _sys.modules.get("admin_console.backend.outline_config")
     assert mod is not None, "outline router not mounted"
     return mod

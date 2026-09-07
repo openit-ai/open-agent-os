@@ -3,6 +3,12 @@ import importlib.util
 import pathlib
 import sys
 import time
+import pytest
+
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
+
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "oaos-mm-bridge.py"

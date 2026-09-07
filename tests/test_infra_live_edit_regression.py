@@ -16,6 +16,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.distributed
+
+
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
 
@@ -42,6 +45,8 @@ try:
     import admin_console.backend.auth as _canon_auth  # type: ignore
     auth_mod = _canon_auth
     import admin_console.backend.app as _canon_app  # type: ignore
+
+
     app_mod = _canon_app
     admin_app = app_mod.app
 except Exception:

@@ -3,11 +3,16 @@
 from pathlib import Path
 import json
 import sys
+import pytest
+pytestmark = pytest.mark.distributed
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import verify_evidence_tiers as vet
+
+
 
 
 def test_classify_does_not_label_unit_as_distributed_or_external():

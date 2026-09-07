@@ -17,6 +17,12 @@ import pathlib
 import tempfile
 import shutil
 import textwrap
+import pytest
+
+pytestmark = pytest.mark.external
+
+
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "deploy" / "systemd" / "install-systemd.sh"

@@ -1,5 +1,11 @@
 import asyncio
 import importlib
+import pytest
+
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
+
+
 
 
 async def test_same_owner_requests_are_serialized():

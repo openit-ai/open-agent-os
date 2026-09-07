@@ -7,6 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 import pytest
 
+pytestmark = [pytest.mark.external, pytest.mark.slow]
+
+
 ROOT = Path(__file__).resolve().parents[1]
 for p in [
     ROOT / "control-plane",
@@ -501,6 +504,8 @@ def test_h4_k8s_manifests_correct_probes():
 
 def test_h4_compose_healthchecks_use_healthz_liveness():
     import yaml
+
+
     compose = Path(__file__).resolve().parents[1] / "deploy" / "docker-compose.prod.yml"
     assert compose.exists(), "docker-compose.prod.yml missing"
     text = compose.read_text()

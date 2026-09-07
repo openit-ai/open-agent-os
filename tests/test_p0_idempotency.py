@@ -21,6 +21,9 @@ import threading
 import uuid
 import pytest
 
+pytestmark = pytest.mark.distributed
+
+
 def _fakeredis_client():
     try:
         import fakeredis  # type: ignore
@@ -460,6 +463,8 @@ class TestWebhookDuplicateNoNewSession:
         set_idempotency_redis_client(r)
         from unittest.mock import patch
         from control_plane.mattermost_adapter import webhook as wh
+
+
         ss = wh.session_store
         if hasattr(ss, "_store"):
             ss._store.clear()
@@ -489,4 +494,3 @@ class TestWebhookDuplicateNoNewSession:
         # only one new session created for both calls (duplicate did not create second)
         assert after1 == before + 1
         assert after2 == after1
-

@@ -18,6 +18,9 @@ import uuid
 
 import pytest
 
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -491,6 +494,8 @@ class TestSessionStoreDistributed:
         rec = store.create(tenant_id="t1", user_id="u1", agent_id="a1")
         assert store.get(rec.session_id, caller_user_id="u1").session_id == rec.session_id
         import agent_runtime.session as ars
+
+
         # agent runtime non-prod fallback also allowed
         ars_store = ars._RedisStore(redis_url="redis://127.0.0.1:59999/0", fallback=True)
         assert ars_store._fallback is not None

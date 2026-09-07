@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.external
+
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "deploy" / "scripts"
 K8S = ROOT / "deploy" / "k8s"
@@ -122,6 +125,8 @@ def test_health_check_sh_json_output():
     assert combined, "health-check --json produced no stdout"
     data = yaml.safe_load(combined) if combined.startswith("{") else None
     import json
+
+
     data = json.loads(combined)
     assert "pass" in data
     assert "fail" in data

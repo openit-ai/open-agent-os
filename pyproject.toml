@@ -47,3 +47,11 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "unit: pure logic, no IO, no external service",
+    "subsystem: single-service boundary (sqlite/fake, in-process)",
+    "integration: cross-service / DB + logic, no real infra",
+    "distributed: Redis/Postgres concurrency, migration, multi-node",
+    "external: Docker/K8s/real network / live SaaS / LLM gateway",
+    "slow: >1s or sleep/gather, heavy setup",
+]

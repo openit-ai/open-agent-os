@@ -21,6 +21,9 @@ from control_plane.concurrency import (
 )
 from execution_gateway.metrics import MetricsCollector
 
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
+
 
 # ── LongTask tests ─────────────────────────────────────────────────
 

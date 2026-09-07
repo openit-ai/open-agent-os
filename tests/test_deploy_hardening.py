@@ -16,6 +16,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.external
+
+
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy"
 K8S = DEPLOY / "k8s"
@@ -238,6 +241,8 @@ def test_tool_rate_limiter_redis_primary_fail_closed_in_prod(monkeypatch):
     monkeypatch.setenv("OAOS_ENV", "production")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6399/0")
     from execution_gateway.tool_policy import ToolRateLimiter
+
+
     limiter = ToolRateLimiter(rate_per_sec=10, burst=5)
     # With no redis server, allow should raise RuntimeError (fail-closed)
     with pytest.raises(RuntimeError, match="Redis"):

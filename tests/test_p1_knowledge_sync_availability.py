@@ -23,6 +23,9 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.distributed, pytest.mark.slow]
+
+
 ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("PYTEST_CURRENT_TEST", "1")
 
@@ -145,6 +148,8 @@ async def test_sync_semaphore_bounded(app, app_mod):
 async def test_sync_semantics_preserved(app):
     """External API semantics unchanged: injected sync + search still works after fix."""
     import httpx
+
+
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

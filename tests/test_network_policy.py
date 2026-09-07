@@ -18,6 +18,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.external
+
+
+
+
 ROOT = Path(__file__).resolve().parents[1]
 K8S = ROOT / "deploy" / "k8s"
 POLICY_FILE = K8S / "networkpolicy.yaml"
