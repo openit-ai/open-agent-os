@@ -13,8 +13,9 @@ The script:
 - fails (exit 1) if docs claim distributed/external counts without available evidence.
 
 Usage:
-  python scripts/verify-evidence-tiers.py [--output docs/deployment-verification-v1.7.1.md] [--json evidence-report.json]
-  python scripts/verify-evidence-tiers.py --check-only   # fail if claims unsupported, no report write
+  python scripts/verify-evidence-tiers.py [--output docs/deployment-verification-v1.7.1.md] [--json evidence-report.json]  # full: runs pytest + writes reports
+  python scripts/verify-evidence-tiers.py --check-only   # fast: no pytest, only prerequisites + doc claim check, no report write
+  python scripts/verify-evidence-tiers.py --skip-pytest  # report without pytest execution (placeholder counts, not evidence)
   pytest tests/test_evidence_tiers.py -v  # TDD for this script's contracts
 
 Design: see docs/architecture-v1.7.2-design.md §10 (H8).
@@ -203,21 +204,39 @@ def extract_doc_tier_claims(text: str) -> dict:
     distributed_claim = None
     external_claim = None
     # pattern: distributed ... N passed  (case-insensitive)
+    # Line-scoped search to avoid cross-line false positives (e.g., TODO distributed -> distant 648 passed).
+    # Also avoid attributing unit counts to distributed/external when the same line contains "unit:" before the number.
     for tier in ("distributed", "external"):
-        # find "distributed: 12 passed" or "| distributed | ... | 12 passed"
-        pat = re.compile(rf"{tier}[\s|:]*.*?(\d+)\s*passed", re.IGNORECASE)
-        m = pat.search(text)
-        if m:
-            try:
-                val = int(m.group(1))
-                if tier == "distributed":
-                    distributed_claim = val
-                else:
-                    external_claim = val
-            except ValueError:
-                pass
-        # also check badge-like "distributed N" without passed but numeric near tier
-        # Already covered; if no explicit passed, leave None
+        best = None
+        for line in text.splitlines():
+            if tier not in line.lower():
+                continue
+            # tempered: ensure "unit" does not appear between tier and the number on this line
+            pat = re.compile(rf"{tier}(?:(?!unit).)*?(\d+)\s*passed", re.IGNORECASE)
+            for m in pat.finditer(line):
+                try:
+                    val = int(m.group(1))
+                    if best is None or val > best:
+                        best = val
+                except ValueError:
+                    continue
+        # fallback: strict tier: N passed per line if still None
+        if best is None:
+            for line in text.splitlines():
+                if tier not in line.lower():
+                    continue
+                strict_pat = re.compile(rf"\b{tier}\b\s*[:|]\s*(\d+)\s*passed", re.IGNORECASE)
+                m2 = strict_pat.search(line)
+                if m2:
+                    try:
+                        best = int(m2.group(1))
+                        break
+                    except ValueError:
+                        pass
+        if tier == "distributed":
+            distributed_claim = best
+        else:
+            external_claim = best
     return {"distributed_claim": distributed_claim, "external_claim": external_claim}
 
 
@@ -299,7 +318,7 @@ def render_markdown(report: dict) -> str:
     lines.append(f"| external | {tiers['external']} passed | Outline/Notion/Mattermost/Slack/LLM gateway live | requires live credentials + network + `docs/deployment-verification-*.md` curl/kubectl/hubble captures |")
     lines.append(f"| **total** | **{tiers['total_passed']} passed, {tiers.get('skipped',0)} skipped** |  |  |")
     lines.append("")
-    lines.append("> **Invariant:** Unit tests are never labeled as distributed/external. Distributed/external counts remain 0 until live verification is captured; current `927` is `unit` only.")
+    lines.append(f"> **Invariant:** Unit tests are never labeled as distributed/external. Distributed/external counts remain 0 until live verification is captured; current `{tiers['unit']}` passed is `unit` only (dynamic per run).")
     lines.append("")
     lines.append("## 2. Prerequisites Check")
     lines.append("")
@@ -331,9 +350,9 @@ def render_markdown(report: dict) -> str:
     lines.append("")
     lines.append("```bash")
     lines.append("git rev-parse HEAD && date -u --iso-8601=seconds")
-    lines.append("pytest -q  # expect 927 passed, 1 skipped (2026-08-29)")
-    lines.append("python scripts/verify-evidence-tiers.py  # regenerates this report + evidence-report-v1.7.1.json")
-    lines.append("python scripts/verify-evidence-tiers.py --check-only  # exits 1 if docs claim unsupported distributed/external")
+    lines.append("pytest -q  # rerun to obtain current counts (do not reuse historical numbers as evidence)")
+    lines.append("python scripts/verify-evidence-tiers.py  # regenerates this report + evidence-report-v1.7.1.json (runs pytest)")
+    lines.append("python scripts/verify-evidence-tiers.py --check-only  # fast claim check only; does not run pytest; exits 1 if docs claim unsupported distributed/external")
     lines.append("```")
     lines.append("")
     lines.append("## 6. Raw pytest Tail (last 4000 chars)")
@@ -349,16 +368,38 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="H8 evidence-tier verification")
     parser.add_argument("--output", type=str, default=str(DEFAULT_REPORT_MD), help="Markdown report path")
     parser.add_argument("--json", dest="json_out", type=str, default=str(DEFAULT_REPORT_JSON), help="JSON report path")
-    parser.add_argument("--check-only", action="store_true", help="Only verify claims, don't run pytest or write reports")
-    parser.add_argument("--skip-pytest", action="store_true", help="Skip running pytest (use cached counts for testing)")
+    parser.add_argument("--check-only", action="store_true", help="Only verify claims, don't run pytest or write reports (no pytest execution)")
+    parser.add_argument("--skip-pytest", action="store_true", help="Skip running pytest (for testing/report generation without live run); has no effect with --check-only which already skips pytest")
     args = parser.parse_args(argv)
 
     commit = get_commit()
     timestamp = get_timestamp()
     command = get_command()
 
+    # --check-only fast path: no pytest, only prerequisite + doc claim verification
+    if args.check_only:
+        prereqs = check_prerequisites()
+        # pytest not executed — use placeholder; distributed/external remain 0 unless live
+        pytest_result = {"passed": 0, "skipped": 0, "failed": 0, "warnings": 0, "raw": "check-only: pytest not executed", "exit_code": 0}
+        tiers = classify_counts(pytest_result, prereqs)
+        doc_texts = []
+        for p in [ROOT / "README.md", ROOT / "docs" / "architecture-v1.7.2.md"]:
+            try:
+                doc_texts.append(p.read_text(encoding="utf-8"))
+            except Exception:
+                doc_texts.append("")
+        violations = verify_claims(tiers, prereqs, doc_texts)
+        if violations:
+            print("H8 evidence-tier violations:", file=sys.stderr)
+            for v in violations:
+                print(f"  - {v}", file=sys.stderr)
+            return 1
+        print(f"H8 check passed — distributed:{tiers['distributed']} external:{tiers['external']} commit:{commit[:8]} (pytest not executed)")
+        return 0
+
+    # full/report path: pytest execution only here (or --skip-pytest placeholder)
     if args.skip_pytest:
-        pytest_result = {"passed": 927, "skipped": 1, "failed": 0, "warnings": 74, "raw": "skipped for test", "exit_code": 0}
+        pytest_result = {"passed": 0, "skipped": 0, "failed": 0, "warnings": 0, "raw": "skipped for test (--skip-pytest: pytest not executed, counts not verified)", "exit_code": 0}
     else:
         pytest_result = run_pytest()
 
@@ -374,15 +415,6 @@ def main(argv: list[str] | None = None) -> int:
             doc_texts.append("")
 
     violations = verify_claims(tiers, prereqs, doc_texts)
-
-    if args.check_only:
-        if violations:
-            print("H8 evidence-tier violations:", file=sys.stderr)
-            for v in violations:
-                print(f"  - {v}", file=sys.stderr)
-            return 1
-        print(f"H8 check passed — unit:{tiers['unit']} distributed:{tiers['distributed']} external:{tiers['external']} commit:{commit[:8]}")
-        return 0
 
     report = build_report(pytest_result, prereqs, tiers, commit, timestamp, command)
     report["violations"] = violations

@@ -24,7 +24,7 @@
     },
     "verify-evidence": {
       "command": "PATH=\"$PWD/.venv/bin:$PATH\" make verify-evidence",
-      "description": "주의: --check-only도 내부에서 pytest 전체(1539 tests)를 재실행하므로 일반 Worktree 완료 조건에서는 제외. 문서/evidence claim만 빠르게 검사하는 용도로는 부적합, 별도 verify-evidence-full로 구분"
+      "description": "H8 claim 검증만 수행 (--check-only: pytest 미실행, prerequisite + 문서 claim 검사만, 수초 내 완료)"
     },
     "verify-evidence-full": {
       "command": "PATH=\"$PWD/.venv/bin:$PATH\" make verify-evidence-full",
