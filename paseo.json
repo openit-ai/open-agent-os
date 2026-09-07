@@ -1,0 +1,45 @@
+{
+  "worktree": {
+    "setup": "./scripts/paseo/setup-worktree.sh",
+    "teardown": "./scripts/paseo/teardown-worktree.sh"
+  },
+  "scripts": {
+    "lint": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make lint"
+    },
+    "test": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make test"
+    },
+    "verify-evidence": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make verify-evidence",
+      "description": "주의: --check-only도 내부에서 pytest 전체(1539 tests)를 재실행하므로 일반 Worktree 완료 조건에서는 제외. 문서/evidence claim만 빠르게 검사하는 용도로는 부적합, 별도 verify-evidence-full로 구분"
+    },
+    "verify-evidence-full": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" make verify-evidence-full",
+      "description": "pytest + live prerequisite + evidence report 재생성 (시간 6분 이상, live infra 필요)"
+    },
+    "admin-lint": {
+      "command": "cd admin-console && npm run lint"
+    },
+    "admin-build": {
+      "command": "cd admin-console && npm run build"
+    },
+    "production-config-check": {
+      "command": "./scripts/check-production-config.sh"
+    },
+    "hermes-test": {
+      "command": "PATH=\"$PWD/.venv/bin:$PATH\" pytest -q tests -k hermes"
+    }
+  },
+  "metadataGeneration": {
+    "branchName": {
+      "instructions": "OAOS 개발 작업의 목적이 명확하게 드러나는 간결한 제목을 생성한다.\n- 6단어 이내로 작성한다.\n- 기능명 또는 변경 목적을 중심으로 작성한다.\n- 불필요한 수식어는 사용하지 않는다.\n\n브랜치 이름은 다음 형식을 사용한다.\n<type>/<scope>-<short-description>\n\n사용 가능한 type:\nfeat, fix, refactor, docs, test, chore, security\n\n권장 scope:\ncontrol-plane\ngateway\nsecurity\nhermes\nmattermost\nadmin\niam\nknowledge\ndeploy\n\n브랜치 이름은 영문 소문자와 하이픈(-)을 사용한다.\n짧고 명확하게 작성한다.\n\n예:\nfeat/hermes-health-check\nfix/gateway-task-routing\nsecurity/iam-permission-check"
+    },
+    "commitMessage": {
+      "instructions": "Conventional Commits 형식을 사용한다.\n\n형식:\n<type>(<scope>): <description>\n\n첫 줄은 72자를 넘지 않도록 한다.\n변경 내용을 구체적이고 간결하게 작성한다.\n\ntype은 다음 중 하나를 사용한다:\nfeat, fix, refactor, docs, test, chore, security\n\n예:\nfeat(hermes): add runtime health check\nfix(gateway): prevent duplicate task dispatch\nsecurity(iam): enforce tenant permission boundary"
+    },
+    "pullRequest": {
+      "instructions": "OAOS 기술 변경사항을 명확하게 설명하는 Pull Request 내용을 작성한다.\n\n다음 항목을 반드시 포함한다.\n\n## 요약\n이번 변경의 목적과 핵심 내용을 간결하게 설명한다.\n\n## 변경 사항\n실제로 수정하거나 추가한 기능을 구체적으로 정리한다.\n\n## 보안 영향\nACP, MCP, IAM, 권한, 인증, 데이터 접근, Hermes Runtime 등\n보안과 관련된 영향이 있는지 설명한다.\n\n보안 영향이 없으면 \"없음\"이라고 명시한다.\n\n## 테스트\n실행한 테스트와 검증 결과를 작성한다.\n\n예:\n- lint\n- test\n- hermes-test\n- admin-build\n- production-config-check\n\n## 위험 요소\n회귀 가능성, 기존 기능 영향, 호환성 문제 등\n알려진 위험 요소를 작성한다.\n\n위험 요소가 없으면 \"없음\"이라고 명시한다."
+    }
+  }
+}

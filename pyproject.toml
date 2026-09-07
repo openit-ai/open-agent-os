@@ -21,6 +21,7 @@ dependencies = [
     "bcrypt>=4.0",
     "argon2-cffi>=23.1",
     "pgvector>=0.5",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "pre-commit>=3.7",
+    "aiosqlite>=0.20",
 ]
 
 [tool.ruff]
