@@ -20,19 +20,53 @@ import logging
 import os
 from typing import AsyncGenerator, Any
 import httpx
+from fastapi import HTTPException
 from .session import SessionRecord
 import time as _time
+
+
+def _is_production() -> bool:
+    return os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"}
+
+
+def _validate_session_context(session: SessionRecord) -> None:
+    for field in ("tenant_id", "user_id", "agent_id", "session_id"):
+        value = getattr(session, field, None)
+        if not isinstance(value, str) or not value.strip():
+            raise HTTPException(status_code=401, detail=f"missing ACP identity context: {field}")
+    trace_id = getattr(session, "trace_id", None)
+    if not isinstance(trace_id, str) or not trace_id.strip():
+        raise HTTPException(status_code=422, detail="missing ACP trace_id")
+
+
+def _decode_json_response(response: httpx.Response, operation: str) -> dict[str, Any]:
+    try:
+        data = response.json()
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"malformed ACP {operation} response") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail=f"ACP {operation} response must be an object")
+    return data
+
+
+def _validate_runtime_context(session: SessionRecord, runtime_context: dict[str, Any] | None) -> None:
+    if runtime_context is None:
+        return
+    for field in ("tenant_id", "user_id", "agent_id", "session_id"):
+        value = runtime_context.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise HTTPException(status_code=422, detail=f"ACP runtime_context.{field} must be a string")
+        if value != getattr(session, field):
+            raise HTTPException(status_code=403, detail=f"ACP runtime context mismatch: {field}")
 
 # -- HA: retry (500/429/timeout, 3 retries exponential backoff) + circuit breaker + audit --
 def _is_retryable_status(exc: BaseException) -> bool:
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return True
-    try:
-        import httpx as _hx  # type: ignore
-        if isinstance(exc, _hx.TimeoutException):  # type: ignore
-            return True
-    except Exception:
-        pass
+    if isinstance(exc, httpx.TimeoutException):
+        return True
     for attr in ("status_code", "status", "code"):
         v = getattr(exc, attr, None)
         if isinstance(v, int) and v in (429, 500, 502, 503, 504):
@@ -96,31 +130,23 @@ def _llm_max_attempts() -> int:
     if raw:
         try:
             return max(1, min(3, int(raw)))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            logging.getLogger(__name__).warning("invalid OAOS_LLM_MAX_ATTEMPTS=%r: %s", raw, exc)
     return 1 if os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"} else 3
 
 
 def _audit_emit(event_type: str, trace_id: str, data: dict):
     try:
-        # try audit_model + ledger if available, else no-op
         from audit_model import AuditEvent as _AE, AuditEventType as _AET  # type: ignore
         import uuid as _uuid
         from datetime import datetime, timezone as _tz
-        # best-effort: emit to security audit_ledger if importable (control-plane may not have ledger)
         try:
             from audit.audit_ledger.ledger import AuditLedger as _AL  # type: ignore
-            pass
-        except Exception:
-            pass
-    except Exception:
-        pass
-    # fallback: log via default_audit_log if present (llm_runtime style) or just logging
-    try:
-        import logging
-        logging.getLogger(__name__).info(f"audit {event_type} trace={trace_id} data={data}")
-    except Exception:
-        pass
+        except (ImportError, ModuleNotFoundError) as exc:
+            logging.getLogger(__name__).debug("ACP audit ledger unavailable: %s", exc)
+    except (ImportError, ModuleNotFoundError) as exc:
+        logging.getLogger(__name__).debug("ACP audit model unavailable: %s", exc)
+    logging.getLogger(__name__).info("audit %s trace=%s data=%s", event_type, trace_id, data)
 
 async def _with_retry_acp(fn, *, max_retries: int = 3, backoff_s: float = 0.2, trace_id: str = ""):
     # check circuit
@@ -133,7 +159,7 @@ async def _with_retry_acp(fn, *, max_retries: int = 3, backoff_s: float = 0.2, t
             res = await fn()
             _acp_circuit_breaker.record_success()
             return res
-        except Exception as e:
+        except (httpx.HTTPError, asyncio.TimeoutError, TimeoutError, OSError, ValueError, TypeError, RuntimeError) as e:
             if not _is_retryable_status(e):
                 _acp_circuit_breaker.record_failure()
                 _audit_emit("acp_failure", trace_id, {"error": str(e)[:300], "retryable": False, "attempt": attempt + 1})
@@ -154,13 +180,12 @@ def _resolve_workspace_for_session(session: SessionRecord) -> str | None:
     try:
         from runtime_adapter.workspace import WorkspaceResolver  # type: ignore
         return str(WorkspaceResolver().resolve(session.tenant_id, session.agent_id, session.session_id))
-    except Exception:
-        try:
-            import re as _re
-            safe = lambda v: _re.sub(r"[^a-zA-Z0-9._-]", "_", str(v))[:64] or "default"
-            return f"/home/hermes/workspaces/{safe(session.tenant_id)}/{safe(session.agent_id)}/{safe(session.session_id)}"
-        except Exception:
-            return None
+    except (ImportError, ModuleNotFoundError) as exc:
+        logging.getLogger(__name__).debug("workspace resolver unavailable: %s", exc)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        logging.getLogger(__name__).warning("workspace resolver degraded for session %s: %s", session.session_id, exc)
+    safe = lambda v: re.sub(r"[^a-zA-Z0-9._-]", "_", str(v))[:64] or "default"
+    return f"/home/hermes/workspaces/{safe(session.tenant_id)}/{safe(session.agent_id)}/{safe(session.session_id)}"
 
 class ACPAdapter:
     """Hermes ACP adapter — single integration point (Section 17)."""
@@ -182,7 +207,8 @@ class ACPAdapter:
             # ensure minimal keys only
             allowed = set(DEFAULT_POLICY.keys())
             return {k: v for k, v in policy.items() if k in allowed}
-        except Exception:
+        except (ImportError, ModuleNotFoundError) as exc:
+            logging.getLogger(__name__).warning("adaptive response policy hook unavailable: %s", exc)
             try:
                 from control_plane.adaptive_profile.engine import DEFAULT_POLICY as _DP
                 merged = dict(_DP)
@@ -191,8 +217,11 @@ class ACPAdapter:
                     if k in cur:
                         merged[k] = cur[k]
                 return merged
-            except Exception:
+            except (ImportError, ModuleNotFoundError) as fallback_exc:
+                logging.getLogger(__name__).warning("adaptive response policy engine unavailable: %s", fallback_exc)
                 return {"conclusion_first": False, "verbosity": "medium", "technical_depth": "medium", "evidence_requirement": "medium", "challenge_assumptions": False, "alternatives": 1, "confirmation_level": "medium"}
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise RuntimeError("adaptive response policy resolution failed") from exc
 
     async def _resolve_policy_async(self, session: SessionRecord, current_instruction: dict | None = None) -> dict:
         try:
@@ -203,8 +232,10 @@ class ACPAdapter:
             policy = await get_response_policy_async(session.tenant_id, session.user_id, task_type, current_instruction or {})
             allowed = set(DEFAULT_POLICY.keys())
             return {k: v for k, v in policy.items() if k in allowed}
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             return self._resolve_policy_sync(session, current_instruction)
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise RuntimeError("async adaptive response policy resolution failed") from exc
 
     def resolve_policy(self, session: SessionRecord, current_instruction: dict | None = None) -> dict:
         """Public adapter seam — Control Plane/ACP LLM boundary."""
@@ -221,9 +252,12 @@ class ACPAdapter:
             allowed = set(DEFAULT_POLICY.keys())
             policy = {k: v for k, v in policy.items() if k in allowed}
             injection = default_hook.format_prompt_injection(policy)
-        except Exception:
+        except (ImportError, ModuleNotFoundError) as exc:
+            logging.getLogger(__name__).warning("adaptive response policy injection unavailable: %s", exc)
             injection = ""
             policy = {}
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise ValueError("adaptive response policy serialization failed") from exc
         base = system_base or (
             f"You are Open Agent OS personal agent {session.agent_id} for user {session.user_id} "
             f"(tenant {session.tenant_id}, session {session.session_id})."
@@ -259,20 +293,23 @@ class ACPAdapter:
                         lambda m: f"{m.group(1)}{m.group(2)}***",
                         masked, flags=re.IGNORECASE,
                     )
-                except Exception:
+                except (TypeError, ValueError, re.error) as exc:
+                    logging.getLogger(__name__).warning("attachment text masking degraded: %s", exc)
                     return text or ""
 
             def _citation_name(ref: dict | None) -> str:
                 try:
                     raw = str((ref or {}).get("filename") or "attachment")
-                except Exception:
+                except (AttributeError, TypeError, ValueError) as exc:
+                    logging.getLogger(__name__).warning("attachment citation name malformed: %s", exc)
                     raw = "attachment"
                 return _mask_extracted(raw)[:120] or "attachment"
 
             def _citation_path(ref: dict | None) -> str:
                 try:
                     vp = str((ref or {}).get("vault_path") or "")
-                except Exception:
+                except (AttributeError, TypeError, ValueError) as exc:
+                    logging.getLogger(__name__).warning("attachment citation path malformed: %s", exc)
                     vp = ""
                 # citation only: relative owner-scoped path; never absolute or file://
                 if not vp or vp.startswith("/") or vp.startswith("file://") or "://" in vp:
@@ -326,7 +363,8 @@ class ACPAdapter:
                     # masked extracted_text citation may still be appended.
                     try:
                         _ext = (ref or {}).get("extracted_text")
-                    except Exception:
+                    except (AttributeError, TypeError) as exc:
+                        logging.getLogger(__name__).warning("attachment extracted text malformed: %s", exc)
                         _ext = None
                     if isinstance(_ext, str) and _ext.strip():
                         _bounded = _mask_extracted(_ext.strip()[:20000])
@@ -415,8 +453,8 @@ class ACPAdapter:
             m = getattr(settings, "hermes_model", "") or ""
             if m:
                 return m
-        except Exception:
-            pass
+        except (ImportError, ModuleNotFoundError, AttributeError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Hermes model config unavailable: %s", exc)
         return os.getenv("OAOS_CP_HERMES_MODEL", "") or "hermes-agent"
 
     def _registration_preferences(self, session: SessionRecord) -> dict[str, str]:
@@ -429,13 +467,18 @@ class ACPAdapter:
         key = f"oaos:registration:{session.tenant_id}:{session.user_id}"
         try:
             import redis as _redis
-            url = os.getenv("REDIS_URL") or os.getenv("OAOS_REDIS_URL")
-            if not url:
-                return {}
+        except (ImportError, ModuleNotFoundError) as exc:
+            logging.getLogger(__name__).debug("registration preference adapter unavailable: %s", exc)
+            return {}
+        url = os.getenv("REDIS_URL") or os.getenv("OAOS_REDIS_URL")
+        if not url:
+            return {}
+        try:
             raw = _redis.Redis.from_url(url, decode_responses=True, socket_timeout=1.0).get(key)
             record = json.loads(raw) if raw else {}
             answers = record.get("answers") if isinstance(record, dict) else {}
             if not isinstance(answers, dict):
+                logging.getLogger(__name__).warning("registration preferences malformed for tenant=%s user=%s", session.tenant_id, session.user_id)
                 return {}
             result = {}
             for field in ("honorific", "response_style"):
@@ -443,12 +486,13 @@ class ACPAdapter:
                 if isinstance(value, str) and value.strip():
                     result[field] = value.strip()[:200]
             return result
-        except Exception:
-            # Preference loading must never block the normal response path.
+        except (_redis.exceptions.RedisError, OSError, TimeoutError, TypeError, ValueError) as exc:
+            logging.getLogger(__name__).warning("registration preference lookup degraded for tenant=%s user=%s: %s", session.tenant_id, session.user_id, exc)
             return {}
 
     async def create_session_remote(self, session: SessionRecord, workspace: str | None = None) -> dict[str, Any]:
         """POST /acp/sessions — create Hermes-side session. Falls back to local if Hermes unavailable (dev)."""
+        _validate_session_context(session)
         url = f"{self.hermes_base_url}/acp/sessions"
         ws = workspace or getattr(session, "workspace", None) or _resolve_workspace_for_session(session)
         payload = {
@@ -469,12 +513,14 @@ class ACPAdapter:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 r = await client.post(url, json=payload, headers=self._headers(session))
                 r.raise_for_status()
-                return r.json()
+                return _decode_json_response(r, "session creation")
         try:
             return await _with_retry_acp(_do, max_retries=_llm_max_attempts() - 1, backoff_s=0.2, trace_id=session.trace_id)
-        except Exception as e:
-            # Dev fallback — Hermes not yet running
-            return {"status": "local_fallback", "reason": str(e), "session_id": session.session_id, "workspace": ws}
+        except (httpx.HTTPError, asyncio.TimeoutError, TimeoutError, OSError, ValueError, TypeError, RuntimeError) as e:
+            if _is_production():
+                raise HTTPException(status_code=503, detail=f"ACP session backend unavailable: {e}") from e
+            logging.getLogger(__name__).warning("ACP session creation degraded for session=%s: %s", session.session_id, e)
+            return {"status": "local_fallback", "degraded": True, "reason": str(e), "session_id": session.session_id, "workspace": ws}
 
     def _acp_enabled(self) -> bool:
         """Whether this deployment exposes Hermes ACP session endpoints.
@@ -486,8 +532,21 @@ class ACPAdapter:
         return os.getenv("OAOS_CP_HERMES_ACP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
     async def send_prompt(self, session: SessionRecord, prompt: str, request_id: str, attachment_refs: list[dict] | None = None, file_ids: list[str] | None = None, runtime_context: dict | None = None) -> dict[str, Any]:
+        _validate_session_context(session)
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise HTTPException(status_code=422, detail="ACP prompt must be a non-empty string")
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise HTTPException(status_code=422, detail="ACP request_id must be a non-empty string")
+        if attachment_refs is not None and (not isinstance(attachment_refs, list) or any(not isinstance(ref, dict) for ref in attachment_refs)):
+            raise HTTPException(status_code=422, detail="ACP attachment_refs must be a list of objects")
+        if file_ids is not None and (not isinstance(file_ids, list) or any(not isinstance(file_id, str) or not file_id.strip() for file_id in file_ids)):
+            raise HTTPException(status_code=422, detail="ACP file_ids must be a list of non-empty strings")
+        if runtime_context is not None and not isinstance(runtime_context, dict):
+            raise HTTPException(status_code=422, detail="ACP runtime_context must be an object")
+        _validate_runtime_context(session, runtime_context)
         if not self._acp_enabled():
-            return {"status": "gateway_fallback", "request_id": request_id, "file_ids": file_ids, "attachment_refs": attachment_refs}
+            logging.getLogger(__name__).warning("ACP endpoints disabled; using explicit Gateway fallback for session=%s", session.session_id)
+            return {"status": "gateway_fallback", "degraded": True, "request_id": request_id, "file_ids": file_ids, "attachment_refs": attachment_refs}
         url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/prompt"
         payload: dict[str, Any] = {"prompt": prompt, "request_id": request_id, "trace_id": session.trace_id}
         # Multimodal context forwarding — no model selection, just direct delivery via active runtime
@@ -509,11 +568,14 @@ class ACPAdapter:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 r = await client.post(url, json=payload, headers=self._headers(session))
                 r.raise_for_status()
-                return r.json()
+                return _decode_json_response(r, "prompt")
         try:
             return await _with_retry_acp(_do, max_retries=_llm_max_attempts() - 1, backoff_s=0.2, trace_id=session.trace_id)
-        except Exception as e:
-            return {"status": "queued_local", "reason": str(e), "request_id": request_id}
+        except (httpx.HTTPError, asyncio.TimeoutError, TimeoutError, OSError, ValueError, TypeError, RuntimeError) as e:
+            if _is_production():
+                raise HTTPException(status_code=503, detail=f"ACP prompt backend unavailable: {e}") from e
+            logging.getLogger(__name__).warning("ACP prompt degraded to local queue for session=%s: %s", session.session_id, e)
+            return {"status": "queued_local", "degraded": True, "transport_error": True, "reason": str(e), "request_id": request_id}
 
     async def stream_events(self, session: SessionRecord) -> AsyncGenerator[dict[str, Any], None]:
         """SSE stream from Hermes — yields StreamEvent dicts (Section 17: stream_event).
@@ -522,6 +584,7 @@ class ACPAdapter:
         /v1/chat/completions (same LLM that powers @openit CoCo) and yield its
         reply as token stream. This keeps Mattermost @agent on the Hermes-configured LLM.
         """
+        _validate_session_context(session)
         if self._acp_enabled():
             url = f"{self.hermes_base_url}/acp/sessions/{session.session_id}/stream"
         else:
@@ -543,8 +606,14 @@ class ACPAdapter:
                             except json.JSONDecodeError:
                                 yield {"type": "token", "data": {"text": data}}
                     return
-        except Exception:
-            pass
+        except (httpx.HTTPError, asyncio.TimeoutError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            fallback_allowed = not self._acp_enabled() or status == 404
+            logging.getLogger(__name__).warning("ACP stream unavailable for session=%s status=%s: %s", session.session_id, status, exc)
+            if _is_production() and not fallback_allowed:
+                yield {"type": "error", "data": {"code": "ACP_BACKEND_UNAVAILABLE", "detail": str(exc)}, "trace_id": session.trace_id}
+                yield {"type": "done", "data": {"error": "ACP backend unavailable"}, "trace_id": session.trace_id}
+                return
         # -- Hermes Gateway fallback (standard path — same LLM as @openit) --
         # Retrieve the current prompt plus bounded durable conversation history.
         prompt_text = ""
@@ -567,8 +636,11 @@ class ACPAdapter:
                     )
                     if history:
                         prompt_text = f"[DURABLE CONVERSATION HISTORY]\n{history}\n[/DURABLE CONVERSATION HISTORY]\n\n현재 사용자 발화: {prompt_text}"
-        except Exception:
-            pass
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            logging.getLogger(__name__).warning("ACP session context unavailable for session=%s: %s", session.session_id, exc)
+            yield {"type": "error", "data": {"code": "ACP_CONTEXT_UNAVAILABLE", "detail": str(exc)}, "trace_id": session.trace_id}
+            yield {"type": "done", "data": {"error": "ACP session context unavailable"}, "trace_id": session.trace_id}
+            return
         if prompt_text:
             api_key = self._hermes_api_key()
             model = self._hermes_model()
@@ -610,9 +682,11 @@ class ACPAdapter:
                 _msgs = self.build_llm_messages(session, prompt_text, policy=_policy, system_base=base_system, file_ids=_last_file_ids, attachment_refs=_last_arefs)
                 system_prompt = _msgs[0]["content"]
                 user_msg = _msgs[1]["content"]
-            except Exception:
-                system_prompt = base_system
-                user_msg = prompt_text
+            except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+                logging.getLogger(__name__).error("ACP response policy enforcement failed for session=%s: %s", session.session_id, exc)
+                yield {"type": "error", "data": {"code": "ACP_POLICY_UNAVAILABLE", "detail": str(exc)}, "trace_id": session.trace_id}
+                yield {"type": "done", "data": {"error": "ACP policy unavailable"}, "trace_id": session.trace_id}
+                return
             try:
                 # Vision requests can legitimately take longer than text-only turns;
                 # keep one bounded request under the bridge's 45s confirmation window
@@ -653,8 +727,12 @@ class ACPAdapter:
                     content = ""
                     try:
                         content = data["choices"][0]["message"]["content"] or ""
-                    except Exception:
-                        content = data.get("content", "") or ""
+                    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+                        if not isinstance(data, dict) or not isinstance(data.get("content"), str):
+                            raise ValueError("malformed Hermes gateway response: missing message content") from exc
+                        content = data["content"]
+                    if not isinstance(content, str):
+                        raise ValueError("malformed Hermes gateway response: content must be a string")
                     content = content.strip()
                     # Mattermost usernames are internal identifiers, never user-facing
                     # honorifics.  The model can still copy a username from conversation
@@ -673,12 +751,11 @@ class ACPAdapter:
                                 await asyncio.sleep(0.02)
                         yield {"type": "done", "data": {}, "trace_id": session.trace_id}
                         return
-            except Exception as e:
-                # log and fall through — no synthetic, let agent runtime handle
-                try:
-                    logging.getLogger(__name__).warning(f"Hermes gateway fallback failed: {e}")
-                except Exception:
-                    pass
+            except (httpx.HTTPError, asyncio.TimeoutError, TimeoutError, OSError, ValueError, TypeError, RuntimeError) as e:
+                logging.getLogger(__name__).warning("Hermes gateway transport/protocol failure for session=%s: %s", session.session_id, e)
+                yield {"type": "error", "data": {"code": "ACP_GATEWAY_UNAVAILABLE", "detail": str(e)}, "trace_id": session.trace_id}
+                yield {"type": "done", "data": {"error": "ACP gateway unavailable"}, "trace_id": session.trace_id}
+                return
         # -- No synthetic fallback — strictly agent runtime only --
         # If Hermes gateway also unreachable, yield done without token so
         # Mattermost posts nothing (agent runtime will recover and retry).
