@@ -220,8 +220,8 @@ def clear_providers() -> None:
     if _is_db_enabled():
         try:
             _db_clear_all()
-        except Exception:
-            pass
+        except (SQLAlchemyError, OSError, ImportError, ModuleNotFoundError) as e:
+            logger.debug(f"clear_providers DB clear failed (best-effort cleanup): {e}")
 
 
 def _normalize_create(payload: LLMProviderCreate) -> dict:
@@ -242,13 +242,13 @@ def _normalize_create(payload: LLMProviderCreate) -> dict:
 def _validate_fields(provider: ProviderType, data: dict, is_update: bool = False) -> None:
     if provider in _APIKEY_TYPES:
         if not is_update and not data.get("api_key"):
-            raise HTTPException(status_code=400, detail=f"apiKey is required for provider '{provider.value}'")
+            raise HTTPException(status_code=422, detail=f"apiKey is required for provider '{provider.value}'")
     elif provider == ProviderType.opencode_go:
         if not is_update and not data.get("path"):
-            raise HTTPException(status_code=400, detail="path is required for provider 'opencode-go'")
+            raise HTTPException(status_code=422, detail="path is required for provider 'opencode-go'")
     elif provider == ProviderType.ollama:
         if not is_update and not data.get("url"):
-            raise HTTPException(status_code=400, detail="url is required for provider 'ollama'")
+            raise HTTPException(status_code=422, detail="url is required for provider 'ollama'")
 
 
 def _to_public(p: LLMProvider) -> dict:
@@ -291,8 +291,8 @@ def _db_url() -> str | None:
         url = get_database_url()
         if url and url.strip():
             return url.strip()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, OSError) as e:
+        logger.debug(f"llm_providers persistence DB URL lookup failed, env fallback: {e}")
     url = os.environ.get("OAOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
     if url and url.strip():
         return url.strip()
@@ -354,8 +354,8 @@ def _get_session_factory():
         # it is idempotent (CREATE TABLE IF NOT EXISTS) and cheap.
         try:
             _db_ensure_table(_db_engine)
-        except Exception:
-            pass
+        except (SQLAlchemyError, OSError) as e:
+            logger.debug(f"llm_providers ensure table on cached engine failed (best-effort): {e}")
         return _db_session_factory
     # URL changed or factory missing — dispose old engine and rebuild
     if _db_engine is not None:
@@ -387,7 +387,7 @@ def _get_session_factory():
         # ensure table exists on the freshly created engine
         _db_ensure_table(_db_engine)
         return _db_session_factory
-    except Exception as e:
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, OSError) as e:
         logger.debug(f"LLM provider DB factory failed: {e}")
         return None
 
@@ -402,8 +402,8 @@ def _db_ensure_table(engine) -> None:
         from security.models.orm import AdminLLMProviderORM  # type: ignore
 
         AdminLLMProviderORM.__table__.create(bind=engine, checkfirst=True)
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
+        logger.debug(f"llm_providers ORM table ensure failed (best-effort): {e}")
     try:
         from security.models.orm import AdminLLMProviderORM  # type: ignore
         from security.models.db import Base  # type: ignore
@@ -417,17 +417,17 @@ def _db_ensure_table(engine) -> None:
             with engine.begin() as conn:
                 try:
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_provider ON admin_llm_providers (provider)"))
-                except Exception:
-                    pass
+                except SQLAlchemyError as e:
+                    logger.debug(f"llm_providers provider index ensure failed (best-effort): {e}")
                 try:
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_admin_llm_providers_secret_ref ON admin_llm_providers (secret_ref)"))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except SQLAlchemyError as e:
+                    logger.debug(f"llm_providers secret_ref index ensure failed (best-effort): {e}")
+        except (SQLAlchemyError, OSError) as e:
+            logger.debug(f"llm_providers index ensure block failed (best-effort): {e}")
         return
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as e:
+        logger.debug(f"llm_providers table ensure fallback failed (best-effort): {e}")
     # fallback raw DDL (sqlite compat)
     try:
         from sqlalchemy import text
@@ -455,8 +455,8 @@ def _db_ensure_table(engine) -> None:
         """
         with engine.begin() as conn:
             conn.execute(text(ddl))
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as e:
+        logger.debug(f"llm_providers raw DDL ensure failed (best-effort): {e}")
 
 
 def _orm_to_provider(row) -> LLMProvider:
@@ -505,8 +505,8 @@ def _db_clear_all() -> None:
         with factory() as s:
             s.query(AdminLLMProviderORM).delete()
             s.commit()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
+        logger.debug(f"llm_providers DB clear failed (best-effort cleanup): {e}")
 
 
 def _db_list_providers() -> list[LLMProvider] | None:
@@ -520,9 +520,18 @@ def _db_list_providers() -> list[LLMProvider] | None:
 
         with factory() as s:
             rows = s.query(AdminLLMProviderORM).order_by(AdminLLMProviderORM.created_at).all()
-            return [_orm_to_provider(r) for r in rows]
-    except Exception as e:
-        logger.debug(f"DB list failed: {e}")
+            items: list[LLMProvider] = []
+            for r in rows:
+                try:
+                    items.append(_orm_to_provider(r))
+                except (ValueError, TypeError, AttributeError) as re:
+                    # Malformed row (e.g. unknown provider enum) must neither poison
+                    # the whole listing nor masquerade as DB outage (None).
+                    logger.warning(f"DB list skipping malformed provider row {getattr(r, 'id', '?')}: {re}")
+            return items
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError) as e:
+        # DB unavailable (None) stays distinct from DB empty ([]).
+        logger.warning(f"DB list failed (unavailable, not empty): {e}")
         return None
 
 
@@ -540,7 +549,10 @@ def _db_get_provider(pid: str) -> LLMProvider | None:
             if row is None:
                 return None
             return _orm_to_provider(row)
-    except Exception:
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
+        # DB error (incl. malformed row) is unavailable — callers must not treat
+        # it the same as not-found without an explicit probe (see _db_probe_reachable).
+        logger.warning(f"DB get provider {pid} failed (unavailable, not not-found): {e}")
         return None
 
 
@@ -575,13 +587,13 @@ def _db_create_provider(p: LLMProvider, encrypted_api_key: str | None, secret_re
             s.add(orm)
             s.commit()
             return True
-    except Exception as e:
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
         logger.debug(f"DB create failed: {e}")
         try:
             with factory() as s2:
                 s2.rollback()
-        except SQLAlchemyError:
-            pass
+        except SQLAlchemyError as re:
+            logger.debug(f"DB create rollback failed (best-effort cleanup): {re}")
         return False
 
 
@@ -612,7 +624,7 @@ def _db_update_provider(pid: str, updates: dict, encrypted_api_key: str | None =
             s.commit()
             s.refresh(row)
             return _orm_to_provider(row)
-    except Exception as e:
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
         logger.debug(f"DB update failed: {e}")
         return None
 
@@ -633,7 +645,9 @@ def _db_delete_provider(pid: str) -> bool | None:
             s.delete(row)
             s.commit()
             return True
-    except Exception:
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError) as e:
+        # None = backend error (distinct from False = row not found).
+        logger.warning(f"DB delete provider {pid} failed (unavailable, not not-found): {e}")
         return None
 
 
@@ -655,8 +669,8 @@ def _db_persist_test_result(p: LLMProvider) -> None:
             row.last_test_latency_ms = p.last_test_latency_ms
             row.updated_at = p.updated_at
             s.commit()
-    except Exception:
-        pass
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
+        logger.debug(f"DB persist test result failed (best-effort): {e}")
 
 
 def _db_persist_toggle(p: LLMProvider) -> None:
@@ -675,13 +689,44 @@ def _db_persist_toggle(p: LLMProvider) -> None:
             row.enabled = p.enabled
             row.updated_at = p.updated_at
             s.commit()
-    except Exception:
-        pass
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
+        logger.debug(f"DB persist toggle failed (best-effort): {e}")
 
 
 # ---------------------------------------------------------------------------
 # Helpers to fetch with DB fallback
 # ---------------------------------------------------------------------------
+def _db_probe_reachable() -> bool | None:
+    """Distinguish DB empty from DB unavailable for provider reads.
+
+    Returns None when no DB is configured, True when reachable, False when the
+    backend is configured but not responding (callers map False to 503 in prod
+    so a backend outage is never disguised as "provider not found").
+    """
+    if not _is_db_enabled():
+        return None
+    try:
+        factory = _get_session_factory()
+        if factory is None:
+            return False
+        from sqlalchemy import text
+
+        with factory() as s:
+            s.execute(text("SELECT 1"))
+        return True
+    except (SQLAlchemyError, OSError, ValueError, AttributeError) as e:
+        logger.warning(f"llm provider DB probe failed (unavailable): {e}")
+        return False
+
+
+def _raise_provider_not_found_or_unavailable(pid: str) -> None:
+    """404 for genuinely missing providers, 503 for prod backend outage."""
+    if _is_quota_prod() and _db_probe_reachable() is False:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "PROVIDER_BACKEND_UNAVAILABLE", "message": "provider backend unavailable — fail-closed"},
+        )
+    raise HTTPException(status_code=404, detail="provider not found")
 def _list_all_providers() -> list[LLMProvider]:
     if _is_db_enabled():
         db_items = _db_list_providers()
@@ -737,8 +782,10 @@ def _check_hermes_mode_guard() -> None:
             )
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError, TypeError) as e:
+        # Mode probe failure must not silently disable the guard: fail-open here
+        # is explicit and telemetered (warning), non-prod tolerant by design.
+        logger.warning(f"hermes mode guard probe failed, allowing provider CRUD (explicit fail-open): {e}")
 
 
 @router.get("/providers")
@@ -805,7 +852,7 @@ def create_provider(payload: LLMProviderCreate, admin: AdminUser = Depends(requi
 def get_provider(provider_id: str, admin: AdminUser = Depends(get_current_admin)):
     p = _get_one_provider(provider_id)
     if not p:
-        raise HTTPException(status_code=404, detail="provider not found")
+        _raise_provider_not_found_or_unavailable(provider_id)
     return _to_public(p)
 
 
@@ -814,7 +861,7 @@ def update_provider(provider_id: str, payload: LLMProviderUpdate, admin: AdminUs
     _check_hermes_mode_guard()
     p = _get_one_provider(provider_id)
     if not p:
-        raise HTTPException(status_code=404, detail="provider not found")
+        _raise_provider_not_found_or_unavailable(provider_id)
     new_provider = payload.provider if payload.provider is not None else p.provider
     api_key = payload.apiKey if payload.apiKey is not None else payload.api_key
     base_url = payload.baseUrl if payload.baseUrl is not None else payload.base_url
@@ -922,7 +969,7 @@ def delete_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
             # else fall through to delete memory
         # res is None -> DB error, fallback to memory
     if provider_id not in _providers:
-        raise HTTPException(status_code=404, detail="provider not found")
+        _raise_provider_not_found_or_unavailable(provider_id)
     del _providers[provider_id]
     _encrypted_store.pop(provider_id, None)
     _secret_refs.pop(provider_id, None)
@@ -935,23 +982,27 @@ def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends
     tenant_id = request.headers.get("X-Tenant-Id") or request.headers.get("x-tenant-id") or request.query_params.get("tenant_id") or "default"
     try:
         _check_quota_or_raise(tenant_id)
-    except HTTPException as he:
-        # record quota-exceeded as failed usage then re-raise (fail-open: record best-effort)
+    except HTTPException:
+        # record quota-exceeded/unavailable as failed usage (best-effort) then re-raise
         try:
             _admin_record_usage(tenant_id=tenant_id, provider="unknown", model="", prompt_tokens=0, completion_tokens=0, latency_ms=0, status="failed", error="quota exceeded")
-        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError):
-            pass
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError) as re:
+            logger.debug(f"quota-failure usage record failed (best-effort): {re}")
         raise
-    except Exception:
-        pass
+    except (SQLAlchemyError, RedisError, OSError, ValueError, AttributeError, RuntimeError) as e:
+        # Unexpected (non-HTTP) quota backend failure: production fail-closed 503,
+        # non-prod explicit fallback with warning (no silent quota bypass).
+        if _is_quota_prod() and not _allow_quota_fallback():
+            raise HTTPException(status_code=503, detail={"code": "QUOTA_BACKEND_UNAVAILABLE", "message": f"quota backend unavailable: {e}"}) from e
+        logger.warning(f"quota check failed for tenant {tenant_id}, non-prod fallback (explicit fail-open): {e}")
     p = _get_one_provider(provider_id)
     if not p:
         # record failed usage
         try:
             _admin_record_usage(tenant_id=tenant_id, provider="unknown", model="", prompt_tokens=0, completion_tokens=0, latency_ms=0, status="failed", error="provider not found")
-        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError):
-            pass
-        raise HTTPException(status_code=404, detail="provider not found")
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError) as re:
+            logger.debug(f"provider-miss usage record failed (best-effort): {re}")
+        _raise_provider_not_found_or_unavailable(provider_id)
     start = time.perf_counter()
     time.sleep(0.05)
     latency = round((time.perf_counter() - start) * 1000, 1)
@@ -980,8 +1031,8 @@ def test_provider(provider_id: str, request: Request, admin: AdminUser = Depends
         pt, ct = 0, 0
         cost = _admin_estimate_cost(pt, ct, model)
         _admin_record_usage(tenant_id=tenant_id, provider=prov_str, model=model, prompt_tokens=pt, completion_tokens=ct, latency_ms=latency, status="success" if ok else "failed", error=None if ok else reason)
-    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError):
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError, TypeError) as e:
+        logger.debug(f"test usage record failed (best-effort): {e}")
     return {"status": "ok" if ok else "failed", "latency_ms": latency, "detail": reason, "provider_id": provider_id}
 
 
@@ -991,7 +1042,7 @@ def toggle_provider(provider_id: str, admin: AdminUser = Depends(require_l5)):
     _check_hermes_mode_guard()
     p = _get_one_provider(provider_id)
     if not p:
-        raise HTTPException(status_code=404, detail="provider not found")
+        _raise_provider_not_found_or_unavailable(provider_id)
     p.enabled = not p.enabled
     p.updated_at = datetime.now(timezone.utc)
     _providers[provider_id] = p
@@ -1025,7 +1076,8 @@ def clear_quota_redis_client() -> None:
     global _quota_redis_override
     try:
         if _quota_redis_override is not None: _quota_redis_override.flushdb()
-    except RedisError: pass
+    except RedisError as e:
+        logger.debug(f"quota redis flushdb failed (best-effort cleanup): {e}")
     _quota_redis_override = None
 
 def _quota_redis_url() -> str | None:
@@ -1052,16 +1104,19 @@ def _get_quota_redis_client():
 def _quota_redis_eval(client, daily_key: str, minute_key: str, dlim: int, mlim: int):
     try:
         return client.eval(_QUOTA_LUA, 2, daily_key, minute_key, dlim, mlim)
-    except Exception as e:
+    except (RedisError, OSError, ValueError, AttributeError, TypeError) as e:
         if "unknown command" in str(e).lower() and "eval" in str(e).lower():
+            # fakeredis / eval-less backend: non-atomic incr fallback (non-prod parity path)
             dc = int(client.incr(daily_key))
             if dc == 1:
                 try: client.expire(daily_key, 86400)
-                except RedisError: pass
+                except RedisError as ee:
+                    logger.debug(f"quota daily expire failed (best-effort): {ee}")
             mc = int(client.incr(minute_key))
             if mc == 1:
                 try: client.expire(minute_key, 120)
-                except RedisError: pass
+                except RedisError as ee:
+                    logger.debug(f"quota minute expire failed (best-effort): {ee}")
             if dc > dlim: return [-1, dc, mc]
             if mc > mlim: return [-2, dc, mc]
             return [0, dc, mc]
@@ -1083,7 +1138,8 @@ def clear_quotas() -> None:
     _quota_window_counts.clear()
     try:
         if _quota_redis_override is not None: _quota_redis_override.flushdb()
-    except RedisError: pass
+    except RedisError as e:
+        logger.debug(f"quota redis flushdb failed (best-effort cleanup): {e}")
     if _is_db_enabled():
         try:
             factory = _get_session_factory()
@@ -1092,16 +1148,16 @@ def clear_quotas() -> None:
                 with factory() as s:
                     s.query(AdminLLMQuotaORM).delete()
                     s.commit()
-        except Exception:
-            pass
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
+            logger.debug(f"quota DB clear failed (best-effort cleanup): {e}")
 
 def _ensure_quota_table(engine) -> None:
     try:
         from security.models.orm import AdminLLMQuotaORM  # noqa
         from security.models.db import Base
         Base.metadata.create_all(bind=engine)
-    except (ImportError, ModuleNotFoundError, SQLAlchemyError):
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
+        logger.debug(f"quota ORM table ensure failed (best-effort): {e}")
     try:
         from sqlalchemy import text
         ddl = """CREATE TABLE IF NOT EXISTS admin_llm_quotas (
@@ -1110,8 +1166,8 @@ def _ensure_quota_table(engine) -> None:
             window_start TEXT, updated_at TEXT NOT NULL)"""
         with engine.begin() as conn:
             conn.execute(text(ddl))
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as e:
+        logger.debug(f"quota raw DDL ensure failed (best-effort): {e}")
 
 def _check_quota_or_raise(tenant_id: str) -> None:
     tid = _quota_tenant_key(tenant_id)
@@ -1136,7 +1192,8 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                         row = s.query(_Q).filter(_Q.tenant_id == tid).first()
                         if row is not None:
                             dlim = int(row.daily_limit); mlim = int(row.per_minute_limit)
-            except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError): pass
+            except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError) as e:
+                logger.debug(f"quota custom-limits peek failed, default limits apply: {e}")
         daily_key = f"oaos:quota:{tid}:daily:{now.strftime('%Y-%m-%d')}"
         minute_key = f"oaos:quota:{tid}:minute:{now.strftime('%Y-%m-%dT%H:%M')}"
         try:
@@ -1149,11 +1206,11 @@ def _check_quota_or_raise(tenant_id: str) -> None:
             return
         except HTTPException:
             raise
-        except Exception as e:
+        except (RedisError, OSError, ValueError, AttributeError, TypeError) as e:
             if _is_quota_prod() and not _allow_quota_fallback():
-                raise HTTPException(status_code=503, detail={"code":"QUOTA_BACKEND_UNAVAILABLE","message":f"quota redis backend unavailable: {e}"})
-            # non-prod fail-open fall through
-            pass
+                raise HTTPException(status_code=503, detail={"code":"QUOTA_BACKEND_UNAVAILABLE","message":f"quota redis backend unavailable: {e}"}) from e
+            # Non-prod explicit fail-open: DB/in-memory path below; telemetered here.
+            logger.warning(f"quota redis eval failed for tenant {tid}, non-prod DB fallback: {e}")
     else:
         if _is_quota_prod() and not _allow_quota_fallback():
             raise HTTPException(status_code=503, detail={"code":"QUOTA_BACKEND_UNAVAILABLE","message":"quota redis required in production but not configured (fail-closed)"})
@@ -1166,8 +1223,8 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                 # ensure table exists
                 try:
                     _ensure_quota_table(factory.bind if hasattr(factory, "bind") else _db_engine)
-                except (ImportError, ModuleNotFoundError, SQLAlchemyError):
-                    pass
+                except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
+                    logger.debug(f"quota table ensure failed (best-effort): {e}")
                 with factory() as s:
                     row = s.query(AdminLLMQuotaORM).filter(AdminLLMQuotaORM.tenant_id == tid).first()
                     if row is None:
@@ -1204,8 +1261,8 @@ def _check_quota_or_raise(tenant_id: str) -> None:
         # Non-prod falls through to in-memory.
         if _is_quota_prod():
             raise HTTPException(status_code=503, detail={"code": "QUOTA_BACKEND_UNAVAILABLE", "message": f"quota backend unavailable: {e}"})
-        # fail-open on DB error (non-prod only)
-        pass
+        # Explicit non-prod fail-open to in-memory (guarded above); telemetered.
+        logger.warning(f"quota DB failed for tenant {tid}, non-prod in-memory fallback: {e}")
     # in-memory fallback
     rec = _quota_store.get(tid)
     if rec is None:
@@ -1245,8 +1302,8 @@ def _check_quota_or_raise(tenant_id: str) -> None:
                         row.daily_limit = rec["daily_limit"]
                         row.per_minute_limit = rec["per_minute_limit"]
                     s.commit()
-    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError):
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError) as e:
+        logger.debug(f"quota in-memory write-back to DB failed (best-effort): {e}")
 
 # ---------------------------------------------------------------------------
 # LLM usage tracking (011) — in-memory + DB persist (AdminLlmUsageORM)
@@ -1280,8 +1337,8 @@ def _admin_ensure_usage_table(engine) -> None:
         from security.models.orm import AdminLlmUsageORM  # noqa
         from security.models.db import Base
         Base.metadata.create_all(bind=engine)
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
+        logger.debug(f"usage ORM table ensure failed (best-effort): {e}")
     try:
         from sqlalchemy import text
         ddl = """CREATE TABLE IF NOT EXISTS admin_llm_usage (
@@ -1295,8 +1352,8 @@ def _admin_ensure_usage_table(engine) -> None:
             conn.execute(text(ddl))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_admin_llm_usage_tenant_id ON admin_llm_usage(tenant_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_admin_llm_usage_created_at ON admin_llm_usage(created_at)"))
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as e:
+        logger.debug(f"usage raw DDL ensure failed (best-effort): {e}")
 
 def _admin_db_insert_usage(rec: dict) -> None:
     if not _is_db_enabled():
@@ -1309,8 +1366,8 @@ def _admin_db_insert_usage(rec: dict) -> None:
             eng = factory.bind if hasattr(factory, "bind") else _db_engine
             if eng is not None:
                 _admin_ensure_usage_table(eng)
-        except Exception:
-            pass
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as e:
+            logger.debug(f"usage table ensure failed (best-effort): {e}")
         from security.models.orm import AdminLlmUsageORM
         with factory() as s:
             row = AdminLlmUsageORM(
@@ -1321,8 +1378,8 @@ def _admin_db_insert_usage(rec: dict) -> None:
             )
             s.add(row)
             s.commit()
-    except Exception:
-        pass
+    except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
+        logger.debug(f"usage DB insert failed (best-effort): {e}")
 
 def _admin_record_usage(*, tenant_id: str, provider: str, model: str, prompt_tokens: int, completion_tokens: int, latency_ms: float, status: str, error: str | None = None) -> dict:
     tid = (tenant_id or "default").strip() or "default"
@@ -1339,8 +1396,8 @@ def _admin_record_usage(*, tenant_id: str, provider: str, model: str, prompt_tok
     _admin_usage_records.append(rec)
     try:
         _admin_db_insert_usage(rec)
-    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError):
-        pass
+    except (ImportError, ModuleNotFoundError, SQLAlchemyError, ValueError, AttributeError) as e:
+        logger.debug(f"usage record DB write-back failed (best-effort): {e}")
     return rec
 
 def _admin_clear_usage() -> None:
@@ -1353,8 +1410,8 @@ def _admin_clear_usage() -> None:
                 with factory() as s:
                     s.query(AdminLlmUsageORM).delete()
                     s.commit()
-        except (ImportError, ModuleNotFoundError, SQLAlchemyError):
-            pass
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
+            logger.debug(f"usage DB clear failed (best-effort cleanup): {e}")
 
 def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[dict]:
     items: list[dict] = []
@@ -1374,8 +1431,9 @@ def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[
                         items.append({"id": r.id, "tenant_id": r.tenant_id, "tenant": r.tenant_id, "provider": r.provider, "model": r.model, "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens, "total_tokens": r.total_tokens, "cost_usd": r.cost_usd, "latency_ms": r.latency_ms, "status": r.status, "error": r.error, "created_at": _ts, "timestamp": _ts})
                     if items:
                         return items
-        except Exception:
-            pass
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
+            # DB history unavailable: explicit in-memory fallback below (telemetered).
+            logger.warning(f"usage history DB read failed, in-memory fallback: {e}")
     # fallback in-memory
     recs = list(_admin_usage_records)
     if tenant_id:
@@ -1431,7 +1489,7 @@ def _admin_usage_summary(tenant_id: str | None = None) -> dict:
         if isinstance(ca, str):
             try:
                 ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 return False
         if ca is None:
             return False
@@ -1442,7 +1500,7 @@ def _admin_usage_summary(tenant_id: str | None = None) -> dict:
         if isinstance(ca, str):
             try:
                 ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 return False
         if ca is None:
             return False
@@ -1456,7 +1514,8 @@ def _admin_usage_summary(tenant_id: str | None = None) -> dict:
         if isinstance(ca, str):
             try:
                 ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
+                logger.debug(f"usage summary skipping unparsable created_at: {ca!r}")
                 continue
         if ca is None:
             continue
@@ -1487,7 +1546,8 @@ def _admin_usage_summary(tenant_id: str | None = None) -> dict:
         if isinstance(ca, str):
             try:
                 ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
+                logger.debug(f"usage hourly skipping unparsable created_at: {ca!r}")
                 continue
         if ca is None:
             continue
@@ -1536,8 +1596,10 @@ def get_encrypted_api_key(provider_id: str) -> str | None:
                     row = s.query(AdminLLMProviderORM).filter(AdminLLMProviderORM.id == provider_id).first()
                     if row is not None:
                         return getattr(row, "encrypted_api_key", None)
-            except Exception:
-                pass
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError) as e:
+                # Inspection helper: backend error stays visible via warning,
+                # caller still sees None (test-only path, no fail-open route).
+                logger.warning(f"encrypted-key lookup for {provider_id} failed (unavailable): {e}")
     return None
 
 
@@ -1554,8 +1616,8 @@ def get_secret_ref(provider_id: str) -> str | None:
                     row = s.query(AdminLLMProviderORM).filter(AdminLLMProviderORM.id == provider_id).first()
                     if row is not None:
                         return getattr(row, "secret_ref", None)
-            except Exception:
-                pass
+            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError) as e:
+                logger.warning(f"secret-ref lookup for {provider_id} failed (unavailable): {e}")
     return None
 
 
