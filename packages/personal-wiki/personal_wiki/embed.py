@@ -23,6 +23,7 @@ import hashlib
 import math
 import os
 import logging
+from numbers import Real
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,11 +33,119 @@ logger = logging.getLogger(__name__)
 try:
     from sqlalchemy.exc import SQLAlchemyError
 except (ImportError, ModuleNotFoundError):  # sqlalchemy is lazy/optional; best-effort fallback
-    SQLAlchemyError = Exception  # type: ignore
+    class SQLAlchemyErrorFallback(Exception):
+        """Marker used when SQLAlchemy is not installed."""
+
+    SQLAlchemyError = SQLAlchemyErrorFallback  # type: ignore[misc,assignment]
 
 DEFAULT_CHUNK_SIZE = 800
 DEFAULT_CHUNK_OVERLAP = 100
 DEFAULT_DIM = 1536
+
+
+class EmbeddingError(RuntimeError):
+    """Base error for provider and durable embedding failures."""
+
+    status_code = 503
+
+
+class EmbeddingConfigurationError(ValueError):
+    """Embedding configuration is malformed or incomplete."""
+
+    status_code = 422
+
+
+class EmbeddingResponseError(EmbeddingError):
+    """A provider returned a response that cannot be used as a vector."""
+
+    status_code = 502
+
+
+class EmbeddingRateLimitError(EmbeddingError):
+    """The embedding provider rejected a request due to rate limiting."""
+
+    status_code = 429
+
+
+class EmbeddingProviderError(EmbeddingError):
+    """The configured embedding provider is unavailable or failed."""
+
+
+class EmbeddingStorageError(EmbeddingError):
+    """Durable memory storage is unavailable or rejected the write."""
+
+
+def _is_production() -> bool:
+    return any(
+        os.getenv(key, "").strip().lower() in ("production", "prod")
+        for key in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT")
+    )
+
+
+def _allow_nonprod_fallback() -> bool:
+    """Allow deterministic/mock fallback only for an explicit non-prod fixture."""
+    if _is_production():
+        return False
+    return any(
+        os.getenv(key, "").strip().lower() in ("1", "true", "yes", "on")
+        for key in (
+            "OAOS_ALLOW_EMBED_FALLBACK",
+            "OAOS_ALLOW_TEST_FIXTURE",
+            "OAOS_ALLOW_TEST_FALLBACK",
+        )
+    ) or bool(os.getenv("PYTEST_CURRENT_TEST"))
+
+
+def _fallback_warning(reason: str) -> None:
+    logger.warning("personal wiki embedding degraded to deterministic/mock fallback: %s", reason)
+
+
+def _parse_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise EmbeddingConfigurationError(f"{name} must be an integer") from exc
+    if value <= 0:
+        raise EmbeddingConfigurationError(f"{name} must be greater than zero")
+    return value
+
+
+def _resolve_dim(dim: int | None = None) -> int:
+    if dim is None:
+        return _parse_env_int("OAOS_EMBED_DIM", DEFAULT_DIM)
+    if isinstance(dim, bool) or not isinstance(dim, int) or dim <= 0:
+        raise EmbeddingConfigurationError("embedding dimension must be a positive integer")
+    return dim
+
+
+def _validate_vectors(
+    vectors: list[list[float]],
+    texts: list[str],
+    dim: int,
+    source: str,
+) -> list[list[float]]:
+    if len(vectors) != len(texts):
+        raise EmbeddingResponseError(
+            f"{source} returned {len(vectors)} vectors for {len(texts)} inputs"
+        )
+    validated: list[list[float]] = []
+    for index, vector in enumerate(vectors):
+        if not isinstance(vector, list) or len(vector) != dim:
+            raise EmbeddingResponseError(
+                f"{source} vector {index} has invalid dimension"
+            )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not math.isfinite(float(value))
+            for value in vector
+        ):
+            raise EmbeddingResponseError(f"{source} vector {index} has invalid numeric values")
+        validated.append([float(value) for value in vector])
+    return validated
 
 
 def is_embed_enabled() -> bool:
@@ -45,24 +154,24 @@ def is_embed_enabled() -> bool:
 
 
 def _dim() -> int:
-    try:
-        return int(os.getenv("OAOS_EMBED_DIM", str(DEFAULT_DIM)))
-    except Exception:
-        return DEFAULT_DIM
+    return _parse_env_int("OAOS_EMBED_DIM", DEFAULT_DIM)
 
 
 def _chunk_size() -> int:
-    try:
-        return int(os.getenv("OAOS_EMBED_CHUNK_SIZE", str(DEFAULT_CHUNK_SIZE)))
-    except Exception:
-        return DEFAULT_CHUNK_SIZE
+    return _parse_env_int("OAOS_EMBED_CHUNK_SIZE", DEFAULT_CHUNK_SIZE)
 
 
 def _overlap() -> int:
-    try:
-        return int(os.getenv("OAOS_EMBED_CHUNK_OVERLAP", str(DEFAULT_CHUNK_OVERLAP)))
-    except Exception:
+    raw = os.getenv("OAOS_EMBED_CHUNK_OVERLAP")
+    if raw is None or not raw.strip():
         return DEFAULT_CHUNK_OVERLAP
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise EmbeddingConfigurationError("OAOS_EMBED_CHUNK_OVERLAP must be an integer") from exc
+    if value < 0:
+        raise EmbeddingConfigurationError("OAOS_EMBED_CHUNK_OVERLAP must not be negative")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +207,7 @@ def chunk_text(text: str, chunk_size: int | None = None, overlap: int | None = N
 
 def hash_embedding(text: str, dim: int | None = None) -> list[float]:
     """Deterministic hash embedding in dim — L2-normalized, no external deps."""
-    d = dim or _dim()
+    d = _resolve_dim(dim)
     # Use SHA256 in counter mode to generate enough bytes
     out: list[float] = []
     counter = 0
@@ -126,135 +235,131 @@ def hash_embedding(text: str, dim: int | None = None) -> list[float]:
 # ---------------------------------------------------------------------------
 
 def _try_sentence_transformer(texts: list[str], dim: int) -> list[list[float]] | None:
-    """Try sentence-transformers locally; returns None on any failure."""
-    try:
-        import importlib.util
+    """Use the optional local model, returning ``None`` only when unavailable."""
+    import importlib.util
 
+    try:
         if importlib.util.find_spec("sentence_transformers") is None:
             return None
         from sentence_transformers import SentenceTransformer  # type: ignore
-
-        model_name = os.getenv("OAOS_EMBED_MODEL_LOCAL", "sentence-transformers/all-MiniLM-L6-v2")
-        # truncated: if model download would block, fallback quickly
-        # Use try with timeout-ish: just attempt load, if fails return None
-        try:
-            model = SentenceTransformer(model_name)  # type: ignore
-        except Exception as e:
-            logger.debug(f"sentence-transformer load failed: {e}")
-            return None
-        embs = model.encode(texts, normalize_embeddings=True)  # type: ignore
-        # embs is np array; convert
-        try:
-            import numpy as np  # type: ignore
-
-            if hasattr(embs, "tolist"):
-                lst = embs.tolist()  # type: ignore
-            else:
-                lst = [list(r) for r in embs]  # type: ignore
-        except Exception:
-            lst = [list(r) for r in embs]  # type: ignore
-        # pad/truncate to dim
-        fixed: list[list[float]] = []
-        for vec in lst:
-            if len(vec) == dim:
-                fixed.append([float(x) for x in vec])
-            elif len(vec) < dim:
-                # pad with hash-derived values
-                pad = hash_embedding(texts[len(fixed)], dim=dim)[len(vec) :]
-                fixed.append([float(x) for x in vec] + pad[: dim - len(vec)])
-            else:
-                fixed.append([float(x) for x in vec[:dim]])
-        return fixed
-    except Exception as e:
-        logger.debug(f"sentence-transformer embedding failed: {e}")
+    except (ImportError, ModuleNotFoundError):
         return None
+
+    model_name = os.getenv("OAOS_EMBED_MODEL_LOCAL", "sentence-transformers/all-MiniLM-L6-v2")
+    try:
+        model = SentenceTransformer(model_name)  # type: ignore
+        embs = model.encode(texts, normalize_embeddings=True)  # type: ignore
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise EmbeddingProviderError("local embedding model unavailable") from exc
+
+    try:
+        if hasattr(embs, "tolist"):
+            raw_vectors = embs.tolist()  # type: ignore
+        else:
+            raw_vectors = [list(row) for row in embs]  # type: ignore
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise EmbeddingResponseError("local embedding model returned malformed vectors") from exc
+    return _validate_vectors(raw_vectors, texts, dim, "local embedding model")
 
 
 def _try_remote_embedding(texts: list[str], dim: int) -> list[list[float]] | None:
-    """Try remote embedding API (OpenAI-compatible) if env configured. Returns None on failure."""
+    """Call the configured remote provider; ``None`` means it is not configured."""
     api_url = os.getenv("OAOS_EMBED_API_URL", "").strip()
     api_key = os.getenv("OAOS_EMBED_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
     model = os.getenv("OAOS_EMBED_MODEL", "text-embedding-3-small")
     if not api_url or not api_key:
-        # also allow memory_service embedding passthrough: if only key set, use OpenAI endpoint
         if not api_key:
             return None
-        # fallback to OpenAI default url if key present but no url
         api_url = api_url or "https://api.openai.com/v1/embeddings"
-    # lazy httpx
     try:
         import httpx  # type: ignore
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise EmbeddingProviderError("remote embedding client unavailable") from exc
 
-        # Use OpenAI-compatible payload
-        payload = {"model": model, "input": texts}
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        # For memory_service custom, it may expect different path; we try both
-        # If api_url already contains embeddings, post directly
-        url = api_url
-        # httpx sync client for sync path
+    payload = {"model": model, "input": texts}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
         with httpx.Client(timeout=10) as client:
-            resp = client.post(url, json=payload, headers=headers)
-            if resp.status_code != 200:
-                logger.debug(f"remote embedding failed {resp.status_code}: {resp.text[:500]}")
-                return None
-            data = resp.json()
-            # OpenAI shape: {data: [{embedding: [...]}, ...]}
-            if isinstance(data, dict) and "data" in data:
-                vectors = []
-                for item in data["data"]:
-                    emb = item.get("embedding")
-                    if isinstance(emb, list):
-                        # normalize/truncate
-                        if len(emb) != dim:
-                            # pad or trim
-                            if len(emb) < dim:
-                                emb = emb + [0.0] * (dim - len(emb))
-                            else:
-                                emb = emb[:dim]
-                        # ensure normalized? hash fallback already normalized
-                        vectors.append([float(x) for x in emb])
-                if len(vectors) == len(texts):
-                    return vectors
-            # alternative shape: {embeddings: [...]}
-            if isinstance(data, dict) and "embeddings" in data:
-                return [[float(x) for x in e[:dim]] for e in data["embeddings"]]  # type: ignore
-        return None
-    except Exception as e:
-        logger.debug(f"remote embedding error: {e}")
-        return None
+            resp = client.post(api_url, json=payload, headers=headers)
+    except httpx.TimeoutException as exc:
+        raise EmbeddingProviderError("remote embedding provider timed out") from exc
+    except httpx.NetworkError as exc:
+        raise EmbeddingProviderError("remote embedding provider is unavailable") from exc
+    except httpx.HTTPError as exc:
+        raise EmbeddingProviderError("remote embedding transport failed") from exc
+
+    if resp.status_code == 429:
+        raise EmbeddingRateLimitError("remote embedding provider rate limited the request")
+    if resp.status_code != 200:
+        raise EmbeddingProviderError(
+            f"remote embedding provider returned HTTP {resp.status_code}"
+        )
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise EmbeddingResponseError("remote embedding response was not valid JSON") from exc
+
+    if not isinstance(data, dict):
+        raise EmbeddingResponseError("remote embedding response must be an object")
+    if "data" in data:
+        raw_items = data["data"]
+        if not isinstance(raw_items, list):
+            raise EmbeddingResponseError("remote embedding data must be a list")
+        vectors: list[list[float]] = []
+        for item in raw_items:
+            if not isinstance(item, dict) or not isinstance(item.get("embedding"), list):
+                raise EmbeddingResponseError("remote embedding item is malformed")
+            vectors.append(item["embedding"])
+        return _validate_vectors(vectors, texts, dim, "remote embedding provider")
+    if "embeddings" in data:
+        raw_vectors = data["embeddings"]
+        if not isinstance(raw_vectors, list):
+            raise EmbeddingResponseError("remote embeddings must be a list")
+        return _validate_vectors(raw_vectors, texts, dim, "remote embedding provider")
+    raise EmbeddingResponseError("remote embedding response did not contain vectors")
 
 
 def get_embedding(text: str, dim: int | None = None) -> list[float]:
-    """Single text embedding — tries remote -> sentence-transformer -> hash. Always returns dim floats."""
-    d = dim or _dim()
+    """Return one vector, failing closed when no real provider is available in production."""
+    d = _resolve_dim(dim)
     texts = [text]
-    # 1) remote if configured
-    vecs = _try_remote_embedding(texts, d)
-    if vecs and len(vecs) == 1:
-        return vecs[0]
-    # 2) local sentence-transformer
-    vecs = _try_sentence_transformer(texts, d)
-    if vecs and len(vecs) == 1:
-        return vecs[0]
-    # 3) hash fallback (always works)
-    return hash_embedding(text, dim=d)
+    try:
+        vecs = _try_remote_embedding(texts, d)
+        if vecs is not None:
+            return vecs[0]
+        vecs = _try_sentence_transformer(texts, d)
+        if vecs is not None:
+            return vecs[0]
+    except (EmbeddingError, EmbeddingConfigurationError) as exc:
+        if not _allow_nonprod_fallback():
+            raise
+        _fallback_warning(str(exc))
+    if _allow_nonprod_fallback():
+        _fallback_warning("no embedding provider configured")
+        return hash_embedding(text, dim=d)
+    raise EmbeddingProviderError("no embedding provider configured")
 
 
 def get_embeddings(texts: list[str], dim: int | None = None) -> list[list[float]]:
-    """Batch embedding for multiple chunks."""
+    """Return batch vectors with strict count, dimension, and numeric validation."""
     if not texts:
         return []
-    d = dim or _dim()
-    # try remote batch
-    vecs = _try_remote_embedding(texts, d)
-    if vecs and len(vecs) == len(texts):
-        return vecs
-    # try sentence-transformer batch
-    vecs = _try_sentence_transformer(texts, d)
-    if vecs and len(vecs) == len(texts):
-        return vecs
-    # hash fallback per chunk
-    return [hash_embedding(t, dim=d) for t in texts]
+    d = _resolve_dim(dim)
+    try:
+        vecs = _try_remote_embedding(texts, d)
+        if vecs is not None:
+            return _validate_vectors(vecs, texts, d, "remote embedding provider")
+        vecs = _try_sentence_transformer(texts, d)
+        if vecs is not None:
+            return _validate_vectors(vecs, texts, d, "local embedding model")
+    except (EmbeddingError, EmbeddingConfigurationError) as exc:
+        if not _allow_nonprod_fallback():
+            raise
+        _fallback_warning(str(exc))
+    if _allow_nonprod_fallback():
+        _fallback_warning("embedding provider unavailable")
+        return [hash_embedding(text, dim=d) for text in texts]
+    raise EmbeddingProviderError("no embedding provider configured")
 
 
 # ---------------------------------------------------------------------------
@@ -320,8 +425,8 @@ async def _write_via_sqlalchemy(
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-    except Exception:
-        pass
+    except SQLAlchemyError as exc:
+        raise EmbeddingStorageError("embedding storage schema is unavailable") from exc
 
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -339,7 +444,7 @@ async def _write_via_sqlalchemy(
         from sqlalchemy import Text as _SA_Text  # type: ignore
 
         is_text = _vec is _SA_Text or str(_vec) == "TEXT"
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         is_text = True
 
     created_ids: list[str] = []
@@ -352,8 +457,8 @@ async def _write_via_sqlalchemy(
                 if is_text:
                     try:
                         emb_val = _json.dumps(emb)
-                    except Exception:
-                        emb_val = None
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        raise EmbeddingResponseError("embedding vector serialization failed") from exc
                 # derive owner fields
                 if owner.startswith("employee:"):
                     owner_type, owner_id = "employee", owner.split(":", 1)[1]
@@ -388,32 +493,31 @@ async def _write_via_sqlalchemy(
                     if hasattr(mem, col):
                         try:
                             setattr(mem, col, val)
-                        except Exception:
-                            pass
+                        except (AttributeError, TypeError, ValueError) as exc:
+                            logger.debug("optional memory column assignment skipped: %s", type(exc).__name__)
                 session.add(mem)
                 # source provenance row
-                try:
-                    src = MemorySourceORM(  # type: ignore
-                        id=f"ms_{uuid.uuid4().hex[:12]}",
-                        tenant_id=tenant_id,
-                        memory_id=mid,
-                        source_type="personal_wiki",
-                        source_id=str(source_path),
-                        source_uri=str(source_path),
-                        metadata_=meta,
-                        created_at=now,
-                    )
-                    session.add(src)
-                except Exception:
-                    pass
+                src = MemorySourceORM(  # type: ignore
+                    id=f"ms_{uuid.uuid4().hex[:12]}",
+                    tenant_id=tenant_id,
+                    memory_id=mid,
+                    source_type="personal_wiki",
+                    source_id=str(source_path),
+                    source_uri=str(source_path),
+                    metadata_=meta,
+                    created_at=now,
+                )
+                session.add(src)
                 created_ids.append(mid)
             await session.commit()
-    except Exception as e:
+    except (SQLAlchemyError, EmbeddingError) as e:
         try:
             await engine.dispose()
         except SQLAlchemyError:
             logger.debug("embed engine dispose failed (best-effort)")
-        raise RuntimeError(f"sqlalchemy write failed: {e}")
+        if isinstance(e, EmbeddingError):
+            raise
+        raise EmbeddingStorageError("sqlalchemy embedding write failed") from e
     try:
         await engine.dispose()
     except SQLAlchemyError:
@@ -430,18 +534,19 @@ async def _write_via_memory_service_api(
     tenant_id: str = "default",
     agent_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Try to POST chunks to memory_service HTTP API if MEM_SERVICE_URL configured."""
+    """POST chunks to memory_service when explicitly configured."""
     svc_url = os.getenv("OAOS_MEMORY_SERVICE_URL", "") or os.getenv("MEMORY_SERVICE_URL", "")
     if not svc_url:
         return None
-    # lazy httpx
     try:
         import httpx  # type: ignore
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise EmbeddingStorageError("memory service HTTP client unavailable") from exc
 
-        base = svc_url.rstrip("/")
-        # memory_service expects POST /v1/memory/write with content + embedding
-        inserted = 0
-        ids: list[str] = []
+    base = svc_url.rstrip("/")
+    inserted = 0
+    ids: list[str] = []
+    try:
         async with httpx.AsyncClient(timeout=10) as client:
             for chunk, emb in zip(chunks, embeddings):
                 payload = {
@@ -459,20 +564,30 @@ async def _write_via_memory_service_api(
                 if agent_id:
                     headers["X-Agent-Id"] = agent_id
                 resp = await client.post(f"{base}/v1/memory/write", json=payload, headers=headers)
-                if resp.status_code in (200, 201):
-                    try:
-                        j = resp.json()
-                        ids.append(j.get("id") or j.get("memory_id") or "")
-                    except Exception:
-                        pass
-                    inserted += 1
-                else:
-                    logger.warning(f"memory_service write failed {resp.status_code}: {resp.text[:500]}")
-                    return None
-        return {"mock": False, "inserted": inserted, "ids": ids, "chunks": len(chunks), "via": "memory_service_api"}
-    except Exception as e:
-        logger.debug(f"memory_service api write failed: {e}")
-        return None
+                if resp.status_code == 429:
+                    raise EmbeddingRateLimitError("memory service rate limited the write")
+                if resp.status_code not in (200, 201):
+                    raise EmbeddingStorageError(
+                        f"memory service write failed after {inserted} chunks: HTTP {resp.status_code}"
+                    )
+                try:
+                    response_data = resp.json()
+                except ValueError as exc:
+                    raise EmbeddingResponseError("memory service write response was not valid JSON") from exc
+                if not isinstance(response_data, dict):
+                    raise EmbeddingResponseError("memory service write response must be an object")
+                memory_id = response_data.get("id") or response_data.get("memory_id")
+                if not isinstance(memory_id, str) or not memory_id:
+                    raise EmbeddingResponseError("memory service write response omitted memory id")
+                ids.append(memory_id)
+                inserted += 1
+    except httpx.TimeoutException as exc:
+        raise EmbeddingStorageError("memory service write timed out") from exc
+    except httpx.NetworkError as exc:
+        raise EmbeddingStorageError("memory service is unavailable") from exc
+    except httpx.HTTPError as exc:
+        raise EmbeddingStorageError("memory service transport failed") from exc
+    return {"mock": False, "inserted": inserted, "ids": ids, "chunks": len(chunks), "via": "memory_service_api"}
 
 
 async def embed_text(
@@ -486,12 +601,16 @@ async def embed_text(
     overlap: int | None = None,
     dim: int | None = None,
 ) -> dict[str, Any]:
-    """Chunk + embed + write to memories. Never raises; returns result dict with mock flag."""
+    """Chunk, embed, and persist text; production failures are never mock-successes."""
     if not content or not content.strip():
         return {"mock": True, "inserted": 0, "chunks": 0, "reason": "empty content", "source_path": str(source_path)}
-    cs = chunk_size or _chunk_size()
-    ov = overlap or _overlap()
-    d = dim or _dim()
+    cs = _chunk_size() if chunk_size is None else chunk_size
+    ov = _overlap() if overlap is None else overlap
+    d = _resolve_dim(dim)
+    if not isinstance(cs, int) or isinstance(cs, bool) or cs <= 0:
+        raise EmbeddingConfigurationError("chunk_size must be a positive integer")
+    if not isinstance(ov, int) or isinstance(ov, bool) or ov < 0:
+        raise EmbeddingConfigurationError("overlap must be a non-negative integer")
     chunks = chunk_text(content, chunk_size=cs, overlap=ov)
     if not chunks:
         return {"mock": True, "inserted": 0, "chunks": 0, "reason": "no chunks", "source_path": str(source_path)}
@@ -500,28 +619,42 @@ async def embed_text(
     meta = dict(metadata or {})
     meta.setdefault("source", "personal_wiki")
     meta.setdefault("vault_path", str(sp))
-    # Priority: 1) memory_service HTTP API if configured, 2) direct DB via sqlalchemy, 3) mock
-    # Try HTTP API first
-    try:
-        api_res = await _write_via_memory_service_api(chunks, embeddings, sp, meta, owner=owner, tenant_id=tenant_id, agent_id=agent_id)
-        if api_res is not None:
-            return api_res
-    except Exception:
-        pass
-    # Try DB
+    # Priority: 1) memory_service HTTP API if configured, 2) direct DB via SQLAlchemy.
+    api_failure: EmbeddingError | None = None
+    if os.getenv("OAOS_MEMORY_SERVICE_URL", "").strip() or os.getenv("MEMORY_SERVICE_URL", "").strip():
+        try:
+            api_res = await _write_via_memory_service_api(
+                chunks, embeddings, sp, meta, owner=owner, tenant_id=tenant_id, agent_id=agent_id
+            )
+            if api_res is not None:
+                return api_res
+        except EmbeddingError as exc:
+            api_failure = exc
+            logger.warning("memory service embedding write degraded: %s", type(exc).__name__)
     if _is_db_configured():
         try:
             return await _write_via_sqlalchemy(chunks, embeddings, sp, meta, owner=owner, tenant_id=tenant_id, agent_id=agent_id)
-        except Exception as e:
-            logger.warning(f"embed DB write failed, falling back to mock: {e}")
-    # Mock fallback — still returns embeddings for testability
+        except EmbeddingError as exc:
+            logger.warning("durable embedding write failed: %s", type(exc).__name__)
+            if not _allow_nonprod_fallback():
+                raise
+            api_failure = exc
+    if not _allow_nonprod_fallback():
+        if api_failure is not None:
+            raise api_failure
+        raise EmbeddingStorageError("durable embedding storage is not configured")
+    reason = "no durable embedding backend configured"
+    if api_failure is not None:
+        reason = f"durable embedding write failed: {type(api_failure).__name__}"
+    _fallback_warning(reason)
     return {
         "mock": True,
         "inserted": len(chunks),
         "chunks": len(chunks),
         "ids": [f"mock_{i}" for i in range(len(chunks))],
         "source_path": str(sp),
-        "reason": "no DB configured or write failed — mock",
+        "reason": reason,
+        "degraded": True,
         "embeddings": embeddings if len(chunks) <= 5 else embeddings[:1],  # avoid huge payload
     }
 
@@ -540,32 +673,33 @@ async def embed_file(
     """Read vault file, chunk, embed, write to memories."""
     p = Path(file_path)
     try:
-        if not p.exists():
-            return {"mock": True, "inserted": 0, "chunks": 0, "reason": f"file not found: {p}", "source_path": str(p)}
-        # read with utf-8 fallback
+        exists = p.exists()
+    except OSError as exc:
+        raise EmbeddingStorageError("embedding source filesystem is unavailable") from exc
+    if not exists:
+        return {"mock": True, "inserted": 0, "chunks": 0, "reason": "file not found", "source_path": str(p)}
+    try:
+        text = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
         try:
-            text = p.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
             text = p.read_text(encoding="latin-1")
-        except Exception as e:
-            return {"mock": True, "inserted": 0, "chunks": 0, "reason": f"read error: {e}", "source_path": str(p)}
-        if len(text) > max_chars:
-            text = text[:max_chars]
-        # strip frontmatter-like content? keep as-is for embedding
-        return await embed_text(
-            text,
-            source_path=p,
-            metadata=metadata,
-            owner=owner,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            chunk_size=chunk_size,
-            overlap=overlap,
-            dim=dim,
-        )
-    except Exception as e:
-        logger.warning(f"embed_file failed for {p}: {e}")
-        return {"mock": True, "inserted": 0, "chunks": 0, "reason": str(e), "source_path": str(p)}
+        except OSError as exc:
+            raise EmbeddingStorageError("embedding source file could not be read") from exc
+    except OSError as exc:
+        raise EmbeddingStorageError("embedding source file could not be read") from exc
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    return await embed_text(
+        text,
+        source_path=p,
+        metadata=metadata,
+        owner=owner,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        chunk_size=chunk_size,
+        overlap=overlap,
+        dim=dim,
+    )
 
 
 def embed_file_sync(
@@ -580,54 +714,50 @@ def embed_file_sync(
     dim: int | None = None,
 ) -> dict[str, Any]:
     """Sync wrapper for embed_file — safe to call from vault.py (non-async)."""
-    try:
-        import asyncio
+    import asyncio
 
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        if not _allow_nonprod_fallback():
+            raise EmbeddingProviderError("synchronous embedding cannot run inside an active event loop")
+        p = Path(file_path)
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            # running loop (e.g. FastAPI) — schedule but don't block; run hash path synchronously as mock
-            # We still compute embeddings synchronously and return mock to avoid blocking
-            p = Path(file_path)
-            try:
-                try:
-                    text = p.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
-                    text = p.read_text(encoding="latin-1")
-                if len(text) > max_chars:
-                    text = text[:max_chars]
-                chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
-                embeddings = get_embeddings(chunks, dim=dim)
-                return {
-                    "mock": True,
-                    "inserted": len(chunks),
-                    "chunks": len(chunks),
-                    "ids": [f"mock_{i}" for i in range(len(chunks))],
-                    "source_path": str(p),
-                    "reason": "running loop — sync mock (embed deferred)",
-                    "embeddings": embeddings[:1] if embeddings else [],
-                }
-            except Exception as e:
-                return {"mock": True, "inserted": 0, "chunks": 0, "reason": str(e), "source_path": str(file_path)}
-        else:
-            return asyncio.run(
-                embed_file(
-                    file_path,
-                    metadata=metadata,
-                    owner=owner,
-                    tenant_id=tenant_id,
-                    agent_id=agent_id,
-                    max_chars=max_chars,
-                    chunk_size=chunk_size,
-                    overlap=overlap,
-                    dim=dim,
-                )
-            )
-    except Exception as e:
-        logger.warning(f"embed_file_sync failed: {e}")
-        return {"mock": True, "inserted": 0, "chunks": 0, "reason": str(e), "source_path": str(file_path)}
+            text = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = p.read_text(encoding="latin-1")
+        except OSError as exc:
+            raise EmbeddingStorageError("embedding source file could not be read") from exc
+        if len(text) > max_chars:
+            text = text[:max_chars]
+        chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+        embeddings = get_embeddings(chunks, dim=dim)
+        _fallback_warning("running event loop deferred durable embedding write")
+        return {
+            "mock": True,
+            "inserted": len(chunks),
+            "chunks": len(chunks),
+            "ids": [f"mock_{i}" for i in range(len(chunks))],
+            "source_path": str(p),
+            "reason": "running loop — sync mock (embed deferred)",
+            "degraded": True,
+            "embeddings": embeddings[:1] if embeddings else [],
+        }
+    return asyncio.run(
+        embed_file(
+            file_path,
+            metadata=metadata,
+            owner=owner,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            max_chars=max_chars,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            dim=dim,
+        )
+    )
 
 
 def embed_text_sync(
@@ -642,29 +772,29 @@ def embed_text_sync(
     dim: int | None = None,
 ) -> dict[str, Any]:
     """Sync wrapper for embed_text."""
-    try:
-        import asyncio
+    import asyncio
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            chunks = chunk_text(content, chunk_size=chunk_size, overlap=overlap)
-            d = dim or _dim()
-            embeddings = get_embeddings(chunks, dim=d)
-            return {
-                "mock": True,
-                "inserted": len(chunks),
-                "chunks": len(chunks),
-                "ids": [f"mock_{i}" for i in range(len(chunks))],
-                "source_path": str(source_path),
-                "reason": "running loop — sync mock",
-                "embeddings": embeddings[:1] if embeddings else [],
-            }
-        else:
-            return asyncio.run(
-                embed_text(content, source_path, metadata, owner, tenant_id, agent_id, chunk_size, overlap, dim)
-            )
-    except Exception as e:
-        return {"mock": True, "inserted": 0, "chunks": 0, "reason": str(e), "source_path": str(source_path)}
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        if not _allow_nonprod_fallback():
+            raise EmbeddingProviderError("synchronous embedding cannot run inside an active event loop")
+        chunks = chunk_text(content, chunk_size=chunk_size, overlap=overlap)
+        d = _resolve_dim(dim)
+        embeddings = get_embeddings(chunks, dim=d)
+        _fallback_warning("running event loop deferred durable embedding write")
+        return {
+            "mock": True,
+            "inserted": len(chunks),
+            "chunks": len(chunks),
+            "ids": [f"mock_{i}" for i in range(len(chunks))],
+            "source_path": str(source_path),
+            "reason": "running loop — sync mock",
+            "degraded": True,
+            "embeddings": embeddings[:1] if embeddings else [],
+        }
+    return asyncio.run(
+        embed_text(content, source_path, metadata, owner, tenant_id, agent_id, chunk_size, overlap, dim)
+    )
