@@ -376,17 +376,19 @@ def _get_personal_display_name(agent_id: str) -> tuple[str | None, str | None]:
                         return row.get("display_name"), row.get("avatar_url")
             except _OPTIONAL_FAILURES as exc:
                 log.debug("personal display-name DB lookup degraded: %s", type(exc).__name__)
-            # try psycopg directly
-            try:
-                import psycopg  # type: ignore
-                with psycopg.connect(url) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT display_name, avatar_url FROM admin_user_mappings WHERE agent_id=%s LIMIT 1", (agent_id,))
-                        r = cur.fetchone()
-                        if r:
-                            return r[0], r[1]
-            except _OPTIONAL_FAILURES as exc:
-                log.debug("personal display-name direct lookup degraded: %s", type(exc).__name__)
+            # psycopg accepts PostgreSQL conninfo only; never pass SQLite URLs
+            # to it after the SQLAlchemy-compatible lookup has degraded.
+            if not url.lower().startswith("sqlite"):
+                try:
+                    import psycopg  # type: ignore
+                    with psycopg.connect(url) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT display_name, avatar_url FROM admin_user_mappings WHERE agent_id=%s LIMIT 1", (agent_id,))
+                            r = cur.fetchone()
+                            if r:
+                                return r[0], r[1]
+                except _OPTIONAL_FAILURES as exc:
+                    log.debug("personal display-name direct lookup degraded: %s", type(exc).__name__)
     except _OPTIONAL_FAILURES as exc:
         log.debug("personal display-name lookup degraded: %s", type(exc).__name__)
     return None, None
