@@ -14,6 +14,14 @@ from typing import Any
 from datetime import datetime, timezone
 
 try:
+    from jose.exceptions import JWTError as _JWTError  # type: ignore
+except ImportError:
+    class _JWTError(Exception):
+        """Fallback type when python-jose is not installed."""
+
+        ...
+
+try:
     from .capability import verify_capability
     from .risk import classify, RiskLevel
     from .normalize import normalize_resource, canonicalize_action
@@ -33,24 +41,77 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_exception_name(exc: BaseException) -> str:
+    """Return a non-sensitive failure label for logs and response metadata."""
+    return type(exc).__name__
+
+
+def _error_response(
+    error: str,
+    reason: str,
+    *,
+    status_code: int,
+    risk: str,
+    trace_id: str,
+    request_id: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Build the proxy error contract without exposing exception/token contents."""
+    return {
+        "error": error,
+        "reason": reason,
+        "status_code": status_code,
+        "risk": risk,
+        "trace_id": trace_id,
+        "request_id": request_id,
+        **extra,
+    }
+
+
+def _upstream_status(payload: Any) -> int | None:
+    """Extract only supported HTTP status values from an upstream envelope."""
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("status_code", payload.get("status"))
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and 100 <= value <= 599:
+        return value
+    return None
+
+
+def _upstream_error(status_code: int, *, risk: str, trace_id: str, request_id: str) -> dict[str, Any]:
+    if status_code == 401:
+        error, reason = "UPSTREAM_UNAUTHORIZED", "upstream authentication failed"
+    elif status_code == 403:
+        error, reason = "UPSTREAM_FORBIDDEN", "upstream permission denied"
+    elif status_code == 429:
+        error, reason = "UPSTREAM_RATE_LIMITED", "upstream rate limit exceeded"
+    elif status_code >= 500:
+        error, reason = "UPSTREAM_UNAVAILABLE", "upstream service unavailable"
+    else:
+        error, reason = "UPSTREAM_ERROR", "upstream request failed"
+    return _error_response(error, reason, status_code=status_code, risk=risk, trace_id=trace_id, request_id=request_id)
+
 # fail-closed gate for mock fallback in production — H7 immutable
 def _is_mock_allowed() -> bool:
     # delegate to canonical gate first
     try:
         from .env_gate import is_mock_allowed as _g
         return _g()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError) as exc:
+        logger.debug("canonical mock gate unavailable: %s", _safe_exception_name(exc))
     try:
         from execution_gateway.env_gate import is_mock_allowed as _g2  # type: ignore
         return _g2()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError) as exc:
+        logger.debug("execution gateway mock gate unavailable: %s", _safe_exception_name(exc))
     try:
         from agent_runtime.env_gate import is_mock_allowed as _g3  # type: ignore
         return _g3()
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError) as exc:
+        logger.debug("agent runtime mock gate unavailable: %s", _safe_exception_name(exc))
     import os as _os
     for k in ("OAOS_ENV","ENV","OAOS_ENVIRONMENT","APP_ENV","ENVIRONMENT"):
         if _os.getenv(k,"").strip().lower() in ("production","prod"):
@@ -64,7 +125,8 @@ def _is_prod() -> bool:
     try:
         from .env_gate import is_production as _p
         return _p()
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError, TypeError) as exc:
+        logger.debug("canonical production gate unavailable: %s", _safe_exception_name(exc))
         import os
         return os.getenv("OAOS_ENV", "").lower() in ("production", "prod")
 
@@ -78,7 +140,8 @@ def _get_registry():
         try:
             from execution_gateway.mcp_registry import default_registry  # type: ignore
             return default_registry
-        except Exception:
+        except (ImportError, ModuleNotFoundError, AttributeError) as exc:
+            logger.warning("MCP registry unavailable: %s", _safe_exception_name(exc))
             return None
 
 
@@ -144,9 +207,9 @@ def _mock_fallback(tool_name: str, args: dict, context: dict) -> dict | None:
                 return None
             result = method(**(args or {}))
             return result if isinstance(result, dict) else {"result": result}
-        except Exception as e:
-            logger.debug("mock colleague fallback failed for %s: %s", tool_name, e)
-            return {"error": str(e), "tool": tool_name}
+        except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+            logger.warning("mock colleague fallback failed for %s: %s", tool_name, _safe_exception_name(exc))
+            return {"error": "MOCK_EXECUTION_FAILED", "tool": tool_name}
     try:
         executor = MockToolExecutor(context)
         method = getattr(executor, method_name, None)
@@ -162,11 +225,11 @@ def _mock_fallback(tool_name: str, args: dict, context: dict) -> dict | None:
             method = getattr(executor, method_name)
             result = method()
             return result if isinstance(result, dict) else {"result": result}
-        except Exception as e:
-            logger.debug("mock fallback TypeError for %s: %s", tool_name, e)
+        except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+            logger.warning("mock fallback retry failed for %s: %s", tool_name, _safe_exception_name(exc))
             return None
-    except Exception as e:
-        logger.debug("mock fallback failed for %s: %s", tool_name, e)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.warning("mock fallback failed for %s: %s", tool_name, _safe_exception_name(exc))
         return None
 
 
@@ -187,15 +250,15 @@ async def _try_transport_call(tool_name: str, args: dict, context: dict) -> tupl
         return None, "no transport — fallback"
     try:
         raw = await server.call_tool(tool_name, args)
+        if not isinstance(raw, dict):
+            return None, "malformed upstream response"
         return raw, None
-    except Exception as e:
-        # Import error type check — MCPTransportError or generic
-        err_msg = str(e)
-        # If it's a "mock" or "not connected" error, allow fallback
-        if "mock" in err_msg.lower() or "not connected" in err_msg.lower():
-            return None, err_msg
-        # Real transport error — surface it but allow caller to decide fallback
-        return None, err_msg
+    except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError, TypeError) as exc:
+        # Preserve the mock/no-transport distinction, but never return raw exception text.
+        kind = _safe_exception_name(exc)
+        if isinstance(exc, RuntimeError) and "mock" in kind.lower():
+            return None, "mock transport unavailable"
+        return None, f"upstream transport unavailable ({kind})"
 
 
 async def proxy_tool_call(
@@ -230,12 +293,26 @@ async def proxy_tool_call(
     # 1. action/resource 정규화
     try:
         action = canonicalize_action(str(raw_action))
-    except ValueError:
-        action = str(raw_action).upper().strip()
+    except (TypeError, ValueError):
+        return _error_response(
+            "INVALID_REQUEST",
+            "invalid action",
+            status_code=422,
+            risk="UNKNOWN",
+            trace_id=trace_id,
+            request_id=request_id,
+        )
     try:
         resource = normalize_resource(str(raw_resource))
-    except ValueError:
-        resource = str(raw_resource)
+    except (TypeError, ValueError):
+        return _error_response(
+            "INVALID_REQUEST",
+            "invalid resource",
+            status_code=422,
+            risk="UNKNOWN",
+            trace_id=trace_id,
+            request_id=request_id,
+        )
 
     # 1b. §16I Data Access hook — 결정론적 (stub 가능)
     # Direct DB / Production 접근은 즉시 DENY, 그 외는 read/write 소스 검증
@@ -255,9 +332,26 @@ async def proxy_tool_call(
                 }
             # store for later audit attachment
             _data_access_hint = {"decision": _da.decision, "reason": _da.reason, "required_source": _da.required_source}
-        except Exception as e:
-            logger.debug("data_access check failed: %s", e)
-            _data_access_hint = None
+        except (ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
+            logger.warning("data access policy backend unavailable: %s", _safe_exception_name(exc))
+            return _error_response(
+                "BACKEND_UNAVAILABLE",
+                "data access policy unavailable",
+                status_code=503,
+                risk="HIGH",
+                trace_id=trace_id,
+                request_id=request_id,
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            logger.warning("data access policy response invalid: %s", _safe_exception_name(exc))
+            return _error_response(
+                "BACKEND_UNAVAILABLE",
+                "data access policy response invalid",
+                status_code=503,
+                risk="HIGH",
+                trace_id=trace_id,
+                request_id=request_id,
+            )
     else:
         _data_access_hint = None
 
@@ -275,11 +369,8 @@ async def proxy_tool_call(
     if tool_name in _colleague_tools or resource.startswith("mattermost/dm"):
         # Force LOW risk so capability not required
         from execution_gateway.risk import RiskLevel as _RL  # type: ignore
-        try:
-            risk = _RL.LOW  # type: ignore
-            risk_value = "LOW"
-        except Exception:
-            risk_value = "LOW"
+        risk = _RL.LOW  # type: ignore
+        risk_value = "LOW"
 
     # 3. HIGH-risk는 capability token 필수
     # token 정규화: 문자열이면 decode 시도, dict면 그대로
@@ -289,155 +380,191 @@ async def proxy_tool_call(
     _token_verify_error: str | None = None
     if isinstance(capability_token, str) and capability_token.strip():
         _token_string_raw = capability_token.strip()
-        # Attempt verified decode with signing key if available, else unverified
-        _signing_key: str | None = None
         import os as _os_verify
-        _signing_key = _os_verify.getenv("OAOS_SECURITY_SERVICE_SIGNING_KEY") or _os_verify.getenv("OAOS_SIGNING_KEY") or _os_verify.getenv("OAOS_CAPABILITY_SIGNING_KEY") or _os_verify.getenv("OAOS_AUDIT_SIGNING_KEY")
-        # Also try importing security app's getter if env not set (dev key)
+
+        _signing_key = (
+            _os_verify.getenv("OAOS_SECURITY_SERVICE_SIGNING_KEY")
+            or _os_verify.getenv("OAOS_SIGNING_KEY")
+            or _os_verify.getenv("OAOS_CAPABILITY_SIGNING_KEY")
+            or _os_verify.getenv("OAOS_AUDIT_SIGNING_KEY")
+        )
         if not _signing_key:
             try:
                 from security.app import get_signing_key as _gsk  # type: ignore
                 _signing_key = _gsk()
-            except Exception:
-                pass
+            except (ImportError, ModuleNotFoundError, AttributeError, TypeError) as exc:
+                logger.debug("signing key provider unavailable: %s", _safe_exception_name(exc))
+            except RuntimeError as exc:
+                logger.warning("signing key backend unavailable: %s", _safe_exception_name(exc))
+                return _error_response(
+                    "BACKEND_UNAVAILABLE",
+                    "capability token backend unavailable",
+                    status_code=503,
+                    risk=risk_value,
+                    trace_id=trace_id,
+                    request_id=request_id,
+                )
+
+        if not _signing_key and _is_prod():
+            return _error_response(
+                "INVALID_CREDENTIAL",
+                "capability token verification is unavailable",
+                status_code=401,
+                risk=risk_value,
+                trace_id=trace_id,
+                request_id=request_id,
+            )
+
         if not _signing_key:
-            # dev fallback for tests (uses test key from caller is unknown, so cannot verify; use unverified but mark)
+            # Explicit non-production compatibility path for test/development JWTs.
             try:
                 from jose import jwt as _jwt  # type: ignore
                 token_dict = _jwt.get_unverified_claims(_token_string_raw)
-            except Exception:
-                token_dict = {"raw": _token_string_raw, "action": action, "resource": resource}
+            except (ImportError, ModuleNotFoundError, _JWTError, ValueError, TypeError, KeyError) as exc:
+                logger.warning("non-production capability token parsing failed: %s", _safe_exception_name(exc))
+                return _error_response(
+                    "INVALID_CREDENTIAL",
+                    "invalid capability token",
+                    status_code=401,
+                    risk=risk_value,
+                    trace_id=trace_id,
+                    request_id=request_id,
+                )
         else:
-            # Try verified decode + replay via TokenService if available
-            verified = False
+            _verify_fn = None
             try:
-                # Prefer stateless verify_capability_token (global replay) if available
+                from token_service.service import verify_capability_token as _verify_fn  # type: ignore
+            except (ImportError, ModuleNotFoundError):
                 try:
-                    from token_service.service import verify_capability_token as _VCT  # type: ignore
-                    token_dict = _VCT(_signing_key, _token_string_raw)
-                    verified = True
-                except ImportError:
-                    from token.token_service.service import verify_capability_token as _VCT2  # type: ignore
-                    token_dict = _VCT2(_signing_key, _token_string_raw)
-                    verified = True
-                except Exception as _e_verify:
-                    # If TokenService verify failed due to signature/expired/replay, propagate as deny
-                    msg = str(_e_verify).lower()
-                    if "expired" in msg or "replay" in msg or "revoked" in msg:
-                        _token_verify_error = str(_e_verify)
-                        token_dict = None
-                    elif "signature" in msg or "invalid" in msg:
-                        # signature mismatch likely custom test key — fallback to unverified
-                        token_dict = None
-                        # do not set verify_error, allow unverified fallback below
-                    else:
-                        # fallback to direct jose verify
-                        raise
-                if not verified and token_dict is None and _token_verify_error is None:
-                    from jose import jwt as _jwt2  # type: ignore
-                    try:
-                        token_dict = _jwt2.decode(_token_string_raw, _signing_key, algorithms=["HS256"])
-                    except Exception as _e2:
-                        msg2 = str(_e2).lower()
-                        if "expired" in msg2 or "replay" in msg2 or "revoked" in msg2:
-                            _token_verify_error = str(_e2)
-                        elif "signature" in msg2 or "invalid" in msg2:
-                            # allow fallback to unverified
-                            pass
-                        else:
-                            _token_verify_error = str(_e2)
-                        token_dict = None
-                    # if still no token and no verify error (signature mismatch), fallback to unverified directly here
-                    if token_dict is None and _token_verify_error is None:
-                        try:
-                            from jose import jwt as _jwt3a  # type: ignore
-                            token_dict = _jwt3a.get_unverified_claims(_token_string_raw)
-                        except Exception:
-                            token_dict = {"raw": _token_string_raw, "action": action, "resource": resource}
-            except Exception as _e_outer:
-                if _token_verify_error is None:
-                    _token_verify_error = str(_e_outer)
-                # try unverified as last resort for non-prod tests with custom key mismatch: will still be checked via verify_capability but replay not enforced
-                if token_dict is None:
-                    try:
-                        from jose import jwt as _jwt3  # type: ignore
-                        token_dict = _jwt3.get_unverified_claims(_token_string_raw)
-                    except Exception:
-                        token_dict = {"raw": _token_string_raw, "action": action, "resource": resource}
-        # if verify error and still no token_dict, we will handle HIGH deny below
-        if token_dict is None and _token_verify_error is not None:
-            # preserve error for CAPABILITY_DENIED mapping (expired/replay)
-            if risk_value == "HIGH":
-                return {
-                    "error": "CAPABILITY_DENIED",
-                    "reason": _token_verify_error,
-                    "risk": risk_value,
-                    "trace_id": trace_id,
-                    "request_id": request_id,
-                }
-        if token_dict is not None:
-            # Proxy-level string replay guard (when TokenService verification was bypassed due to key mismatch)
-            # Maintain global seen set for proxy string tokens to catch replay even without TokenService shared store
+                    from token.token_service.service import verify_capability_token as _verify_fn  # type: ignore
+                except (ImportError, ModuleNotFoundError):
+                    _verify_fn = None
+
             try:
-                _proxy_jti = token_dict.get("jti") if isinstance(token_dict, dict) else None
-                _proxy_nonce = token_dict.get("nonce") if isinstance(token_dict, dict) else None
-                global _PROXY_SEEN_JTIS, _PROXY_SEEN_NONCES
-                if "_PROXY_SEEN_JTIS" not in globals():
-                    globals()["_PROXY_SEEN_JTIS"] = set()
-                    globals()["_PROXY_SEEN_NONCES"] = set()
-                if _proxy_jti is not None and _proxy_jti in globals()["_PROXY_SEEN_JTIS"]:
-                    return {"error": "CAPABILITY_DENIED", "reason": "token replay detected (proxy jti)", "risk": risk_value, "trace_id": trace_id, "request_id": request_id}
-                if _proxy_nonce is not None and _proxy_nonce in globals()["_PROXY_SEEN_NONCES"]:
-                    return {"error": "CAPABILITY_DENIED", "reason": "token replay detected (proxy nonce)", "risk": risk_value, "trace_id": trace_id, "request_id": request_id}
-                # record as seen only after successful verify_capability? Record now for string tokens (first use)
-                # We defer recording until after verify_capability succeeds below, but store nonce/jti optimistically
-                # Actually record here and remove on failure? Simpler: record after success below; so store temp marker
-                pass
-            except Exception:
-                pass
+                if _verify_fn is not None:
+                    token_dict = _verify_fn(_signing_key, _token_string_raw)
+                else:
+                    from jose import jwt as _jwt_verified  # type: ignore
+                    token_dict = _jwt_verified.decode(_token_string_raw, _signing_key, algorithms=["HS256"])
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                if "replay" in message or "revoked" in message or "expired" in message:
+                    _token_verify_error = "capability token rejected"
+                    logger.info("capability token rejected: %s", _safe_exception_name(exc))
+                    return _error_response(
+                        "INVALID_CREDENTIAL",
+                        _token_verify_error,
+                        status_code=401,
+                        risk=risk_value,
+                        trace_id=trace_id,
+                        request_id=request_id,
+                    )
+                logger.warning("capability token backend unavailable: %s", _safe_exception_name(exc))
+                return _error_response(
+                    "BACKEND_UNAVAILABLE",
+                    "capability token backend unavailable",
+                    status_code=503,
+                    risk=risk_value,
+                    trace_id=trace_id,
+                    request_id=request_id,
+                )
+            except (_JWTError, ValueError, TypeError, KeyError, OSError, ImportError, ModuleNotFoundError) as exc:
+                logger.info("capability token rejected: %s", _safe_exception_name(exc))
+                if not _is_prod():
+                    try:
+                        from jose import jwt as _jwt_unverified  # type: ignore
+                        token_dict = _jwt_unverified.get_unverified_claims(_token_string_raw)
+                    except (ImportError, ModuleNotFoundError, _JWTError, ValueError, TypeError, KeyError):
+                        return _error_response(
+                            "INVALID_CREDENTIAL",
+                            "invalid capability token",
+                            status_code=401,
+                            risk=risk_value,
+                            trace_id=trace_id,
+                            request_id=request_id,
+                        )
+                else:
+                    return _error_response(
+                        "INVALID_CREDENTIAL",
+                        "invalid capability token",
+                        status_code=401,
+                        risk=risk_value,
+                        trace_id=trace_id,
+                        request_id=request_id,
+                    )
+
+        if not isinstance(token_dict, dict):
+            return _error_response(
+                "INVALID_CREDENTIAL",
+                "invalid capability token payload",
+                status_code=401,
+                risk=risk_value,
+                trace_id=trace_id,
+                request_id=request_id,
+            )
+
+        # Proxy-level replay guard is retained for non-production unverified JWTs.
+        _proxy_jti = token_dict.get("jti")
+        _proxy_nonce = token_dict.get("nonce")
+        global _PROXY_SEEN_JTIS, _PROXY_SEEN_NONCES
+        if "_PROXY_SEEN_JTIS" not in globals():
+            globals()["_PROXY_SEEN_JTIS"] = set()
+            globals()["_PROXY_SEEN_NONCES"] = set()
+        if _proxy_jti is not None and _proxy_jti in globals()["_PROXY_SEEN_JTIS"]:
+            return _error_response("CAPABILITY_DENIED", "token replay detected", status_code=401, risk=risk_value, trace_id=trace_id, request_id=request_id)
+        if _proxy_nonce is not None and _proxy_nonce in globals()["_PROXY_SEEN_NONCES"]:
+            return _error_response("CAPABILITY_DENIED", "token replay detected", status_code=401, risk=risk_value, trace_id=trace_id, request_id=request_id)
     elif isinstance(capability_token, dict):
         token_dict = capability_token
     else:
         token_dict = None
 
     if risk_value == "HIGH" and not token_dict:
-        return {
-            "error": "CAPABILITY_REQUIRED",
-            "reason": f"HIGH-risk action {action} on {resource} requires capability token",
-            "risk": risk_value,
-            "trace_id": trace_id,
-            "request_id": request_id,
-        }
+        return _error_response(
+            "CAPABILITY_REQUIRED",
+            f"HIGH-risk action {action} on {resource} requires capability token",
+            status_code=401,
+            risk=risk_value,
+            trace_id=trace_id,
+            request_id=request_id,
+        )
 
     # 4. capability 검증 (token이 있으면)
     if token_dict is not None:
         # token_dict가 raw opaque이면 간단 검증
-        if "raw" in token_dict and token_dict.get("action") == action:
+        try:
             check = verify_capability(token_dict, action, resource, context)
-        else:
-            check = verify_capability(token_dict, action, resource, context)
+        except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+            logger.warning("capability evaluation failed: %s", _safe_exception_name(exc))
+            return _error_response(
+                "POLICY_UNAVAILABLE",
+                "capability evaluation unavailable",
+                status_code=503,
+                risk=risk_value,
+                trace_id=trace_id,
+                request_id=request_id,
+            )
         if not check.allowed:
-            return {
-                "error": "CAPABILITY_DENIED",
-                "reason": check.reason,
-                "risk": risk_value,
-                "trace_id": trace_id,
-                "request_id": request_id,
-            }
+            reason = check.reason if isinstance(check.reason, str) else "capability denied"
+            return _error_response(
+                "CAPABILITY_DENIED",
+                reason,
+                status_code=403,
+                risk=risk_value,
+                trace_id=trace_id,
+                request_id=request_id,
+            )
         # record string token replay after successful capability check
         if _token_string_raw is not None:
-            try:
-                _proxy_jti2 = token_dict.get("jti") if isinstance(token_dict, dict) else None
-                _proxy_nonce2 = token_dict.get("nonce") if isinstance(token_dict, dict) else None
-                if "_PROXY_SEEN_JTIS" not in globals():
-                    globals()["_PROXY_SEEN_JTIS"] = set()
-                    globals()["_PROXY_SEEN_NONCES"] = set()
-                if _proxy_jti2 is not None:
-                    globals()["_PROXY_SEEN_JTIS"].add(_proxy_jti2)
-                if _proxy_nonce2 is not None:
-                    globals()["_PROXY_SEEN_NONCES"].add(_proxy_nonce2)
-            except Exception:
-                pass
+            _proxy_jti2 = token_dict.get("jti") if isinstance(token_dict, dict) else None
+            _proxy_nonce2 = token_dict.get("nonce") if isinstance(token_dict, dict) else None
+            if "_PROXY_SEEN_JTIS" not in globals():
+                globals()["_PROXY_SEEN_JTIS"] = set()
+                globals()["_PROXY_SEEN_NONCES"] = set()
+            if _proxy_jti2 is not None:
+                globals()["_PROXY_SEEN_JTIS"].add(_proxy_jti2)
+            if _proxy_nonce2 is not None:
+                globals()["_PROXY_SEEN_NONCES"].add(_proxy_nonce2)
 
     # 5. MCP transport 라우팅 — capability 검증 후 실제 transport로
     transport_result: dict | None = None
@@ -448,31 +575,40 @@ async def proxy_tool_call(
         # Strict: must succeed via transport
         tr, err = await _try_transport_call(tool_name, args, context)
         if tr is not None:
+            upstream_status = _upstream_status(tr)
+            if upstream_status is not None and upstream_status >= 400:
+                return _upstream_error(upstream_status, risk=risk_value, trace_id=trace_id, request_id=request_id)
             transport_result = tr
         else:
             # Check if error is "mock" vs real transport failure
             if err and "mock" in err.lower():
                 if not use_mock_fallback:
-                    return {
-                        "error": "TRANSPORT_REQUIRED",
-                        "reason": f"tool {tool_name} has no real transport: {err}",
-                        "risk": risk_value,
-                        "trace_id": trace_id,
-                        "request_id": request_id,
-                    }
+                    return _error_response(
+                        "TRANSPORT_REQUIRED",
+                        f"tool {tool_name} has no real transport",
+                        status_code=503,
+                        risk=risk_value,
+                        trace_id=trace_id,
+                        request_id=request_id,
+                    )
                 # fallback to mock below
             else:
-                return {
-                    "error": "TRANSPORT_ERROR",
-                    "reason": err or "transport call failed",
-                    "risk": risk_value,
-                    "trace_id": trace_id,
-                    "request_id": request_id,
-                }
+                status = 502 if err == "malformed upstream response" else 503
+                return _error_response(
+                    "UPSTREAM_MALFORMED" if status == 502 else "UPSTREAM_UNAVAILABLE",
+                    "malformed upstream response" if status == 502 else "upstream service unavailable",
+                    status_code=status,
+                    risk=risk_value,
+                    trace_id=trace_id,
+                    request_id=request_id,
+                )
     else:
         # Default: try transport, fallback to mock on failure
         tr, err = await _try_transport_call(tool_name, args, context)
         if tr is not None:
+            upstream_status = _upstream_status(tr)
+            if upstream_status is not None and upstream_status >= 400:
+                return _upstream_error(upstream_status, risk=risk_value, trace_id=trace_id, request_id=request_id)
             transport_result = tr
         else:
             transport_error = err  # record for debug, but continue to mock
@@ -481,25 +617,27 @@ async def proxy_tool_call(
     if transport_result is None:
         # 6. mock fallback (MCP 서버 없을 때) — fail-closed in production
         if _is_prod() and not _is_mock_allowed():
-            return {
-                "error": "MOCK_FALLBACK_DISABLED",
-                "reason": f"mock fallback disabled in production for tool={tool_name} (OAOS_ENV=production, OAOS_MOCK_FALLBACK not enabled)",
-                "risk": risk_value,
-                "trace_id": trace_id,
-                "request_id": request_id,
-                "code": "MOCK_FALLBACK_DISABLED",
-            }
+            return _error_response(
+                "MOCK_FALLBACK_DISABLED",
+                "upstream service unavailable and mock fallback is disabled",
+                status_code=503,
+                risk=risk_value,
+                trace_id=trace_id,
+                request_id=request_id,
+                code="MOCK_FALLBACK_DISABLED",
+            )
         mock_result = _mock_fallback(tool_name, args, context)
         # If mock fallback was unavailable and we're in production, fail-closed
         if mock_result is None and _is_prod() and not _is_mock_allowed():
-            return {
-                "error": "MOCK_FALLBACK_DISABLED",
-                "reason": f"no real transport for tool={tool_name} and mock disabled in production",
-                "risk": risk_value,
-                "trace_id": trace_id,
-                "request_id": request_id,
-                "code": "MOCK_FALLBACK_DISABLED",
-            }
+            return _error_response(
+                "MOCK_FALLBACK_DISABLED",
+                "no real transport and mock fallback is disabled",
+                status_code=503,
+                risk=risk_value,
+                trace_id=trace_id,
+                request_id=request_id,
+                code="MOCK_FALLBACK_DISABLED",
+            )
         # If mock also returned None, we still succeed with stub (backward compat for unknown tools)
         # But if tool was found via registry as mock, mock_result should have data for known tools
 
@@ -567,7 +705,9 @@ async def proxy_tool_call(
         try:
             # truncate result to 4k chars inside auto_archive; pass full result
             auto_archive(trace_id=trace_id, tool_name=tool_name, result=result, max_chars=4000)
-        except Exception:
-            pass
+        except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+            # Archive is optional; preserve the primary tool result and expose degraded state in logs.
+            logger.warning("optional auto-archive degraded: %s", _safe_exception_name(exc))
+            result["archive"] = {"status": "degraded"}
 
     return result
