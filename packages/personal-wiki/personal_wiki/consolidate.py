@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +65,7 @@ def _path_exists(path: Path) -> bool:
 # Legacy simple text watermark (e2e) — keep compatible with e2e tests
 # ---------------------------------------------------------------------------
 try:
-    from personal_wiki.vault import get_vault_root, ensure_vault_dirs  # type: ignore
+    from personal_wiki.vault import ensure_vault_dirs, get_vault_root  # type: ignore
 except (ImportError, ModuleNotFoundError):  # fallback
     def get_vault_root() -> Path:  # type: ignore[no-redef]
         for k in ("OAOS_WIKI_VAULT", "PERSONAL_WIKI_VAULT", "VAULT_ROOT", "PERSONAL_WIKI_ROOT"):
@@ -120,7 +120,7 @@ def write_watermark(value: str, vault_root: Path | str | None = None) -> Path | 
         p.parent.mkdir(parents=True, exist_ok=True)
         v = str(value).strip()
         if not v:
-            v = datetime.now(timezone.utc).isoformat()
+            v = datetime.now(UTC).isoformat()
         p.write_text(v + "\n", encoding="utf-8")
     except (OSError, UnicodeError, TypeError, ValueError) as exc:
         raise ConsolidationStorageError("consolidation watermark write failed") from exc
@@ -174,7 +174,7 @@ def _save_json_watermark(offsets: dict[str, Any], vault_root: Path | str | None 
         root.mkdir(parents=True, exist_ok=True)
         p = root / WATERMARK
         data = dict(offsets)
-        data["_updated_at"] = datetime.now(timezone.utc).isoformat()
+        data["_updated_at"] = datetime.now(UTC).isoformat()
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except (OSError, UnicodeError, TypeError, ValueError) as exc:
         raise ConsolidationStorageError("JSON consolidation watermark write failed") from exc
@@ -309,7 +309,7 @@ def consolidate_journal(
         }
 
     if not journals:
-        wm_val = datetime.now(timezone.utc).isoformat()
+        wm_val = datetime.now(UTC).isoformat()
         try:
             write_watermark(wm_val, root)
         except ConsolidationStorageError:
@@ -356,7 +356,7 @@ def consolidate_journal(
         return degraded_result("NO_VALID_RECORDS")
 
     if target_slug is None:
-        target_slug = f"consolidated/{datetime.now(timezone.utc).date().isoformat()}"
+        target_slug = f"consolidated/{datetime.now(UTC).date().isoformat()}"
     document = "\n\n---\n\n".join(merged_parts)
     try:
         from personal_wiki.vault import upsert_note  # type: ignore
@@ -368,7 +368,7 @@ def consolidate_journal(
             note_path = upsert_note(
                 target_slug,
                 document,
-                frontmatter={"consolidated_at": datetime.now(timezone.utc).isoformat(), "source": "journal"},
+                frontmatter={"consolidated_at": datetime.now(UTC).isoformat(), "source": "journal"},
                 vault_root=root,
             )
         else:
@@ -388,7 +388,7 @@ def consolidate_journal(
             raise ConsolidationStorageError("consolidated note write returned no path")
         return degraded_result("NOTE_WRITE_FAILED")
 
-    wm_val = datetime.now(timezone.utc).isoformat()
+    wm_val = datetime.now(UTC).isoformat()
     try:
         write_watermark(wm_val, root)
     except ConsolidationStorageError:

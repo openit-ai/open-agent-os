@@ -4,6 +4,7 @@ Skills: get_my_profile, get_response_policy, get_work_preference,
         explain_my_profile, record_explicit_preference, reset_my_profile
 """
 from __future__ import annotations
+
 import logging
 import os
 from typing import Any
@@ -88,20 +89,19 @@ def _make_handler(skill_name: str, raise_on_denied: bool = False):
                 # distinguish: params dict already used, so this second dict is likely session
                 session = alt_session
         # normalize params: could be passed as first positional dict or via kwargs
-        if params is None and kwargs:
+        if params is None and kwargs and ("tenant_id" in kwargs or "user_id" in kwargs):
             # allow calling with tenant_id/user_id as kwargs directly
-            if "tenant_id" in kwargs or "user_id" in kwargs:
-                params = {k: kwargs.pop(k) for k in list(kwargs.keys()) if k in ("tenant_id", "user_id", "task_type", "key", "value", "scope")}
+            params = {k: kwargs.pop(k) for k in list(kwargs.keys()) if k in ("tenant_id", "user_id", "task_type", "key", "value", "scope")}
         # session may be passed as second positional via kwargs? already handled
         if session is None:
             session = kwargs.get("session")
         # handle case where session is passed as dict via kwargs 'params' when action used
         if session is None and "params" in kwargs and isinstance(kwargs["params"], dict):
             cand = kwargs["params"]
-            if isinstance(cand, dict) and ("tenant_id" in cand or "user_id" in cand):
+            if (isinstance(cand, dict) and ("tenant_id" in cand or "user_id" in cand)
+                    and params is not None and cand is not params):
                 # if params already set, this is likely session
-                if params is not None and cand is not params:
-                    session = cand
+                session = cand
         # support alternative call style: handler({'tenant_id':...}, sess) where sess is second positional
         # In that case session is already provided as second arg via params? But our signature has params first, session second.
         # The test calls h({'tenant_id':'t1','user_id':'u2'}, session=sess) -> params dict, session kw

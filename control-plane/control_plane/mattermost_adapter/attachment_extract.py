@@ -191,11 +191,9 @@ def _load_vault_helpers() -> tuple[Any, Any, Any]:
     """Return (get_vault_root, safe_join_vault, assert_vault_path_safe) or Nones."""
     try:
         _ensure_wiki_on_path()
-        from personal_wiki.vault import (  # type: ignore
-            assert_vault_path_safe as _assert,
-            get_vault_root as _root,
-            safe_join_vault as _join,
-        )
+        from personal_wiki.vault import assert_vault_path_safe as _assert  # type: ignore
+        from personal_wiki.vault import get_vault_root as _root  # type: ignore
+        from personal_wiki.vault import safe_join_vault as _join  # type: ignore
         return _root, _join, _assert
     except (ImportError, ModuleNotFoundError) as exc:
         logger.debug("personal wiki vault package unavailable: %s", type(exc).__name__)
@@ -271,7 +269,7 @@ def _resolve_owner_file(
         # Normalize first so backslash traversal can't dodge the ".." check.
         norm = vp.replace("\\", "/")
         # Refuse absolute paths, drive-letter paths, file:// URLs, any scheme, and traversal.
-        if norm.startswith("/") or norm.startswith("file://") or "://" in norm:
+        if norm.startswith(("/", "file://")) or "://" in norm:
             return None
         if re.match(r"^[A-Za-z]:/", norm):
             return None
@@ -305,10 +303,11 @@ def _resolve_owner_file(
         # Defense in depth: resolved file must also sit under the owner dir.
         try:
             owner_dir = root.joinpath(tenant, agent).resolve()
-            if joined.resolve() != owner_dir and owner_dir not in joined.resolve().parents:
+            if (joined.resolve() != owner_dir and owner_dir not in joined.resolve().parents
+                    and str(joined.resolve()) != str(owner_dir)
+                    and not str(joined.resolve()).startswith(str(owner_dir) + os.sep)):
                 # allow non-existent targets: compare absolute normalized paths
-                if str(joined.resolve()) != str(owner_dir) and not str(joined.resolve()).startswith(str(owner_dir) + os.sep):
-                    return None
+                return None
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.warning("attachment owner path validation degraded: %s", type(exc).__name__)
             return None
@@ -329,7 +328,7 @@ def _looks_owner_scoped(vp: Any, tenant_id: str, agent_principal: str) -> bool:
         if not s:
             return False
         norm = s.replace("\\", "/")
-        if norm.startswith("/") or norm.startswith("file://") or "://" in norm:
+        if norm.startswith(("/", "file://")) or "://" in norm:
             return False
         if re.match(r"^[A-Za-z]:/", norm):
             return False
