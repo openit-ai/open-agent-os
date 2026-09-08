@@ -1,22 +1,139 @@
 """Adaptive Profile Runtime Hook — minimal Response Policy with Redis cache."""
 from __future__ import annotations
 
-import os
+import asyncio
 import logging
+import os
 from typing import Any
-from .engine import DEFAULT_POLICY, TASK_TYPES, synthesize_policy, validate_task_type
+
+from .engine import DEFAULT_POLICY, TASK_TYPES, synthesize_policy
+
+try:
+    from sqlalchemy.exc import SQLAlchemyError
+except (ImportError, ModuleNotFoundError):
+    class SQLAlchemyError(Exception):
+        """Fallback marker when SQLAlchemy is not installed."""
+
 
 logger = logging.getLogger(__name__)
+_CACHE_ERRORS = (ImportError, ModuleNotFoundError, OSError, RuntimeError, TimeoutError, TypeError, ValueError)
+_BACKEND_ERRORS = (SQLAlchemyError, OSError, ConnectionError, TimeoutError, RuntimeError)
+
+
+class ProfileHookError(RuntimeError):
+    """Base error for failures at the adaptive profile hook boundary."""
+
+    status_code = 500
+
+
+class ProfileValidationError(ProfileHookError):
+    """The event, context, or persisted profile shape is invalid."""
+
+    status_code = 422
+
+
+class ProfileIdentityError(ProfileHookError):
+    """The hook was called without a usable identity."""
+
+    status_code = 401
+
+
+class ProfileContextMismatchError(ProfileHookError):
+    """The supplied profile context does not belong to the request context."""
+
+    status_code = 403
+
+
+class ProfileBackendUnavailableError(ProfileHookError):
+    """The durable profile backend could not be reached or initialized."""
+
+    status_code = 503
+
+
+def _is_production() -> bool:
+    return os.getenv("OAOS_ENV", "").strip().lower() in {"production", "prod"}
+
+
+def _allow_nonprod_fallback() -> bool:
+    """Allow fallback only for explicit non-production/test execution."""
+    if _is_production():
+        return False
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    for key in ("OAOS_ALLOW_TEST_FIXTURE", "OAOS_ALLOW_TEST_FALLBACK", "OAOS_ALLOW_PROFILE_FALLBACK"):
+        if os.getenv(key, "").strip().lower() in {"1", "true", "yes"}:
+            return True
+    return False
+
+
+def _error_type(exc: BaseException) -> str:
+    """Return a non-sensitive error label for logs and metrics."""
+    return type(exc).__name__
+
+
+def _default_policy(current_instruction: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(DEFAULT_POLICY)
+    for key in merged:
+        if key in current_instruction:
+            merged[key] = current_instruction[key]
+    return merged
+
+
+def _validate_context(
+    tenant_id: str,
+    user_id: str,
+    task_type: str | None,
+    current_instruction: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    if not isinstance(tenant_id, str) or not tenant_id.strip() or not isinstance(user_id, str) or not user_id.strip():
+        raise ProfileIdentityError("adaptive profile identity is required")
+    if current_instruction is None:
+        current: dict[str, Any] = {}
+    elif isinstance(current_instruction, dict):
+        current = current_instruction
+    else:
+        raise ProfileValidationError("current instruction must be an object")
+
+    for key, expected in (("tenant_id", tenant_id), ("user_id", user_id)):
+        supplied = current.get(key)
+        if supplied is not None and supplied != expected:
+            raise ProfileContextMismatchError("adaptive profile context does not match the request")
+
+    if task_type is None:
+        resolved_task = "general_chat"
+    elif isinstance(task_type, str) and task_type in TASK_TYPES:
+        resolved_task = task_type
+    else:
+        raise ProfileValidationError("unsupported adaptive profile task type")
+    return resolved_task, current
+
+
+def _profile_payload(data: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if not isinstance(data, dict):
+        raise ProfileValidationError("adaptive profile payload must be an object")
+    values: list[dict[str, Any]] = []
+    for key in ("explicit_prefs", "explicit", "task_scores", "global_scores", "trait_scores"):
+        value = data.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise ProfileValidationError("adaptive profile payload contains an invalid section")
+        values.append(value or {})
+    explicit = values[0] or values[1]
+    return explicit, values[2], values[3] or values[4]
+
+
+def _minimal_policy(policy: Any, current_instruction: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(policy, dict):
+        raise ProfileValidationError("adaptive profile policy must be an object")
+    allowed = set(DEFAULT_POLICY.keys())
+    minimal = {key: value for key, value in policy.items() if key in allowed}
+    for key in minimal:
+        if key in current_instruction:
+            minimal[key] = current_instruction[key]
+    return minimal
 
 
 class AdaptiveProfileHook:
-    """Runtime Hook interface.
-
-    before_llm_call: given verified agent context (tenant_id/user_id/task_type),
-    returns minimal Response Policy dict (7 keys, no scores/evidence).
-    Fail-safe: on any error returns DEFAULT_POLICY.
-    after_interaction: async evidence ingestion trigger (MVP: direct call).
-    """
+    """Resolve a minimal response policy at the verified LLM call boundary."""
 
     def before_llm_call(
         self,
@@ -26,46 +143,39 @@ class AdaptiveProfileHook:
         current_instruction: dict[str, Any] | None = None,
         profile_loader: Any | None = None,
     ) -> dict[str, Any]:
-        """Emit minimal Response Policy.
-
-        profile_loader: optional callable (tenant_id, user_id, task_type) -> {explicit, task_scores, global_scores}
-        If None or fails, falls back to DEFAULT_POLICY merged with current_instruction.
-        """
-        task_type = validate_task_type(task_type)
-        cur = current_instruction or {}
+        """Return a seven-key policy without exposing profile evidence or scores."""
+        resolved_task, current = _validate_context(tenant_id, user_id, task_type, current_instruction)
         if profile_loader is None:
-            merged = dict(DEFAULT_POLICY)
-            for k in merged:
-                if k in cur:
-                    merged[k] = cur[k]
-            return merged
+            return _default_policy(current)
+
         try:
-            data = profile_loader(tenant_id, user_id, task_type)
-            explicit = {}
-            task_scores = {}
-            global_scores = {}
-            if isinstance(data, dict):
-                explicit = data.get("explicit_prefs") or data.get("explicit") or {}
-                task_scores = data.get("task_scores") or {}
-                global_scores = data.get("global_scores") or data.get("trait_scores") or {}
+            data = profile_loader(tenant_id, user_id, resolved_task)
+        except ProfileHookError:
+            raise
+        except _BACKEND_ERRORS as exc:
+            if _allow_nonprod_fallback():
+                logger.warning("adaptive profile loader degraded: %s", _error_type(exc))
+                return _default_policy(current)
+            raise ProfileBackendUnavailableError("adaptive profile backend unavailable") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProfileValidationError("adaptive profile loader returned invalid data") from exc
+
+        explicit, task_scores, global_scores = _profile_payload(data)
+        try:
             policy = synthesize_policy(
-                current_instruction=cur,
+                current_instruction=current,
                 explicit_prefs=explicit,
                 task_scores=task_scores,
                 global_scores=global_scores,
             )
-            allowed = set(DEFAULT_POLICY.keys())
-            return {k: v for k, v in policy.items() if k in allowed}
-        except Exception as e:
-            logger.warning(f"AdaptiveProfileHook before_llm_call fallback: {e}")
-            merged = dict(DEFAULT_POLICY)
-            for k in merged:
-                if k in cur:
-                    merged[k] = cur[k]
-            return merged
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ProfileValidationError("adaptive profile data could not be interpreted") from exc
+        return _minimal_policy(policy, current)
 
     def format_prompt_injection(self, policy: dict[str, Any]) -> str:
         """Format minimal policy for LLM context injection (no scores)."""
+        if not isinstance(policy, dict):
+            raise ProfileValidationError("adaptive profile policy must be an object")
         lines = ["[USER RESPONSE POLICY]"]
         if policy.get("conclusion_first"):
             lines.append("- 결론을 먼저 제시")
@@ -86,8 +196,10 @@ class AdaptiveProfileHook:
         if policy.get("challenge_assumptions"):
             lines.append("- 필요한 경우 기존 가정을 반박")
         alt = policy.get("alternatives", 1)
+        if not isinstance(alt, (int, float)):
+            raise ProfileValidationError("adaptive profile alternatives must be numeric")
         if alt > 1:
-            lines.append(f"- 핵심 대안은 {alt}개 이하로 제시")
+            lines.append(f"- 핵심 대안은 {int(alt)}개 이하로 제시")
         cl = policy.get("confirmation_level", "medium")
         if cl == "low":
             lines.append("- 불필요한 확인 질문 최소화")
@@ -96,102 +208,119 @@ class AdaptiveProfileHook:
         return "\n".join(lines)
 
 
-def _sync_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict:
-    """Attempt to load profile data synchronously via async DB (best-effort).
-    Returns {} on failure so caller falls back to DEFAULT_POLICY.
-    Never raises, never leaks scores directly.
-    """
-    try:
-        # try cache first
-        try:
-            from .cache import get_cached_policy
-            # need profile_version to key; fetch version via quick DB check or skip
-            # we cannot get version without DB, so cache lookup here uses version-aware path only via hook's version loader
-            # For sync loader, we attempt to load version first
-            import asyncio
-            # Check if we can get version without full load
-            pass
-        except Exception:
-            pass
-        import asyncio
-
-        async def _load():
-            try:
-                from security.models.db import get_sessionmaker
-                from security.models.orm import ExplicitPreferenceORM, TraitScoreORM, TaskTraitScoreORM
-                from sqlalchemy import select
-
-                maker = get_sessionmaker()
-                async with maker() as session:
-                    res3 = await session.execute(select(ExplicitPreferenceORM).where(ExplicitPreferenceORM.user_id == user_id, ExplicitPreferenceORM.tenant_id == tenant_id))
-                    explicit: dict = {}
-                    for r in res3.scalars().all():
-                        if r.scope == "global":
-                            explicit[r.key] = r.value
-                        elif r.task_type == task_type:
-                            explicit[r.key] = r.value
-                        v = explicit.get(r.key)
-                        if isinstance(v, str):
-                            if v.lower() in ("true", "false"):
-                                explicit[r.key] = v.lower() == "true"
-                            elif v.isdigit():
-                                try:
-                                    explicit[r.key] = int(v)
-                                except Exception:
-                                    pass
-                    res = await session.execute(select(TraitScoreORM).where(TraitScoreORM.user_id == user_id, TraitScoreORM.tenant_id == tenant_id))
-                    global_scores = {r.trait_name: r.global_score for r in res.scalars().all()}
-                    res2 = await session.execute(select(TaskTraitScoreORM).where(TaskTraitScoreORM.user_id == user_id, TaskTraitScoreORM.tenant_id == tenant_id, TaskTraitScoreORM.task_type == task_type))
-                    task_scores = {r.trait_name: r.score for r in res2.scalars().all()}
-                    return {"explicit_prefs": explicit, "task_scores": task_scores, "global_scores": global_scores}
-            except Exception as e:
-                logger.debug(f"_sync_profile_loader load failed: {e}")
-                return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
-
-        try:
-            asyncio.get_running_loop()
-            return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
-        except RuntimeError:
-            pass
-        return asyncio.run(_load())
-    except Exception as e:
-        logger.debug(f"_sync_profile_loader outer fail: {e}")
-        return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
-
-
-async def _async_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict:
-    """Async DB loader for use inside async ACP path."""
+async def _load_profile_data(tenant_id: str, user_id: str, task_type: str) -> dict[str, Any]:
     try:
         from security.models.db import get_sessionmaker
-        from security.models.orm import ExplicitPreferenceORM, TraitScoreORM, TaskTraitScoreORM
+        from security.models.orm import ExplicitPreferenceORM, TaskTraitScoreORM, TraitScoreORM
         from sqlalchemy import select
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise ProfileBackendUnavailableError("adaptive profile backend unavailable") from exc
 
+    try:
         maker = get_sessionmaker()
         async with maker() as session:
-            res3 = await session.execute(select(ExplicitPreferenceORM).where(ExplicitPreferenceORM.user_id == user_id, ExplicitPreferenceORM.tenant_id == tenant_id))
-            explicit: dict = {}
-            for r in res3.scalars().all():
-                if r.scope == "global":
-                    explicit[r.key] = r.value
-                elif r.task_type == task_type:
-                    explicit[r.key] = r.value
-                v = explicit.get(r.key)
-                if isinstance(v, str):
-                    if v.lower() in ("true", "false"):
-                        explicit[r.key] = v.lower() == "true"
-                    elif v.isdigit():
-                        try:
-                            explicit[r.key] = int(v)
-                        except Exception:
-                            pass
-            res = await session.execute(select(TraitScoreORM).where(TraitScoreORM.user_id == user_id, TraitScoreORM.tenant_id == tenant_id))
-            global_scores = {r.trait_name: r.global_score for r in res.scalars().all()}
-            res2 = await session.execute(select(TaskTraitScoreORM).where(TaskTraitScoreORM.user_id == user_id, TaskTraitScoreORM.tenant_id == tenant_id, TaskTraitScoreORM.task_type == task_type))
-            task_scores = {r.trait_name: r.score for r in res2.scalars().all()}
+            explicit: dict[str, Any] = {}
+            result = await session.execute(
+                select(ExplicitPreferenceORM).where(
+                    ExplicitPreferenceORM.user_id == user_id,
+                    ExplicitPreferenceORM.tenant_id == tenant_id,
+                )
+            )
+            for row in result.scalars().all():
+                if row.scope == "global" or row.task_type == task_type:
+                    explicit[row.key] = row.value
+                value = explicit.get(row.key)
+                if isinstance(value, str):
+                    if value.lower() in ("true", "false"):
+                        explicit[row.key] = value.lower() == "true"
+                    elif value.isdigit():
+                        explicit[row.key] = int(value)
+
+            result = await session.execute(
+                select(TraitScoreORM).where(
+                    TraitScoreORM.user_id == user_id,
+                    TraitScoreORM.tenant_id == tenant_id,
+                )
+            )
+            global_scores = {row.trait_name: row.global_score for row in result.scalars().all()}
+            result = await session.execute(
+                select(TaskTraitScoreORM).where(
+                    TaskTraitScoreORM.user_id == user_id,
+                    TaskTraitScoreORM.tenant_id == tenant_id,
+                    TaskTraitScoreORM.task_type == task_type,
+                )
+            )
+            task_scores = {row.trait_name: row.score for row in result.scalars().all()}
             return {"explicit_prefs": explicit, "task_scores": task_scores, "global_scores": global_scores}
-    except Exception as e:
-        logger.debug(f"_async_profile_loader failed: {e}")
-        return {"explicit_prefs": {}, "task_scores": {}, "global_scores": {}}
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ProfileValidationError("adaptive profile data is malformed") from exc
+    except _BACKEND_ERRORS as exc:
+        raise ProfileBackendUnavailableError("adaptive profile backend unavailable") from exc
+
+
+def _sync_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict[str, Any]:
+    """Load durable profile data for synchronous callers; never hide production failures."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_load_profile_data(tenant_id, user_id, task_type))
+    raise ProfileBackendUnavailableError("synchronous profile lookup is unavailable inside an active event loop")
+
+
+async def _async_profile_loader(tenant_id: str, user_id: str, task_type: str) -> dict[str, Any]:
+    """Load durable profile data for async callers."""
+    return await _load_profile_data(tenant_id, user_id, task_type)
+
+
+async def _load_profile_version(tenant_id: str, user_id: str) -> int:
+    try:
+        from security.models.db import get_sessionmaker
+        from security.models.orm import UserProfileORM
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise ProfileBackendUnavailableError("adaptive profile backend unavailable") from exc
+    try:
+        maker = get_sessionmaker()
+        async with maker() as session:
+            profile = await session.get(UserProfileORM, {"user_id": user_id, "tenant_id": tenant_id})
+            return profile.profile_version if profile else 0
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ProfileValidationError("adaptive profile version is malformed") from exc
+    except _BACKEND_ERRORS as exc:
+        raise ProfileBackendUnavailableError("adaptive profile backend unavailable") from exc
+
+
+def _cache_policy(tenant_id: str, user_id: str, task_type: str, version: int, current: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        from .cache import get_cached_policy
+        cached = get_cached_policy(tenant_id, user_id, task_type, version)
+    except _CACHE_ERRORS as exc:
+        logger.warning("adaptive profile cache read degraded: %s", _error_type(exc))
+        return None
+    if not cached or not isinstance(cached, dict) or "policy" not in cached:
+        return None
+    return _minimal_policy(cached["policy"], current)
+
+
+def _write_cache_sync(tenant_id: str, user_id: str, task_type: str, policy: dict[str, Any]) -> None:
+    try:
+        version = asyncio.run(_load_profile_version(tenant_id, user_id))
+        from .cache import set_cached_policy
+        set_cached_policy(tenant_id, user_id, task_type, version, policy)
+    except ProfileHookError as exc:
+        logger.warning("adaptive profile cache write degraded: %s", _error_type(exc))
+    except _CACHE_ERRORS as exc:
+        logger.warning("adaptive profile cache write degraded: %s", _error_type(exc))
+
+
+async def _write_cache_async(tenant_id: str, user_id: str, task_type: str, policy: dict[str, Any]) -> None:
+    try:
+        version = await _load_profile_version(tenant_id, user_id)
+        from .cache import set_cached_policy
+        set_cached_policy(tenant_id, user_id, task_type, version, policy)
+    except ProfileHookError as exc:
+        logger.warning("adaptive profile cache write degraded: %s", _error_type(exc))
+    except _CACHE_ERRORS as exc:
+        logger.warning("adaptive profile cache write degraded: %s", _error_type(exc))
 
 
 def get_response_policy(
@@ -200,85 +329,37 @@ def get_response_policy(
     task_type: str | None = None,
     current_instruction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Synchronous adapter seam — Control Plane / ACP boundary.
-    Loads profile via DB loader with safe fallback to DEFAULT_POLICY.
-    Never leaks scores/evidence; returns minimal 7-key policy.
-    Redis cache aware: checks cache by profile_version if available.
-    """
-    task_type = validate_task_type(task_type)
-    cur = current_instruction or {}
-    # Try Redis cache if profile_version known
+    """Resolve a minimal response policy for synchronous Control Plane callers."""
+    resolved_task, current = _validate_context(tenant_id, user_id, task_type, current_instruction)
+
     try:
-        from security.models.db import get_sessionmaker as _gsm
-        from security.models.orm import UserProfileORM
-        import asyncio
+        version = asyncio.run(_load_profile_version(tenant_id, user_id))
+        cached = _cache_policy(tenant_id, user_id, resolved_task, version, current)
+        if cached is not None:
+            return cached
+    except ProfileBackendUnavailableError as exc:
+        logger.info("adaptive profile cache version unavailable: %s", _error_type(exc))
+    except ProfileValidationError:
+        raise
+    except _CACHE_ERRORS as exc:
+        logger.warning("adaptive profile cache lookup degraded: %s", _error_type(exc))
 
-        async def _get_ver():
-            try:
-                maker = _gsm()
-                async with maker() as s:
-                    p = await s.get(UserProfileORM, {"user_id": user_id, "tenant_id": tenant_id})
-                    return p.profile_version if p else 0
-            except Exception:
-                return None
-
-        # only attempt sync cache if no running loop
-        try:
-            asyncio.get_running_loop()
-            ver = None
-        except RuntimeError:
-            ver = asyncio.run(_get_ver())
-        if ver is not None:
-            try:
-                from .cache import get_cached_policy as _gcp
-                cached = _gcp(tenant_id, user_id, task_type, ver)
-                if cached and "policy" in cached:
-                    # merge current_instruction precedence over cached explicit-derived policy
-                    pol = dict(cached["policy"])
-                    for k in pol:
-                        if k in cur:
-                            pol[k] = cur[k]
-                    # ensure minimal keys
-                    allowed = set(DEFAULT_POLICY.keys())
-                    return {k: v for k, v in pol.items() if k in allowed}
-            except Exception:
-                pass
-    except Exception:
-        pass
     try:
-        data = _sync_profile_loader(tenant_id, user_id, task_type)
-        policy = default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
-        # populate cache best-effort (need version)
-        try:
-            import asyncio as _aio
-
-            async def _ver_and_set():
-                try:
-                    from security.models.db import get_sessionmaker as _g2
-                    from security.models.orm import UserProfileORM as _UP
-                    maker2 = _g2()
-                    async with maker2() as s2:
-                        p2 = await s2.get(_UP, {"user_id": user_id, "tenant_id": tenant_id})
-                        ver2 = p2.profile_version if p2 else 0
-                        from .cache import set_cached_policy as _scp
-                        _scp(tenant_id, user_id, task_type, ver2, policy)
-                except Exception:
-                    pass
-
-            try:
-                _aio.get_running_loop()
-            except RuntimeError:
-                _aio.run(_ver_and_set())
-        except Exception:
-            pass
-        return policy
-    except Exception as e:
-        logger.warning(f"get_response_policy fallback: {e}")
-        merged = dict(DEFAULT_POLICY)
-        for k in merged:
-            if k in cur:
-                merged[k] = cur[k]
-        return merged
+        data = _sync_profile_loader(tenant_id, user_id, resolved_task)
+        policy = default_hook.before_llm_call(
+            tenant_id,
+            user_id,
+            resolved_task,
+            current_instruction=current,
+            profile_loader=lambda _tenant, _user, _task: data,
+        )
+    except ProfileBackendUnavailableError as exc:
+        if _allow_nonprod_fallback():
+            logger.warning("adaptive profile resolution degraded: %s", _error_type(exc))
+            return _default_policy(current)
+        raise
+    _write_cache_sync(tenant_id, user_id, resolved_task, policy)
+    return policy
 
 
 async def get_response_policy_async(
@@ -287,51 +368,37 @@ async def get_response_policy_async(
     task_type: str | None = None,
     current_instruction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Async variant for ACP adapter streaming path. Redis cache aware."""
-    task_type = validate_task_type(task_type)
-    cur = current_instruction or {}
-    # cache check (async)
+    """Resolve a minimal response policy for async ACP callers."""
+    resolved_task, current = _validate_context(tenant_id, user_id, task_type, current_instruction)
+
     try:
-        from security.models.db import get_sessionmaker as _gsm2
-        from security.models.orm import UserProfileORM as _UP2
-        maker = _gsm2()
-        async with maker() as session:
-            prof = await session.get(_UP2, {"user_id": user_id, "tenant_id": tenant_id})
-            ver = prof.profile_version if prof else 0
-        from .cache import get_cached_policy as _gcp2
-        cached = _gcp2(tenant_id, user_id, task_type, ver)
-        if cached and "policy" in cached:
-            pol = dict(cached["policy"])
-            for k in pol:
-                if k in cur:
-                    pol[k] = cur[k]
-            allowed = set(DEFAULT_POLICY.keys())
-            return {k: v for k, v in pol.items() if k in allowed}
-    except Exception:
-        pass
+        version = await _load_profile_version(tenant_id, user_id)
+        cached = _cache_policy(tenant_id, user_id, resolved_task, version, current)
+        if cached is not None:
+            return cached
+    except ProfileBackendUnavailableError as exc:
+        logger.info("adaptive profile cache version unavailable: %s", _error_type(exc))
+    except ProfileValidationError:
+        raise
+    except _CACHE_ERRORS as exc:
+        logger.warning("adaptive profile cache lookup degraded: %s", _error_type(exc))
+
     try:
-        data = await _async_profile_loader(tenant_id, user_id, task_type)
-        policy = default_hook.before_llm_call(tenant_id, user_id, task_type, current_instruction=cur, profile_loader=lambda tid, uid, tt: data)
-        # set cache
-        try:
-            from security.models.db import get_sessionmaker as _gsm3
-            from security.models.orm import UserProfileORM as _UP3
-            maker3 = _gsm3()
-            async with maker3() as s3:
-                prof3 = await s3.get(_UP3, {"user_id": user_id, "tenant_id": tenant_id})
-                ver3 = prof3.profile_version if prof3 else 0
-            from .cache import set_cached_policy as _scp3
-            _scp3(tenant_id, user_id, task_type, ver3, policy)
-        except Exception:
-            pass
-        return policy
-    except Exception as e:
-        logger.warning(f"get_response_policy_async fallback: {e}")
-        merged = dict(DEFAULT_POLICY)
-        for k in merged:
-            if k in cur:
-                merged[k] = cur[k]
-        return merged
+        data = await _async_profile_loader(tenant_id, user_id, resolved_task)
+        policy = default_hook.before_llm_call(
+            tenant_id,
+            user_id,
+            resolved_task,
+            current_instruction=current,
+            profile_loader=lambda _tenant, _user, _task: data,
+        )
+    except ProfileBackendUnavailableError as exc:
+        if _allow_nonprod_fallback():
+            logger.warning("adaptive profile resolution degraded: %s", _error_type(exc))
+            return _default_policy(current)
+        raise
+    await _write_cache_async(tenant_id, user_id, resolved_task, policy)
+    return policy
 
 
 # Alias for compatibility
