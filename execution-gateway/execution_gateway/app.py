@@ -8,7 +8,9 @@ Endpoints:
 from __future__ import annotations
 
 import base64
+import binascii
 import json
+import re
 import uuid
 from typing import Any
 
@@ -62,6 +64,90 @@ except (ImportError, ModuleNotFoundError):
 
 app = FastAPI(title="Open Agent OS — Execution Gateway", version="0.1.3")
 
+
+_HTTP_ERROR_STATUSES = frozenset({401, 403, 422, 429, 502, 503})
+_ERROR_STATUS_BY_NAME = {
+    "INVALID_CREDENTIAL": 401,
+    "CAPABILITY_REQUIRED": 401,
+    "CAPABILITY_DENIED": 403,
+    "APPROVAL_REQUIRED": 403,
+    "DENIED": 403,
+    "INVALID_REQUEST": 422,
+    "RATE_LIMITED": 429,
+    "UPSTREAM_RATE_LIMITED": 429,
+    "UPSTREAM_MALFORMED": 502,
+    "BACKEND_UNAVAILABLE": 503,
+    "POLICY_UNAVAILABLE": 503,
+    "UPSTREAM_UNAVAILABLE": 503,
+    "MOCK_FALLBACK_DISABLED": 503,
+    "TRANSPORT_REQUIRED": 503,
+}
+
+
+def _safe_error_reason(value: Any) -> str:
+    """Keep credential/token material out of HTTP error bodies."""
+    reason = str(value) if value is not None else "request failed"
+    if len(reason) > 240:
+        return "request failed"
+    if re.search(r"(?i)(bearer\s+|authorization\s*[:=]|(?:token|secret|credential|password)\s*[:=])", reason):
+        return "request failed"
+    if re.search(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", reason):
+        return "request failed"
+    return reason
+
+
+def _safe_error_content(result: dict[str, Any], status_code: int) -> dict[str, Any]:
+    """Return the stable error contract without forwarding arbitrary result data."""
+    content: dict[str, Any] = {
+        "error": str(result.get("error") or "INTERNAL_ERROR"),
+        "reason": _safe_error_reason(result.get("reason")),
+        "status_code": status_code,
+    }
+    for key in ("code", "risk", "tool", "trace_id", "request_id", "retry_after", "source", "action", "resource"):
+        if key in result:
+            content[key] = result[key]
+    return content
+
+
+def _proxy_error_status(result: dict[str, Any]) -> int:
+    status_code = result.get("status_code")
+    if isinstance(status_code, int) and status_code in _HTTP_ERROR_STATUSES:
+        return status_code
+    if isinstance(status_code, int) and 500 <= status_code <= 599:
+        return status_code
+    return _ERROR_STATUS_BY_NAME.get(str(result.get("error")), 500)
+
+
+def _exception_status(exc: BaseException, default: int = 500) -> int:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and 400 <= status_code <= 599:
+        return status_code
+    if isinstance(exc, PermissionError):
+        return 403
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError, RuntimeError)):
+        return 503 if default == 500 else default
+    return default
+
+
+def _exception_error_name(status_code: int) -> str:
+    return {
+        401: "INVALID_CREDENTIAL",
+        403: "PERMISSION_DENIED",
+        422: "INVALID_REQUEST",
+        429: "RATE_LIMITED",
+        503: "BACKEND_UNAVAILABLE",
+    }.get(status_code, "INTERNAL_ERROR")
+
+
+@app.exception_handler(Exception)
+async def _handle_internal_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Return 500 for unexpected failures without exposing exception contents."""
+    logger.error("unhandled gateway exception method=%s path=%s type=%s", request.method, request.url.path, type(exc).__name__)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "INTERNAL_ERROR", "reason": "internal server error", "status_code": 500},
+    )
+
 # -- Graceful shutdown + queue draining (SIGTERM 30s) --
 _active_requests: int = 0
 _shutting_down: bool = False
@@ -85,8 +171,8 @@ def _handle_sigterm(signum, frame):
 
 try:
     signal.signal(signal.SIGTERM, _handle_sigterm)
-except Exception:
-    pass
+except (OSError, RuntimeError, ValueError) as exc:
+    logger.debug("SIGTERM handler unavailable: %s", type(exc).__name__)
 
 async def _drain_on_shutdown():
     # called via lifespan shutdown
@@ -108,8 +194,8 @@ async def _lifespan(app: FastAPI):
 # attach lifespan if not already set
 try:
     app.router.lifespan_context = _lifespan  # type: ignore
-except Exception:
-    pass
+except (AttributeError, RuntimeError, TypeError) as exc:
+    logger.warning("gateway lifespan handler unavailable: %s", type(exc).__name__)
 
 # -- HA health helpers — liveness vs readiness (H4 strict) --
 # /health & /healthz = liveness (always 200). /readyz = readiness with bounded real checks: prod 503 on degraded/draining.
@@ -125,9 +211,10 @@ def _check_latency(fn):
         fn()
         latency = round((time.monotonic() - start) * 1000, 2)
         return {"status": "ok", "latency_ms": latency}
-    except Exception as e:
+    except (ConnectionError, OSError, TimeoutError, RuntimeError, TypeError, ValueError) as e:
         latency = round((time.monotonic() - start) * 1000, 2)
-        return {"status": "degraded", "latency_ms": latency, "error": str(e)[:200]}
+        logger.warning("gateway health probe degraded: %s", type(e).__name__)
+        return {"status": "degraded", "latency_ms": latency, "error": type(e).__name__}
 
 def _bounded_db_ping(db_url: str, timeout_s: float = 0.8) -> None:
     """Bounded real DB connectivity check when configured."""
@@ -228,9 +315,7 @@ def _bounded_vault_ping(timeout_s: float = 0.8) -> None:
                         _asyncio.run(_do())
                         return
                     except ImportError:
-                        pass
-                    except Exception as e:
-                        raise e
+                        logger.debug("httpx unavailable for Vault probe; using urllib fallback")
                     import urllib.request
                     import ssl
                     ctx = ssl._create_unverified_context() if vault_addr.startswith("https") else None
@@ -372,27 +457,21 @@ def _get_rate_limiter():
         rate = float(os.getenv("OAOS_TOOL_RATE_PER_SEC", "10"))
         burst = int(os.getenv("OAOS_TOOL_BURST", "20"))
         _rate_limiter = ToolRateLimiter(rate_per_sec=rate, burst=burst)
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         # H7 immutable: in production, import failure must fail-closed, not allow with _Noop
-        try:
-            from .env_gate import is_production as _is_prod  # type: ignore
-            _prod = _is_prod()
-        except Exception:
-            try:
-                from execution_gateway.env_gate import is_production as _is_prod2  # type: ignore
-                _prod = _is_prod2()
-            except Exception:
-                import os as _os
-                _prod = _os.getenv("OAOS_ENV","").strip().lower() in ("production","prod")
-        if _prod:
-            raise RuntimeError(f"rate limiter unavailable in production: {e}") from e
+        if _is_production():
+            raise RuntimeError("rate limiter unavailable in production") from e
         # non-prod: fail-open with telemetry but still allow tests
         try:
             from .env_gate import fail_open_telemetry  # type: ignore
-            fail_open_telemetry("execution_gateway","rate_limiter_import_fallback_nonprod", error=str(e)[:200])
-        except Exception:
+            fail_open_telemetry("execution_gateway", "rate_limiter_import_fallback_nonprod", error=type(e).__name__)
+        except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError) as telemetry_exc:
             import logging as _lg
-            _lg.getLogger(__name__).warning("[fail-open] rate_limiter_import_fallback_nonprod err=%s", str(e)[:200])
+            _lg.getLogger(__name__).warning(
+                "[fail-open] rate_limiter_import_fallback_nonprod error=%s telemetry=%s",
+                type(e).__name__,
+                type(telemetry_exc).__name__,
+            )
         class _Noop:
             def allow(self, key: str, tokens: int = 1) -> bool:
                 return True
@@ -430,8 +509,8 @@ def _parse_agent_context_header(
                 # 패딩 보정
                 padded = raw + "=" * (-len(raw) % 4)
                 decoded = json.loads(base64.b64decode(padded).decode("utf-8"))
-            except Exception:
-                raise HTTPException(status_code=400, detail="invalid X-Agent-Context header: not valid JSON nor base64 JSON")
+            except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
+                raise HTTPException(status_code=422, detail="invalid X-Agent-Context header")
         if isinstance(decoded, dict):
             ctx.update(decoded)
 
@@ -578,15 +657,15 @@ async def execute(
     # body의 capability_token이 문자열이면 ctx에 별도 보관 (proxy에서 검증)
     ctx = _require_context(ctx)
 
-    # 2. action/resource 정규화 (실패 시 400)
+    # 2. action/resource 정규화 (실패 시 422)
     try:
         canon_action = canonicalize_action(req.action)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="invalid action") from exc
     try:
         canon_resource = normalize_resource(req.resource)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="invalid resource") from exc
 
     # 3. ToolRateLimiter (§16H.2) — lazy, per (tenant,user,tool,resource)
     # Production: Redis-primary fail-closed; non-prod: fail-open to preserve tests
@@ -608,20 +687,29 @@ async def execute(
             )
     except RuntimeError as e:
         # Production fail-closed: Redis unavailable → 503
-        is_prod = os.getenv("OAOS_ENV", "").lower() in ("production", "prod")
-        if is_prod:
+        if _is_production():
             return JSONResponse(
                 status_code=503,
                 content={
                     "error": "RATE_LIMIT_UNAVAILABLE",
-                    "reason": str(e),
+                    "reason": "rate limiter unavailable",
                     "tool": req.tool,
                     "trace_id": ctx.get("trace_id", "unknown"),
                 },
             )
-        pass
-    except Exception:
-        pass  # fail-open for non-RuntimeError limiter errors in non-prod — keeps 541 green
+        logger.warning("rate limiter degraded in non-production: %s", type(e).__name__)
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        if _is_production():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "RATE_LIMIT_UNAVAILABLE",
+                    "reason": "rate limiter unavailable",
+                    "tool": req.tool,
+                    "trace_id": ctx.get("trace_id", "unknown"),
+                },
+            )
+        logger.warning("rate limiter degraded in non-production: %s", type(exc).__name__)
 
     # 4. tool 존재 검증
     if _registry.find_tool(req.tool) is None and req.tool not in _registry.list_tools():
@@ -697,18 +785,23 @@ async def execute(
                 agent_context=proxy_ctx,
                 capability_token=req.capability_token,
             )
-        except PermissionError as exc:
-            return JSONResponse(status_code=403, content={
-                "error": "GOOGLE_CREDENTIAL_DENIED",
-                "reason": str(exc),
-                "trace_id": ctx.get("trace_id", "unknown"),
-            })
-        except RuntimeError as exc:
-            return JSONResponse(status_code=503, content={
-                "error": "GOOGLE_CONNECTOR_UNAVAILABLE",
-                "reason": str(exc),
-                "trace_id": ctx.get("trace_id", "unknown"),
-            })
+        except (PermissionError, RuntimeError, ValueError) as exc:
+            status_code = _exception_status(exc)
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "error": _exception_error_name(status_code),
+                    "reason": _safe_error_reason({
+                        401: "invalid or missing credential",
+                        403: "permission denied",
+                        422: "invalid request",
+                        429: "rate limit exceeded",
+                        503: "backend unavailable",
+                    }.get(status_code, "internal server error")),
+                    "status_code": status_code,
+                    "trace_id": ctx.get("trace_id", "unknown"),
+                },
+            )
     else:
         result = await proxy_tool_call(
             tool_name=req.tool,
@@ -724,17 +817,16 @@ async def execute(
         except ImportError:
             from .wiki_archive import auto_archive  # type: ignore  # type: ignore
         auto_archive(trace_id=ctx.get("trace_id") or result.get("trace_id") or "unknown", tool_name=req.tool, result=result, max_chars=4000)
-    except Exception:
-        pass
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        # Optional archive must not change the primary gateway result.
+        logger.warning("optional gateway archive degraded: %s", type(exc).__name__)
+        if isinstance(result, dict):
+            result.setdefault("archive", {"status": "degraded"})
 
     # 8. proxy 결과 상태 매핑
     if "error" in result:
-        err = result["error"]
-        if err == "CAPABILITY_REQUIRED":
-            return JSONResponse(status_code=403, content=result)
-        if err == "CAPABILITY_DENIED":
-            return JSONResponse(status_code=403, content=result)
-        return JSONResponse(status_code=403, content=result)
+        status_code = _proxy_error_status(result)
+        return JSONResponse(status_code=status_code, content=_safe_error_content(result, status_code))
 
     # 성공 — trace 헤더 포함
     headers = {
