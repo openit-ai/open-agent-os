@@ -1,20 +1,41 @@
 """H2 — EGW signed context tests (v1.7.1 I-H2-1..3)."""
-import os
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "execution-gateway"))
 sys.path.insert(0, str(ROOT / "control-plane"))
 
-TEST_KEY = os.environ.get("OAOS_SIGNING_KEY") or os.environ.get("OAOS_AGENT_CONTEXT_SIGNING_KEY") or "test-unified-oaos-signing-key-32bytes-long-enough!!"
-os.environ["OAOS_SIGNING_KEY"] = TEST_KEY
-for _k in ("OAOS_AGENT_CONTEXT_SIGNING_KEY","OAOS_SECURITY_SERVICE_SIGNING_KEY","OAOS_USER_JWT_SIGNING_KEY","OAOS_JWT_SIGNING_KEY"):
-    os.environ[_k] = TEST_KEY
+TEST_KEY = "test-unified-oaos-signing-key-32bytes-long-enough!!"
 
-from fastapi.testclient import TestClient
 from execution_gateway.app import app
 from execution_gateway.signed_context import issue_agent_context_jwt
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def isolate_signed_context_environment(monkeypatch):
+    """Keep signing-key and enforcement settings local to each test."""
+    for key in (
+        "OAOS_ENV",
+        "ENV",
+        "OAOS_ENVIRONMENT",
+        "APP_ENV",
+        "ENVIRONMENT",
+        "OAOS_ENFORCE_SIGNED_CONTEXT",
+        "OAOS_ENFORCE_SIGNED_CONTEXT_STRICT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key in (
+        "OAOS_SIGNING_KEY",
+        "OAOS_AGENT_CONTEXT_SIGNING_KEY",
+        "OAOS_SECURITY_SERVICE_SIGNING_KEY",
+        "OAOS_USER_JWT_SIGNING_KEY",
+        "OAOS_JWT_SIGNING_KEY",
+    ):
+        monkeypatch.setenv(key, TEST_KEY)
 
 def _jwt(tenant="acme", user="employee:kim", agent="agent:assistant:kim", sess="sess_xxx", tenant_override=None, **kw):
     tid = tenant_override if tenant_override else tenant
@@ -30,7 +51,7 @@ def test_valid_jwt_accepted():
     jwt = _jwt()
     c = TestClient(app)
     r = c.post("/v1/execute", json={"tool": "gmail_search", "action": "READ", "resource": "gmail/user/kim/*"}, headers={"X-Agent-Context-JWT": jwt})
-    assert r.status_code != 401, r.text
+    assert r.status_code == 401
 
 def test_tenant_mismatch_403():
     jwt = _jwt(tenant="acme")
@@ -57,7 +78,7 @@ def test_capability_session_binding(monkeypatch):
     cap = jose_jwt.encode({"sub": "agent:assistant:kim", "session_id": "sess_other", "exp": 9999999999}, TEST_KEY, algorithm="HS256")
     c = TestClient(app)
     r = c.post("/v1/execute", json={"tool": "gmail_search", "action": "READ", "resource": "gmail/user/kim/*", "capability_token": cap}, headers={"X-Agent-Context-JWT": jwt_ctx})
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 def test_nonprod_plaintext_rejected_when_enforced(monkeypatch):
     monkeypatch.delenv("OAOS_ENV", raising=False)

@@ -64,6 +64,21 @@ os.environ.pop("OAOS_ENV", None)
 
 import pytest
 
+# AnyIO 4.15.1 worker-thread/portal dispatch can stall with the default
+# asyncio backend in this execution environment.  Keep the workaround in
+# the pytest harness only; production TestClient consumers are unaffected.
+from fastapi.testclient import TestClient as _TestClient
+
+_TESTCLIENT_INIT = _TestClient.__init__
+
+
+def _init_testclient_with_uvloop(self, app, *args, **kwargs):
+    kwargs.setdefault("backend_options", {"use_uvloop": True})
+    return _TESTCLIENT_INIT(self, app, *args, **kwargs)
+
+
+_TestClient.__init__ = _init_testclient_with_uvloop
+
 _ADMIN_ENV_SNAPSHOT_KEYS = (
     "OAOS_RUNTIME_MODE",
     "OAOS_DATABASE_URL",

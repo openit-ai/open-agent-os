@@ -23,7 +23,7 @@ test-slow:
 	pytest -q -m "slow"
 
 test-fast:
-	pytest -q -m "not external and not distributed and not slow"
+	PATH="$(CURDIR)/.venv/bin:$(PATH)" PYTHONUNBUFFERED=1 /usr/bin/timeout --signal=TERM --kill-after=10s 180s pytest -q -p no:cacheprovider -m "not external and not distributed and not slow"
 
 verify-evidence:
 	python scripts/verify-evidence-tiers.py --check-only
