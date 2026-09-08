@@ -325,6 +325,7 @@ async def proxy_tool_call(
                 return {
                     "error": "DATA_ACCESS_DENIED",
                     "reason": _da.reason,
+                    "status_code": 403,
                     "risk": "HIGH",
                     "trace_id": trace_id,
                     "request_id": request_id,
@@ -353,6 +354,15 @@ async def proxy_tool_call(
                 request_id=request_id,
             )
     else:
+        if _is_prod():
+            return _error_response(
+                "BACKEND_UNAVAILABLE",
+                "data access policy unavailable",
+                status_code=503,
+                risk="HIGH",
+                trace_id=trace_id,
+                request_id=request_id,
+            )
         _data_access_hint = None
 
     # 2. risk 분류 (deterministic)
@@ -616,10 +626,10 @@ async def proxy_tool_call(
     mock_result: dict | None = None
     if transport_result is None:
         # 6. mock fallback (MCP 서버 없을 때) — fail-closed in production
-        if _is_prod() and not _is_mock_allowed():
+        if not _is_mock_allowed():
             return _error_response(
                 "MOCK_FALLBACK_DISABLED",
-                "upstream service unavailable and mock fallback is disabled",
+                "mock fallback is disabled",
                 status_code=503,
                 risk=risk_value,
                 trace_id=trace_id,
@@ -627,19 +637,17 @@ async def proxy_tool_call(
                 code="MOCK_FALLBACK_DISABLED",
             )
         mock_result = _mock_fallback(tool_name, args, context)
-        # If mock fallback was unavailable and we're in production, fail-closed
-        if mock_result is None and _is_prod() and not _is_mock_allowed():
+        # Never report success without a real or mock execution result.
+        if mock_result is None:
             return _error_response(
-                "MOCK_FALLBACK_DISABLED",
-                "no real transport and mock fallback is disabled",
+                "UPSTREAM_UNAVAILABLE",
+                "tool execution unavailable",
                 status_code=503,
                 risk=risk_value,
                 trace_id=trace_id,
                 request_id=request_id,
-                code="MOCK_FALLBACK_DISABLED",
+                code="TRANSPORT_UNAVAILABLE",
             )
-        # If mock also returned None, we still succeed with stub (backward compat for unknown tools)
-        # But if tool was found via registry as mock, mock_result should have data for known tools
 
     # 7. 성공 — trace 전파
     result: dict[str, Any] = {
@@ -669,12 +677,6 @@ async def proxy_tool_call(
         result["transport"] = "mock"
         result["mock_result"] = mock_result
         result["data"] = mock_result
-        if transport_error:
-            result["transport_error"] = transport_error
-    else:
-        # Stub success — tool not in mock map, but capability/risk checks passed
-        result["transport"] = "stub"
-        result["data"] = {"tool": tool_name, "args": args}
         if transport_error:
             result["transport_error"] = transport_error
 

@@ -72,6 +72,7 @@ _ERROR_STATUS_BY_NAME = {
     "CAPABILITY_DENIED": 403,
     "APPROVAL_REQUIRED": 403,
     "DENIED": 403,
+    "DATA_ACCESS_DENIED": 403,
     "INVALID_REQUEST": 422,
     "RATE_LIMITED": 429,
     "UPSTREAM_RATE_LIMITED": 429,
@@ -111,9 +112,7 @@ def _safe_error_content(result: dict[str, Any], status_code: int) -> dict[str, A
 
 def _proxy_error_status(result: dict[str, Any]) -> int:
     status_code = result.get("status_code")
-    if isinstance(status_code, int) and status_code in _HTTP_ERROR_STATUSES:
-        return status_code
-    if isinstance(status_code, int) and 500 <= status_code <= 599:
+    if isinstance(status_code, int) and 400 <= status_code <= 599:
         return status_code
     return _ERROR_STATUS_BY_NAME.get(str(result.get("error")), 500)
 
@@ -534,6 +533,8 @@ def _parse_agent_context_header(
 
 def _require_context(ctx: dict) -> dict:
     """필수 필드 검증 — 없으면 401/400."""
+    if not isinstance(ctx, dict):
+        raise HTTPException(status_code=401, detail="invalid AgentContext")
     if not ctx.get("user_id"):
         raise HTTPException(status_code=401, detail="AgentContext user_id required (employee:...)")
     if not ctx.get("tenant_id"):
@@ -647,6 +648,8 @@ async def execute(
             x_credential_binding_id,
         )
     else:
+        if _is_production():
+            raise HTTPException(status_code=503, detail="signed context verifier unavailable")
         ctx = _parse_agent_context_header(
             x_agent_context, x_tenant_id, x_user_id, x_agent_id, x_session_id, x_trace_id, x_request_id
         )

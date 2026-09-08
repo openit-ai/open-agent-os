@@ -86,6 +86,14 @@ fallback_router = _fallback_mod.router
 
 app = FastAPI(title="Open Agent OS Admin API", version="0.1.3")
 
+
+def _is_production() -> bool:
+    """Use the same production aliases as the other admin security gates."""
+    for key in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT"):
+        if os.environ.get(key, "").strip().lower() in ("production", "prod"):
+            return True
+    return False
+
 # ── CORS — whitelist via OAOS_CORS_ORIGINS, deny * when credentials true ─
 _DEFAULT_CORS_ORIGINS = [
     "http://localhost:3012",
@@ -150,7 +158,7 @@ try:
     ensure_admin_tables = _pers_mod.ensure_admin_tables
     get_database_url = _pers_mod.get_database_url
 except ImportError as exc:
-    if os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod"):
+    if _is_production():
         raise RuntimeError("admin persistence module unavailable in production") from exc
     logger.warning("Admin persistence module unavailable; non-prod in-memory fallback enabled: %s", exc)
     ensure_admin_tables = None  # type: ignore
@@ -167,16 +175,18 @@ async def _admin_persistence_startup() -> None:
 
     In non-prod, falls back to in-memory and never raises.
     """
-    if ensure_admin_tables is not None:
-        is_prod = os.environ.get("OAOS_ENV", "").lower() == "production"
-        if is_prod:
-            # fail-closed: let RuntimeError propagate
+    if _is_production():
+        if ensure_admin_tables is None or get_database_url is None:
+            raise RuntimeError("admin persistence unavailable in production (fail-closed)")
+        if not get_database_url():
+            raise RuntimeError("DATABASE_URL/OAOS_DATABASE_URL required in production (fail-closed)")
+        # fail-closed: let persistence errors prevent the app from serving.
+        await ensure_admin_tables()
+    elif ensure_admin_tables is not None:
+        try:
             await ensure_admin_tables()
-        else:
-            try:
-                await ensure_admin_tables()
-            except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as exc:  # pragma: no cover - safety net
-                logger.warning("Admin persistence startup fallback: %s", exc)
+        except (ImportError, ModuleNotFoundError, SQLAlchemyError, OSError) as exc:  # pragma: no cover - safety net
+            logger.warning("Admin persistence startup fallback: %s", exc)
     # Required log line per spec (exact substring match)
     logger.info("Admin persistence: oaos ready (or in-memory fallback)")
 
