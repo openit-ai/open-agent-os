@@ -32,17 +32,47 @@ and the helper itself never raises.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 # Bounded LLM-facing text per attachment (matches ACP citation bound).
 MAX_EXTRACTED_CHARS = 20000
 # Conservative extraction input cap — the 500MB value is the durable store
 # bound, never an extraction/LLM bound. Files above this are metadata-only.
 MAX_EXTRACT_BYTES = 10 * 1024 * 1024
+
+
+def _mark_failure(ref: dict, error_code: str, status_code: int, reason: str) -> dict:
+    """Attach bounded, non-sensitive failure metadata to a degraded ref."""
+    out = dict(ref)
+    out["status"] = "degraded"
+    out["error_code"] = error_code
+    out["status_code"] = status_code
+    out["error_reason"] = reason
+    return out
+
+
+def _failure_ref(
+    ref: dict,
+    *,
+    tenant_id: str,
+    agent_principal: str,
+    error_code: str,
+    status_code: int,
+    reason: str,
+) -> dict:
+    return _mark_failure(
+        _sanitize_meta_ref(ref, None, tenant_id, agent_principal),
+        error_code,
+        status_code,
+        reason,
+    )
 
 
 def _max_chars() -> int:
@@ -93,7 +123,8 @@ def mask_secrets(text: str) -> str:
     try:
         masked = _SECRET_JSON_VALUE_RE.sub(lambda m: f"{m.group(1)}***{m.group(2)}", text or "")
         return _SECRET_VALUE_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", masked)
-    except Exception:
+    except (TypeError, ValueError, re.error) as exc:
+        logger.warning("attachment secret masking degraded: %s", type(exc).__name__)
         return text or ""
 
 
@@ -105,8 +136,8 @@ def _is_sensitive_ref(ref: dict) -> bool:
         name = str(ref.get("filename") or "")
         if name and _SENSITIVE_KEY_RE.search(name):
             return True
-    except Exception:
-        pass
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.warning("attachment metadata inspection degraded: %s", type(exc).__name__)
     return False
 
 
@@ -124,15 +155,16 @@ def _is_image_ref(ref: dict) -> bool:
         ext = Path(str(ref.get("filename") or "")).suffix.lower()
         if ext:
             return ext in _IMAGE_EXTS
-    except Exception:
-        pass
+    except (AttributeError, TypeError, ValueError, OSError) as exc:
+        logger.warning("attachment media type inspection degraded: %s", type(exc).__name__)
     return False
 
 
 def _safe_basename(name: Any) -> str:
     try:
         base = Path(str(name or "attachment")).name
-    except Exception:
+    except (OSError, TypeError, ValueError) as exc:
+        logger.debug("attachment filename normalization degraded: %s", type(exc).__name__)
         base = "attachment"
     base = re.sub(r"[\x00-\x1f\x7f]", "_", base).strip().strip(".") or "attachment"
     return base[:180]
@@ -151,8 +183,8 @@ def _ensure_wiki_on_path() -> None:
         pkg = _repo_root() / "packages" / "personal-wiki"
         if pkg.is_dir() and str(pkg) not in sys.path:
             sys.path.insert(0, str(pkg))
-    except Exception:
-        pass
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.debug("personal wiki path setup unavailable: %s", type(exc).__name__)
 
 
 def _load_vault_helpers() -> tuple[Any, Any, Any]:
@@ -165,8 +197,8 @@ def _load_vault_helpers() -> tuple[Any, Any, Any]:
             safe_join_vault as _join,
         )
         return _root, _join, _assert
-    except (ImportError, ModuleNotFoundError):
-        pass
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.debug("personal wiki vault package unavailable: %s", type(exc).__name__)
     try:  # file-location fallback (isolated, no package import)
         import importlib.util as _ilu
 
@@ -181,8 +213,8 @@ def _load_vault_helpers() -> tuple[Any, Any, Any]:
                     getattr(mod, "safe_join_vault", None),
                     getattr(mod, "assert_vault_path_safe", None),
                 )
-    except (ImportError, ModuleNotFoundError, FileNotFoundError):
-        pass
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, OSError, RuntimeError) as exc:
+        logger.debug("personal wiki vault fallback unavailable: %s", type(exc).__name__)
     return None, None, None
 
 
@@ -193,8 +225,8 @@ def _load_extractor():
         from personal_wiki.extractor import extract_text  # type: ignore
 
         return extract_text
-    except (ImportError, ModuleNotFoundError):
-        pass
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.debug("personal wiki extractor package unavailable: %s", type(exc).__name__)
     try:
         import importlib.util as _ilu
 
@@ -207,8 +239,8 @@ def _load_extractor():
                 fn = getattr(mod, "extract_text", None)
                 if callable(fn):
                     return fn
-    except (ImportError, ModuleNotFoundError, FileNotFoundError):
-        pass
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, OSError, RuntimeError) as exc:
+        logger.debug("personal wiki extractor fallback unavailable: %s", type(exc).__name__)
     return None
 
 
@@ -219,8 +251,8 @@ def _canonical_root(vault_root: Path | str | None) -> Path:
     if callable(get_root):
         try:
             return Path(str(get_root()))
-        except Exception:
-            pass
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("attachment vault root unavailable: %s", type(exc).__name__)
     for key in ("OAOS_WIKI_VAULT", "PERSONAL_WIKI_VAULT", "VAULT_ROOT"):
         val = os.getenv(key, "").strip()
         if val:
@@ -277,10 +309,12 @@ def _resolve_owner_file(
                 # allow non-existent targets: compare absolute normalized paths
                 if str(joined.resolve()) != str(owner_dir) and not str(joined.resolve()).startswith(str(owner_dir) + os.sep):
                     return None
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("attachment owner path validation degraded: %s", type(exc).__name__)
             return None
         return joined
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.warning("attachment owner path resolution degraded: %s", type(exc).__name__)
         return None
 
 
@@ -312,7 +346,8 @@ def _looks_owner_scoped(vp: Any, tenant_id: str, agent_principal: str) -> bool:
         if "/" in agent or "\\" in agent or ".." in agent:
             return False
         return norm == f"{tenant}/{agent}" or norm.startswith(f"{tenant}/{agent}/")
-    except Exception:
+    except (OSError, TypeError, ValueError) as exc:
+        logger.debug("attachment owner scope inspection degraded: %s", type(exc).__name__)
         return False
 
 
@@ -321,7 +356,8 @@ def _redacted_name(filename: Any) -> str:
     try:
         ext = Path(_safe_basename(filename)).suffix.lower()
         ext = re.sub(r"[^a-z0-9.]", "", ext)[:16]
-    except Exception:
+    except (OSError, TypeError, ValueError) as exc:
+        logger.debug("attachment redacted filename normalization degraded: %s", type(exc).__name__)
         ext = ""
     return f"redacted-attachment{ext}"
 
@@ -370,8 +406,9 @@ def _sanitize_image_ref(ref: dict, tenant_id: str = "", agent_principal: str = "
             out.pop("base64", None)
         out["extracted_text"] = None
         # never forward: url (Mattermost API), local_path (absolute), preview, token
-    except Exception:
-        pass
+    except (AttributeError, KeyError, OSError, TypeError, ValueError) as exc:
+        logger.warning("image attachment sanitization degraded: %s", type(exc).__name__)
+        out = {"kind": "image", "extracted_text": None}
     return out
 
 
@@ -411,7 +448,8 @@ def _sanitize_meta_ref(ref: dict, extracted_text: str | None, tenant_id: str = "
             # True would advertise unusable extraction.
             try:
                 _ext = Path(str(out.get("filename") or "")).suffix.lower()
-            except Exception:
+            except (OSError, TypeError, ValueError) as exc:
+                logger.debug("attachment extension normalization degraded: %s", type(exc).__name__)
                 _ext = ""
             out["extractable"] = bool(_ext and _ext in _EXTRACTABLE_EXTS)
         # never forward: preview/base64/data_url/url/local_path/token/raw bytes
@@ -419,19 +457,20 @@ def _sanitize_meta_ref(ref: dict, extracted_text: str | None, tenant_id: str = "
                      "localPath", "local_file", "file_path", "download_url",
                      "token", "absolute_path", "path", "bytes", "content"):
             out.pop(leak, None)
-    except Exception:
-        pass
+    except (AttributeError, KeyError, OSError, TypeError, ValueError) as exc:
+        logger.warning("attachment metadata sanitization degraded: %s", type(exc).__name__)
+        out = {"filename": "attachment", "vault_path": "", "extracted_text": None}
     return out
 
 
-def _extract_sync(resolved: Path, max_chars: int) -> str | None:
+def _extract_sync(resolved: Path, max_chars: int) -> tuple[str | None, str | None, int | None]:
     try:
         fn = _load_extractor()
         if not callable(fn):
-            return None
+            return None, "EXTRACTOR_UNAVAILABLE", 503
         text = fn(resolved, max_chars)
         if not isinstance(text, str) or not text.strip():
-            return None
+            return None, "EMPTY_EXTRACTION", 422
         # Skip extractor stub/error markers — metadata-only instead.
         # Match known marker prefixes only: legitimate content (JSON arrays,
         # markdown links, …) may start with "[" and must stay usable.
@@ -447,10 +486,21 @@ def _extract_sync(resolved: Path, max_chars: int) -> str | None:
             "[LLM Vision",
         )
         if _stripped.startswith(_stub_prefixes):
-            return None
-        return mask_secrets(_stripped)[:max_chars] or None
-    except Exception:
-        return None
+            if _stripped.startswith(("[unsupported extension", "[unsupported ")):
+                return None, "UNSUPPORTED_FORMAT", 422
+            if _stripped.startswith("[file not found"):
+                return None, "ATTACHMENT_MISSING", 404
+            return None, "EXTRACTION_FAILED", 503
+        masked = mask_secrets(_stripped)[:max_chars] or None
+        return masked, None if masked else "EMPTY_EXTRACTION", None if masked else 422
+    except FileNotFoundError:
+        return None, "ATTACHMENT_MISSING", 404
+    except (PermissionError, OSError, ImportError, ModuleNotFoundError, RuntimeError, SyntaxError) as exc:
+        logger.warning("attachment extraction backend failed: %s", type(exc).__name__)
+        return None, "EXTRACTION_FAILED", 503
+    except (TypeError, ValueError) as exc:
+        logger.warning("attachment extraction input invalid: %s", type(exc).__name__)
+        return None, "EXTRACTION_INVALID", 422
 
 
 async def enrich_attachment_refs(
@@ -469,34 +519,82 @@ async def enrich_attachment_refs(
     """
     refs = attachment_refs or []
     if not isinstance(refs, list):
-        return []
+        return [_failure_ref(
+            {},
+            tenant_id=tenant_id,
+            agent_principal=agent_principal,
+            error_code="INVALID_ATTACHMENT",
+            status_code=422,
+            reason="attachment metadata must be a list",
+        )]
     # Hard caps: caller-supplied bounds can only lower, never raise.
     try:
         limit_chars = _max_chars() if max_chars is None else max(1, min(MAX_EXTRACTED_CHARS, int(max_chars)))
-    except Exception:
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.warning("attachment character limit invalid: %s", type(exc).__name__)
         limit_chars = _max_chars()
     try:
         limit_bytes = _max_bytes() if max_extract_bytes is None else max(1, min(MAX_EXTRACT_BYTES, int(max_extract_bytes)))
-    except Exception:
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.warning("attachment byte limit invalid: %s", type(exc).__name__)
         limit_bytes = _max_bytes()
+    root_error: BaseException | None = None
     try:
         root = _canonical_root(vault_root)
-    except OSError:
-        root = Path.home() / ".open-agent-os" / "wiki-vault"
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.warning("attachment vault root unavailable: %s", type(exc).__name__)
+        root = None
+        root_error = exc
 
     enriched: list[dict] = []
     for ref in refs:
         try:
             if not isinstance(ref, dict):
+                enriched.append(_failure_ref(
+                    {},
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="INVALID_ATTACHMENT",
+                    status_code=422,
+                    reason="attachment metadata must be an object",
+                ))
+                continue
+            if not (ref.get("attachment_id") or ref.get("file_id") or ref.get("vault_path")):
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="INVALID_ATTACHMENT",
+                    status_code=422,
+                    reason="attachment reference is missing an identifier",
+                ))
+                continue
+            if not tenant_id or not agent_principal:
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="ATTACHMENT_AUTH_REQUIRED",
+                    status_code=401,
+                    reason="attachment owner context is required",
+                ))
                 continue
             # Image refs: preserve for the ACP image gate (no extraction).
             # Owner-unverified image refs lose their bytes (metadata-only).
             if _is_image_ref(ref):
-                enriched.append(_sanitize_image_ref(ref, tenant_id, agent_principal))
+                image = _sanitize_image_ref(ref, tenant_id, agent_principal)
+                if ref.get("vault_path") and not _looks_owner_scoped(ref.get("vault_path"), tenant_id, agent_principal):
+                    image = _mark_failure(image, "ATTACHMENT_ACCESS_DENIED", 403, "attachment owner scope denied")
+                enriched.append(image)
                 continue
             # Sensitive refs: metadata-only, never extracted; names redacted.
             if _is_sensitive_ref(ref):
-                enriched.append(_sanitize_meta_ref(ref, None, tenant_id, agent_principal))
+                enriched.append(_mark_failure(
+                    _sanitize_meta_ref(ref, None, tenant_id, agent_principal),
+                    "SENSITIVE_ATTACHMENT",
+                    403,
+                    "sensitive attachment extraction is not permitted",
+                ))
                 continue
             # Durable-store gate: extraction (and prefilled text) requires
             # stored=True. Fallback/over-limit refs carry a logical
@@ -512,37 +610,147 @@ async def enrich_attachment_refs(
                 if _looks_owner_scoped(ref.get("vault_path"), tenant_id, agent_principal):
                     enriched.append(_sanitize_meta_ref(ref, mask_secrets(pre.strip())[:limit_chars], tenant_id, agent_principal))
                 else:
-                    enriched.append(_sanitize_meta_ref(ref, None, tenant_id, agent_principal))
+                    enriched.append(_failure_ref(
+                        ref,
+                        tenant_id=tenant_id,
+                        agent_principal=agent_principal,
+                        error_code="ATTACHMENT_ACCESS_DENIED",
+                        status_code=403,
+                        reason="attachment owner scope denied",
+                    ))
                 continue
             # Only extractable formats proceed; the rest stay metadata-only.
             ext = Path(str(ref.get("filename") or "")).suffix.lower()
             if ext not in _EXTRACTABLE_EXTS:
-                enriched.append(_sanitize_meta_ref(ref, None, tenant_id, agent_principal))
+                enriched.append(_mark_failure(
+                    _sanitize_meta_ref(ref, None, tenant_id, agent_principal),
+                    "UNSUPPORTED_FORMAT",
+                    422,
+                    "attachment format is not extractable",
+                ))
+                continue
+            if root is None:
+                logger.warning("attachment extraction root unavailable: %s", type(root_error).__name__ if root_error else "unknown")
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="ATTACHMENT_BACKEND_UNAVAILABLE",
+                    status_code=503,
+                    reason="attachment storage unavailable",
+                ))
                 continue
             resolved = _resolve_owner_file(
                 str(ref.get("vault_path") or ""), tenant_id, agent_principal, root
             )
             if resolved is None:
-                enriched.append(_sanitize_meta_ref(ref, None, tenant_id, agent_principal))
+                path = str(ref.get("vault_path") or "")
+                normalized = path.replace("\\", "/")
+                malformed_path = (
+                    not path
+                    or normalized.startswith("/")
+                    or "://" in normalized
+                    or ".." in Path(normalized).parts
+                    or ".." in normalized.split("/")
+                )
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="INVALID_ATTACHMENT_PATH" if malformed_path else "ATTACHMENT_ACCESS_DENIED",
+                    status_code=422 if malformed_path else 403,
+                    reason="invalid attachment path" if malformed_path else "attachment owner scope denied",
+                ))
                 continue
             try:
                 if not resolved.is_file():
-                    enriched.append(_sanitize_meta_ref(ref, None, tenant_id, agent_principal))
+                    enriched.append(_failure_ref(
+                        ref,
+                        tenant_id=tenant_id,
+                        agent_principal=agent_principal,
+                        error_code="ATTACHMENT_MISSING",
+                        status_code=404,
+                        reason="attachment file not found",
+                    ))
                     continue
                 if resolved.stat().st_size > limit_bytes:
-                    enriched.append(_sanitize_meta_ref(ref, None, tenant_id, agent_principal))
+                    enriched.append(_failure_ref(
+                        ref,
+                        tenant_id=tenant_id,
+                        agent_principal=agent_principal,
+                        error_code="ATTACHMENT_TOO_LARGE",
+                        status_code=422,
+                        reason="attachment exceeds extraction limit",
+                    ))
                     continue
-            except Exception:
-                enriched.append(_sanitize_meta_ref(ref, None, tenant_id, agent_principal))
+            except FileNotFoundError:
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="ATTACHMENT_MISSING",
+                    status_code=404,
+                    reason="attachment file not found",
+                ))
+                continue
+            except (PermissionError, OSError, RuntimeError) as exc:
+                logger.warning("attachment filesystem unavailable: %s", type(exc).__name__)
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="ATTACHMENT_BACKEND_UNAVAILABLE",
+                    status_code=503,
+                    reason="attachment storage unavailable",
+                ))
                 continue
             try:
-                text = await asyncio.to_thread(_extract_sync, resolved, limit_chars)
-            except Exception:
-                text = None
-            enriched.append(_sanitize_meta_ref(ref, text, tenant_id, agent_principal))
-        except Exception:
-            try:
-                enriched.append(_sanitize_meta_ref(ref if isinstance(ref, dict) else {}, None, tenant_id, agent_principal))
-            except Exception:
+                text, error_code, status_code = await asyncio.to_thread(_extract_sync, resolved, limit_chars)
+            except FileNotFoundError:
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="ATTACHMENT_MISSING",
+                    status_code=404,
+                    reason="attachment file not found",
+                ))
                 continue
+            except (PermissionError, OSError, RuntimeError, SyntaxError, TypeError, ValueError) as exc:
+                logger.warning("attachment extraction failed: %s", type(exc).__name__)
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code="EXTRACTION_FAILED",
+                    status_code=503,
+                    reason="attachment extraction unavailable",
+                ))
+                continue
+            if error_code:
+                enriched.append(_failure_ref(
+                    ref,
+                    tenant_id=tenant_id,
+                    agent_principal=agent_principal,
+                    error_code=error_code,
+                    status_code=status_code or 503,
+                    reason={
+                        "UNSUPPORTED_FORMAT": "attachment format is not extractable",
+                        "ATTACHMENT_MISSING": "attachment file not found",
+                        "EMPTY_EXTRACTION": "attachment extraction returned no content",
+                        "EXTRACTOR_UNAVAILABLE": "attachment extractor unavailable",
+                    }.get(error_code, "attachment extraction failed"),
+                ))
+            else:
+                enriched.append(_sanitize_meta_ref(ref, text, tenant_id, agent_principal))
+        except (AttributeError, KeyError, OSError, RuntimeError, SyntaxError, TypeError, ValueError) as exc:
+            logger.warning("attachment item processing failed: %s", type(exc).__name__)
+            enriched.append(_failure_ref(
+                ref if isinstance(ref, dict) else {},
+                tenant_id=tenant_id,
+                agent_principal=agent_principal,
+                error_code="ATTACHMENT_PROCESSING_FAILED",
+                status_code=503,
+                reason="attachment processing unavailable",
+            ))
     return enriched
