@@ -5,11 +5,35 @@ Skills: get_my_profile, get_response_policy, get_work_preference,
 """
 from __future__ import annotations
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _REGISTERED = False
+
+
+class SkillError(RuntimeError):
+    """Base error for adaptive-profile skill discovery and registration."""
+
+    status_code = 503
+
+
+class SkillValidationError(SkillError):
+    """Skill parameters or metadata are malformed."""
+
+    status_code = 422
+
+
+class SkillUnavailableError(SkillError):
+    """A required skill registry or storage backend is unavailable."""
+
+
+def _is_production() -> bool:
+    return any(
+        os.environ.get(key, "").strip().lower() in ("production", "prod")
+        for key in ("OAOS_ENV", "ENV", "OAOS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT")
+    )
 
 SKILL_NAMES = ["get_my_profile", "get_response_policy", "get_work_preference", "explain_my_profile", "record_explicit_preference", "reset_my_profile"]
 
@@ -27,28 +51,27 @@ def _check_self_scope(params: dict[str, Any] | None, session: Any | None) -> tup
     """Return (allowed, reason). If session is None, allow (no isolation context)."""
     if session is None:
         return True, ""
-    try:
-        # session may be SessionRecord or dict
-        if isinstance(session, dict):
-            sess_tenant = session.get("tenant_id")
-            sess_user = session.get("user_id")
-        else:
-            sess_tenant = getattr(session, "tenant_id", None)
-            sess_user = getattr(session, "user_id", None)
-        # params may be dict with tenant_id/user_id
-        p = params or {}
-        req_tenant = p.get("tenant_id") if isinstance(p, dict) else None
-        req_user = p.get("user_id") if isinstance(p, dict) else None
-        # if params missing tenant/user, fallback to session only (allow)
-        if req_tenant is None and req_user is None:
-            return True, ""
-        if req_tenant is not None and sess_tenant is not None and str(req_tenant) != str(sess_tenant):
-            return False, f"tenant mismatch {req_tenant} != {sess_tenant}"
-        if req_user is not None and sess_user is not None and str(req_user) != str(sess_user):
-            return False, f"user mismatch {req_user} != {sess_user}"
+    # session may be SessionRecord or dict; unsupported shapes are validation errors.
+    if isinstance(session, dict):
+        sess_tenant = session.get("tenant_id")
+        sess_user = session.get("user_id")
+    elif session is not None:
+        sess_tenant = getattr(session, "tenant_id", None)
+        sess_user = getattr(session, "user_id", None)
+    else:
+        sess_tenant = sess_user = None
+    p = params or {}
+    if not isinstance(p, dict):
+        raise SkillValidationError("skill parameters must be an object")
+    req_tenant = p.get("tenant_id")
+    req_user = p.get("user_id")
+    if req_tenant is None and req_user is None:
         return True, ""
-    except Exception as e:
-        return False, str(e)
+    if req_tenant is not None and sess_tenant is not None and str(req_tenant) != str(sess_tenant):
+        return False, f"tenant mismatch {req_tenant} != {sess_tenant}"
+    if req_user is not None and sess_user is not None and str(req_user) != str(sess_user):
+        return False, f"user mismatch {req_user} != {sess_user}"
+    return True, ""
 
 def _make_handler(skill_name: str, raise_on_denied: bool = False):
     async def handler(params: dict[str, Any] | None = None, session: Any | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -64,10 +87,6 @@ def _make_handler(skill_name: str, raise_on_denied: bool = False):
                 # check if this alt looks like session (has tenant/user)
                 # distinguish: params dict already used, so this second dict is likely session
                 session = alt_session
-        # also handle case where params is passed as positional action and session is second positional via kwargs 'params'
-        if isinstance(params, dict) and session is None:
-            # maybe session was passed as kwargs['params'] when action was used
-            pass
         # normalize params: could be passed as first positional dict or via kwargs
         if params is None and kwargs:
             # allow calling with tenant_id/user_id as kwargs directly
@@ -76,10 +95,6 @@ def _make_handler(skill_name: str, raise_on_denied: bool = False):
         # session may be passed as second positional via kwargs? already handled
         if session is None:
             session = kwargs.get("session")
-            # also check if params was actually session when no params
-            if session is None and isinstance(params, dict) and "session_id" in params:
-                # treat as session
-                pass
         # handle case where session is passed as dict via kwargs 'params' when action used
         if session is None and "params" in kwargs and isinstance(kwargs["params"], dict):
             cand = kwargs["params"]
@@ -90,7 +105,7 @@ def _make_handler(skill_name: str, raise_on_denied: bool = False):
         # support alternative call style: handler({'tenant_id':...}, sess) where sess is second positional
         # In that case session is already provided as second arg via params? But our signature has params first, session second.
         # The test calls h({'tenant_id':'t1','user_id':'u2'}, session=sess) -> params dict, session kw
-        allowed, reason = _check_self_scope(params if isinstance(params, dict) else {}, session)
+        allowed, reason = _check_self_scope(params, session)
         if not allowed:
             if raise_on_denied:
                 raise PermissionError(f"self-scope denied: {reason}")
@@ -98,38 +113,28 @@ def _make_handler(skill_name: str, raise_on_denied: bool = False):
         # For allowed, return minimal success stub (tests for allowed path check evidence)
         # For get_my_profile: try DB fetch if possible, else stub
         if skill_name == "get_my_profile":
-            try:
-                # attempt DB fetch if session available
-                if session is not None:
-                    if isinstance(session, dict):
-                        tenant_id = str(session.get("tenant_id","") or (params or {}).get("tenant_id", ""))
-                        user_id = str(session.get("user_id","") or (params or {}).get("user_id", ""))
-                    else:
-                        tenant_id = str(getattr(session, "tenant_id", "") or (params or {}).get("tenant_id", ""))
-                        user_id = str(getattr(session, "user_id", "") or (params or {}).get("user_id", ""))
-                    # try to load profile synchronously via async helper? Keep stub to avoid blocking
-                    return {"status": "ok", "skill": skill_name, "tenant_id": tenant_id, "user_id": user_id, "profile": {"tenant_id": tenant_id, "user_id": user_id}}
-            except Exception:
-                pass
+            if session is not None:
+                if isinstance(session, dict):
+                    tenant_id = str(session.get("tenant_id", "") or (params or {}).get("tenant_id", ""))
+                    user_id = str(session.get("user_id", "") or (params or {}).get("user_id", ""))
+                else:
+                    tenant_id = str(getattr(session, "tenant_id", "") or (params or {}).get("tenant_id", ""))
+                    user_id = str(getattr(session, "user_id", "") or (params or {}).get("user_id", ""))
+                return {"status": "ok", "skill": skill_name, "tenant_id": tenant_id, "user_id": user_id, "profile": {"tenant_id": tenant_id, "user_id": user_id}}
             return {"status": "ok", "skill": skill_name}
         elif skill_name == "get_response_policy":
-            try:
-                if isinstance(session, dict):
-                    tenant_id = str(session.get("tenant_id","") if session else (params or {}).get("tenant_id", ""))
-                    user_id = str(session.get("user_id","") if session else (params or {}).get("user_id", ""))
-                else:
-                    tenant_id = str(getattr(session, "tenant_id", "") if session else (params or {}).get("tenant_id", ""))
-                    user_id = str(getattr(session, "user_id", "") if session else (params or {}).get("user_id", ""))
-                task_type = (params or {}).get("task_type", "general_chat")
-                from .engine import DEFAULT_POLICY
-                policy = dict(DEFAULT_POLICY)
-                # reflect stored explicit preference for test
-                v = _get_pref(tenant_id, user_id, "verbosity")
-                if v is not None:
-                    policy["verbosity"] = v
-                return {"status": "ok", "skill": skill_name, "policy": policy, "profile_version": 0}
-            except Exception:
-                return {"status": "ok", "skill": skill_name, "policy": {}}
+            if isinstance(session, dict):
+                tenant_id = str(session.get("tenant_id", "") if session else (params or {}).get("tenant_id", ""))
+                user_id = str(session.get("user_id", "") if session else (params or {}).get("user_id", ""))
+            else:
+                tenant_id = str(getattr(session, "tenant_id", "") if session else (params or {}).get("tenant_id", ""))
+                user_id = str(getattr(session, "user_id", "") if session else (params or {}).get("user_id", ""))
+            from .engine import DEFAULT_POLICY
+            policy = dict(DEFAULT_POLICY)
+            v = _get_pref(tenant_id, user_id, "verbosity")
+            if v is not None:
+                policy["verbosity"] = v
+            return {"status": "ok", "skill": skill_name, "policy": policy, "profile_version": 0}
         elif skill_name == "get_work_preference":
             return {"status": "ok", "skill": skill_name, "preferences": {}}
         elif skill_name == "explain_my_profile":
@@ -144,36 +149,33 @@ def _make_handler(skill_name: str, raise_on_denied: bool = False):
             return {"status": "ok", "skill": skill_name, "explanation": f"Profile {tenant_id}/{user_id} explanation verbosity {v}"}
         elif skill_name == "record_explicit_preference":
             # store and echo
-            try:
-                p = params or {}
-                # determine tenant/user from params or session
-                if isinstance(session, dict):
-                    tenant_id = str(session.get("tenant_id","") or p.get("tenant_id",""))
-                    user_id = str(session.get("user_id","") or p.get("user_id",""))
-                else:
-                    tenant_id = str(getattr(session, "tenant_id","") if session else p.get("tenant_id",""))
-                    user_id = str(getattr(session, "user_id","") if session else p.get("user_id",""))
-                key = p.get("key") or kwargs.get("key")
-                value = p.get("value") or kwargs.get("value")
-                scope = p.get("scope") or kwargs.get("scope") or "global"
-                if key:
-                    _store_pref(tenant_id, user_id, str(key), value)
-                    return {"status": "ok", "skill": skill_name, "key": str(key), "value": str(value), "scope": scope, "tenant_id": tenant_id, "user_id": user_id}
-            except Exception:
-                pass
-            return {"status": "ok", "skill": skill_name, "recorded": True}
+            p = params or {}
+            if not isinstance(p, dict):
+                raise SkillValidationError("skill parameters must be an object")
+            if isinstance(session, dict):
+                tenant_id = str(session.get("tenant_id", "") or p.get("tenant_id", ""))
+                user_id = str(session.get("user_id", "") or p.get("user_id", ""))
+            else:
+                tenant_id = str(getattr(session, "tenant_id", "") if session else p.get("tenant_id", ""))
+                user_id = str(getattr(session, "user_id", "") if session else p.get("user_id", ""))
+            key = p.get("key") or kwargs.get("key")
+            value = p.get("value") or kwargs.get("value")
+            scope = p.get("scope") or kwargs.get("scope") or "global"
+            if not isinstance(key, str) or not key.strip():
+                raise SkillValidationError("preference key is required")
+            _store_pref(tenant_id, user_id, key.strip(), value)
+            return {"status": "ok", "skill": skill_name, "key": key.strip(), "value": str(value), "scope": scope, "tenant_id": tenant_id, "user_id": user_id}
         elif skill_name == "reset_my_profile":
-            try:
-                p = params or {}
-                if isinstance(session, dict):
-                    tenant_id = str(session.get("tenant_id","") if session else p.get("tenant_id",""))
-                    user_id = str(session.get("user_id","") if session else p.get("user_id",""))
-                else:
-                    tenant_id = str(getattr(session, "tenant_id","") if session else p.get("tenant_id",""))
-                    user_id = str(getattr(session, "user_id","") if session else p.get("user_id",""))
-                _clear_prefs(tenant_id, user_id)
-            except Exception:
-                pass
+            p = params or {}
+            if not isinstance(p, dict):
+                raise SkillValidationError("skill parameters must be an object")
+            if isinstance(session, dict):
+                tenant_id = str(session.get("tenant_id", "") if session else p.get("tenant_id", ""))
+                user_id = str(session.get("user_id", "") if session else p.get("user_id", ""))
+            else:
+                tenant_id = str(getattr(session, "tenant_id", "") if session else p.get("tenant_id", ""))
+                user_id = str(getattr(session, "user_id", "") if session else p.get("user_id", ""))
+            _clear_prefs(tenant_id, user_id)
             return {"status": "reset", "skill": skill_name, "reset": True}
         return {"status": "ok", "skill": skill_name}
     # allow both await and non-await? Make it async; tests use await
@@ -200,72 +202,100 @@ def _clear_prefs(tenant_id: str, user_id: str):
 def get_handler(name: str):
     return _HANDLERS.get(name)
 
-def _register_to_registry(reg: Any) -> bool:
-    """Try to register all PROFILE_SKILLS to reg, handling SkillRegistry variants. Returns True if attempted."""
+_REGISTRATION_SCHEMA_ERRORS = (AttributeError, KeyError, TypeError, ValueError)
+
+
+def _skill_error(skill_id: str, exc: BaseException) -> str:
+    """Return safe per-item metadata without exposing registry internals."""
+    return f"{skill_id}: {type(exc).__name__}"
+
+
+def _validate_skill_metadata(skill: Any) -> None:
+    if not isinstance(skill, dict):
+        raise SkillValidationError("skill manifest must be an object")
+    for field in ("id", "name", "description", "kind"):
+        value = skill.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise SkillValidationError(f"skill manifest field {field} is required")
+    if skill["kind"] != "adaptive_profile":
+        raise SkillValidationError("unsupported adaptive profile skill kind")
+
+
+def _register_to_registry(reg: Any) -> tuple[bool, list[str]]:
+    """Register skills, falling back only for known registry schema variants."""
     if reg is None:
-        return False
+        return False, ["registry: unavailable"]
     success = False
-    for sk in PROFILE_SKILLS:
-        # use raising handler for registry (expects PermissionError), non-raising for direct get_handler
-        handler = _REGISTRY_HANDLERS.get(sk["id"]) or _REGISTRY_HANDLERS.get(sk["name"])
-        # fallback to non-raising if not found
-        if handler is None:
-            handler = _HANDLERS.get(sk["id"]) or _HANDLERS.get(sk["name"])
-        try:
-            # SkillRegistry with load(manifest, handler)
-            if hasattr(reg, "load"):
+    errors: list[str] = []
+    for skill in PROFILE_SKILLS:
+        _validate_skill_metadata(skill)
+        skill_id = str(skill["id"])
+        handler = _REGISTRY_HANDLERS.get(skill_id) or _HANDLERS.get(skill_id)
+        registered = False
+        item_error: str | None = None
+
+        if hasattr(reg, "load"):
+            try:
+                reg.load(skill, handler)  # type: ignore
+                registered = True
+            except _REGISTRATION_SCHEMA_ERRORS as first_error:
                 try:
-                    reg.load(sk, handler)  # type: ignore
-                    success = True
-                    continue
-                except Exception:
-                    # try load with SkillManifest
-                    try:
-                        from runtime_adapter.skills import SkillManifest  # type: ignore
-                        m = SkillManifest.from_dict(sk)
-                        reg.load(m, handler)  # type: ignore
-                        success = True
-                        continue
-                    except Exception:
-                        pass
-            if hasattr(reg, "register"):
-                try:
-                    # some registries expect dict
-                    reg.register(sk)  # type: ignore
-                    # bind handler if possible
-                    if hasattr(reg, "bind_handler"):
-                        try:
-                            reg.bind_handler(sk["id"], handler)  # type: ignore
-                        except Exception:
-                            pass
-                    elif hasattr(reg, "_handlers"):
-                        try:
-                            reg._handlers[sk["id"]] = handler  # type: ignore
-                        except Exception:
-                            pass
-                    success = True
-                    continue
-                except Exception:
-                    pass
-            if hasattr(reg, "add_skill"):
-                reg.add_skill(sk)  # type: ignore
-                success = True
-                continue
-            if hasattr(reg, "add"):
-                reg.add(sk)  # type: ignore
-                success = True
-                continue
-            if isinstance(reg, dict):
-                reg[sk["id"]] = sk
-                success = True
-                continue
-        except Exception:
-            continue
-    return success
+                    from runtime_adapter.skills import SkillManifest  # type: ignore
+                    manifest = SkillManifest.from_dict(skill)
+                    reg.load(manifest, handler)  # type: ignore
+                    registered = True
+                except (ImportError, ModuleNotFoundError) as exc:
+                    item_error = _skill_error(skill_id, exc)
+                except _REGISTRATION_SCHEMA_ERRORS as exc:
+                    item_error = _skill_error(skill_id, exc)
+                if not registered and item_error is None:
+                    item_error = _skill_error(skill_id, first_error)
+
+        if not registered and hasattr(reg, "register"):
+            try:
+                reg.register(skill)  # type: ignore
+                if hasattr(reg, "bind_handler"):
+                    reg.bind_handler(skill_id, handler)  # type: ignore
+                elif hasattr(reg, "_handlers"):
+                    reg._handlers[skill_id] = handler  # type: ignore
+                registered = True
+            except _REGISTRATION_SCHEMA_ERRORS as exc:
+                item_error = _skill_error(skill_id, exc)
+
+        if not registered and hasattr(reg, "add_skill"):
+            try:
+                reg.add_skill(skill)  # type: ignore
+                registered = True
+            except _REGISTRATION_SCHEMA_ERRORS as exc:
+                item_error = _skill_error(skill_id, exc)
+
+        if not registered and hasattr(reg, "add"):
+            try:
+                reg.add(skill)  # type: ignore
+                registered = True
+            except _REGISTRATION_SCHEMA_ERRORS as exc:
+                item_error = _skill_error(skill_id, exc)
+
+        if not registered and isinstance(reg, dict):
+            try:
+                reg[skill_id] = skill
+                registered = True
+            except (TypeError, KeyError) as exc:
+                item_error = _skill_error(skill_id, exc)
+
+        if registered:
+            success = True
+        else:
+            message = item_error or f"{skill_id}: unsupported registry interface"
+            errors.append(message)
+            logger.warning("adaptive profile skill registration degraded: %s", message)
+    return success, errors
 
 def register_profile_skills(registry: Any | None = None) -> Any:
     global _REGISTERED
     # If caller supplied a fresh registry, always attempt to populate it even when cached
+    for skill in PROFILE_SKILLS:
+        _validate_skill_metadata(skill)
     skills_list = [s["id"] for s in PROFILE_SKILLS]
     # helper to create result that supports both: 'skill in result' and result['registered']
     class SkillsResult(dict):
@@ -280,38 +310,24 @@ def register_profile_skills(registry: Any | None = None) -> Any:
         def __iter__(self):
             # iterating should yield skills to satisfy set(result) contains skills
             return iter(self._skills)
-    def _make_result(cached: bool = False, errors: list[str] | None = None):
-        d = SkillsResult({"registered": True, "skills": skills_list, "errors": errors or []})
+    def _make_result(registered: bool, cached: bool = False, errors: list[str] | None = None):
+        error_list = errors or []
+        d = SkillsResult({"registered": registered, "skills": skills_list, "errors": error_list, "degraded": bool(error_list) and not _is_production()})
         if cached:
             d["cached"] = True
         # also allow iteration via skills list already
         return d
     if _REGISTERED and registry is None:
-        return _make_result(cached=True)
+        return _make_result(registered=True, cached=True)
     if _REGISTERED and registry is not None:
-        try:
-            _register_to_registry(registry)
-        except Exception:
-            pass
-        return _make_result(cached=True)
+        ok, errors = _register_to_registry(registry)
+        if errors and _is_production():
+            raise SkillUnavailableError("adaptive profile skill registry unavailable")
+        return _make_result(registered=ok, cached=True, errors=errors)
     errors: list[str] = []
     if registry is not None:
-        try:
-            ok = _register_to_registry(registry)
-            if not ok:
-                # fallback generic
-                for sk in PROFILE_SKILLS:
-                    try:
-                        if hasattr(registry, "register"):
-                            registry.register(sk)  # type: ignore
-                        elif hasattr(registry, "add_skill"):
-                            registry.add_skill(sk)  # type: ignore
-                        elif isinstance(registry, dict):
-                            registry[sk["id"]] = sk
-                    except Exception as e:
-                        errors.append(f"supplied registry {sk['id']}: {e}")
-        except Exception as e:
-            errors.append(str(e))
+        _, supplied_errors = _register_to_registry(registry)
+        errors.extend(f"supplied registry: {message}" for message in supplied_errors)
     _candidates = [
         ("control_plane.skills", "registry"),
         ("control_plane.skill_registry", "registry"),
@@ -326,36 +342,32 @@ def register_profile_skills(registry: Any | None = None) -> Any:
             reg = getattr(mod, attr, None)
             if reg is None:
                 continue
-            try:
-                _register_to_registry(reg)
-            except Exception as e:
-                errors.append(f"{mod_name}: {e}")
-        except ModuleNotFoundError:
-            continue
-        except Exception as e:
-            errors.append(f"{mod_name}: {e}")
-            continue
+            _, registry_errors = _register_to_registry(reg)
+            errors.extend(f"{mod_name}: {message}" for message in registry_errors)
+        except ModuleNotFoundError as exc:
+            module_root = mod_name.split(".", 1)[0]
+            if exc.name and exc.name not in (module_root, mod_name):
+                errors.append(f"{mod_name}: {type(exc).__name__}")
+        except ImportError as exc:
+            errors.append(f"{mod_name}: {type(exc).__name__}")
     # Also try runtime_adapter default_registry directly (common path)
     try:
         from runtime_adapter.skills import default_registry as _dr  # type: ignore
-        try:
-            _register_to_registry(_dr)
-        except Exception:
-            pass
-    except Exception:
-        pass
-    _REGISTERED = True
+        _, registry_errors = _register_to_registry(_dr)
+        errors.extend(f"runtime_adapter.skills: {message}" for message in registry_errors)
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.debug("runtime_adapter skill registry unavailable: %s", type(exc).__name__)
+    _REGISTERED = not errors
     if errors:
-        logger.debug(f"register_profile_skills partial errors: {errors}")
+        logger.warning("adaptive_profile skill registration has %d errors", len(errors))
+        if _is_production():
+            raise SkillUnavailableError("adaptive profile skill registry unavailable")
     else:
         logger.info("adaptive_profile skills registered: %s", [s["id"] for s in PROFILE_SKILLS])
-    return _make_result(errors=errors)
+    return _make_result(registered=not errors, errors=errors)
 
 def ensure_profile_skills_registered() -> dict[str, Any]:
     return register_profile_skills()
 
-# auto-register on import (best-effort, never raises)
-try:
-    register_profile_skills()
-except Exception:
-    pass
+# Auto-register on import. Required registry/runtime failures must remain visible.
+register_profile_skills()
