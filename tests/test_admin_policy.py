@@ -33,6 +33,9 @@ auth_mod = _load_admin_module("admin_auth_policy", "auth.py", bare_alias="auth")
 infra_mod = _load_admin_module("admin_infra_policy", "infra.py", bare_alias="infra")
 # policy needs auth already loaded
 policy_mod = _load_admin_module("admin_policy_mod", "policy.py")
+sys.modules["admin_console.backend.auth"] = auth_mod
+sys.modules["admin_console.backend.infra"] = infra_mod
+sys.modules["admin_console.backend.policy"] = policy_mod
 _app_mod = _load_admin_module("admin_app_policy", "app.py")
 if str(BACKEND) in sys.path:
     sys.path.remove(str(BACKEND))
