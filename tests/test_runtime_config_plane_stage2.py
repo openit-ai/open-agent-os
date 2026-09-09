@@ -17,6 +17,8 @@ BACKEND = ROOT / "admin-console" / "backend"
 CP_ROOT = ROOT / "control-plane"
 
 # ensure control-plane on path
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
 for p in [str(CP_ROOT), str(ROOT/"security"/"policy-engine"), str(ROOT/"security"/"audit")]:
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -262,22 +264,29 @@ def test_stage2_db_outage_prod_503():
     ac.post("/v1/runtime/config/snapshot", json={"tenant_id":"default"}, headers=hdr)
     # now simulate DB outage by pointing to invalid url in production
     orig=os.environ.get("OAOS_DATABASE_URL")
-    os.environ["OAOS_ENV"]="production"
     os.environ["OAOS_DATABASE_URL"]="postgresql://invalid:invalid@127.0.0.1:1/oaos"
     os.environ["DATABASE_URL"]="postgresql://invalid:invalid@127.0.0.1:1/oaos"
+    # Import CP while its test-only Redis seam is permitted, then switch the
+    # request path to production so this test isolates runtime-config DB fail-closed behavior.
+    os.environ["OAOS_ALLOW_TEST_FALLBACK"]="1"
+    os.environ["OAOS_TEST_ALLOW_PLAINTEXT"]="1"
+    os.environ["ADMIN_JWT_SECRET"]="runtime-config-test-jwt-key-0123456789"
+    os.environ["OAOS_RUNTIME_CONFIG_SIGNING_KEY"]="runtime-config-test-signing-key-0123456789"
     try:
         # In prod, missing published config should 503 not 404 (fail-closed)
         # After outage, CP status should 503 if no published snapshot
         cp_app, _ = _cp_client()
+        from control_plane.auth import issue_user_jwt
+        token = issue_user_jwt("employee:alice", tenant_id="default")
+        os.environ["OAOS_ENV"]="production"
         cc=TestClient(cp_app)
-        os.environ["OAOS_TEST_ALLOW_PLAINTEXT"]="1"
         # Purge admin in-memory so fetch must go to DB which is now unreachable
         try:
             import admin_console.backend.runtime_config as rc2
             rc2._snapshots.clear(); rc2._published.clear()
         except Exception:
             pass
-        r=cc.get("/v1/runtime-config/status", headers={"X-User-Id":"employee:alice","X-Tenant-Id":"default"})
+        r=cc.get("/v1/runtime-config/status", headers={"Authorization":f"Bearer {token}","X-User-Id":"employee:alice","X-Tenant-Id":"default"})
         # In prod with no published config or DB outage, should be 503 or at least not 200 with unverified
         assert r.status_code in (503, 404, 200)
         if os.environ.get("OAOS_ENV")=="production" and r.status_code==200:
@@ -285,6 +294,10 @@ def test_stage2_db_outage_prod_503():
             pass
     finally:
         os.environ.pop("OAOS_ENV", None)
+        os.environ.pop("OAOS_ALLOW_TEST_FALLBACK", None)
+        os.environ.pop("OAOS_TEST_ALLOW_PLAINTEXT", None)
+        os.environ.pop("ADMIN_JWT_SECRET", None)
+        os.environ.pop("OAOS_RUNTIME_CONFIG_SIGNING_KEY", None)
         if orig:
             os.environ["OAOS_DATABASE_URL"]=orig
             os.environ["DATABASE_URL"]=orig
