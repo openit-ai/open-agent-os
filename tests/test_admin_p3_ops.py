@@ -14,7 +14,7 @@ BACKEND = ROOT / "admin-console" / "backend"
 
 os.environ["OAOS_ENV"] = "test"
 os.environ.pop("OAOS_DATABASE_URL", None)
-os.environ["DATABASE_URL"] = "/tmp/oaos_p3_ops_test.db"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 for k in ("OAOS_PROFILE_RESET_CONFIRM",):
     os.environ.pop(k, None)
 

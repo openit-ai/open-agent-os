@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
 
 os.environ["OAOS_ENV"] = "test"
-os.environ["DATABASE_URL"] = "/tmp/oaos_p2_surfaces_test.db"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 for k in ("OAOS_DATABASE_URL", "OAOS_CP_HERMES_BASE_URL", "HERMES_BASE_URL",
           "OAOS_EMBED_API_URL", "OAOS_EMBEDDING_API_URL", "OLLAMA_API_URL",
           "OAOS_EMBED_MODEL", "OAOS_EMBED_DIM"):

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
 
 os.environ["OAOS_ENV"] = "test"
-os.environ["DATABASE_URL"] = "/tmp/oaos_p1_connectors_test.db"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 for k in ("OAOS_DATABASE_URL", "OAOS_CP_HERMES_BASE_URL", "HERMES_BASE_URL",
           "NOTION_API_KEY", "NOTION_TOKEN", "SLACK_WEBHOOK_URL",
           "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
