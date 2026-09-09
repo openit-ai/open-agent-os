@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.5 — Personal AX Business Platform
+# Open Agent OS v0.1.6 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,7 +13,7 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.5` — single source of truth `admin-console/package.json` `0.1.5` (candidate branch `release/v0.1.3-remediation` at `6d91f3b710`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.3` (`docs/architecture-v1.7.3.md`) is distinct from product version `0.1.5`** — v1.7.3 describes the Adaptive Profile Engine design (§16.12) and Control-Plane-centric IA aliases (§16.14), not the release number.
+- **Product version:** `0.1.6` — single source of truth `admin-console/package.json` `0.1.6` (candidate branch `release/v0.1.3-remediation` at `6d91f3b710`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.3` (`docs/architecture-v1.7.3.md`) is distinct from product version `0.1.6`** — v1.7.3 describes the Adaptive Profile Engine design (§16.12) and Control-Plane-centric IA aliases (§16.14), not the release number.
 - **Canonical architecture:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
@@ -340,6 +340,15 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Control-Plane-centric IA aliases (§16.14)** — admin `/control/acp`, `/control/runtime`, `/execution/mcp` views; backend `/v1/control/acp/*` (3), `/v1/execution/mcp/*` (5) aliases sharing canonical endpoints; canonical units `oaos-adapter-mattermost`, `oaos-governance` (old units coexist 1 release); snapshot `process_aliases` reference-only.
 
 **Measured evidence (2026-09-05, main `b49073112a` + this bump):** full suite `1525 passed, 4 skipped, 10 failed` — 9 fail only in full-run order (pass in isolation on both clean worktree `b49073112a` and this tree), 1 (`test_stage5_migration_backup::test_existing_table_preservation`) reproduces on clean worktree (pre-existing); targeted admin+runtime-config `28 passed`; `npm run build` success locally and on KVM4 prod (3 new routes); alias routes verified via import (8) and live prod HTTP (canonical+alias `401` auth-gated, console/api/CP `200`); KVM4 selective sync (19 server deviations preserved) with backup; `oaos-admin-api`/`oaos-admin-console` restarted, 5 units active.
+
+### 9d. Release v0.1.6 — product `0.1.6` (arch `v1.7.3` distinct)
+
+**Included (over v0.1.5 — stabilization backports + lint baseline, additive-only):**
+- **Vault fail-closed hardening** — hvac-optional path reports real auth state; HTTP transport failure stops before fallback; unreachable-probe isolation in tests; tenant mock quota enforcement with failure-usage recording.
+- **Test isolation fixes** — admin loader/SQLite/engine-cache isolation, IAM/LLM/runtime-config/workstream teardown + explicit injection, migration-head expectation update.
+- **Ruff baseline established** — `docs/ruff-baseline.json` (3416 preserved, current-vs-baseline new 0); post-merge delta re-verified `new 0 / resolved 0`.
+
+**Measured evidence (2026-09-09, main `7c1c0ef` PR #7 merge):** targeted regression `106 passed`; `test_stage5_migration_backup.py` `6 passed` on host runner (2 sandbox subprocess timeouts proven environmental, fail-closed); compile PASS; `git diff --check` PASS; commercial server `v0.1.5` health OK (5 units active, console `200` + installed `0.1.5`).
 
 ## 10. Repository Structure
 

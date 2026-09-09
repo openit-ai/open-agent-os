@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.5 — Personal AX Business Platform
+# Open Agent OS v0.1.6 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.5` — 단일 진실 `admin-console/package.json` `0.1.5` (후보 브랜치 `release/v0.1.3-remediation` at `6d91f3b710`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.3`(`docs/architecture-v1.7.3.md`)는 제품 버전 `0.1.5`와 별개** — v1.7.3는 Adaptive Profile Engine 설계(§16.12)와 Control-Plane 중심 IA 별칭(§16.14)을, 0.1.5는 제품 릴리즈 번호를 의미한다.
+- **제품 버전:** `0.1.6` — 단일 진실 `admin-console/package.json` `0.1.6` (후보 브랜치 `release/v0.1.3-remediation` at `6d91f3b710`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.3`(`docs/architecture-v1.7.3.md`)는 제품 버전 `0.1.6`와 별개** — v1.7.3는 Adaptive Profile Engine 설계(§16.12)와 Control-Plane 중심 IA 별칭(§16.14)을, 0.1.6는 제품 릴리즈 번호를 의미한다.
 - **기준 아키텍처:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
 - **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
@@ -271,6 +271,15 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Control-Plane 중심 IA 별칭 (§16.14)** — 어드민 `/control/acp`·`/control/runtime`·`/execution/mcp` 뷰; 백엔드 `/v1/control/acp/*`(3)·`/v1/execution/mcp/*`(5) 별칭(정본 endpoint 공유); 정식 유닛 `oaos-adapter-mattermost`·`oaos-governance`(구 유닛 1릴리스 병행); 스냅샷 `process_aliases` 참조 전용.
 
 **측정 근거 (2026-09-05, main `b49073112a` + 본 범프):** 전수 `1525 passed, 4 skipped, 10 failed` — 9건은 전수 순서에서만 실패(clean worktree `b49073112a`·본 트리 격리 실행 모두 통과), 1건(`test_stage5_migration_backup::test_existing_table_preservation`)은 clean worktree 재현(기존 결함); 표적 admin+runtime-config `28 passed`; 로컬·KVM4 운영 `npm run build` 성공(신규 3라우트); 별칭 import 8건 + 운영 live HTTP(정본/별칭 `401` 인증게이트, console/api/CP `200`); KVM4 선별 sync(서버 편차 19건 보존) 및 백업; `oaos-admin-api`·`oaos-admin-console` 재기동, 5종 active.
+
+### 9d. 릴리즈 v0.1.6 — 제품 `0.1.6` (아키텍처 `v1.7.3`와 별개)
+
+**포함 내역 (v0.1.5 대비 — 안정화 백포트 + 린트 baseline, additive-only):**
+- **Vault fail-closed 강화** — hvac-optional 경로 실제 인증 상태 보고; HTTP transport 실패 시 fallback 전 중단; unreachable-probe 테스트 격리; tenant mock quota 강제 및 실패 usage 기록.
+- **테스트 격리 수정** — admin loader/SQLite/engine-cache 격리, IAM/LLM/runtime-config/workstream teardown + 명시적 주입, migration-head 기대치 갱신.
+- **Ruff baseline 확정** — `docs/ruff-baseline.json`(3416건 보존, current-vs-baseline 신규 0건); 병합 후 delta 재검증 `신규 0 / 해소 0`.
+
+**측정 근거 (2026-09-09, main `7c1c0ef` PR #7 병합):** 표적 회귀 `106 passed`; `test_stage5_migration_backup.py` 호스트 러너 `6 passed`(샌드박스 subprocess 시간 초과 2건은 환경 문제로 입증, fail-closed); compile PASS; `git diff --check` PASS; 상용 서버 `v0.1.5` 헬스 정상(5종 active, 콘솔 `200` + 설치 `0.1.5`).
 
 ## 10. Repository Structure
 
