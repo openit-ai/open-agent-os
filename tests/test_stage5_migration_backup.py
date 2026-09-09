@@ -208,12 +208,12 @@ def test_existing_table_preservation():
             rows = conn.execute(text("SELECT id, rules_json FROM admin_policy_versions WHERE id='preserve-id'")).fetchall()
             assert len(rows) == 1, "preserved row lost after upgrade (destructive)"
             assert rows[0][1] == "[]"
-            # Verify version advanced to head (now 016 after 015/016 additions)
+            # Verify version advanced to the current migration head.
             ver = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
             assert ver is not None, "alembic_version missing"
-            expected_heads = {"018_knowledge_sync_checkpoints", "017_profile_behavioral", "016_user_map_avatar", "015_runtime_config_snapshots", "014_adaptive_profile", "013_admin_policy_versions"}
+            expected_heads = {"019_ki_embedding_1024", "018_knowledge_sync_checkpoints", "017_profile_behavioral", "016_user_map_avatar", "015_runtime_config_snapshots", "014_adaptive_profile", "013_admin_policy_versions"}
             assert ver[0] in expected_heads, f"unexpected head {ver[0]} not in {expected_heads}"
-            assert ver[0] == "018_knowledge_sync_checkpoints", f"expected head 018, got {ver[0]}"
+            assert ver[0] == "019_ki_embedding_1024", f"expected head 019, got {ver[0]}"
         eng2.dispose()
 
 
