@@ -445,7 +445,7 @@ async def _probe_tcp(service: InfraService) -> InfraService:
         service.latency_ms = round(latency, 2)
         service.last_check = datetime.now(timezone.utc)
         service.status = InfraStatus.healthy
-    except (OSError, TimeoutError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - any probe failure is unhealthy
         logger.info("Infra TCP probe unavailable for %s: %s", service.name, type(exc).__name__)
         latency = (time.perf_counter() - start) * 1000
         service.latency_ms = round(latency, 2)
@@ -485,7 +485,7 @@ async def _probe_one(service: InfraService) -> InfraService:
                 service.status = InfraStatus.healthy
             else:
                 service.status = InfraStatus.unhealthy
-    except (httpx.HTTPError, OSError, TimeoutError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - any probe failure is unhealthy
         logger.info("Infra HTTP probe unavailable for %s: %s", service.name, type(exc).__name__)
         latency = (time.perf_counter() - start) * 1000
         service.latency_ms = round(latency, 2)
