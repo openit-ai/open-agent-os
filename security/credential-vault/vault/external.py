@@ -368,6 +368,9 @@ class HashiCorpVaultBackend(VaultBackend):
 
             client = hvac.Client(url=self.addr, token=self.token, namespace=self.namespace, verify=self.tls_ca_bundle or True)  # type: ignore
             return not client.is_authenticated() or client.is_authenticated()  # type: ignore
+        except ImportError as e:
+            logger.debug("HashiCorp Vault health hvac probe unavailable: %s", type(e).__name__)
+            return False
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug("HashiCorp Vault health hvac probe failed: %s", type(e).__name__)
             return False
