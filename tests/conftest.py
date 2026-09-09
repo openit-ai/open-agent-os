@@ -63,6 +63,13 @@ os.environ.setdefault("OAOS_AGENT_JWT_AUDIENCE", "execution-gateway")
 os.environ.pop("OAOS_ENV", None)
 
 import pytest
+import uvloop
+
+
+@pytest.fixture(scope="session")
+def event_loop_policy():
+    """Use uvloop for async tests; aiosqlite stalls on this host's default loop."""
+    return uvloop.EventLoopPolicy()
 
 # AnyIO 4.15.1 worker-thread/portal dispatch can stall with the default
 # asyncio backend in this execution environment.  Keep the workaround in
