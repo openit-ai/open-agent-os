@@ -155,6 +155,25 @@ def test_health_check_fails_in_production_when_unreachable(monkeypatch):
     monkeypatch.setenv("OAOS_ENV","production")
     monkeypatch.setenv("VAULT_BACKEND","hashicorp_vault")
     monkeypatch.setenv("VAULT_ADDR","http://invalid.invalid:8200")
+    # Keep this test deterministic even when the full suite has installed a
+    # process-wide HTTP mock or the host resolver treats the sentinel domain
+    # unexpectedly.  The assertion is about the production transport-failure
+    # branch, not the behavior of a real network path.
+    import httpx
+    class _UnreachableClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *args, **kwargs):
+            raise httpx.ConnectError("simulated unreachable Vault")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _UnreachableClient)
     from vault.external import HashiCorpVaultBackend
     be = HashiCorpVaultBackend(addr="http://invalid.invalid:8200")
     async def _run():
