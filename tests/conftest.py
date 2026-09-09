@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import os
 from pathlib import Path
@@ -64,6 +65,8 @@ os.environ.pop("OAOS_ENV", None)
 
 import pytest
 import uvloop
+
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 @pytest.fixture(scope="session")
