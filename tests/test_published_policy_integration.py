@@ -163,9 +163,9 @@ def test_production_db_error_fails_closed(monkeypatch):
     if g._hook is not None:
         g._hook.engine = None
     g._engine = None
-    # also verify helper returns None in prod
-    eng = gate._get_small_business_engine("t_pub")
-    assert eng is None, "production DB error must fail closed (engine None)"
+    # Production backend errors must surface as the fail-closed policy error.
+    with pytest.raises(gate.PolicyGateBackendError):
+        gate._get_small_business_engine("t_pub")
     assert g._engine is None
     mapping = map_user_to_agent("employee:kim", "t_pub")
     import asyncio

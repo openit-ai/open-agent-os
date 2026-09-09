@@ -40,6 +40,8 @@ def _load_admin_module(name: str, filename: str, bare_alias: str | None = None):
 
 auth_mod = _load_admin_module("admin_auth", "auth.py", bare_alias="auth")
 infra_mod = _load_admin_module("admin_infra", "infra.py", bare_alias="infra")
+sys.modules["admin_console.backend.auth"] = auth_mod
+sys.modules["admin_console.backend.infra"] = infra_mod
 _app_mod = _load_admin_module("admin_app", "app.py")
 # Remove BACKEND from front of path after import — security/app.py must win for
 # bare `from app import` in test_workstream_c. Admin modules are already in

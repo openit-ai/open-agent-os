@@ -19,11 +19,21 @@ def test_profile_router_mounted_in_app():
     """control_plane.app must expose /v1/profile/* routes (MVP, not live until migration)."""
     from control_plane.app import app
 
-    paths = set()
-    for route in app.routes:
-        path = getattr(route, "path", None) or getattr(route, "path_format", "")
-        if path:
-            paths.add(path)
+    def collect_paths(routes):
+        paths = set()
+        for route in routes:
+            path = getattr(route, "path", None) or getattr(route, "path_format", "")
+            if path:
+                paths.add(path)
+            nested = getattr(route, "routes", None)
+            if nested:
+                paths.update(collect_paths(nested))
+            original = getattr(route, "original_router", None)
+            if original is not None:
+                paths.update(collect_paths(getattr(original, "routes", ())))
+        return paths
+
+    paths = collect_paths(app.routes)
 
     expected = {
         "/v1/profile/me",
@@ -48,8 +58,8 @@ def test_profile_openapi_exposed():
 
 def test_profile_unauth_returns_401():
     """Mounted routes should enforce auth (401 without token) — proves routing is live in process."""
-    from fastapi.testclient import TestClient
     from control_plane.app import app
+    from fastapi.testclient import TestClient
 
     with TestClient(app) as c:
         resp = c.get("/v1/profile/me")

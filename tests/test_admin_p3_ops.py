@@ -14,7 +14,7 @@ BACKEND = ROOT / "admin-console" / "backend"
 
 os.environ["OAOS_ENV"] = "test"
 os.environ.pop("OAOS_DATABASE_URL", None)
-os.environ["DATABASE_URL"] = "/tmp/oaos_p3_ops_test.db"
+os.environ["DATABASE_URL"] = "sqlite:////tmp/oaos_p3_ops_test.db"
 for k in ("OAOS_PROFILE_RESET_CONFIRM",):
     os.environ.pop(k, None)
 
@@ -38,6 +38,10 @@ def _load(name: str, filename: str, bare_alias: str | None = None):
 
 
 auth_mod = _load("p3_auth_mod", "auth.py", bare_alias="auth")
+sys.modules["admin_console.backend.auth"] = auth_mod
+sys.modules.pop("admin_console.backend.infra", None)
+sys.modules.pop("admin_console.backend.profile_ops", None)
+sys.modules.pop("admin_console.backend.knowledge_ops", None)
 _app_mod = _load("p3_app_mod", "app.py")
 app = _app_mod.app
 

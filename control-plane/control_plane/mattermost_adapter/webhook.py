@@ -376,17 +376,19 @@ def _get_personal_display_name(agent_id: str) -> tuple[str | None, str | None]:
                         return row.get("display_name"), row.get("avatar_url")
             except _OPTIONAL_FAILURES as exc:
                 log.debug("personal display-name DB lookup degraded: %s", type(exc).__name__)
-            # try psycopg directly
-            try:
-                import psycopg  # type: ignore
-                with psycopg.connect(url) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT display_name, avatar_url FROM admin_user_mappings WHERE agent_id=%s LIMIT 1", (agent_id,))
-                        r = cur.fetchone()
-                        if r:
-                            return r[0], r[1]
-            except _OPTIONAL_FAILURES as exc:
-                log.debug("personal display-name direct lookup degraded: %s", type(exc).__name__)
+            # psycopg accepts PostgreSQL conninfo only; never pass SQLite URLs
+            # to it after the SQLAlchemy-compatible lookup has degraded.
+            if not url.lower().startswith("sqlite"):
+                try:
+                    import psycopg  # type: ignore
+                    with psycopg.connect(url) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT display_name, avatar_url FROM admin_user_mappings WHERE agent_id=%s LIMIT 1", (agent_id,))
+                            r = cur.fetchone()
+                            if r:
+                                return r[0], r[1]
+                except _OPTIONAL_FAILURES as exc:
+                    log.debug("personal display-name direct lookup degraded: %s", type(exc).__name__)
     except _OPTIONAL_FAILURES as exc:
         log.debug("personal display-name lookup degraded: %s", type(exc).__name__)
     return None, None
@@ -985,9 +987,9 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     try:
         payload: dict[str, Any] = json.loads(body) if body else {}
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail="invalid JSON") from exc
+        raise HTTPException(status_code=400, detail="invalid JSON") from exc
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=422, detail="JSON payload must be an object")
+        raise HTTPException(status_code=400, detail="JSON payload must be an object")
     _validate_object_fields(payload, "user", "channel", "data")
     _validate_string_fields(payload, "tenant_id", "user_id", "user_name", "username", "text", "message", "session_id", "channel_id", "post_id", "id", "root_id", "rootId")
     _validate_nested_string_fields(payload, "user", "id", "username")
@@ -1011,7 +1013,7 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     root_id: str | None = payload.get("root_id") or payload.get("data", {}).get("post", {}).get("root_id") or payload.get("rootId")
 
     if not user_id:
-        raise HTTPException(status_code=422, detail="user_id (employee:...) required")
+        raise HTTPException(status_code=400, detail="user_id (employee:...) required")
     # Allow image-only posts (no text) when file_ids/attachments present — forwarded via Agent Runtime
     _raw_fids = payload.get("file_ids") if isinstance(payload.get("file_ids"), list) else None
     _raw_arefs = payload.get("attachment_refs") or payload.get("attachments") or ([payload.get("attachment_ref")] if payload.get("attachment_ref") else None)
@@ -1020,7 +1022,7 @@ async def mattermost_event(request: Request, x_signature: str | None = Header(de
     _raw_rctx = payload.get("runtime_context") if isinstance(payload.get("runtime_context"), dict) else {}
     # normalize runtime_context from bridge (already contains channel/root/post)
     if not text and not (_raw_fids or _raw_arefs):
-        raise HTTPException(status_code=422, detail="text/message required (or file_ids/attachment_refs for image)")
+        raise HTTPException(status_code=400, detail="text/message required (or file_ids/attachment_refs for image)")
     # ensure text is at least placeholder for multimodal runtime (ACP builds list)
     if not text and (_raw_fids or _raw_arefs):
         text = payload.get("text") or ""  # allow empty; ACP will handle image-only via multimodal
@@ -1069,14 +1071,14 @@ async def mattermost_slash(request: Request, x_signature: str | None = Header(de
             tenant_id = _resolve_tenant_id(_payload_tenant_form) if _payload_tenant_form else tenant_id
             # also allow explicit payload json in text? keep text as-is
         except (UnicodeError, TypeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail="invalid form payload") from exc
+            raise HTTPException(status_code=400, detail="invalid form payload") from exc
     else:
         try:
             payload = json.loads(body) if body else {}
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="invalid JSON") from exc
+            raise HTTPException(status_code=400, detail="invalid JSON") from exc
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=422, detail="JSON payload must be an object")
+            raise HTTPException(status_code=400, detail="JSON payload must be an object")
         _validate_object_fields(payload, "user", "channel")
         _validate_string_fields(payload, "command", "text", "message", "user_id", "user_name", "session_id", "channel_id", "team_id", "tenant_id")
         _validate_nested_string_fields(payload, "user", "id", "username")
@@ -1096,9 +1098,9 @@ async def mattermost_slash(request: Request, x_signature: str | None = Header(de
         tenant_id = _resolve_tenant_id(_payload_tenant_json) if _payload_tenant_json else tenant_id
 
     if not user_id:
-        raise HTTPException(status_code=422, detail="user_id required")
+        raise HTTPException(status_code=400, detail="user_id required")
     if not text and not command:
-        raise HTTPException(status_code=422, detail="text/command required")
+        raise HTTPException(status_code=400, detail="text/command required")
 
     # If text empty but command provided, use command as text
     effective_text = text or command
@@ -1144,16 +1146,16 @@ async def mattermost_actions(request: Request, x_signature: str | None = Header(
                 # fallback: flatten qs
                 payload = {k: v[0] for k, v in parsed.items()}
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="invalid JSON") from exc
+            raise HTTPException(status_code=400, detail="invalid JSON") from exc
         except (UnicodeError, TypeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail="invalid form payload") from exc
+            raise HTTPException(status_code=400, detail="invalid form payload") from exc
     else:
         try:
             payload = json.loads(body) if body else {}
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="invalid JSON") from exc
+            raise HTTPException(status_code=400, detail="invalid JSON") from exc
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=422, detail="JSON payload must be an object")
+            raise HTTPException(status_code=400, detail="JSON payload must be an object")
         _validate_object_fields(payload, "context", "user")
         _validate_string_fields(payload, "approval_id", "decision", "action", "user_id", "user_name", "channel_id", "post_id", "group_id")
         _validate_nested_string_fields(payload, "context", "approval_id", "decision", "group_id")
@@ -1181,9 +1183,9 @@ async def mattermost_actions(request: Request, x_signature: str | None = Header(
     post_id = payload.get("post_id") or ""
 
     if not approval_id:
-        raise HTTPException(status_code=422, detail="approval_id required")
+        raise HTTPException(status_code=400, detail="approval_id required")
     if decision not in VALID_DECISIONS:
-        raise HTTPException(status_code=422, detail=f"invalid decision: {decision}, must be one of {VALID_DECISIONS}")
+        raise HTTPException(status_code=400, detail=f"invalid decision: {decision}, must be one of {VALID_DECISIONS}")
 
     # Map Mattermost user to employee principal for decided_by
     decided_by = user_id

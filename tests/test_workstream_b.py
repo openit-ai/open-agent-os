@@ -46,6 +46,22 @@ def make_ctx(user="employee:kim", tenant="test-tenant", agent=None, trace="trace
     }
 
 
+def _app_client(monkeypatch):
+    """Keep app endpoint tests on the intentional non-production mock path."""
+    from fastapi.testclient import TestClient
+    import execution_gateway.app as app_mod
+
+    async def _no_credential_store():
+        return None
+
+    monkeypatch.setattr(app_mod, "_ensure_google_credential_store", _no_credential_store)
+    app_mod._google_connector.set_vault(None)
+    app_mod._google_connector._delegation_service = None
+    app_mod._google_connector._credential_provider = None
+    app_mod._google_connector._credential_binding.clear()
+    return TestClient(app_mod.app)
+
+
 # ── normalize tests ──────────────────────────────────────────────────
 
 def test_canonicalize_action():
@@ -385,10 +401,8 @@ def test_app_tools():
     assert "servers" in data
 
 
-def test_app_execute_personal_success():
-    from fastapi.testclient import TestClient
-    from execution_gateway.app import app
-    c = TestClient(app)
+def test_app_execute_personal_success(monkeypatch):
+    c = _app_client(monkeypatch)
     ctx = {"user_id": "employee:kim", "agent_id": "agent:assistant:kim", "tenant_id": "test-tenant", "session_id": "sess_1", "trace_id": "trace_app_001", "request_id": "req_app_001"}
     headers = {"X-Agent-Context": json.dumps(ctx)}
     body = {"tool": "gmail_search", "action": "SEARCH", "resource": "gmail/user/kim/messages", "args": {"q": "hello"}}
@@ -453,10 +467,8 @@ def test_app_execute_missing_context_unauthorized():
     assert r.status_code in (400, 401)
 
 
-def test_app_execute_base64_context():
-    from fastapi.testclient import TestClient
-    from execution_gateway.app import app
-    c = TestClient(app)
+def test_app_execute_base64_context(monkeypatch):
+    c = _app_client(monkeypatch)
     ctx = {"user_id": "employee:kim", "agent_id": "agent:assistant:kim", "tenant_id": "test-tenant", "session_id": "sess_5", "trace_id": "trace_b64_001", "request_id": "req_b64_001"}
     b64 = base64.b64encode(json.dumps(ctx).encode()).decode()
     headers = {"X-Agent-Context": b64}
@@ -465,10 +477,8 @@ def test_app_execute_base64_context():
     assert r.status_code == 200
 
 
-def test_app_trace_header_propagated():
-    from fastapi.testclient import TestClient
-    from execution_gateway.app import app
-    c = TestClient(app)
+def test_app_trace_header_propagated(monkeypatch):
+    c = _app_client(monkeypatch)
     ctx = {"user_id": "employee:kim", "agent_id": "agent:assistant:kim", "tenant_id": "test-tenant", "session_id": "sess_6", "trace_id": "trace_hdr_777", "request_id": "req_hdr_777"}
     headers = {"X-Agent-Context": json.dumps(ctx)}
     body = {"tool": "gmail_read", "action": "READ", "resource": "gmail/user/kim/messages/1", "args": {}}

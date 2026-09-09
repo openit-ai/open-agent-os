@@ -34,6 +34,9 @@ auth_mod = _load_admin_module("admin_auth_biz", "auth.py", bare_alias="auth")
 # infra needed for app import (app imports infra router)
 infra_mod = _load_admin_module("admin_infra_biz", "infra.py", bare_alias="infra")
 business_mod = _load_admin_module("admin_business", "business.py", bare_alias="business")
+sys.modules["admin_console.backend.auth"] = auth_mod
+sys.modules["admin_console.backend.infra"] = infra_mod
+sys.modules["admin_console.backend.business"] = business_mod
 _app_mod = _load_admin_module("admin_app_biz", "app.py")
 if str(BACKEND) in sys.path:
     sys.path.remove(str(BACKEND))

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
 
 os.environ["OAOS_ENV"] = "test"
-os.environ["DATABASE_URL"] = "/tmp/oaos_p1_connectors_test.db"
+os.environ["DATABASE_URL"] = "sqlite:////tmp/oaos_p1_connectors_test.db"
 for k in ("OAOS_DATABASE_URL", "OAOS_CP_HERMES_BASE_URL", "HERMES_BASE_URL",
           "NOTION_API_KEY", "NOTION_TOKEN", "SLACK_WEBHOOK_URL",
           "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
@@ -41,6 +41,8 @@ def _load(name: str, filename: str, bare_alias: str | None = None):
 
 
 auth_mod = _load("p1_auth_mod", "auth.py", bare_alias="auth")
+sys.modules["admin_console.backend.auth"] = auth_mod
+sys.modules.pop("admin_console.backend.infra", None)
 _app_mod = _load("p1_app_mod", "app.py")
 app = _app_mod.app
 

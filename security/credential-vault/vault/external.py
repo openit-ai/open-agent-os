@@ -358,16 +358,26 @@ class HashiCorpVaultBackend(VaultBackend):
             url = f"{self.addr}/v1/sys/health"
             async with httpx.AsyncClient(verify=self.tls_ca_bundle or True, timeout=3.0) as client:
                 resp = await client.get(url, headers=self._headers())
-                return resp.status_code in (200, 204, 429, 472, 473)
+                healthy = resp.status_code in (200, 204, 429, 472, 473)
+                if _is_production() and not healthy:
+                    return False
+                return healthy
         except httpx.HTTPError as e:  # type: ignore[name-defined]
             logger.debug("HashiCorp Vault health HTTP probe failed: %s", type(e).__name__)
+            if _is_production():
+                return False
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug("HashiCorp Vault health HTTP probe failed: %s", type(e).__name__)
+            if _is_production():
+                return False
         try:
             import hvac  # type: ignore
 
             client = hvac.Client(url=self.addr, token=self.token, namespace=self.namespace, verify=self.tls_ca_bundle or True)  # type: ignore
-            return not client.is_authenticated() or client.is_authenticated()  # type: ignore
+            return bool(client.is_authenticated())  # type: ignore
+        except ImportError as e:
+            logger.debug("HashiCorp Vault health hvac probe unavailable: %s", type(e).__name__)
+            return False
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug("HashiCorp Vault health hvac probe failed: %s", type(e).__name__)
             return False

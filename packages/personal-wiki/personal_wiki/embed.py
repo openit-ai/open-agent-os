@@ -20,11 +20,11 @@ All imports are lazy inside functions so `import personal_wiki.embed` never fail
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import os
-import logging
+from datetime import UTC, datetime
 from numbers import Real
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -387,7 +387,7 @@ async def _write_via_sqlalchemy(
     """Try SQLAlchemy async write to memories table. Returns dict or raises to trigger fallback."""
     # lazy imports
     try:
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker  # type: ignore
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # type: ignore
     except (ImportError, ModuleNotFoundError) as e:
         raise RuntimeError(f"sqlalchemy not available: {e}")
 
@@ -433,10 +433,10 @@ async def _write_via_sqlalchemy(
     if not agent_id:
         agent_id = owner.replace("employee:", "agent:assistant:") if "employee:" in owner else f"agent:assistant:{owner}"
 
-    import uuid
     import json as _json
+    import uuid
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     meta = metadata or {}
     # detect Text fallback for embedding column
     try:

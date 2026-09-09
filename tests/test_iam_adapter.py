@@ -262,7 +262,11 @@ class TestJITGroupSync:
         assert "newuser@example.com" in a._groups["eng"]
 class TestDeprovisionRevoke:
     @pytest.mark.asyncio
-    async def test_deprovision_revokes_delegations(self):
+    async def test_deprovision_revokes_delegations(self, monkeypatch):
+        # DelegationService is intentionally in-memory for this unit test;
+        # unrelated admin tests may leave a DATABASE_URL configured.
+        monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
         ds = DelegationService()
         ledger = AuditLedger(signing_key="test-key")
         a = IamAdapter(domain="example.com", tenant_id="t1", delegation_service=ds, audit_ledger=ledger)

@@ -1,6 +1,8 @@
 """Tenant LLM Quota — 3 tests: within limit / daily exceeded 429 / per-minute exceeded 429."""
-import sys, importlib.util
+import importlib.util
+import sys
 from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,10 +23,14 @@ llm_mod = _load("admin_llm_quota", "llm_providers.py")
 app_mod = _load("admin_app_quota", "app.py")
 
 @pytest.fixture(autouse=True)
-def isolate():
-    import os
-    os.environ["OAOS_RUNTIME_MODE"] = "llm"
-    os.environ["OAOS_VAULT_KEY"] = "test-vault-key-for-llm-quota-32bytes!!"
+def isolate(monkeypatch):
+    monkeypatch.setenv("OAOS_RUNTIME_MODE", "llm")
+    monkeypatch.setenv("OAOS_VAULT_KEY", "test-vault-key-for-llm-quota-32bytes!!")
+    # Do not inherit a developer/runner database or Redis service into the
+    # in-memory fixture.  Individual production-backend tests set their own
+    # URLs explicitly and monkeypatch restores them after the test.
+    for k in ("OAOS_DATABASE_URL", "DATABASE_URL", "OAOS_QUOTA_REDIS_URL", "OAOS_REDIS_URL", "REDIS_URL", "OAOS_CP_REDIS_URL"):
+        monkeypatch.delenv(k, raising=False)
     _orig = {}
     for k in ("admin_llm_quota", "llm_providers", "admin_console.backend.llm_providers"):
         try:
