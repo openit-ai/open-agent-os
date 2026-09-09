@@ -547,7 +547,7 @@ class OpenCodeProvider:
                             data.setdefault("object", "chat.completion")
                             data.setdefault("model", model)
                             return data
-                except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError, KeyError):
+                except Exception:  # noqa: BLE001, S110
                     pass
                 # fallback /api/chat
                 try:
@@ -566,7 +566,7 @@ class OpenCodeProvider:
                                 "choices": [{"index": 0, "message": {"role": "assistant", "content": str(content), "tool_calls": []}, "finish_reason": "stop"}],
                                 "usage": data2.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
                             }
-                except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError, KeyError):
+                except Exception:  # noqa: BLE001, S110
                     pass
         except (httpx.HTTPError, OSError, RuntimeError, ValueError, AttributeError, TypeError, KeyError):
             return None
@@ -712,4 +712,3 @@ class OpenCodeProvider:
         for ch in _mock_stream_chunks(resolved, content):
             yield ch
             await asyncio.sleep(0)
-
