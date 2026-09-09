@@ -32,7 +32,11 @@ from agent_runtime.llm_runtime import (
 )
 
 @pytest.fixture(autouse=True)
-def isolate():
+def isolate(monkeypatch):
+    # This module exercises the in-memory quota fallback; admin surface tests
+    # can leave a persistent DATABASE_URL and bypass the fixture's quota dicts.
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     os.environ["OAOS_RUNTIME_MODE"] = "llm"
     os.environ["OAOS_VAULT_KEY"] = "test-vault-key-32b-test-vault-key!!"
     _orig = {}
@@ -72,6 +76,11 @@ def isolate():
             if m and hasattr(m, "clear_quotas"):
                 m.clear_quotas()
         except: pass
+    for mod in (llm_mod, sys.modules.get("llm_providers"), sys.modules.get("admin_console.backend.llm_providers")):
+        if mod is not None:
+            for attr in ("_db_engine", "_db_session_factory", "_db_cached_url"):
+                if hasattr(mod, attr):
+                    setattr(mod, attr, None)
     try: llm_mod.clear_usage()
     except: pass
     for canon in ("admin_console.backend.llm_providers", "llm_providers"):

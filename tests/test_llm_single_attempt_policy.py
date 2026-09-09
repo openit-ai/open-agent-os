@@ -23,6 +23,11 @@ def test_retry_helper_attempt_count_is_explicit(monkeypatch):
         nonlocal calls
         calls += 1
         raise RuntimeError("permanent")
+    # The breaker is process-global and may be open after an earlier HA test.
+    from control_plane.acp_adapter import _acp_circuit_breaker
+    _acp_circuit_breaker._failures = 0
+    _acp_circuit_breaker._state = "CLOSED"
+    _acp_circuit_breaker._opened_at = None
     monkeypatch.setattr("control_plane.acp_adapter._is_retryable_status", lambda exc: True)
     try:
         asyncio.run(_with_retry_acp(failing, max_retries=0, trace_id="t"))

@@ -176,8 +176,12 @@ def test_snapshot_includes_nonsecret_collector_metadata_without_raw_secrets():
         if p.get("provider")=="openrouter":
             assert p.get("secret_ref","").startswith("vault://")
 
-def test_prevent_stale_fallback_snapshot_reflects_current_chain():
+def test_prevent_stale_fallback_snapshot_reflects_current_chain(monkeypatch):
     """Regression: snapshot must reflect current fallback chain, not stale empty."""
+    # Previous admin tests mirror a persisted fallback into process env; this
+    # regression starts from an explicitly empty chain in its isolated DB.
+    for key in ("OAOS_LLM_FALLBACK_JSON", "OAOS_FALLBACK_PROVIDERS", "OAOS_FALLBACK_MODEL"):
+        monkeypatch.delenv(key, raising=False)
     db_url=_tmp_sqlite_url()
     admin_app,_ = _admin_client(db_url)
     import admin_console.backend.runtime_config as rc
