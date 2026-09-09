@@ -361,8 +361,12 @@ class HashiCorpVaultBackend(VaultBackend):
                 return resp.status_code in (200, 204, 429, 472, 473)
         except httpx.HTTPError as e:  # type: ignore[name-defined]
             logger.debug("HashiCorp Vault health HTTP probe failed: %s", type(e).__name__)
+            if _is_production():
+                return False
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug("HashiCorp Vault health HTTP probe failed: %s", type(e).__name__)
+            if _is_production():
+                return False
         try:
             import hvac  # type: ignore
 
