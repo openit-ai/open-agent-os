@@ -1830,16 +1830,18 @@ class LLMProviderAdapter:
                 record_llm_usage(tenant_id=_usage_tid, provider=_usage_provider, model=resolved, prompt_tokens=0, completion_tokens=0, latency_ms=round(latency*1000,2), status="failed", error=str(err)[:500])
             except _RUNTIME_OPERATION_ERRORS:
                 logger.debug("best-effort exception suppressed", exc_info=True)
-        # An explicitly injected response is a deterministic test/adapter
-        # fixture, not a provider execution. It must not require live quota
-        # infrastructure; real provider calls always stay fail-closed.
-        if not (self._mock_responses and self._mock_index < len(self._mock_responses)):
+        # Mock responses replace provider transport only; tenant quota remains
+        # an invariant for every completion path, including deterministic tests.
+        # A mock without tenant context is a transport-only compatibility
+        # probe; tenant-scoped mocks still exercise the real quota invariant.
+        if tenant_for_quota is not None or not self._mock_responses:
             try:
                 _llm_quota_check(tenant_for_quota or "default")
-            except _RUNTIME_OPERATION_ERRORS as e:
+            except Exception as e:
                 if getattr(e, "status_code", None)==429 or "QUOTA_EXCEEDED" in str(e) or (isinstance(getattr(e, "detail", None), dict) and getattr(e, "detail", {}).get("code")=="QUOTA_EXCEEDED"):
                     _record_fail(str(e) or "quota exceeded", time.perf_counter() - _usage_start)
                     raise
+                raise
         # — Hermes mode: bypass provider logic entirely —
         if self.runtime_mode == RuntimeMode.HERMES:
             async def _do_hermes() -> dict[str, Any]:
