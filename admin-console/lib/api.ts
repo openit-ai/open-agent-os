@@ -1010,7 +1010,18 @@ export function postSetupComplete(): Promise<{ setup_completed: boolean; persist
 }
 
 // ---- ACP settings (matches backend/acp_config.py) ----
-export interface AcpConfig {
+export interface ConfigApplyMetadata {
+  persisted?: boolean;
+  applied?: boolean;
+  config_revision?: string;
+  effective_revision?: string;
+  requires_restart?: boolean;
+  apply_strategy?: "immediate" | "reload" | "restart_required" | "external_action";
+  updated_at?: string;
+  applied_at?: string;
+}
+
+export interface AcpConfig extends ConfigApplyMetadata {
   hermes_base_url: string;
   hermes_model: string;
   acp_enabled: boolean;
@@ -1092,7 +1103,7 @@ export function testMcpServer(name: string): Promise<McpServerTestResult> {
 }
 
 // ---- Mattermost bot (matches backend/mattermost_config.py) ----
-export interface MmConfig {
+export interface MmConfig extends ConfigApplyMetadata {
   mattermost_url: string;
   bot_token_set: boolean;
   bot_username: string;
@@ -1128,7 +1139,7 @@ export function testMmConnection(payload?: { bot_token?: string }): Promise<MmTe
 }
 
 // ---- Outline connector (matches backend/outline_config.py) ----
-export interface OlConfig {
+export interface OlConfig extends ConfigApplyMetadata {
   outline_url: string;
   api_key_set: boolean;
   source?: string;
@@ -1307,7 +1318,7 @@ export function getRuntimeAppliedStatus(tenantId?: string): Promise<RuntimeAppli
 }
 
 // ---- Notion connector (matches backend/notion_config.py) ----
-export interface NotionConfig {
+export interface NotionConfig extends ConfigApplyMetadata {
   notion_api_url: string;
   api_key_set: boolean;
   source?: string;
@@ -1338,7 +1349,7 @@ export function testNotionConnection(payload?: { api_key?: string }): Promise<No
 }
 
 // ---- Slack connector (matches backend/slack_config.py) ----
-export interface SlackConfig {
+export interface SlackConfig extends ConfigApplyMetadata {
   webhook_url_set: boolean;
   channel: string;
   source?: string;
@@ -1367,7 +1378,7 @@ export function testSlackConnection(payload?: { webhook_url?: string }): Promise
 }
 
 // ---- OAuth connectors (matches backend/oauth_config.py; secrets env-only) ----
-export interface OAuthConfig {
+export interface OAuthConfig extends ConfigApplyMetadata {
   google_client_id_set: boolean;
   google_client_secret_set: boolean;
   google_redirect_uri: string;
@@ -1409,7 +1420,7 @@ export function testOAuthConnection(payload?: { provider?: string }): Promise<OA
 }
 
 // ---- SMTP connector (matches backend/smtp_config.py) ----
-export interface SmtpConfig {
+export interface SmtpConfig extends ConfigApplyMetadata {
   smtp_host: string;
   smtp_port: number;
   smtp_user: string;

@@ -24,8 +24,10 @@ from pydantic import BaseModel, Field
 
 try:
     from .auth import AdminUser, get_current_admin, require_l5
+    from .config_state import public_revision, utc_now_iso
 except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
+    from config_state import public_revision, utc_now_iso  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +191,22 @@ class OAuthUpdateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+def _public_response(prefs: dict, source: str, note: str) -> dict:
+    config = {**_env_config(), **prefs}
+    revision = public_revision("oauth", config)
+    now = utc_now_iso()
+    return {
+        **config, "source": source, "persisted": True, "applied": True,
+        "config_revision": revision, "effective_revision": revision,
+        "requires_restart": False, "apply_strategy": "immediate",
+        "updated_at": now, "applied_at": now, "note": note,
+    }
+
+
 @router.get("/config")
 def oauth_get_config(admin: AdminUser = Depends(get_current_admin)) -> dict:
     prefs, source = _load_prefs()
-    return {**_env_config(), **prefs, "source": source, "applied": True,
-            "note": "client-id/secret are env-only (GOOGLE_* / MS_* on the host); DB stores display prefs only"}
+    return _public_response(prefs, source, "client-id/secret are env-only (GOOGLE_* / MS_* on the host); DB stores display prefs only")
 
 
 @router.put("/config")
@@ -208,13 +221,11 @@ def oauth_put_config(req: OAuthUpdateRequest, admin: AdminUser = Depends(require
     ok = _db_set_raw(raw, updated_by=getattr(admin, "email", None))
     if ok:
         _inmem = dict(prefs)
-        return {**_env_config(), **prefs, "source": "db", "applied": True,
-                "note": "prefs saved; client-id/secret must be set via host env (never stored here)"}
+        return _public_response(prefs, "db", "prefs saved; client-id/secret must be set via host env (never stored here)")
     if (os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")):
         raise HTTPException(status_code=503, detail="OAuth prefs DB unavailable in production (fail-closed)")
     _inmem = dict(prefs)
-    return {**_env_config(), **prefs, "source": "in-memory", "applied": True,
-            "note": "prefs saved in-memory only (dev); client-id/secret must be set via host env"}
+    return _public_response(prefs, "in-memory", "prefs saved in-memory only (dev); client-id/secret must be set via host env")
 
 
 @router.post("/test")

@@ -5,19 +5,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getNotionConfig, updateNotionConfig, testNotionConnection, type NotionConfig, type NotionTestResult } from "@/lib/api";
+import { getNotionConfig, updateNotionConfig, type NotionConfig } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { StickyNote, Loader2 } from "lucide-react";
+import { ConfigurationApplyState, TestConnectionButton } from "@/components/admin";
 
 export function NotionPanel() {
   const { t } = useI18n();
   const [cfg, setCfg] = useState<NotionConfig | null>(null);
   const [url, setUrl] = useState("");
   const [key, setKey] = useState("");
-  const [testRes, setTestRes] = useState<NotionTestResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -55,19 +54,6 @@ export function NotionPanel() {
     }
   };
 
-  const test = async () => {
-    setTesting(true);
-    setError(null);
-    try {
-      const res = await testNotionConnection(key.trim() ? { api_key: key.trim() } : undefined);
-      setTestRes(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "test failed");
-    } finally {
-      setTesting(false);
-    }
-  };
-
   if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
 
   return (
@@ -91,6 +77,7 @@ export function NotionPanel() {
           {cfg?.note && <CardDescription>{cfg.note}</CardDescription>}
         </CardHeader>
         <CardContent className="space-y-3">
+          {cfg ? <ConfigurationApplyState value={cfg} service="Notion" /> : null}
           <div>
             <Label>{t("notion.url")}</Label>
             <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.notion.com" />
@@ -103,15 +90,8 @@ export function NotionPanel() {
           <div className="text-sm text-muted-foreground">{t("notion.keySet")}: {String(cfg?.api_key_set)}</div>
           <div className="flex gap-2">
             <Button onClick={save} disabled={saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("notion.save")}</Button>
-            <Button variant="outline" onClick={test} disabled={testing}>{testing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("notion.test")}</Button>
+            <TestConnectionButton connectionId="notion" configRevision={cfg?.config_revision} />
           </div>
-          {testRes && (
-            <div className="text-sm">
-              {testRes.ok
-                ? <span className="text-green-700">OK · users: {testRes.user_count} · {testRes.latency_ms} ms</span>
-                : <span className="text-red-600">FAIL · {testRes.error ?? testRes.status_code}</span>}
-            </div>
-          )}
         </CardContent>
       </Card>
     </div>

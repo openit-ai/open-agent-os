@@ -61,6 +61,33 @@ export interface ApplyState {
   applied_at?: string;
 }
 
+export type ConnectionKind =
+  | "acp"
+  | "mattermost"
+  | "slack"
+  | "notion"
+  | "oauth"
+  | "smtp"
+  | "outline"
+  | "mcp";
+
+export interface ConnectionDiscoveryCandidate {
+  candidate_id: string;
+  kind: ConnectionKind;
+  display_target: string;
+  source: "env" | "manifest" | "registry" | "default" | "saved";
+  confidence: "high" | "medium" | "low";
+  credential_state: "available" | "authorization_required" | "missing";
+  applied: boolean;
+  requires_restart: boolean;
+}
+
+export interface ConnectionDiscovery {
+  kind: ConnectionKind;
+  candidates: ConnectionDiscoveryCandidate[];
+  reasons: string[];
+}
+
 export type SetupStepId =
   | "environment"
   | "runtime"

@@ -3,6 +3,8 @@ import {
   AdminErrorCode,
   type AdminError,
   type AdminReadiness,
+  type ConnectionDiscovery,
+  type ConnectionKind,
   type SetupProgress,
   type TestConnectionRequest,
   type TestConnectionResult,
@@ -108,6 +110,16 @@ export function testConnection(
     timeoutKind: "http",
     signal,
   });
+}
+
+export function getConnectionDiscovery(
+  kind: ConnectionKind,
+  signal?: AbortSignal,
+): Promise<ConnectionDiscovery> {
+  return adminFetch<ConnectionDiscovery>(
+    `/v1/admin/connections/discovery?kind=${encodeURIComponent(kind)}`,
+    { signal, timeoutKind: "quick" },
+  );
 }
 
 export function getSetupProgress(signal?: AbortSignal): Promise<SetupProgress> {

@@ -36,7 +36,7 @@ def _load(name: str, filename: str):
 readiness_mod = _load("phase2a_readiness_contract_mod", "readiness.py")
 config_modules = {
     name: _load(f"phase2a_{name}_config_mod", f"{name}_config.py")
-    for name in ("acp", "mattermost", "outline", "notion", "slack", "smtp")
+    for name in ("acp", "mattermost", "outline", "notion", "slack", "smtp", "oauth")
 }
 
 
@@ -84,6 +84,8 @@ def client(tmp_path, monkeypatch):
         "SLACK_WEBHOOK_URL", "SLACK_INCOMING_WEBHOOK_URL", "OAOS_SLACK_WEBHOOK_URL",
         "OUTLINE_API_URL", "OUTLINE_URL", "OUTLINE_API_KEY", "NOTION_API_KEY",
         "NOTION_TOKEN", "SMTP_HOST", "SMTP_PASSWORD", "OAOS_ADMIN_DISCOVERY_MANIFEST_JSON",
+        "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "MICROSOFT_CLIENT_ID",
+        "MICROSOFT_CLIENT_SECRET", "MS_CLIENT_ID", "MS_CLIENT_SECRET",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -158,6 +160,23 @@ def test_discovery_uses_only_fixed_defaults_and_redacts_secrets(client, monkeypa
     assert empty.status_code == 200
     assert empty.json()["candidates"] == []
     assert empty.json()["reasons"]
+
+
+def test_oauth_discovery_reports_authorization_or_configured_without_secrets(client, monkeypatch):
+    authorization = client.get("/v1/admin/connections/discovery?kind=oauth")
+    assert authorization.status_code == 200
+    assert any(
+        candidate["credential_state"] == "authorization_required"
+        for candidate in authorization.json()["candidates"]
+    )
+
+    secret = "oauth-secret-must-not-leak"
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", secret)
+    configured = client.get("/v1/admin/connections/discovery?kind=oauth")
+    dumped = json.dumps(configured.json())
+    assert secret not in dumped
+    assert any(candidate["credential_state"] == "available" for candidate in configured.json()["candidates"])
 
 
 @pytest.mark.parametrize(
@@ -236,6 +255,7 @@ def test_existing_config_response_has_additive_apply_state(client):
     for path in (
         "/v1/acp/config", "/v1/mattermost/config", "/v1/outline/config",
         "/v1/notion/config", "/v1/slack/config", "/v1/smtp/config",
+        "/v1/oauth/config",
     ):
         response = client.get(path)
         assert response.status_code == 200, (path, response.text)
