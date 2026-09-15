@@ -276,27 +276,27 @@
     "dataNote": "데이터: GET /v1/policy/bundles (security policy_engine bundles 프록시). JWT 인증 필요. 375px에서는 좌우 스크롤로 확인."
   },
   "approvals": {
-    "title": "Approvals",
+    "title": "승인",
     "subtitle": "승인 대기 — 위험도 기반 JIT 승인 (Once / Always 사용자·그룹 / Deny) · 요청자 매핑 컨텍스트 표시",
     "refresh": "새로고침",
     "pendingTitle": "승인 대기 목록",
     "pendingDesc": "{count}건 대기 중",
     "groupId": "그룹 ID:",
     "mappingsLoaded": "매핑 {count}건 로드됨",
-    "approvalId": "Approval ID",
-    "requester": "Requester",
+    "approvalId": "승인 ID",
+    "requester": "요청자",
     "linkedAgent": "Linked Agent",
-    "agent": "Agent",
-    "action": "Action",
-    "resource": "Resource",
-    "risk": "Risk",
+    "agent": "에이전트",
+    "action": "동작",
+    "resource": "리소스",
+    "risk": "위험도",
     "requestedAt": "요청시각",
     "expires": "만료",
     "decision": "결정",
-    "decideDeny": "Deny",
-    "decideOnce": "Approve Once",
-    "decideUserAlways": "Always (User)",
-    "decideGroupAlways": "Always (Group)",
+    "decideDeny": "거부",
+    "decideOnce": "이번만 승인",
+    "decideUserAlways": "항상 (사용자)",
+    "decideGroupAlways": "항상 (그룹)",
     "emptyTitle": "대기 중인 승인이 없습니다",
     "emptyDesc": "새로운 고위험 작업이 요청되면 이 목록에 표시됩니다. 정책에 따라 APPROVAL_REQUIRED가 발생한 요청이 여기에 쌓입니다.",
     "needGroupId": "그룹 ID를 입력하세요.",
@@ -311,39 +311,51 @@
     "actionFailed": "결정 실패",
     "mappedBadge": "매핑",
     "derivedBadge": "유도",
-    "footnote": "* Approve Once: 이번 요청만 승인 · Always(사용자): 동일 사용자·동일 action/resource 영구 승인 · Always(그룹): 그룹 전체 영구 승인 · Deny: 거부. Requester의 Mattermost 매핑이 있으면 Linked Agent에 매핑 배지, 없으면 자동 유도값(agent:assistant:<suffix>)을 표시합니다."
+    "footnote": "* Approve Once: 이번 요청만 승인 · Always(사용자): 동일 사용자·동일 action/resource 영구 승인 · Always(그룹): 그룹 전체 영구 승인 · Deny: 거부. Requester의 Mattermost 매핑이 있으면 Linked Agent에 매핑 배지, 없으면 자동 유도값(agent:assistant:<suffix>)을 표시합니다.",
+    "colRequester": "요청자",
+    "colAgent": "에이전트",
+    "colAction": "동작",
+    "colResource": "리소스",
+    "colRisk": "위험도",
+    "ariaList": "승인 대기 목록"
   },
   "audit": {
-    "title": "Audit",
+    "title": "감사 로그",
     "subtitle": "Hash-chain 감사 로그 · 무결성 검증 · 타임라인",
     "refresh": "새로고침",
     "verify": "검증",
-    "chainStatus": "Chain 상태",
+    "chainStatus": "체인 상태",
     "chainStatusDesc": "Hash-chain + checkpoint 검증",
     "events": "이벤트",
     "count": "수",
     "head": "Head",
     "checkpoint": "Checkpoint",
-    "headHash": "Head hash",
+    "headHash": "헤드 해시",
     "noCheckpoint": "checkpoint 없음",
-    "currentHead": "current head",
+    "currentHead": "현재 헤드",
     "timelineTitle": "Audit 이벤트 타임라인",
     "timelineDesc": "시간 역순 · 최신 이벤트가 가장 위에 표시됩니다 ({count}건)",
     "loading": "로딩 중...",
     "noEvents": "감사 이벤트가 없습니다",
     "noEventsDesc": "정책 평가·위임·승인 등이 발생하면 hash-chain에 기록됩니다.",
-    "user": "user",
-    "agent": "agent",
-    "resource": "resource",
-    "action": "action",
-    "hash": "hash",
-    "prev": "prev",
+    "user": "사용자",
+    "agent": "에이전트",
+    "resource": "리소스",
+    "action": "동작",
+    "hash": "해시",
+    "prev": "이전",
     "eventCount": "이벤트 수",
     "chainLengthDesc": "전체 체인 길이",
-    "chainIntegrity": "Chain 무결성",
-    "verifyToCheck": "Verify 버튼으로 확인",
+    "chainIntegrity": "체인 무결성",
+    "verifyToCheck": "검증 버튼으로 확인",
     "chainValid": "chain_valid",
-    "tampered": "tampered"
+    "tampered": "tampered",
+    "colEvent": "이벤트",
+    "colActor": "주체",
+    "colAction": "동작",
+    "colResource": "리소스",
+    "colDecision": "판정",
+    "ariaTimeline": "감사 이벤트 타임라인"
   },
   "credentials": {
     "title": "Credentials",
@@ -1290,14 +1302,38 @@
         "bridgeOperatorManaged": "브리지 생명주기는 운영자가 관리합니다. 이 콘솔은 상태만 표시하며 서비스를 시작·중지·재시작하지 않습니다."
       },
       "kind": {
-        "acp": { "title": "ACP 실행 경로", "description": "Hermes ACP 발견·구성·적용 상태와 연결 검사를 관리합니다." },
-        "mattermost": { "title": "Mattermost", "description": "Mattermost 봇과 브리지 연결 상태를 관리합니다." },
-        "slack": { "title": "Slack", "description": "Slack 승인과 안전한 전달 경로 검사를 관리합니다." },
-        "notion": { "title": "Notion", "description": "Notion 인그레스 승인과 접근 검사를 관리합니다." },
-        "oauth": { "title": "OAuth 제공자", "description": "외부 인증 제공자의 활성 상태와 승인 필요 여부를 확인합니다." },
-        "smtp": { "title": "SMTP", "description": "메일을 발송하지 않는 연결 검사로 SMTP 알림 경로를 관리합니다." },
-        "outline": { "title": "Outline", "description": "Outline secret reference와 collection 접근 검사를 관리합니다." },
-        "mcp": { "title": "MCP 서버", "description": "MCP 서버를 발견·관리하고 도구 발견 검사를 실행합니다." }
+        "acp": {
+          "title": "ACP 실행 경로",
+          "description": "Hermes ACP 발견·구성·적용 상태와 연결 검사를 관리합니다."
+        },
+        "mattermost": {
+          "title": "Mattermost",
+          "description": "Mattermost 봇과 브리지 연결 상태를 관리합니다."
+        },
+        "slack": {
+          "title": "Slack",
+          "description": "Slack 승인과 안전한 전달 경로 검사를 관리합니다."
+        },
+        "notion": {
+          "title": "Notion",
+          "description": "Notion 인그레스 승인과 접근 검사를 관리합니다."
+        },
+        "oauth": {
+          "title": "OAuth 제공자",
+          "description": "외부 인증 제공자의 활성 상태와 승인 필요 여부를 확인합니다."
+        },
+        "smtp": {
+          "title": "SMTP",
+          "description": "메일을 발송하지 않는 연결 검사로 SMTP 알림 경로를 관리합니다."
+        },
+        "outline": {
+          "title": "Outline",
+          "description": "Outline secret reference와 collection 접근 검사를 관리합니다."
+        },
+        "mcp": {
+          "title": "MCP 서버",
+          "description": "MCP 서버를 발견·관리하고 도구 발견 검사를 실행합니다."
+        }
       }
     },
     "infraResolver": {
@@ -1454,6 +1490,109 @@
       },
       "mcp": {
         "deleteDescription": "서버 구성과 발견된 도구 연결 정보를 제거합니다."
+      }
+    },
+    "policy": {
+      "title": "정책 번들",
+      "subtitle": "게시된 정책 번들과 초안을 검토하고, 검증·승인·발행합니다.",
+      "tab": {
+        "published": "게시됨",
+        "draft": "초안",
+        "simulate": "시뮬레이션",
+        "history": "이력 / 롤백"
+      },
+      "active": {
+        "publishedVersion": "활성 게시 버전:",
+        "draftSuffix": "초안 {status} ({version})",
+        "noDraft": "초안 없음"
+      },
+      "published": {
+        "missing": "게시된 번들이 없습니다."
+      },
+      "draft": {
+        "title": "초안 — 편집 · 검증 → 승인 → 발행",
+        "description": "초안 저장·승인·발행에는 L5 권한이 필요합니다. 검증은 explicit_deny와 필수 deny-external-export를 강제하며, 기본 거부는 암묵적으로 적용됩니다.",
+        "sectionTitle": "초안 — {status}",
+        "createdBy": "작성자 {actor}",
+        "approvedBy": "승인자 {actor}",
+        "bundleId": "번들 ID",
+        "name": "이름",
+        "allowRemoveMandatory": "allow_remove_mandatory (L5)",
+        "rulesTable": "규칙 (표)",
+        "addRule": "규칙 추가",
+        "noRules": "규칙이 없습니다 — 추가하세요.",
+        "rawJson": "원본 JSON (대체 편집기 — 불러올 때 동기화됩니다)",
+        "loadJson": "JSON → 표에 적용",
+        "tableToJson": "표 → JSON",
+        "loadedFromJson": "JSON에서 불러왔습니다",
+        "editDraft": "초안 편집",
+        "saving": "저장 중...",
+        "saveDraft": "초안 저장 (L5)",
+        "validate": "검증",
+        "approve": "승인 (L5)",
+        "publish": "발행 (L5)",
+        "validationPassed": "검증 통과",
+        "validationFailed": "검증 실패",
+        "invalidJson": "올바르지 않은 JSON입니다",
+        "emptyRules": "초안에는 규칙이 최소 1개 필요합니다",
+        "saved": "초안을 저장했습니다 — 상태: {status} · 버전: {version}",
+        "approved": "승인했습니다 — {status}",
+        "published": "발행했습니다 — 활성 버전 {version}",
+        "publishFailed": "발행 실패",
+        "rolledBack": "{version}(으)로 롤백했습니다 — 현재 {active}",
+        "rollbackFailed": "롤백 실패"
+      },
+      "simulate": {
+        "title": "시뮬레이션 (드라이런)",
+        "description": "action과 resource를 초안(기본) 또는 게시된 번들에 대해 평가합니다. Section 25 순서와 fnmatch 글롭을 그대로 사용합니다.",
+        "action": "action",
+        "resource": "resource",
+        "useDraft": "use_draft",
+        "run": "실행",
+        "running": "...",
+        "decision": "판정:",
+        "source": "출처:"
+      },
+      "history": {
+        "title": "버전 이력 — 롤백은 새 게시 버전을 만듭니다",
+        "description": "이력은 불변이며, 롤백은 대상 규칙을 새 게시 버전(번호 증가)으로 복사합니다. L5 권한이 필요합니다.",
+        "activeBadge": "활성",
+        "emptyTitle": "이력이 없습니다",
+        "emptyDescription": "초안을 발행하면 불변 버전이 만들어집니다.",
+        "ariaLabel": "정책 버전 이력"
+      },
+      "col": {
+        "version": "버전",
+        "status": "상태",
+        "bundle": "번들",
+        "rules": "규칙",
+        "createdBy": "작성자",
+        "createdAt": "작성 시각",
+        "id": "id",
+        "action": "action",
+        "resourcePattern": "resource_pattern",
+        "effect": "effect"
+      },
+      "action": {
+        "rollback": "롤백"
+      },
+      "confirm": {
+        "publishTitle": "정책 발행",
+        "rollbackTitle": "정책 롤백",
+        "publishDescription": "승인된 초안을 활성 정책으로 발행합니다.",
+        "rollbackDescription": "{version}(으)로 롤백합니다. 새 게시 버전이 만들어집니다.",
+        "publishConfirm": "발행",
+        "rollbackConfirm": "롤백"
+      },
+      "source": {
+        "explicit_deny": "명시적 거부",
+        "security_boundary_deny": "보안 경계",
+        "personal_delegation": "개인 위임",
+        "persistent_user_grant": "영구 사용자 허용",
+        "group_grant": "그룹 허용",
+        "default_bundle": "기본 번들",
+        "jit_approval": "JIT 승인",
+        "default_deny": "기본 거부"
       }
     }
   }
