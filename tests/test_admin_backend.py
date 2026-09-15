@@ -138,7 +138,25 @@ async def test_admin_startup_seeds_canonical_registry(monkeypatch, caplog):
         await _app_mod._admin_persistence_startup()
 
     seed.assert_called_once_with()
-    assert "Canonical infra registry ready (created=6 skipped=4)" in caplog.text
+    assert "Canonical infra registry ready (created=6 skipped=4" in caplog.text
+
+
+async def test_admin_startup_logs_excluded_canonical_names(monkeypatch, caplog):
+    """The startup line surfaces OAOS_INFRA_SEED_EXCLUDE so operators can see the opt-out."""
+    monkeypatch.setenv("OAOS_INFRA_AUTO_SEED_ENABLED", "true")
+    monkeypatch.setenv("OAOS_INFRA_PROBE_ENABLED", "false")
+    monkeypatch.setattr(_app_mod, "ensure_admin_tables", AsyncMock())
+    seed = MagicMock(return_value={
+        "created_count": 6, "skipped_count": 3,
+        "excluded": ["memory"], "excluded_count": 1,
+    })
+    monkeypatch.setattr(infra_mod, "ensure_canonical_registry", seed)
+
+    with caplog.at_level("INFO"):
+        await _app_mod._admin_persistence_startup()
+
+    assert "excluded=1" in caplog.text
+    assert "memory" in caplog.text
 
 
 def test_login_success_and_me():
