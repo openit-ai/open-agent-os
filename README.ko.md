@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.7 — Personal AX Business Platform
+# Open Agent OS v0.1.8 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.7` — 단일 진실 `admin-console/package.json` `0.1.7` (직전 태그 `v0.1.6` → `920723f`; 0.1.7 릴리스 내용은 Phase 6 IA 병합 `983dc4c`와 배포·감사 수정 `c68bf47`을 포함; 그 이전 제품 태그 `v0.1.5` → `2406da63ac`). **아키텍처 문서 버전 `v1.7.4`(`docs/architecture-v1.7.4.md`)는 제품 버전 `0.1.7`과 별개** — v1.7.4는 Admin Console IA 전환 완료(§16.15)를 기록하며 제품 릴리즈 번호를 의미하지 않는다.
+- **제품 버전:** `0.1.8` — 단일 진실 `admin-console/package.json` `0.1.8` (직전 제품 태그 `v0.1.7` → `bc648fd`; 0.1.8 릴리스 내용은 setup 마법사 완주 수정 PR #20(`873a634`), canonical 시드 opt-out·Outline 헬스 경로 PR #21(`a1c9f52`), 설정 3화면 한글화 PR #22(`c10574c`), 설정 3화면 구조 정렬 PR #23(`1979881`), 카탈로그 정리·누락 키 가드 PR #24(`e512244`)를 포함; 그 이전 제품 태그 `v0.1.6` → `920723f`). **아키텍처 문서 버전 `v1.7.4`(`docs/architecture-v1.7.4.md`)는 제품 버전 `0.1.8`과 별개** — v1.7.4는 Admin Console IA 전환 완료(§16.15)를 기록하며 제품 릴리즈 번호를 의미하지 않는다.
 - **기준 아키텍처:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 Admin Console IA 전환 완료(§16.15) + Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
 - **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
@@ -290,6 +290,17 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **6그룹 canonical IA(§16.15)** — 연결·설정·실행·지식·모니터링·관리의 canonical 내비게이션 링크 30개와 데스크톱 사이드바·모바일 drawer의 동일 `AdminNavigation` 계층.
 - **호환 정책** — 단순 legacy URL 17개는 query를 보존하는 임시 서버 `307` 별칭, fragment 의존 `/infra`와 `/providers`는 client resolver 유지, legacy client page는 롤백 경로로 보존.
 - **공통 Admin UX 킷** — 표/query, 대화상자/확인, 토스트, 폼, loading/empty/error/status, 접근성, i18n, `useSearchParams()`/`Suspense` 계약 표준화.
+
+### 9f. 릴리즈 v0.1.8 — 제품 `0.1.8` (아키텍처 `v1.7.4`와 별개)
+
+**포함 내역 (v0.1.7 대비 — Admin Console 마감 작업):**
+- **setup 마법사 완주(PR #20)** — 주기 점검이 부팅 시 기동하고 종료 시 정리됩니다. 관찰한 점검 결과가 300초 메모리 TTL이 아니라 DB에 영속됩니다. canonical 인프라 레지스트리가 idempotent하게 시드됩니다. `applied` 판정이 `source == "env"`가 아니라 `config_revision == effective_revision`입니다. 각 차단 사유가 사람이 읽는 안내(ko/en)로 렌더되고 진단 코드는 보조 텍스트로 남습니다.
+- **canonical 시드 opt-out·Outline 헬스(PR #21)** — `OAOS_INFRA_SEED_EXCLUDE`가 운영자가 지운 행을 3개 재시드 경로(기동·`/seed`·콘솔 목록) 모두에서 영구 제외합니다. Outline 실시간 점검은 `/_health`를 쓰는데, `GET /`가 포트 없는 `https://127.0.0.1/`로 `301`을 반환해 리다이렉트로는 `200`에 도달할 수 없었습니다.
+- **설정 3화면 한글화(PR #22)** — policy·approvals·audit가 모든 라벨을 카탈로그로 렌더합니다. 직접 원인은 키 부재가 아니라 `ko.json`에 방치된 영어 값(예: `approvals.requester = "Requester"`)이었고, 3화면에 인라인으로 박혀 있던 영문도 `t()` 조회로 전환했습니다.
+- **설정 3화면 구조 정렬(PR #23)** — 3화면 본문을 `components/admin/control/control-features.tsx`로 이관하고 라우트를 11줄 `Suspense` 래퍼로 축소해 다른 그룹과 동일한 구조로 맞췄습니다. 이관으로 이 코드가 `components/admin/**` eslint 범위에 들어오며 기존 `exhaustive-deps` 경고 2건이 드러났고, 파생 배열을 memoize해 해소했습니다.
+- **카탈로그 정리·누락 키 가드(PR #24)** — 아무 파일도 참조하지 않는 275키를 삭제했고(1,335 → 1,060, ko/en 정합 유지), 카탈로그 테스트가 이제 화면이 조회하는 리터럴 키나 동적 접두사를 카탈로그가 해석하지 못하면 **빌드를 실패**시킵니다.
+
+**측정 근거 (main `e512244`, PR #23 + #24 병합):** `tsc --noEmit` 0; `vitest run` **31 files / 116 tests passed**; `eslint .` 0; `next build` 0(**56/56** 정적 페이지); 카탈로그 **1,060 = 1,060**. 가드는 실효를 실증했습니다 — `t("admin.probe.missingKey")`를 추가하면 그 키를 지목하며 스위트가 실패하고, 제거하면 다시 통과합니다.
 
 ## 10. Repository Structure
 
