@@ -1328,6 +1328,28 @@
           "redactionNote": "검증 후 라이선스 값은 표시하지 않습니다.",
           "inputHint": "검증을 위해 전송한 뒤 폼에서 즉시 지웁니다."
         }
+      },
+      "knowledge": {
+        "operations": {
+          "runTitle": "커넥터 동기화 실행",
+          "runDescription": "실제 동기화 작업을 투입하기 전에 드라이런으로 계획을 확인하세요.",
+          "history": "지식 동기화 이력",
+          "cursor": "커서",
+          "lastSync": "최근 동기화",
+          "updated": "갱신 시각",
+          "lastResult": "최근 동기화 결과",
+          "empty": "동기화 체크포인트가 없습니다",
+          "emptyDescription": "커넥터 동기화를 실행해 첫 체크포인트를 만드세요."
+        },
+        "embedding": {
+          "configuration": "임베딩 구성",
+          "candidateHint": "제공자를 선택하면 권장 기본 후보를 채웁니다.",
+          "defaultsDescription": "저장하기 전에 탐지된 구성과 권장 기본값을 검토하세요.",
+          "modelRequired": "임베딩 모델을 입력하세요.",
+          "dimensionInvalid": "0보다 큰 정수 차원을 입력하세요.",
+          "urlInvalid": "유효한 HTTP 또는 HTTPS URL을 입력하세요.",
+          "urlHint": "기본 엔드포인트를 사용하는 제공자에서는 선택 항목입니다."
+        }
       }
     }
   }

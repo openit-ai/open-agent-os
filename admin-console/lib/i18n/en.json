@@ -1328,6 +1328,28 @@
           "redactionNote": "The license value is never displayed after verification.",
           "inputHint": "The value is submitted for verification and immediately cleared from the form."
         }
+      },
+      "knowledge": {
+        "operations": {
+          "runTitle": "Run connector synchronization",
+          "runDescription": "Use dry-run to review the plan before enqueueing a synchronization job.",
+          "history": "Knowledge synchronization history",
+          "cursor": "Cursor",
+          "lastSync": "Last synchronized",
+          "updated": "Updated",
+          "lastResult": "Latest synchronization result",
+          "empty": "No synchronization checkpoints",
+          "emptyDescription": "Run a connector synchronization to establish the first checkpoint."
+        },
+        "embedding": {
+          "configuration": "Embedding configuration",
+          "candidateHint": "Selecting a provider fills its recommended default candidate.",
+          "defaultsDescription": "Review the detected configuration and recommended defaults before saving.",
+          "modelRequired": "Enter an embedding model.",
+          "dimensionInvalid": "Enter a positive whole-number dimension.",
+          "urlInvalid": "Enter a valid HTTP or HTTPS URL.",
+          "urlHint": "Optional for providers that use a built-in endpoint."
+        }
       }
     }
   }
