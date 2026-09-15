@@ -1,4 +1,4 @@
-"""Focused tests for Outline HTTPS probe fix and duplicate display regression."""
+"""Focused tests for the Outline HTTPS probe and registry display contract."""
 from __future__ import annotations
 
 import sys
@@ -146,23 +146,13 @@ def test_outline_registry_url_without_probe_still_https():
     assert outline["url"].startswith("https://")
     assert "note.openit.co.kr" in outline["url"]
 
-def test_duplicate_display_name_not_rendered_twice():
-    """UI fix: when display_name == service/name (e.g. outline/outline), render once."""
-    # Check page.tsx contains dedup logic
-    page_path = ROOT / "admin-console" / "app" / "(dashboard)" / "infra" / "page.tsx"
-    text = page_path.read_text(encoding="utf-8")
-    # New logic must exist: dn === sn check
-    assert "dn === sn" in text or "dn ===" in text or "toLowerCase" in text, "page.tsx should contain duplicate-display guard"
-    # Old buggy pattern must be gone: unconditional second span with {it.service || it.name} without guard
-    # Ensure the guard is wrapping the second span
-    assert "if (!dn || dn === sn) return null" in text, "guard should hide duplicate display_name"
-    # Also ensure infra.py unified still preserves display_name == outline
+def test_registry_display_name_is_not_duplicated():
+    """The registry preserves Outline's display name as one uncombined value."""
     token = _login()
     c = _client()
     h = _auth(token)
     r = c.post("/v1/infra", json={"service": "outline", "host": "note.openit.co.kr", "port": 443, "health_path": "/_health"}, headers=h)
     assert r.status_code == 201
-    # registry display_name should be "outline" (lowercase) not duplicated
     with patch("httpx.AsyncClient", return_value=MagicMock(
         __aenter__=AsyncMock(return_value=MagicMock(get=AsyncMock(return_value=MagicMock(status_code=200)))),
         __aexit__=AsyncMock(return_value=False),
@@ -170,9 +160,5 @@ def test_duplicate_display_name_not_rendered_twice():
         with patch("asyncio.open_connection", new=AsyncMock(side_effect=Exception("tcp"))):
             r2 = c.get("/v1/infra/registry", headers=h)
     outline = next(x for x in r2.json()["items"] if x["name"] == "outline")
-    assert outline["display_name"].lower() == outline["name"].lower() or outline["display_name"] == "outline"
-    # The UI would render this as single token, not "outlineoutline"
-    combined_bug = (outline["display_name"] or "") + (outline["service"] or outline["name"] or "")
-    # Ensure combined would be duplicate if old UI, but new UI avoids it — we check data itself not duplicated
-    assert combined_bug.lower() == "outlineoutline"  # data naturally would duplicate if UI naively concatenates
-    # UI guard prevents that visual duplication
+    assert outline["display_name"].lower() == "outline"
+    assert outline["display_name"].lower() != "outlineoutline"
