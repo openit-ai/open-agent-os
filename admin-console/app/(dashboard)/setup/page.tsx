@@ -18,13 +18,13 @@ const REQUIRED_STEPS = new Set<SetupStepId>(["environment", "runtime", "ingress"
 const FINAL_PREREQUISITES = new Set<SetupStepId>(["environment", "runtime", "ingress", "policy"]);
 
 const ACTION_HREF: Record<SetupStepId, string> = {
-  environment: "/infra",
+  environment: "/operations/health",
   runtime: "/control/acp",
-  ingress: "/infra",
+  ingress: "/connections",
   policy: "/policy",
   mcp: "/execution/mcp",
   knowledge: "/knowledge-ops",
-  notifications: "/infra",
+  notifications: "/connections",
   verify: "/setup",
 };
 
