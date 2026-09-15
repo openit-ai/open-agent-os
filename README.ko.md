@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.6` — 단일 진실 `admin-console/package.json` `0.1.6` (후보 브랜치 `release/v0.1.3-remediation` at `6d91f3b710`, 태그 `v0.1.3` 미생성 — 이전 `v0.1.2`는 `34f0981e71`). **아키텍처 문서 버전 `v1.7.3`(`docs/architecture-v1.7.3.md`)는 제품 버전 `0.1.6`와 별개** — v1.7.3는 Adaptive Profile Engine 설계(§16.12)와 Control-Plane 중심 IA 별칭(§16.14)을, 0.1.6는 제품 릴리즈 번호를 의미한다.
+- **제품 버전:** `0.1.6` — 단일 진실 `admin-console/package.json` `0.1.6` (태그 `v0.1.6` → `920723f`, 이전 제품 태그 `v0.1.5` → `2406da63ac`). **아키텍처 문서 버전 `v1.7.3`(`docs/architecture-v1.7.3.md`)는 제품 버전 `0.1.6`와 별개** — v1.7.3는 Adaptive Profile Engine 설계(§16.12)와 Control-Plane 중심 IA 별칭(§16.14)을, 0.1.6는 제품 릴리즈 번호를 의미한다.
 - **기준 아키텍처:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
 - **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
