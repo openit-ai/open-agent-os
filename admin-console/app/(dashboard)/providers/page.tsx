@@ -1,12 +1,16 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableQuery, useToast, ConfirmDialog, DataTable, Skeleton } from "@/components/admin";
+import { applyClientListQuery } from "@/lib/admin-api/list-query";
+import { adminKeys } from "@/lib/admin-api/keys";
+import { normalizeAdminError } from "@/lib/admin-api/client";
 import { getToken, listLLMProviders, createLLMProvider, updateLLMProvider, deleteLLMProvider, testLLMProvider, toggleLLMProvider, getRuntimeMode, setRuntimeMode, type LLMProvider, type LLMProviderType, type RuntimeMode } from "@/lib/api";
 import { RefreshCw, Trash2, Pencil, Plus, Cpu, Plug2, Ban, CheckCircle2, Info, BarChart3 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
@@ -28,9 +32,12 @@ function providerBadge(p: string) {
   return map[p] ?? "bg-secondary";
 }
 
-export default function ProvidersPage() {
+function ProvidersPageContent() {
   const router = useRouter();
   const { t } = useI18n();
+  const table = useTableQuery();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const [runtimeMode, setRuntimeModeState] = useState<RuntimeMode>("hermes");
   const [runtimeLoading, setRuntimeLoading] = useState(true);
@@ -55,12 +62,13 @@ export default function ProvidersPage() {
   const [formLoading, setFormLoading] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { status: string; latency_ms?: number; detail?: string }>>({});
+  const [deleting, setDeleting] = useState<LLMProvider | null>(null);
 
   const fetchRuntime = useCallback(async () => {
     setRuntimeError(null);
     try {
       const res = await getRuntimeMode();
-      setRuntimeMode(res.mode);
+      setRuntimeModeState(res.mode);
     } catch (e) {
       setRuntimeError(e instanceof Error ? e.message : t("common.error"));
     } finally {
@@ -76,10 +84,11 @@ export default function ProvidersPage() {
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("common.error"));
+      toast({ title: t("admin.lists.backgroundError"), description: e instanceof Error ? e.message : undefined, variant: "error" });
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, toast]);
 
   useEffect(() => {
     if (!getToken()) { router.replace("/login"); return; }
@@ -140,6 +149,8 @@ export default function ProvidersPage() {
       } else {
         await createLLMProvider(payload as never);
       }
+      toast({ title: editingId ? t("providers.update") : t("providers.add"), variant: "success" });
+      await queryClient.invalidateQueries({ queryKey: adminKeys.lists("providers") });
       setName(""); setApiKey(""); setBaseUrl(""); setModel(""); setPath(""); setUrl(""); setEnabled(true); setEditingId(null);
       await fetchList();
     } catch (e) {
@@ -162,9 +173,8 @@ export default function ProvidersPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm(t("providers.deleteConfirm"))) return;
-    try { await deleteLLMProvider(id); await fetchList(); }
-    catch (e) { alert(e instanceof Error ? e.message : t("providers.deleteFailed")); }
+    try { await deleteLLMProvider(id); toast({ title: t("common.delete"), variant: "success" }); await queryClient.invalidateQueries({ queryKey: adminKeys.lists("providers") }); await fetchList(); }
+    catch (e) { toast({ title: t("providers.deleteFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" }); throw e; }
   }
 
   async function handleTest(id: string) {
@@ -172,18 +182,28 @@ export default function ProvidersPage() {
     try {
       const res = await testLLMProvider(id);
       setTestResult((prev) => ({ ...prev, [id]: { status: res.status, latency_ms: res.latency_ms, detail: res.detail } }));
+      toast({ title: res.status === "ok" ? t("providers.testOk", { ms: String(res.latency_ms ?? "") }) : t("providers.testFailed"), variant: res.status === "ok" ? "success" : "error" });
+      await queryClient.invalidateQueries({ queryKey: adminKeys.lists("providers") });
       await fetchList();
     } catch (e) {
       setTestResult((prev) => ({ ...prev, [id]: { status: "failed", detail: e instanceof Error ? e.message : t("providers.testFailed") } }));
+      toast({ title: t("providers.testFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" });
     } finally { setTestingId(null); }
   }
 
   async function handleToggle(id: string) {
-    try { await toggleLLMProvider(id); await fetchList(); }
-    catch (e) { alert(e instanceof Error ? e.message : t("common.error")); }
+    try { await toggleLLMProvider(id); toast({ title: t("providers.update"), variant: "success" }); await queryClient.invalidateQueries({ queryKey: adminKeys.lists("providers") }); await fetchList(); }
+    catch (e) { toast({ title: t("common.error"), description: e instanceof Error ? e.message : undefined, variant: "error" }); }
   }
 
   const isHermes = runtimeMode === "hermes";
+  // Provider list API is unpaged today; use the shared client adapter without changing legacy response fields.
+  const visibleItems = useMemo(() => applyClientListQuery(
+    items,
+    table.query,
+    [(row) => row.provider, (row) => row.name, (row) => row.model, (row) => row.last_test_status],
+    { provider: (row) => row.provider, name: (row) => row.name ?? "", model: (row) => row.model ?? "", status: (row) => row.enabled, tested: (row) => row.last_test_at ?? "" },
+  ), [items, table.query]);
 
   return (
     <div className="space-y-6">
@@ -316,65 +336,61 @@ export default function ProvidersPage() {
 
           {/* List Table */}
           <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("providers.provider")}</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Model</TableHead>
-                    <TableHead>Cred / Target</TableHead>
-                    <TableHead>{t("common.status")}</TableHead>
-                    <TableHead>Last Test</TableHead>
-                    <TableHead className="text-right">{t("common.actions")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading ? (
-                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">{t("common.loading")}</TableCell></TableRow>
-                  ) : items.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">{t("providers.noData")}</TableCell></TableRow>
-                  ) : items.map((it) => {
-                    const cred = it.provider === "opencode-go" || (it.provider as string) === "opencode" ? it.path : it.provider === "ollama" ? (it.url ?? it.base_url ?? it.baseUrl) : (it.api_key_masked ?? it.apiKey ?? "***");
-                    const isEnabled = it.enabled;
-                    const tr = testResult[it.id];
-                    return (
-                      <TableRow key={it.id} className={!isEnabled ? "opacity-60" : ""}>
-                        <TableCell><span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${providerBadge(it.provider)}`}>{it.provider}</span></TableCell>
-                        <TableCell className="text-sm">{it.name || "-"}</TableCell>
-                        <TableCell className="text-xs font-mono">{it.model || "-"}</TableCell>
-                        <TableCell className="max-w-[180px] truncate text-xs font-mono" title={String(cred ?? "")}>{cred ?? "-"}</TableCell>
-                        <TableCell>{isEnabled ? <Badge variant="success">enabled</Badge> : <Badge variant="secondary">disabled</Badge>}</TableCell>
-                        <TableCell className="text-xs">
-                          {it.last_test_status ? (
-                            <span className={it.last_test_status === "ok" ? "text-[#22C55E]" : "text-[#DC2626]"}>
-                              {it.last_test_status} {it.last_test_latency_ms ? `(${it.last_test_latency_ms}ms)` : ""}
-                            </span>
-                          ) : tr ? (
-                            <span className={tr.status === "ok" ? "text-[#22C55E]" : "text-[#DC2626]"}>{tr.status === "ok" ? t("providers.testOk", { ms: String(tr.latency_ms ?? "") }) : tr.detail ?? t("providers.testFailed")}</span>
-                          ) : "-"}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-1">
-                            <Button variant="outline" size="sm" disabled={testingId === it.id} onClick={() => handleTest(it.id)} title={t("providers.test")}>
-                              {testingId === it.id ? t("providers.testing") : <><Plug2 className="h-3 w-3 mr-1" />{t("providers.test")}</>}
-                            </Button>
-                            <Button variant={isEnabled ? "outline" : "default"} size="sm" onClick={() => handleToggle(it.id)} title={isEnabled ? t("providers.toggleDisable") : t("providers.toggleEnable")}>
-                              {isEnabled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
-                            </Button>
-                            <Button variant="ghost" size="icon" onClick={() => startEdit(it)} aria-label={t("common.edit")}><Pencil className="h-4 w-4" /></Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleDelete(it.id)} aria-label={t("common.delete")}><Trash2 className="h-4 w-4" /></Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+            <CardContent>
+              <DataTable
+                rows={visibleItems.rows}
+                columns={[
+                  { id: "provider", header: t("providers.provider"), cell: (row) => <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${providerBadge(row.provider)}`}>{row.provider}</span>, sortable: true },
+                  { id: "name", header: "Name", accessor: (row) => row.name, sortable: true },
+                  { id: "model", header: "Model", accessor: (row) => row.model, sortable: true },
+                  { id: "credential", header: t("admin.providers.credentialState"), cell: (row) => row.provider === "opencode-go" || row.provider === "ollama" ? t("admin.providers.connectionTargetConfigured") : (row.api_key_masked ? t("admin.providers.secretConfigured") : t("admin.providers.secretMissing")) },
+                  { id: "status", header: t("common.status"), cell: (row) => row.enabled ? <Badge variant="success">enabled</Badge> : <Badge variant="secondary">disabled</Badge>, sortable: true },
+                  { id: "tested", header: "Last Test", cell: (row) => row.last_test_status ? `${row.last_test_status}${row.last_test_latency_ms ? ` (${row.last_test_latency_ms}ms)` : ""}` : testResult[row.id]?.status ?? "—", sortable: true },
+                ]}
+                rowKey={(row) => row.id}
+                loading={loading}
+                error={error ? normalizeAdminError(new Error(error)) : undefined}
+                onRetry={fetchList}
+                query={table.query}
+                onQueryChange={table.onQueryChange}
+                totalRows={visibleItems.totalRows}
+                searchable
+                rowActions={(row) => [
+                  { id: "test", label: testingId === row.id ? t("providers.testing") : t("providers.test"), icon: Plug2, disabled: testingId === row.id, onSelect: () => handleTest(row.id) },
+                  { id: "toggle", label: row.enabled ? t("providers.toggleDisable") : t("providers.toggleEnable"), icon: row.enabled ? Ban : CheckCircle2, onSelect: () => handleToggle(row.id) },
+                  { id: "edit", label: t("common.edit"), icon: Pencil, onSelect: () => startEdit(row) },
+                  { id: "delete", label: t("common.delete"), icon: Trash2, tone: "danger", onSelect: () => setDeleting(row) },
+                ]}
+                empty={{ title: t("providers.noData"), description: t("providers.formTitleCreate"), filtered: Boolean(table.query.search) }}
+                ariaLabel={t("providers.title")}
+              />
             </CardContent>
           </Card>
         </>
       )}
+      <ConfirmDialog
+        open={Boolean(deleting)}
+        title={t("providers.deleteConfirm")}
+        description={t("providers.deleteConfirm")}
+        targetLabel={deleting?.name || deleting?.provider}
+        confirmLabel={t("common.delete")}
+        tone="danger"
+        onOpenChange={(open) => { if (!open) setDeleting(null); }}
+        onConfirm={() => deleting ? handleDelete(deleting.id) : undefined}
+      />
     </div>
+  );
+}
+
+
+/**
+ * `useTableQuery`/`useUrlFilter` call `useSearchParams()`, which Next.js 15 requires
+ * to sit under a Suspense boundary during prerendering.
+ */
+export default function ProvidersPage() {
+  return (
+    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+      <ProvidersPageContent />
+    </Suspense>
   );
 }
