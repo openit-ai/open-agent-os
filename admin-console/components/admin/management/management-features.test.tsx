@@ -50,7 +50,7 @@ describe("Phase 5 management features", () => {
     ]);
     vi.mocked(api.listMappings).mockResolvedValue([]);
     vi.mocked(api.deleteUser).mockResolvedValue({ status: "deleted", id: "other" });
-    vi.mocked(api.getCredentialsStatus).mockResolvedValue({ providers: [{ provider: "notion", total: 1, active: 1, revoked: 0, expired: 0 }], total: 1, active: 1, revoked: 0, expired: 0, recent: [{ id: "cred-1", user_id: "user-1", agent_id: "agent-1", provider: "notion", scope: "read", status: "active", created_at: "2026-09-15T00:00:00Z" }] });
+    vi.mocked(api.getCredentialsStatus).mockResolvedValue({ providers: [{ provider: "notion", total: 1, active: 1, revoked: 0, expired: 0 }], total: 1, active: 1, revoked: 0, expired: 0, recent: [{ id: "cred-1", user_id: "user-1", agent_id: "agent-1", provider: "notion", scope: "read", status: "active", created_at: "2026-09-15T00:00:00Z", credential_value: "credential-secret" }] } as unknown as api.CredentialsStatusResponse);
     vi.mocked(api.getSecretsStatus).mockResolvedValue({ checked_at: "2026-09-15T00:00:00Z", count: 1, rotation_needed_count: 0, items: [{ name: "NOTION_TOKEN", configured: true, length: 32, source_env: "NOTION_TOKEN", rotation_needed: false, reason: "healthy", value: "raw-secret-value" } as api.SecretStatusItem] });
     vi.mocked(api.getRotationGuide).mockResolvedValue({ overview: "Rotate outside the console", steps: [], checklist: [], executes_rotation: false });
     vi.mocked(api.deleteUser).mockClear();

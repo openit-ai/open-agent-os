@@ -99,6 +99,7 @@ export function McpPanel() {
       await fetchServers();
     } catch (e) {
       setError(e instanceof Error ? e.message : "delete failed");
+      throw e;
     }
   };
 
