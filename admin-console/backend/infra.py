@@ -892,9 +892,11 @@ def _resolve_outline_live() -> dict:
     raw = (os.environ.get("OUTLINE_URL") or os.environ.get("OAOS_OUTLINE_URL") or os.environ.get("OUTLINE_API_URL") or "").strip()
     if raw:
         host, port = _parse_host_port_from_url(raw, "127.0.0.1", 3000)
-        # Outline health: root or /_health — use / for broad compat without auth
-        return _live_http_entry("live_outline", "outline", "Outline", host, port, health_path="/", extra={"category": "knowledge", "url_hint": raw})
-    return _live_http_entry("live_outline", "outline", "Outline", "127.0.0.1", 3000, health_path="/", extra={"category": "knowledge"})
+        # Outline serves its health document at /_health; "/" answers 301 to an
+        # https URL that drops the port, so a redirect-following probe never
+        # reaches 200 and the row would stay unhealthy forever.
+        return _live_http_entry("live_outline", "outline", "Outline", host, port, health_path="/_health", extra={"category": "knowledge", "url_hint": raw})
+    return _live_http_entry("live_outline", "outline", "Outline", "127.0.0.1", 3000, health_path="/_health", extra={"category": "knowledge"})
 
 
 def _resolve_postgres_live() -> dict:
@@ -1132,11 +1134,33 @@ def create_service_alias(req: InfraAliasCreate, admin: AdminUser = Depends(requi
 # POST /v1/infra/seed — idempotent seed of 10 canonical services (no secrets, host/port only)
 # ---------------------------------------------------------------------------
 
+def canonical_excluded_names() -> set[str]:
+    """Names this deployment opts out of, via OAOS_INFRA_SEED_EXCLUDE.
+
+    Opt-out is required because two paths otherwise resurrect a canonical
+    service an operator deliberately removed: ensure_canonical_registry()
+    recreates the missing row on every startup, and _build_unified_rows()
+    fabricates a row for every CANONICAL_ORDER name even when no DB row exists.
+    """
+    raw = os.environ.get("OAOS_INFRA_SEED_EXCLUDE", "") or ""
+    names = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    unknown = sorted(name for name in names if name not in CANONICAL_ORDER)
+    if unknown:
+        logger.warning(
+            "OAOS_INFRA_SEED_EXCLUDE lists names outside CANONICAL_ORDER (ignored): %s",
+            ", ".join(unknown),
+        )
+    return names
+
+
 def _canonical_defs_for_seed() -> list[dict]:
     """Safe canonical definitions for DB seed — host/port only, no secrets/DSN/password."""
     live_map = {e["name"]: e for e in LIVE_INVENTORY}
+    excluded = canonical_excluded_names()
     out: list[dict] = []
     for name in CANONICAL_ORDER:
+        if name in excluded:
+            continue
         e = live_map.get(name)
         if e is None:
             e = {"id": f"live_{name}", "name": name, "display_name": _CANONICAL_DISPLAY.get(name, name),
@@ -1216,8 +1240,11 @@ async def _build_unified_rows(probe: bool = True) -> list[dict]:
 
     rows: list[dict] = []
     seen_names: set[str] = set()
+    excluded_names = canonical_excluded_names()
 
     for name in CANONICAL_ORDER:
+        if name in excluded_names:
+            continue
         db_svc = db_by_name.get(name)
         live_def = live_by_name.get(name)
         live_res = probed.get(name)
@@ -1486,6 +1513,7 @@ def ensure_canonical_registry(*, create_backup: bool = False) -> dict:
     backup_path = _backup_registry(items) if create_backup else None
 
     existing_names = {service.name for service in items}
+    excluded_names = canonical_excluded_names()
 
     created: list[dict] = []
     skipped: list[str] = []
@@ -1558,6 +1586,8 @@ def ensure_canonical_registry(*, create_backup: bool = False) -> dict:
         "skipped_count": len(skipped),
         "created": created,
         "skipped": skipped,
+        "excluded": sorted(excluded_names),
+        "excluded_count": len(excluded_names),
         "backup_path": backup_path,
         "note": "host/port/health_path only — no API key/password/DSN stored or displayed",
     }

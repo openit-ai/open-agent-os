@@ -216,8 +216,10 @@ async def _admin_persistence_startup() -> None:
         try:
             seed_result = _infra_mod.ensure_canonical_registry()
             logger.info(
-                "Canonical infra registry ready (created=%d skipped=%d)",
+                "Canonical infra registry ready (created=%d skipped=%d excluded=%d%s)",
                 seed_result["created_count"], seed_result["skipped_count"],
+                seed_result.get("excluded_count", 0),
+                f" [{', '.join(seed_result['excluded'])}]" if seed_result.get("excluded") else "",
             )
         except Exception as exc:  # noqa: BLE001 - report degraded readiness without blocking the API
             logger.warning("Canonical infra registry seed failed: %s", type(exc).__name__)
