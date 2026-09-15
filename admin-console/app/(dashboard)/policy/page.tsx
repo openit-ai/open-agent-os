@@ -53,15 +53,16 @@ const SOURCE_OPTIONS = [
 
 const EFFECT_OPTIONS: PolicyRule["effect"][] = ["ALLOW", "DENY", "APPROVAL_REQUIRED"];
 
-const SOURCE_LABEL: Record<string, string> = {
-  explicit_deny: "Explicit Deny",
-  security_boundary_deny: "Security Boundary",
-  personal_delegation: "Personal Delegation",
-  persistent_user_grant: "Persistent Grant",
-  group_grant: "Group Grant",
-  default_bundle: "Default Bundle",
-  jit_approval: "JIT Approval",
-  default_deny: "Default Deny",
+/** Evaluation-order sources are translated at render time via `admin.policy.source.*`. */
+const SOURCE_KEYS: Record<string, string> = {
+  explicit_deny: "explicit_deny",
+  security_boundary_deny: "security_boundary_deny",
+  personal_delegation: "personal_delegation",
+  persistent_user_grant: "persistent_user_grant",
+  group_grant: "group_grant",
+  default_bundle: "default_bundle",
+  jit_approval: "jit_approval",
+  default_deny: "default_deny",
 };
 
 function decisionVariant(d: string) {
@@ -165,7 +166,7 @@ function PolicyPageContent() {
         const parsed = JSON.parse(jsonDraft);
         if (Array.isArray(parsed)) rules = parsed;
       } catch (e) {
-        setValidateResult({ ok: false, errors: [e instanceof Error ? e.message : "Invalid JSON"] });
+        setValidateResult({ ok: false, errors: [e instanceof Error ? e.message : t("admin.policy.draft.invalidJson")] });
         return;
       }
     }
@@ -186,12 +187,12 @@ function PolicyPageContent() {
     try {
       let rules: PolicyRule[] = editRules;
       if (jsonDraft.trim()) {
-        try { const p = JSON.parse(jsonDraft); if (Array.isArray(p)) rules = p; } catch (e) { throw new Error(e instanceof Error ? e.message : "Invalid JSON"); }
+        try { const p = JSON.parse(jsonDraft); if (Array.isArray(p)) rules = p; } catch (e) { throw new Error(e instanceof Error ? e.message : t("admin.policy.draft.invalidJson")); }
       }
-      if (!rules.length) throw new Error("Draft must contain at least one rule");
+      if (!rules.length) throw new Error(t("admin.policy.draft.emptyRules"));
       const res = await upsertPolicyDraft({ rules, name: editName, bundle_id: editBundleId, allow_remove_mandatory: allowRemoveMandatory });
       setDraft(res.draft);
-      setActionMsg(`Draft saved — status: ${res.draft.status} · version: ${res.draft.version}`);
+      setActionMsg(t("admin.policy.draft.saved", { status: res.draft.status, version: res.draft.version }));
       await fetchAll();
       setActiveTab("bundles");
     } catch (e) {
@@ -210,20 +211,20 @@ function PolicyPageContent() {
 
   async function handleApprove() {
     setActionMsg(null);
-    try { const r = await approvePolicy("default"); setActionMsg(`Approved — ${r.status}`); await fetchAll(); }
+    try { const r = await approvePolicy("default"); setActionMsg(t("admin.policy.draft.approved", { status: r.status })); await fetchAll(); }
     catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); }
   }
 
   async function handlePublish() {
     setActionMsg(null);
-    try { const r = await publishPolicy("default"); setActionMsg(`Published — active ${r.active_version}`); toast({ title: `Published — active ${r.active_version}`, variant: "success" }); await fetchAll(); }
-    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); toast({ title: "Publish failed", description: e instanceof Error ? e.message : undefined, variant: "error" }); throw e; }
+    try { const r = await publishPolicy("default"); setActionMsg(t("admin.policy.draft.published", { version: r.active_version })); toast({ title: t("admin.policy.draft.published", { version: r.active_version }), variant: "success" }); await fetchAll(); }
+    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); toast({ title: t("admin.policy.draft.publishFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" }); throw e; }
   }
 
   async function handleRollback(v: string) {
     setActionMsg(null);
-    try { const r = await rollbackPolicy(v, "default"); setActionMsg(`Rolled back to ${v} → now ${r.active_version}`); toast({ title: `Rolled back to ${v}`, variant: "success" }); await fetchAll(); }
-    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); toast({ title: "Rollback failed", description: e instanceof Error ? e.message : undefined, variant: "error" }); throw e; }
+    try { const r = await rollbackPolicy(v, "default"); setActionMsg(t("admin.policy.draft.rolledBack", { version: v, active: r.active_version })); toast({ title: t("admin.policy.draft.rolledBack", { version: v, active: r.active_version }), variant: "success" }); await fetchAll(); }
+    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); toast({ title: t("admin.policy.draft.rollbackFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" }); throw e; }
   }
 
   // Policy history has no list query parameters; preserve the API and paginate the immutable client snapshot.
@@ -239,7 +240,7 @@ function PolicyPageContent() {
       <div className="flex items-center justify-between">
         <h1 className="flex items-center gap-2 text-2xl font-semibold">
           <Shield className="h-6 w-6" />
-          Policy Bundles
+          {t("admin.policy.title")}
         </h1>
         <Button variant="outline" size="sm" onClick={fetchAll} disabled={loading}>
           <RefreshCw className={`mr-1 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -249,14 +250,14 @@ function PolicyPageContent() {
 
       {error && <p className="rounded-md bg-[#DC2626]/10 p-3 text-sm text-[#DC2626]" role="alert">{error}</p>}
       {actionMsg && <p className="rounded-md border bg-card p-3 text-sm" role="status">{actionMsg}</p>}
-      {activeVersion && <p className="text-xs text-muted-foreground">Active published version: <span className="font-mono font-medium text-foreground">{activeVersion}</span>{draft ? <> · Draft {draft.status} ({draft.version})</> : " · No draft"}</p>}
+      {activeVersion && <p className="text-xs text-muted-foreground">{t("admin.policy.active.publishedVersion")} <span className="font-mono font-medium text-foreground">{activeVersion}</span>{draft ? <> · {t("admin.policy.active.draftSuffix", { status: draft.status, version: draft.version })}</> : ` · ${t("admin.policy.active.noDraft")}`}</p>}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="bundles">Published</TabsTrigger>
-          <TabsTrigger value="draft"><FileEdit className="mr-1 h-3.5 w-3.5" />Draft</TabsTrigger>
-          <TabsTrigger value="simulate"><FlaskConical className="mr-1 h-3.5 w-3.5" />Simulate</TabsTrigger>
-          <TabsTrigger value="history"><History className="mr-1 h-3.5 w-3.5" />History / Rollback</TabsTrigger>
+          <TabsTrigger value="bundles">{t("admin.policy.tab.published")}</TabsTrigger>
+          <TabsTrigger value="draft"><FileEdit className="mr-1 h-3.5 w-3.5" />{t("admin.policy.tab.draft")}</TabsTrigger>
+          <TabsTrigger value="simulate"><FlaskConical className="mr-1 h-3.5 w-3.5" />{t("admin.policy.tab.simulate")}</TabsTrigger>
+          <TabsTrigger value="history"><History className="mr-1 h-3.5 w-3.5" />{t("admin.policy.tab.history")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="bundles">
@@ -274,7 +275,7 @@ function PolicyPageContent() {
                   return (
                     <div key={src} className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium ${isExplicitDeny ? "border-[#DC2626] bg-[#DC2626] text-white" : isPersonal ? "border-[#22C55E] bg-[#22C55E]/10 text-[#16A34A]" : "bg-muted"}`}>
                       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-background text-[11px] font-bold text-foreground">{idx + 1}</span>
-                      {SOURCE_LABEL[src] ?? src}
+                      {SOURCE_KEYS[src] ? t(`admin.policy.source.${SOURCE_KEYS[src]}`) : src}
                     </div>
                   );
                 })}
@@ -301,7 +302,7 @@ function PolicyPageContent() {
                 <CardContent className="p-0">
                   <div className="w-full overflow-auto">
                     <Table>
-                      <TableHeader><TableRow><TableHead className="whitespace-nowrap"># (Section 25)</TableHead><TableHead>source</TableHead><TableHead>action (glob)</TableHead><TableHead>resource (glob)</TableHead><TableHead>decision</TableHead><TableHead>priority</TableHead></TableRow></TableHeader>
+                      <TableHeader><TableRow><TableHead className="whitespace-nowrap">{t("policy.colOrder")}</TableHead><TableHead>{t("policy.colSource")}</TableHead><TableHead>{t("policy.colAction")}</TableHead><TableHead>{t("policy.colResource")}</TableHead><TableHead>{t("policy.colDecision")}</TableHead><TableHead>{t("policy.colPriority")}</TableHead></TableRow></TableHeader>
                       <TableBody>
                         {[...(bundle.rules ?? [])].sort((a, b) => { const ao = orderIndex(a.source, evalOrder); const bo = orderIndex(b.source, evalOrder); if (ao !== bo) return ao - bo; if (a.priority !== b.priority) return a.priority - b.priority; return a.id.localeCompare(b.id); }).map((rule: PolicyRule) => {
                           const isExplicitDeny = rule.source === "explicit_deny";
@@ -309,7 +310,7 @@ function PolicyPageContent() {
                           return (
                             <TableRow key={rule.id} className={isExplicitDeny ? "bg-[#DC2626]/10 hover:bg-[#DC2626]/15" : isPersonal ? "bg-[#22C55E]/5" : ""}>
                               <TableCell className="whitespace-nowrap text-xs font-medium">{orderIndex(rule.source, evalOrder)}<span className="ml-1 text-muted-foreground">· {rule.id}</span></TableCell>
-                              <TableCell><Badge variant={isExplicitDeny ? "danger" : isPersonal ? "success" : "secondary"} className="whitespace-nowrap">{SOURCE_LABEL[rule.source] ?? rule.source}</Badge></TableCell>
+                              <TableCell><Badge variant={isExplicitDeny ? "danger" : isPersonal ? "success" : "secondary"} className="whitespace-nowrap">{SOURCE_KEYS[rule.source] ? t(`admin.policy.source.${SOURCE_KEYS[rule.source]}`) : rule.source}</Badge></TableCell>
                               <TableCell className="font-mono text-xs">{rule.action}</TableCell>
                               <TableCell className="font-mono text-xs">{rule.resource_pattern}</TableCell>
                               <TableCell><Badge variant={decisionVariant(rule.effect)}>{rule.effect}</Badge></TableCell>
@@ -327,14 +328,14 @@ function PolicyPageContent() {
           )}
           {draft && (
             <Card className="mt-4 border-dashed">
-              <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><FileEdit className="h-4 w-4" />Draft — {draft.status} <Badge variant={draft.status === "approved" ? "success" : "warning"}>{draft.status}</Badge><span className="font-mono text-xs text-muted-foreground">{draft.version}</span></CardTitle>
-                <CardDescription>Created by {draft.created_by ?? "-"} {draft.created_at ? new Date(draft.created_at).toLocaleString() : ""}{draft.approved_by ? ` · Approved by ${draft.approved_by}` : ""}</CardDescription>
+              <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><FileEdit className="h-4 w-4" />{t("admin.policy.draft.sectionTitle", { status: draft.status })} <Badge variant={draft.status === "approved" ? "success" : "warning"}>{draft.status}</Badge><span className="font-mono text-xs text-muted-foreground">{draft.version}</span></CardTitle>
+                <CardDescription>{t("admin.policy.draft.createdBy", { actor: draft.created_by ?? "-" })} {draft.created_at ? new Date(draft.created_at).toLocaleString() : ""}{draft.approved_by ? ` · ${t("admin.policy.draft.approvedBy", { actor: draft.approved_by })}` : ""}</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" onClick={handleValidate}><CheckCircle2 className="h-4 w-4" />Validate</Button>
-                <Button size="sm" variant="secondary" onClick={handleApprove}>Approve (L5)</Button>
-                <Button size="sm" onClick={() => setConfirmAction({ kind: "publish" })}><Upload className="h-4 w-4" />Publish (L5)</Button>
-                <Button size="sm" variant="outline" onClick={() => setActiveTab("draft")}>Edit Draft</Button>
+                <Button size="sm" variant="outline" onClick={handleValidate}><CheckCircle2 className="h-4 w-4" />{t("admin.policy.draft.validate")}</Button>
+                <Button size="sm" variant="secondary" onClick={handleApprove}>{t("admin.policy.draft.approve")}</Button>
+                <Button size="sm" onClick={() => setConfirmAction({ kind: "publish" })}><Upload className="h-4 w-4" />{t("admin.policy.draft.publish")}</Button>
+                <Button size="sm" variant="outline" onClick={() => setActiveTab("draft")}>{t("admin.policy.draft.editDraft")}</Button>
               </CardContent>
             </Card>
           )}
@@ -343,26 +344,26 @@ function PolicyPageContent() {
 
         <TabsContent value="draft">
           <Card>
-            <CardHeader><CardTitle className="text-base">Draft — Edit / Validate → Approve → Publish</CardTitle><CardDescription>L5 required for draft/approve/publish. Validation enforces explicit_deny + mandatory deny-external-export. Default deny is implicit.</CardDescription></CardHeader>
+            <CardHeader><CardTitle className="text-base">{t("admin.policy.draft.title")}</CardTitle><CardDescription>{t("admin.policy.draft.description")}</CardDescription></CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className="space-y-1"><Label>Bundle ID</Label><Input value={editBundleId} onChange={(e) => setEditBundleId(e.target.value)} placeholder="default-bundle-v1" /></div>
-                <div className="space-y-1"><Label>Name</Label><Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Default Policy Bundle" /></div>
+                <div className="space-y-1"><Label>{t("admin.policy.draft.bundleId")}</Label><Input value={editBundleId} onChange={(e) => setEditBundleId(e.target.value)} placeholder="default-bundle-v1" /></div>
+                <div className="space-y-1"><Label>{t("admin.policy.draft.name")}</Label><Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Default Policy Bundle" /></div>
                 <div className="flex items-end gap-2">
-                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowRemoveMandatory} onChange={(e) => setAllowRemoveMandatory(e.target.checked)} /> allow_remove_mandatory (L5)</label>
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowRemoveMandatory} onChange={(e) => setAllowRemoveMandatory(e.target.checked)} /> {t("admin.policy.draft.allowRemoveMandatory")}</label>
                 </div>
               </div>
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label>Rules (table)</Label>
-                  <Button size="sm" variant="outline" onClick={() => syncJson([...editRules, { ...newEmptyRule(), id: `rule-${Date.now()}` }])}>Add rule</Button>
+                  <Label>{t("admin.policy.draft.rulesTable")}</Label>
+                  <Button size="sm" variant="outline" onClick={() => syncJson([...editRules, { ...newEmptyRule(), id: `rule-${Date.now()}` }])}>{t("admin.policy.draft.addRule")}</Button>
                 </div>
                 <div className="overflow-auto rounded-md border">
                   <Table>
-                    <TableHeader><TableRow><TableHead>id</TableHead><TableHead>source</TableHead><TableHead>action</TableHead><TableHead>resource_pattern</TableHead><TableHead>effect</TableHead><TableHead>priority</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                    <TableHeader><TableRow><TableHead>{t("admin.policy.col.id")}</TableHead><TableHead>{t("policy.colSource")}</TableHead><TableHead>{t("admin.policy.col.action")}</TableHead><TableHead>{t("admin.policy.col.resourcePattern")}</TableHead><TableHead>{t("admin.policy.col.effect")}</TableHead><TableHead>{t("policy.colPriority")}</TableHead><TableHead></TableHead></TableRow></TableHeader>
                     <TableBody>
-                      {editRules.length === 0 ? <TableRow><TableCell colSpan={7} className="text-center text-sm text-muted-foreground">No rules — add one</TableCell></TableRow> : editRules.map((r, idx) => (
+                      {editRules.length === 0 ? <TableRow><TableCell colSpan={7} className="text-center text-sm text-muted-foreground">{t("admin.policy.draft.noRules")}</TableCell></TableRow> : editRules.map((r, idx) => (
                         <TableRow key={idx}>
                           <TableCell><Input value={r.id} onChange={(e) => { const c = [...editRules]; c[idx] = { ...c[idx], id: e.target.value }; setEditRules(c); }} className="h-7 min-w-[120px] font-mono text-xs" placeholder="deny-external-export" /></TableCell>
                           <TableCell><select value={r.source} onChange={(e) => { const c = [...editRules]; c[idx] = { ...c[idx], source: e.target.value }; setEditRules(c); }} className="h-7 rounded-md border bg-background px-2 text-xs">{SOURCE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}</select></TableCell>
@@ -379,24 +380,24 @@ function PolicyPageContent() {
               </div>
 
               <div className="space-y-1">
-                <Label>Raw JSON (alternative editor — kept in sync on load)</Label>
+                <Label>{t("admin.policy.draft.rawJson")}</Label>
                 <textarea value={jsonDraft} onChange={(e) => setJsonDraft(e.target.value)} rows={8} className="w-full rounded-md border bg-muted/20 p-3 font-mono text-xs" placeholder='[{"id":"deny-external-export","source":"explicit_deny","action":"*","resource_pattern":"external:*","effect":"DENY","priority":10}]' />
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => { try { const p = JSON.parse(jsonDraft); if (Array.isArray(p)) setEditRules(p as PolicyRule[]); setActionMsg("Loaded from JSON"); } catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); } }}>Load JSON → table</Button>
-                  <Button size="sm" variant="outline" onClick={() => setJsonDraft(JSON.stringify(editRules, null, 2))}>Table → JSON</Button>
+                  <Button size="sm" variant="outline" onClick={() => { try { const p = JSON.parse(jsonDraft); if (Array.isArray(p)) setEditRules(p as PolicyRule[]); setActionMsg(t("admin.policy.draft.loadedFromJson")); } catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); } }}>{t("admin.policy.draft.loadJson")}</Button>
+                  <Button size="sm" variant="outline" onClick={() => setJsonDraft(JSON.stringify(editRules, null, 2))}>{t("admin.policy.draft.tableToJson")}</Button>
                 </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={handleValidate}><CheckCircle2 className="h-4 w-4" />Validate</Button>
-                <Button onClick={handleSaveDraft} disabled={saving}>{saving ? "Saving..." : "Save Draft (L5)"}</Button>
-                <Button variant="secondary" onClick={handleApprove}>Approve (L5)</Button>
-                <Button onClick={() => setConfirmAction({ kind: "publish" })}><Upload className="h-4 w-4" />Publish (L5)</Button>
+                <Button variant="outline" onClick={handleValidate}><CheckCircle2 className="h-4 w-4" />{t("admin.policy.draft.validate")}</Button>
+                <Button onClick={handleSaveDraft} disabled={saving}>{saving ? t("admin.policy.draft.saving") : t("admin.policy.draft.saveDraft")}</Button>
+                <Button variant="secondary" onClick={handleApprove}>{t("admin.policy.draft.approve")}</Button>
+                <Button onClick={() => setConfirmAction({ kind: "publish" })}><Upload className="h-4 w-4" />{t("admin.policy.draft.publish")}</Button>
               </div>
 
               {validateResult && (
                 <div className={`rounded-md border p-3 text-sm ${validateResult.ok ? "border-[#22C55E] bg-[#22C55E]/10" : "border-[#DC2626] bg-[#DC2626]/10"}`}>
-                  <p className="font-medium">{validateResult.ok ? "Validation passed" : "Validation failed"}</p>
+                  <p className="font-medium">{validateResult.ok ? t("admin.policy.draft.validationPassed") : t("admin.policy.draft.validationFailed")}</p>
                   {validateResult.errors.length > 0 && <ul className="mt-1 list-disc pl-5 text-xs">{validateResult.errors.map((er, i) => <li key={i}>{er}</li>)}</ul>}
                 </div>
               )}
@@ -406,20 +407,20 @@ function PolicyPageContent() {
 
         <TabsContent value="simulate">
           <Card>
-            <CardHeader><CardTitle className="text-base flex items-center gap-2"><FlaskConical className="h-4 w-4" />Simulation (dry-run)</CardTitle><CardDescription>Evaluates action+resource against draft (default) or published bundle. Uses same Section 25 order + fnmatch glob.</CardDescription></CardHeader>
+            <CardHeader><CardTitle className="text-base flex items-center gap-2"><FlaskConical className="h-4 w-4" />{t("admin.policy.simulate.title")}</CardTitle><CardDescription>{t("admin.policy.simulate.description")}</CardDescription></CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className="space-y-1"><Label>action</Label><Input value={simAction} onChange={(e) => setSimAction(e.target.value)} placeholder="read / write / external:export" /></div>
-                <div className="space-y-1"><Label>resource</Label><Input value={simResource} onChange={(e) => setSimResource(e.target.value)} placeholder="doc:public/* / external:share" /></div>
+                <div className="space-y-1"><Label>{t("admin.policy.simulate.action")}</Label><Input value={simAction} onChange={(e) => setSimAction(e.target.value)} placeholder="read / write / external:export" /></div>
+                <div className="space-y-1"><Label>{t("admin.policy.simulate.resource")}</Label><Input value={simResource} onChange={(e) => setSimResource(e.target.value)} placeholder="doc:public/* / external:share" /></div>
                 <div className="flex items-end gap-2">
-                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={simUseDraft} onChange={(e) => setSimUseDraft(e.target.checked)} /> use_draft</label>
-                  <Button onClick={handleSimulate} disabled={simLoading}>{simLoading ? "..." : "Simulate"}</Button>
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={simUseDraft} onChange={(e) => setSimUseDraft(e.target.checked)} /> {t("admin.policy.simulate.useDraft")}</label>
+                  <Button onClick={handleSimulate} disabled={simLoading}>{simLoading ? t("admin.policy.simulate.running") : t("admin.policy.simulate.run")}</Button>
                 </div>
               </div>
               {simError && <p className="text-sm text-[#DC2626]" role="alert">{simError}</p>}
               {simResult && (
                 <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                  <div className="flex flex-wrap items-center gap-2">Decision: <Badge variant={decisionVariant(simResult.decision)}>{simResult.decision}</Badge> source: <Badge variant="secondary">{simResult.source}</Badge></div>
+                  <div className="flex flex-wrap items-center gap-2">{t("admin.policy.simulate.decision")} <Badge variant={decisionVariant(simResult.decision)}>{simResult.decision}</Badge> {t("admin.policy.simulate.source")} <Badge variant="secondary">{simResult.source}</Badge></div>
                   <p className="mt-1 text-xs text-muted-foreground">{simResult.reason}</p>
                   {simResult.matched_rule && <pre className="mt-2 overflow-auto rounded bg-background p-2 text-xs">{JSON.stringify(simResult.matched_rule, null, 2)}</pre>}
                 </div>
@@ -430,17 +431,17 @@ function PolicyPageContent() {
 
         <TabsContent value="history">
           <Card>
-            <CardHeader><CardTitle className="text-base flex items-center gap-2"><History className="h-4 w-4" />Version History — rollback creates new published version</CardTitle><CardDescription>Immutable history; rollback copies target rules into a new published version (incremented). Requires L5.</CardDescription></CardHeader>
+            <CardHeader><CardTitle className="text-base flex items-center gap-2"><History className="h-4 w-4" />{t("admin.policy.history.title")}</CardTitle><CardDescription>{t("admin.policy.history.description")}</CardDescription></CardHeader>
             <CardContent>
               <DataTable
                 rows={visibleHistory.rows}
                 columns={[
-                  { id: "version", header: "Version", cell: (row) => <span className="font-mono">v{row.version}{row.version === activeVersion ? <Badge variant="success" className="ml-2">active</Badge> : null}</span>, sortable: true },
-                  { id: "status", header: "Status", cell: (row) => <Badge variant={row.status === "published" ? "success" : row.status === "approved" ? "warning" : "secondary"}>{row.status}</Badge>, sortable: true },
-                  { id: "bundle", header: "Bundle", cell: (row) => <>{row.name}<span className="ml-1 font-mono text-muted-foreground">{row.id}</span></> },
-                  { id: "rules", header: "Rules", accessor: (row) => row.rules?.length ?? 0 },
-                  { id: "actor", header: "Created by", accessor: (row) => row.created_by, sortable: true },
-                  { id: "created", header: "Created at", cell: (row) => row.created_at ? new Date(row.created_at).toLocaleString() : "—", sortable: true },
+                  { id: "version", header: t("admin.policy.col.version"), cell: (row) => <span className="font-mono">v{row.version}{row.version === activeVersion ? <Badge variant="success" className="ml-2">{t("admin.policy.history.activeBadge")}</Badge> : null}</span>, sortable: true },
+                  { id: "status", header: t("admin.policy.col.status"), cell: (row) => <Badge variant={row.status === "published" ? "success" : row.status === "approved" ? "warning" : "secondary"}>{row.status}</Badge>, sortable: true },
+                  { id: "bundle", header: t("admin.policy.col.bundle"), cell: (row) => <>{row.name}<span className="ml-1 font-mono text-muted-foreground">{row.id}</span></> },
+                  { id: "rules", header: t("admin.policy.col.rules"), accessor: (row) => row.rules?.length ?? 0 },
+                  { id: "actor", header: t("admin.policy.col.createdBy"), accessor: (row) => row.created_by, sortable: true },
+                  { id: "created", header: t("admin.policy.col.createdAt"), cell: (row) => row.created_at ? new Date(row.created_at).toLocaleString() : "—", sortable: true },
                 ]}
                 rowKey={(row) => row.id_row ?? row.id + row.version}
                 loading={loading}
@@ -450,9 +451,9 @@ function PolicyPageContent() {
                 onQueryChange={table.onQueryChange}
                 totalRows={visibleHistory.totalRows}
                 searchable
-                rowActions={(row) => row.status === "published" ? [{ id: "rollback", label: "Rollback", icon: RotateCcw, tone: "danger", onSelect: () => setConfirmAction({ kind: "rollback", version: row.version }) }] : []}
-                empty={{ title: "No history", description: "Publish a draft to create an immutable version.", filtered: Boolean(table.query.search) }}
-                ariaLabel="Policy version history"
+                rowActions={(row) => row.status === "published" ? [{ id: "rollback", label: t("admin.policy.action.rollback"), icon: RotateCcw, tone: "danger", onSelect: () => setConfirmAction({ kind: "rollback", version: row.version }) }] : []}
+                empty={{ title: t("admin.policy.history.emptyTitle"), description: t("admin.policy.history.emptyDescription"), filtered: Boolean(table.query.search) }}
+                ariaLabel={t("admin.policy.history.ariaLabel")}
               />
             </CardContent>
           </Card>
@@ -460,13 +461,13 @@ function PolicyPageContent() {
       </Tabs>
       <ConfirmDialog
         open={Boolean(confirmAction)}
-        title={confirmAction?.kind === "publish" ? "Publish policy" : "Rollback policy"}
+        title={confirmAction?.kind === "publish" ? t("admin.policy.confirm.publishTitle") : t("admin.policy.confirm.rollbackTitle")}
         description={confirmAction?.kind === "publish"
-          ? "Publish the approved draft as the active policy."
-          : `Rollback to ${confirmAction?.version ?? ""}. A new published version will be created.`}
+          ? t("admin.policy.confirm.publishDescription")
+          : t("admin.policy.confirm.rollbackDescription", { version: confirmAction?.version ?? "" })}
         targetLabel={confirmAction?.version ?? draft?.version}
         consequence={t("admin.lists.highRiskConsequence")}
-        confirmLabel={confirmAction?.kind === "publish" ? "Publish" : "Rollback"}
+        confirmLabel={confirmAction?.kind === "publish" ? t("admin.policy.confirm.publishConfirm") : t("admin.policy.confirm.rollbackConfirm")}
         tone="danger"
         requireText={confirmAction?.kind === "publish" ? (draft?.version ?? "PUBLISH") : confirmAction?.version}
         onOpenChange={(open) => { if (!open) setConfirmAction(null); }}
@@ -482,8 +483,9 @@ function PolicyPageContent() {
  * to sit under a Suspense boundary during prerendering.
  */
 export default function PolicyPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+    <Suspense fallback={<Skeleton variant="table" ariaLabel={t("common.loading")} />}>
       <PolicyPageContent />
     </Suspense>
   );

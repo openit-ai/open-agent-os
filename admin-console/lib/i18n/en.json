@@ -311,7 +311,13 @@
     "actionFailed": "Action failed",
     "mappedBadge": "Mapped",
     "derivedBadge": "Derived",
-    "footnote": "* Approve Once: single approval · Always (User): permanent for same user·action/resource · Always (Group): permanent for group · Deny: rejected. Linked Agent shows Mapped badge if Mattermost mapping exists, otherwise derived value (agent:assistant:<suffix>)."
+    "footnote": "* Approve Once: single approval · Always (User): permanent for same user·action/resource · Always (Group): permanent for group · Deny: rejected. Linked Agent shows Mapped badge if Mattermost mapping exists, otherwise derived value (agent:assistant:<suffix>).",
+    "colRequester": "Requester",
+    "colAgent": "Agent",
+    "colAction": "Action",
+    "colResource": "Resource",
+    "colRisk": "Risk",
+    "ariaList": "Pending approvals"
   },
   "audit": {
     "title": "Audit",
@@ -343,7 +349,13 @@
     "chainIntegrity": "Chain Integrity",
     "verifyToCheck": "Click Verify to check",
     "chainValid": "chain_valid",
-    "tampered": "tampered"
+    "tampered": "tampered",
+    "colEvent": "Event",
+    "colActor": "Actor",
+    "colAction": "Action",
+    "colResource": "Resource",
+    "colDecision": "Decision",
+    "ariaTimeline": "Audit event timeline"
   },
   "credentials": {
     "title": "Credentials",
@@ -1290,14 +1302,38 @@
         "bridgeOperatorManaged": "Bridge lifecycle is operator-managed. This console only reports its state and never starts, stops, or restarts the service."
       },
       "kind": {
-        "acp": { "title": "ACP execution path", "description": "Manage Hermes ACP discovery, configuration, application state, and connection checks." },
-        "mattermost": { "title": "Mattermost", "description": "Manage Mattermost bot and bridge connectivity." },
-        "slack": { "title": "Slack", "description": "Manage Slack authorization and safe delivery-path checks." },
-        "notion": { "title": "Notion", "description": "Manage Notion ingress authorization and access checks." },
-        "oauth": { "title": "OAuth providers", "description": "Review provider activation and authorization requirements." },
-        "smtp": { "title": "SMTP", "description": "Manage SMTP notifications with a no-mail connection check." },
-        "outline": { "title": "Outline", "description": "Manage the Outline secret reference and collection access checks." },
-        "mcp": { "title": "MCP servers", "description": "Discover and manage MCP servers and tool discovery checks." }
+        "acp": {
+          "title": "ACP execution path",
+          "description": "Manage Hermes ACP discovery, configuration, application state, and connection checks."
+        },
+        "mattermost": {
+          "title": "Mattermost",
+          "description": "Manage Mattermost bot and bridge connectivity."
+        },
+        "slack": {
+          "title": "Slack",
+          "description": "Manage Slack authorization and safe delivery-path checks."
+        },
+        "notion": {
+          "title": "Notion",
+          "description": "Manage Notion ingress authorization and access checks."
+        },
+        "oauth": {
+          "title": "OAuth providers",
+          "description": "Review provider activation and authorization requirements."
+        },
+        "smtp": {
+          "title": "SMTP",
+          "description": "Manage SMTP notifications with a no-mail connection check."
+        },
+        "outline": {
+          "title": "Outline",
+          "description": "Manage the Outline secret reference and collection access checks."
+        },
+        "mcp": {
+          "title": "MCP servers",
+          "description": "Discover and manage MCP servers and tool discovery checks."
+        }
       }
     },
     "infraResolver": {
@@ -1454,6 +1490,109 @@
       },
       "mcp": {
         "deleteDescription": "The server configuration and its discovered tool association will be removed."
+      }
+    },
+    "policy": {
+      "title": "Policy Bundles",
+      "subtitle": "Review published bundles and the draft, then validate, approve, and publish.",
+      "tab": {
+        "published": "Published",
+        "draft": "Draft",
+        "simulate": "Simulate",
+        "history": "History / Rollback"
+      },
+      "active": {
+        "publishedVersion": "Active published version:",
+        "draftSuffix": "Draft {status} ({version})",
+        "noDraft": "No draft"
+      },
+      "published": {
+        "missing": "No published bundle."
+      },
+      "draft": {
+        "title": "Draft — Edit · Validate → Approve → Publish",
+        "description": "L5 is required to save, approve, and publish a draft. Validation enforces explicit_deny and the mandatory deny-external-export; default deny is implicit.",
+        "sectionTitle": "Draft — {status}",
+        "createdBy": "Created by {actor}",
+        "approvedBy": "Approved by {actor}",
+        "bundleId": "Bundle ID",
+        "name": "Name",
+        "allowRemoveMandatory": "allow_remove_mandatory (L5)",
+        "rulesTable": "Rules (table)",
+        "addRule": "Add rule",
+        "noRules": "No rules — add one",
+        "rawJson": "Raw JSON (alternative editor — kept in sync on load)",
+        "loadJson": "Load JSON → table",
+        "tableToJson": "Table → JSON",
+        "loadedFromJson": "Loaded from JSON",
+        "editDraft": "Edit Draft",
+        "saving": "Saving...",
+        "saveDraft": "Save Draft (L5)",
+        "validate": "Validate",
+        "approve": "Approve (L5)",
+        "publish": "Publish (L5)",
+        "validationPassed": "Validation passed",
+        "validationFailed": "Validation failed",
+        "invalidJson": "Invalid JSON",
+        "emptyRules": "Draft must contain at least one rule",
+        "saved": "Draft saved — status: {status} · version: {version}",
+        "approved": "Approved — {status}",
+        "published": "Published — active {version}",
+        "publishFailed": "Publish failed",
+        "rolledBack": "Rolled back to {version} — now {active}",
+        "rollbackFailed": "Rollback failed"
+      },
+      "simulate": {
+        "title": "Simulation (dry-run)",
+        "description": "Evaluates action+resource against the draft (default) or the published bundle. Uses the same Section 25 order and fnmatch glob.",
+        "action": "action",
+        "resource": "resource",
+        "useDraft": "use_draft",
+        "run": "Simulate",
+        "running": "...",
+        "decision": "Decision:",
+        "source": "source:"
+      },
+      "history": {
+        "title": "Version History — rollback creates a new published version",
+        "description": "History is immutable; rollback copies the target rules into a new published version (incremented). Requires L5.",
+        "activeBadge": "active",
+        "emptyTitle": "No history",
+        "emptyDescription": "Publish a draft to create an immutable version.",
+        "ariaLabel": "Policy version history"
+      },
+      "col": {
+        "version": "Version",
+        "status": "Status",
+        "bundle": "Bundle",
+        "rules": "Rules",
+        "createdBy": "Created by",
+        "createdAt": "Created at",
+        "id": "id",
+        "action": "action",
+        "resourcePattern": "resource_pattern",
+        "effect": "effect"
+      },
+      "action": {
+        "rollback": "Rollback"
+      },
+      "confirm": {
+        "publishTitle": "Publish policy",
+        "rollbackTitle": "Rollback policy",
+        "publishDescription": "Publish the approved draft as the active policy.",
+        "rollbackDescription": "Rollback to {version}. A new published version will be created.",
+        "publishConfirm": "Publish",
+        "rollbackConfirm": "Rollback"
+      },
+      "source": {
+        "explicit_deny": "Explicit Deny",
+        "security_boundary_deny": "Security Boundary",
+        "personal_delegation": "Personal Delegation",
+        "persistent_user_grant": "Persistent Grant",
+        "group_grant": "Group Grant",
+        "default_bundle": "Default Bundle",
+        "jit_approval": "JIT Approval",
+        "default_deny": "Default Deny"
       }
     }
   }

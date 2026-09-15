@@ -71,7 +71,7 @@ function AuditPageContent() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h1 className="flex items-center gap-2 text-2xl font-semibold"><ScrollText aria-hidden="true" className="h-6 w-6" />Audit</h1><p className="text-sm text-muted-foreground">{t("audit.subtitle")}</p></div>
+        <div><h1 className="flex items-center gap-2 text-2xl font-semibold"><ScrollText aria-hidden="true" className="h-6 w-6" />{t("audit.title")}</h1><p className="text-sm text-muted-foreground">{t("audit.subtitle")}</p></div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" disabled={audit.isFetching} onClick={() => audit.refetch()}><RefreshCw aria-hidden="true" className="h-4 w-4" />{t("common.refresh")}</Button>
           <Button size="sm" disabled={verify.isPending} onClick={() => verify.mutate()}><ShieldCheck aria-hidden="true" className="h-4 w-4" />{t("common.verify")}</Button>
@@ -91,11 +91,11 @@ function AuditPageContent() {
         rows={visible.rows}
         columns={[
           { id: "timestamp", header: t("llmUsage.colTime"), cell: (row) => formatTime(row.timestamp), sortable: true },
-          { id: "event", header: "Event", accessor: (row) => row.event_type, sortable: true },
-          { id: "actor", header: "Actor", accessor: (row) => row.user_id ?? row.agent_id ?? "—", sortable: true },
-          { id: "action", header: "Action", accessor: (row) => row.action },
-          { id: "resource", header: "Resource", accessor: (row) => row.resource },
-          { id: "decision", header: "Decision", accessor: (row) => row.decision },
+          { id: "event", header: t("audit.colEvent"), accessor: (row) => row.event_type, sortable: true },
+          { id: "actor", header: t("audit.colActor"), accessor: (row) => row.user_id ?? row.agent_id ?? "—", sortable: true },
+          { id: "action", header: t("audit.colAction"), accessor: (row) => row.action },
+          { id: "resource", header: t("audit.colResource"), accessor: (row) => row.resource },
+          { id: "decision", header: t("audit.colDecision"), accessor: (row) => row.decision },
         ]}
         rowKey={(row) => row.event_id}
         loading={audit.isLoading}
@@ -118,8 +118,9 @@ function AuditPageContent() {
  * to sit under a Suspense boundary during prerendering.
  */
 export default function AuditPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+    <Suspense fallback={<Skeleton variant="table" ariaLabel={t("common.loading")} />}>
       <AuditPageContent />
     </Suspense>
   );
