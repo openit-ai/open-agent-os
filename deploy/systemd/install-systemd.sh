@@ -24,6 +24,9 @@ ENABLE_NOW=1
 ONLY_CONTROL_PLANE=0
 WITH_OPTIONAL=0
 ROTATE_SECRETS=0
+SYSTEM_ENV_OWNER="root"
+SYSTEM_ENV_GROUP="oaos"
+SYSTEM_ENV_MODE="0640"
 
 usage() {
   cat <<'HELP'
@@ -42,7 +45,8 @@ Usage: install-systemd.sh [options]
 Examples:
   # System (production, as on 192.168.6.61):
   sudo mkdir -p /etc/oaos && sudo cp config/oaos.env.example /etc/oaos/oaos.env
-  sudo chmod 600 /etc/oaos/oaos.env && sudo vi /etc/oaos/oaos.env  # replace CHANGE_ME_* (secrets auto-generated on new install)
+  sudo chown root:oaos /etc/oaos/oaos.env && sudo chmod 640 /etc/oaos/oaos.env
+  sudo vi /etc/oaos/oaos.env  # replace CHANGE_ME_* (secrets auto-generated on new install)
   sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env
   sudo bash deploy/systemd/install-systemd.sh --env-file /etc/oaos/oaos.env --with-optional
 
@@ -56,7 +60,8 @@ Security:
   - New install: automatically generates 64-hex secrets for missing/placeholder keys (never prints values).
   - Existing install: preserves all secrets; weak/missing secrets abort unless --rotate-secrets is given.
   - --rotate-secrets rotates all canonical secrets with a clear warning (existing JWTs/sessions invalidated).
-  - Env file must be 0600. Units reference EnvironmentFile without embedding secrets.
+  - System env files are root:oaos 0640; user env files are 0600.
+    Units reference EnvironmentFile without embedding secrets.
 HELP
 }
 
@@ -85,6 +90,38 @@ run() {
     log "[DRY-RUN] Would run: $*"
   else
     "$@"
+  fi
+}
+
+ensure_env_file_permissions() {
+  local env_path="$1"
+  local permission_failed=0
+  if [[ "${MODE}" == "system" ]]; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log "[DRY-RUN] Would ensure ${env_path} is ${SYSTEM_ENV_OWNER}:${SYSTEM_ENV_GROUP} ${SYSTEM_ENV_MODE}"
+      return 0
+    fi
+    if ! chown "${SYSTEM_ENV_OWNER}:${SYSTEM_ENV_GROUP}" "${env_path}" 2>/dev/null; then
+      warn "Failed to chown ${SYSTEM_ENV_OWNER}:${SYSTEM_ENV_GROUP} ${env_path}"
+      permission_failed=1
+    fi
+    if ! chmod "${SYSTEM_ENV_MODE}" "${env_path}"; then
+      warn "Failed to chmod ${SYSTEM_ENV_MODE} ${env_path}"
+      permission_failed=1
+    fi
+    if [[ $permission_failed -eq 0 ]]; then
+      info "Secured ${env_path} (${SYSTEM_ENV_OWNER}:${SYSTEM_ENV_GROUP} ${SYSTEM_ENV_MODE})"
+    fi
+  else
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log "[DRY-RUN] Would ensure chmod 0600 ${env_path} (user-owned)"
+      return 0
+    fi
+    if chmod 0600 "${env_path}"; then
+      info "Secured ${env_path} (user-owned 0600)"
+    else
+      warn "Failed to chmod 0600 ${env_path}"
+    fi
   fi
 }
 
@@ -261,6 +298,7 @@ PY
   if [[ $do_generate -eq 1 ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then
       log "[DRY-RUN] Would generate 64-hex secrets for ${canonical} (${reason}) — JWT_SIGNING_KEY, AUDIT_SIGNING_KEY, ADMIN_JWT_SECRET, VAULT/OAOS_ENCRYPTION_KEY (aliases, same value)"
+      ensure_env_file_permissions "${canonical}"
       # For dry-run, also update ENV_FILE to canonical for preflight preview (preflight will still see missing secrets, so we mention)
       info "DRY-RUN: new install would auto-generate secrets (64-hex) — never printed"
       # Don't actually create file; but set ENV_FILE to canonical for subsequent steps? Keep original so preflight warns but we indicate generation
@@ -434,12 +472,8 @@ if not has_redis:
 pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
 pathlib.Path(dest).write_text("\n".join(out)+"\n", encoding="utf-8")
 PY
-    chmod 600 "${canonical}" || true
-    if [[ "${MODE}" == "system" ]]; then
-      # For system, try to chown root:root if running as root, else keep
-      if [[ $EUID -eq 0 ]]; then chown root:root "${canonical}" 2>/dev/null || true; fi
-    fi
-    info "Generated canonical env file with 64-hex secrets: ${canonical} (0600, never printed)"
+    ensure_env_file_permissions "${canonical}"
+    info "Generated canonical env file with 64-hex secrets: ${canonical} (never printed)"
     ENV_FILE="${canonical}"
     ENV_ARG=(--env-file "${canonical}")
     export OAOS_ENV_FILE="${canonical}"
@@ -449,6 +483,7 @@ PY
   if [[ $do_rotate -eq 1 ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then
       log "[DRY-RUN] [WARN] Would rotate all canonical secrets in ${canonical} — ${reason} — this will invalidate existing JWTs/sessions and encrypted vault data if re-encrypted"
+      ensure_env_file_permissions "${canonical}"
       return 0
     fi
     log "[WARN] Rotating all canonical secrets in ${canonical} — ${reason} — this will invalidate existing JWTs/sessions!"
@@ -503,8 +538,8 @@ if not has_env:
     out.append("OAOS_ENV=production")
 pathlib.Path(path).write_text("\n".join(out)+"\n", encoding="utf-8")
 PY
-    chmod 600 "${canonical}" || true
-    info "Rotated secrets in ${canonical} (0600, never printed) — restart services to apply"
+    ensure_env_file_permissions "${canonical}"
+    info "Rotated secrets in ${canonical} (never printed) — restart services to apply"
     ENV_FILE="${canonical}"
     ENV_ARG=(--env-file "${canonical}")
     export OAOS_ENV_FILE="${canonical}"
@@ -643,10 +678,10 @@ SYSTEM_ENV_FILE=/etc/oaos/oaos.env
 if [[ "${MODE}" == "system" ]]; then
   if [[ "${ENV_FILE}" != "${SYSTEM_ENV_FILE}" ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then
-      log "[DRY-RUN] Would install env file ${ENV_FILE} -> ${SYSTEM_ENV_FILE} (0600, root:root)"
+      log "[DRY-RUN] Would install env file ${ENV_FILE} -> ${SYSTEM_ENV_FILE} (${SYSTEM_ENV_MODE}, ${SYSTEM_ENV_OWNER}:${SYSTEM_ENV_GROUP})"
     else
       install -d -m 0750 /etc/oaos
-      install -m 0600 -o root -g root "${ENV_FILE}" "${SYSTEM_ENV_FILE}"
+      install -m "${SYSTEM_ENV_MODE}" -o "${SYSTEM_ENV_OWNER}" -g "${SYSTEM_ENV_GROUP}" "${ENV_FILE}" "${SYSTEM_ENV_FILE}"
       info "Installed canonical systemd env file: ${SYSTEM_ENV_FILE}"
     fi
   fi
@@ -756,12 +791,7 @@ fi
 
 # Ensure /etc/oaos/oaos.env has correct perms if we are in system mode and file exists
 if [[ "${MODE}" == "system" && -f "${ENV_FILE}" && "${ENV_FILE}" == "/etc/oaos/oaos.env" ]]; then
-  if [[ $DRY_RUN -eq 1 ]]; then
-    log "[DRY-RUN] Would ensure chmod 600 /etc/oaos/oaos.env"
-  else
-    chmod 600 "${ENV_FILE}" || warn "Failed to chmod 600 ${ENV_FILE}"
-    info "Secured ${ENV_FILE} (0600)"
-  fi
+  ensure_env_file_permissions "${ENV_FILE}"
 fi
 
 # --- 5. daemon-reload + enable -------------------------------------------
