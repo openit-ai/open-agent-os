@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.6 — Personal AX Business Platform
+# Open Agent OS v0.1.7 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,8 +13,8 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.6` — single source of truth `admin-console/package.json` `0.1.6` (tag `v0.1.6` → `920723f`; previous product tag `v0.1.5` → `2406da63ac`). **Architecture document version `v1.7.3` (`docs/architecture-v1.7.3.md`) is distinct from product version `0.1.6`** — v1.7.3 describes the Adaptive Profile Engine design (§16.12) and Control-Plane-centric IA aliases (§16.14), not the release number.
-- **Canonical architecture:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
+- **Product version:** `0.1.7` — single source of truth `admin-console/package.json` `0.1.7` (previous tag `v0.1.6` → `920723f`; the 0.1.7 release content includes the Phase 6 IA merge `983dc4c` and the deploy/audit fixes `c68bf47`; preceding product tag `v0.1.5` → `2406da63ac`). **Architecture document version `v1.7.4` (`docs/architecture-v1.7.4.md`) is distinct from product version `0.1.7`** — v1.7.4 records the completed Admin Console IA transition (§16.15), not the release number.
+- **Canonical architecture:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 completed Admin Console IA transition (§16.15) + Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
 ---
@@ -28,6 +28,8 @@
 - **Self-hosted:** Runs on the customer's server / VPS / private cloud / K8s. No multi-tenant SaaS lock-in, data stays on customer infrastructure.
 
 OAOS does not replace Mattermost, Slack, Outline, Notion, or Hermes. It is the **Control + Security + Execution platform** that connects them around the Personal Agent.
+
+The Admin Console now uses six navigation groups — Connections, Control, Execution, Knowledge, Operations, and Management — with canonical group URLs. Seventeen simple legacy URLs remain available as temporary `307` aliases with query preservation, while fragment-dependent `/infra` and `/providers` use client resolvers. Shared table, dialog, confirmation, toast, form, loading, empty, error, status, and URL-query primitives provide the common UX kit.
 
 **Why this structure exists — two contradictions (§2):**
 
@@ -117,7 +119,8 @@ Mattermost / Slack ──► Control Plane (Identity / Session / ACP) ──► 
                                   └──────► Execution Gateway (MCP Registry / Risk / AuthZ / Proxy) ──► Personal (Google) / Shared (Outline) / Enterprise (CRM/ERP)
                                                               ▲
                                               Security (Delegation / Vault / Policy / Token / Approval / Audit)
-Admin Console (Next.js + shadcn) ──► Security API proxy ──────┘  users / policy / approvals / audit / credentials / infra
+Admin Console (Next.js + shadcn) ──► Admin API ──► Control Plane / Execution Gateway / Security
+                                    6 groups: connections / control / execution / knowledge / operations / management
 
 Personal Wiki (Vault FS + memory_service pgvector) ◄── Execution Gateway auto-archive (every tool call, trace_id)
 Enterprise Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/Notion) — ACL versioned
@@ -263,7 +266,7 @@ Next on the roadmap: single KVM4 VPS integrating Mattermost + Outline + Hermes +
 - **Isolation guarantees:** `agent:assistant:kim` cannot access `employee:lee` resources. Verified by `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper`.
 - **Network & worker isolation (§§16A, 16G–16I):** Hermes runs as untrusted worker (`hermes` uid, `/home/hermes` sandbox, `nftables` + Controlled Egress Proxy — only ACP:8000, MCP:8001, LLM Gateway, approved package mirror are allowed; direct access to production DB, ERP/CRM, SSH, other user homes, and vault secrets is denied). See [`docs/security-model.md`](docs/security-model.md) and `deploy/firewall/hermes-egress.nft`.
 
-Admin Console screens (11+ routes: login / dashboard / infra / users / policy / approvals / audit / credentials / providers) are shadcn + WCAG AA, `overflow-auto` for 375px, `npm run build` verified. Infra screen probes `GET /v1/infra/health` in parallel (3s timeout, 15s polling); write requires L5, read requires L4.
+Admin Console navigation contains 30 canonical links: two fixed entries plus six groups (Connections, Control, Execution, Knowledge, Operations, Management), shared by the desktop sidebar and mobile drawer through `AdminNavigation`. Seventeen simple legacy paths use temporary server-side `307` redirects with query preservation; `/infra` and `/providers` retain fragment-aware client resolvers. The shared UX kit standardizes tables, dialogs and confirmations, toasts, forms, loading/empty/error/status states, and URL query handling; write requires L5 and read requires L4.
 
 ## 9. Verification Evidence
 
@@ -350,6 +353,13 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 **Measured evidence (2026-09-09, main `7c1c0ef` PR #7 merge):** targeted regression `106 passed`; `test_stage5_migration_backup.py` `6 passed` on host runner (2 sandbox subprocess timeouts proven environmental, fail-closed); compile PASS; `git diff --check` PASS; commercial server `v0.1.5` health OK (5 units active, console `200` + installed `0.1.5`).
 
+### 9e. Release v0.1.7 — product `0.1.7` (arch `v1.7.4` distinct)
+
+**Included (over v0.1.6 — completed Admin Console IA transition):**
+- **Six-group canonical IA (§16.15)** — 30 canonical navigation links across Connections, Control, Execution, Knowledge, Operations, and Management, with the same `AdminNavigation` hierarchy in the desktop sidebar and mobile drawer.
+- **Compatibility policy** — 17 simple legacy URLs use temporary server-side `307` aliases with query preservation; fragment-dependent `/infra` and `/providers` keep client resolvers; legacy client pages remain available as rollback paths.
+- **Shared Admin UX kit** — standardized table/query, dialog/confirmation, toast, form, loading/empty/error/status, accessibility, i18n, and `useSearchParams()`/`Suspense` contracts.
+
 ## 10. Repository Structure
 
 ```text
@@ -365,12 +375,12 @@ config/                    # oaos.env.example — systemd unified env template (
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + systemd (oaos-*.service) + firewall (hermes-egress.nft)
 scripts/                   # check-production-config.sh — friendly preflight (no secret output)
 tests/                     # see Verification Evidence — run pytest -q for the current count
-docs/architecture-v1.7.3.md  # Canonical implementation architecture — v1.7.3 IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
+docs/architecture-v1.7.4.md  # Canonical implementation architecture — v1.7.4 completed Admin Console IA transition (§16.15)
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — Current canonical implementation architecture; includes the v1.7.3 IA aliases (§16.14) and Adaptive Profile Engine design (§16.12). Previous: [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) (historical), [`docs/architecture-v1.7.0.md`](docs/architecture-v1.7.0.md) (historical), [`docs/architecture-v1.6.4.md`](docs/architecture-v1.6.4.md) `e10c1af8` (historical).
+- [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — Current canonical implementation architecture; includes the completed Admin Console IA transition (§16.15), v1.7.3 IA aliases (§16.14), and Adaptive Profile Engine design (§16.12). Previous: [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) and [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) (historical).
 - [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening design (C1/H1–H8, Personal Wiki JWT, Enterprise Knowledge Index spec, readiness strict, distributed state).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service integration.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.

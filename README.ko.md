@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.6 — Personal AX Business Platform
+# Open Agent OS v0.1.7 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,8 +13,8 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.6` — 단일 진실 `admin-console/package.json` `0.1.6` (태그 `v0.1.6` → `920723f`, 이전 제품 태그 `v0.1.5` → `2406da63ac`). **아키텍처 문서 버전 `v1.7.3`(`docs/architecture-v1.7.3.md`)는 제품 버전 `0.1.6`와 별개** — v1.7.3는 Adaptive Profile Engine 설계(§16.12)와 Control-Plane 중심 IA 별칭(§16.14)을, 0.1.6는 제품 릴리즈 번호를 의미한다.
-- **기준 아키텍처:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
+- **제품 버전:** `0.1.7` — 단일 진실 `admin-console/package.json` `0.1.7` (직전 태그 `v0.1.6` → `920723f`; 0.1.7 릴리스 내용은 Phase 6 IA 병합 `983dc4c`와 배포·감사 수정 `c68bf47`을 포함; 그 이전 제품 태그 `v0.1.5` → `2406da63ac`). **아키텍처 문서 버전 `v1.7.4`(`docs/architecture-v1.7.4.md`)는 제품 버전 `0.1.7`과 별개** — v1.7.4는 Admin Console IA 전환 완료(§16.15)를 기록하며 제품 릴리즈 번호를 의미하지 않는다.
+- **기준 아키텍처:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 Admin Console IA 전환 완료(§16.15) + Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
 - **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
 ---
@@ -28,6 +28,8 @@
 - **설치형:** 고객사 서버 / VPS / 전용 클라우드 / K8s에 설치한다. 멀티테넌트 SaaS 종속과 데이터 외부 이전 없이 고객 인프라에 데이터가 남는다.
 
 OAOS는 Mattermost·Slack·Outline·Notion·Hermes를 대체하지 않는다. 이들을 Personal Agent 중심으로 **안전하게 연결하는 Control + Security + Execution 플랫폼**이다.
+
+Admin Console은 연결·설정·실행·지식·모니터링·관리의 6개 내비게이션 그룹과 그룹별 canonical URL을 사용한다. 단순 legacy URL 17개는 query를 보존하는 임시 `307` 별칭으로 유지하고, fragment 의존 `/infra`와 `/providers`는 클라이언트 resolver를 사용한다. 공통 UX 킷은 표·대화상자·확인·토스트·폼·로딩·빈 상태·오류·상태·URL query 흐름을 제공한다.
 
 **왜 이 구조인가 — 시장이 풀지 못한 두 가지 모순(§2):**
 
@@ -101,7 +103,8 @@ Mattermost / Slack ──► Control Plane (Identity / Session / ACP) ──► 
                                   └──────► Execution Gateway (MCP Registry / Risk / AuthZ / Proxy) ──► Personal (Google) / Shared (Outline) / Enterprise (CRM/ERP)
                                                               ▲
                                               Security (Delegation / Vault / Policy / Token / Approval / Audit)
-Admin Console (Next.js + shadcn) ──► Security API 프록시 ──────┘  users / policy / approvals / audit / credentials / infra
+Admin Console (Next.js + shadcn) ──► Admin API ──► Control Plane / Execution Gateway / Security
+                                    6그룹: 연결 / 설정 / 실행 / 지식 / 모니터링 / 관리
 
 Personal Wiki (Vault FS + memory_service pgvector) ◄── Execution Gateway auto-archive (every tool call, trace_id)
 전사 Knowledge Index (Postgres + pgvector) ◄── Connectors (Outline/Notion) — ACL versioned
@@ -205,7 +208,7 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 - **격리 보장:** `agent:assistant:kim`은 `employee:lee` 자원에 접근할 수 없다. `test_delegation_isolation`, `test_cross_user_session_isolation 403`, `test_app_policy_evaluate_explicit_deny`, `test_audit_verify_chain+tamper`로 검증한다.
 - **네트워크 & worker 격리(§§16A, 16G–16I):** Hermes는 untrusted worker(`hermes` uid, `/home/hermes` 샌드박스, `nftables` + Controlled Egress Proxy — ACP:8000, MCP:8001, LLM Gateway, 승인된 package mirror만 허용; Production DB·ERP/CRM·SSH·다른 사용자 홈·vault secret 직접 접근은 DENY). 상세: [`docs/security-model.md`](docs/security-model.md), `deploy/firewall/hermes-egress.nft`.
 
-Admin Console 화면(11+ routes: login / dashboard / infra / users / policy / approvals / audit / credentials / providers)은 shadcn + WCAG AA, `overflow-auto`로 375px 대응, `npm run build`로 검증된다. Infra 화면은 `GET /v1/infra/health`를 병렬 probe(3s timeout, 15s polling)하며 쓰기는 L5, 읽기는 L4가 필요하다.
+Admin Console 내비게이션은 고정 2항목과 연결·설정·실행·지식·모니터링·관리 6그룹의 canonical 링크 30개로 구성되며, 데스크톱 사이드바와 모바일 drawer는 `AdminNavigation`으로 같은 계층을 공유한다. 단순 legacy 경로 17개는 query를 보존하는 임시 서버 `307` redirect를 사용하고 `/infra`와 `/providers`는 fragment 인식 client resolver를 유지한다. 공통 UX 킷은 표·대화상자·확인·토스트·폼·로딩/빈 상태/오류/상태·URL query 처리를 표준화하며 쓰기는 L5, 읽기는 L4가 필요하다.
 
 ## 9. 검증 근거
 
@@ -281,6 +284,13 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 **측정 근거 (2026-09-09, main `7c1c0ef` PR #7 병합):** 표적 회귀 `106 passed`; `test_stage5_migration_backup.py` 호스트 러너 `6 passed`(샌드박스 subprocess 시간 초과 2건은 환경 문제로 입증, fail-closed); compile PASS; `git diff --check` PASS; 상용 서버 `v0.1.5` 헬스 정상(5종 active, 콘솔 `200` + 설치 `0.1.5`).
 
+### 9e. 릴리즈 v0.1.7 — 제품 `0.1.7` (아키텍처 `v1.7.4`와 별개)
+
+**포함 내역 (v0.1.6 대비 — Admin Console IA 전환 완료):**
+- **6그룹 canonical IA(§16.15)** — 연결·설정·실행·지식·모니터링·관리의 canonical 내비게이션 링크 30개와 데스크톱 사이드바·모바일 drawer의 동일 `AdminNavigation` 계층.
+- **호환 정책** — 단순 legacy URL 17개는 query를 보존하는 임시 서버 `307` 별칭, fragment 의존 `/infra`와 `/providers`는 client resolver 유지, legacy client page는 롤백 경로로 보존.
+- **공통 Admin UX 킷** — 표/query, 대화상자/확인, 토스트, 폼, loading/empty/error/status, 접근성, i18n, `useSearchParams()`/`Suspense` 계약 표준화.
+
 ## 10. Repository Structure
 
 ```text
@@ -294,12 +304,12 @@ packages/personal-wiki/    # Personal Wiki Vault FS(journal/notes/projects/files
 examples/morning-briefing/ # MVP — orchestrator(per-user kim vs lee) + output.json(13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + firewall(hermes-egress.nft)
 tests/                     # 검증 근거 참조 — 현재 수치는 pytest -q로 확인
-docs/architecture-v1.7.3.md  # 최신 정본 — v1.7.3 IA 별칭(§16.14) + Adaptive Profile Engine(§16.12) 포함
+docs/architecture-v1.7.4.md  # 최신 정본 — v1.7.4 Admin Console IA 전환 완료(§16.15) 포함
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — 최신 정본 구현 아키텍처이며 v1.7.3 IA 별칭(§16.14)과 Adaptive Profile Engine 설계(§16.12)를 포함한다. 이전 버전(v1.7.2 등)은 과거 기준으로 보존한다.
+- [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — 최신 정본 구현 아키텍처이며 Admin Console IA 전환 완료(§16.15), v1.7.3 IA 별칭(§16.14), Adaptive Profile Engine 설계(§16.12)를 포함한다. 이전 [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md)와 [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md)는 과거 기준으로 보존한다.
 - [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening 설계(C1/H1–H8, Personal Wiki JWT, 전사 Knowledge Index spec, readiness strict, 분산 상태).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service 연동.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.
