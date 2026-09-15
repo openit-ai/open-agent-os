@@ -1002,6 +1002,121 @@
     },
     "loading": {
       "content": "콘텐츠 불러오는 중"
+    },
+    "setup": {
+      "page": {
+        "title": "Open Agent OS 설정",
+        "description": "사용자가 이용할 수 있도록 필수 자동 검사를 완료하세요.",
+        "loading": "설정 진행 상태 불러오는 중",
+        "loadFailed": "설정 진행 상태를 불러오지 못했습니다",
+        "invalidProgress": "설정 진행 상태를 사용할 수 없습니다",
+        "invalidProgressDescription": "진행 상태 응답에 올바른 단계가 없습니다."
+      },
+      "wizard": {
+        "stepsLabel": "설정 단계",
+        "progressTitle": "전체 진행률",
+        "requiredProgress": "필수 검사 {total}개 중 {done}개 완료 ({percent}%)",
+        "requiredProgressLabel": "필수 설정 진행률",
+        "optionalProgress": "선택 {done}/{total}",
+        "required": "필수",
+        "optional": "선택",
+        "back": "이전",
+        "next": "다음",
+        "later": "나중에",
+        "finish": "완료",
+        "stepNumber": "{total}단계 중 {current}단계"
+      },
+      "status": {
+        "pending": "대기",
+        "checking": "검사 중",
+        "complete": "완료",
+        "needs_attention": "조치 필요",
+        "skipped": "건너뜀"
+      },
+      "check": {
+        "recheck": "다시 검사",
+        "checking": "자동 검사 진행 중",
+        "checkedAt": "마지막 검사: {time}",
+        "neverChecked": "아직 검사하지 않음",
+        "blockingIssues": "진행을 막는 문제",
+        "openSettings": "설정 및 다음 조치 열기"
+      },
+      "steps": {
+        "environment": {
+          "title": "환경 확인",
+          "description": "발견된 배포 환경과 Admin backend, DB, Control Plane의 상태를 확인합니다."
+        },
+        "runtime": {
+          "title": "실행 경로",
+          "description": "추천 실행 경로를 선택하고 저장·적용·연결 상태를 확인합니다."
+        },
+        "ingress": {
+          "title": "사용자 진입 채널",
+          "description": "지원 인그레스 채널을 하나 이상 연결합니다. 콘솔 전용 운영은 지원하지 않습니다."
+        },
+        "policy": {
+          "title": "정책과 관리자",
+          "description": "L5 관리자, 활성 정책 버전, 정책 검증 성공을 확인합니다."
+        },
+        "mcp": {
+          "title": "도구 연결(MCP)",
+          "description": "발견된 MCP 서버를 검토하고 연결할 서버를 테스트합니다."
+        },
+        "knowledge": {
+          "title": "지식 연결",
+          "description": "필요한 경우 지식 source와 embedding 구성을 연결하고 테스트합니다."
+        },
+        "notifications": {
+          "title": "운영 알림",
+          "description": "필요한 경우 SMTP 또는 Slack 알림 목적지를 하나 이상 테스트합니다."
+        },
+        "verify": {
+          "title": "최종 검증",
+          "description": "요약을 검토하고 readiness에 차단 실패가 남지 않았는지 확인합니다.",
+          "ingressRequired": "최종 검증 전에 구성·적용·상태가 모두 정상인 인그레스 채널이 필요합니다."
+        }
+      },
+      "complete": {
+        "title": "설정 상태",
+        "description": "설정 완료 후에도 이 화면에서 현재 준비상태를 언제든 확인할 수 있습니다.",
+        "requiredReady": "모든 필수 설정 검사가 완료되었습니다.",
+        "automaticStatus": "상태는 자동으로 판정됩니다. 필수 검사가 깨지면 별도 완료 작업 없이 조치 필요 상태로 돌아갑니다."
+      }
+    },
+    "readiness": {
+      "summary": {
+        "title": "필수 연결",
+        "requiredCount": "필수 {total}개 중 정상 {healthy} / 조치 필요 {attention}",
+        "lastChecked": "마지막 전체 점검: {time}",
+        "unknownTime": "알 수 없음",
+        "resolve": "문제 해결",
+        "openDetails": "상세 열기",
+        "recheckAll": "모두 다시 검사",
+        "checking": "전체 연결 검사 중",
+        "loadFailed": "준비상태를 불러오지 못했습니다",
+        "continueSetupTitle": "필수 설정이 완료되지 않았습니다",
+        "continueSetupDescription": "현재 세션에서는 대시보드를 사용할 수 있지만 건너뛴 필수 단계는 완료로 계산되지 않습니다.",
+        "continueSetupAction": "설정 이어하기"
+      }
+    },
+    "connections": {
+      "card": {
+        "secret": "비밀값",
+        "configured": "설정됨",
+        "notConfigured": "설정되지 않음",
+        "source": "Source",
+        "lastChecked": "마지막 검사",
+        "neverChecked": "검사 기록 없음",
+        "latency": "지연 시간",
+        "latencyValue": "{latency}ms",
+        "notAvailable": "정보 없음"
+      },
+      "apply": {
+        "savedNotApplied": "저장됨 · 아직 미반영",
+        "affectedServices": "영향받는 서비스: {services}",
+        "operatorAction": "승인된 운영자 절차를 따르세요. 콘솔은 서비스를 재시작하지 않습니다.",
+        "openProcedure": "운영자 절차 열기"
+      }
     }
   }
 }

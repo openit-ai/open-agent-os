@@ -1,0 +1,4 @@
+# Next.js build artifacts
+*.tsbuildinfo
+/.next/
+/out/

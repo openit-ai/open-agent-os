@@ -2,6 +2,8 @@ import { ApiFetchError, apiFetch } from "@/lib/api";
 import {
   AdminErrorCode,
   type AdminError,
+  type AdminReadiness,
+  type SetupProgress,
   type TestConnectionRequest,
   type TestConnectionResult,
 } from "@/lib/admin-api/types";
@@ -106,6 +108,14 @@ export function testConnection(
     timeoutKind: "http",
     signal,
   });
+}
+
+export function getSetupProgress(signal?: AbortSignal): Promise<SetupProgress> {
+  return adminFetch<SetupProgress>("/v1/setup/progress", { signal, timeoutKind: "quick" });
+}
+
+export function getAdminReadiness(signal?: AbortSignal): Promise<AdminReadiness> {
+  return adminFetch<AdminReadiness>("/v1/admin/readiness", { signal, timeoutKind: "quick" });
 }
 
 export const adminTimeouts = {

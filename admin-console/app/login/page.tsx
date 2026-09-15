@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { login, setToken } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { clearSetupDeferral } from "@/lib/setup-session";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -24,7 +25,8 @@ export default function LoginPage() {
     try {
       const res = await login(email, password);
       setToken(res.access_token);
-      router.push("/");
+      clearSetupDeferral();
+      router.replace("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : t("login.failed"));
     } finally {

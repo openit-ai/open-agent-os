@@ -7,7 +7,18 @@ export default [
     ignores: [".next/**", "node_modules/**"],
   },
   {
-    files: ["components/admin/**/*.{ts,tsx}", "lib/admin-api/**/*.{ts,tsx}", "test/**/*.{ts,tsx}"],
+    files: [
+      "components/admin/**/*.{ts,tsx}",
+      "lib/admin-api/**/*.{ts,tsx}",
+      "lib/i18n/catalog.test.ts",
+      "lib/setup-session.ts",
+      "test/**/*.{ts,tsx}",
+      "app/layout.tsx",
+      "app/login/page.tsx",
+      "app/(dashboard)/layout.tsx",
+      "app/(dashboard)/page.tsx",
+      "app/(dashboard)/setup/**/*.{ts,tsx}",
+    ],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
