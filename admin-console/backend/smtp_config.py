@@ -24,8 +24,10 @@ from pydantic import BaseModel, Field, field_validator
 
 try:
     from .auth import AdminUser, get_current_admin, require_l5
+    from .config_state import config_response
 except ImportError:
     from auth import AdminUser, get_current_admin, require_l5  # type: ignore
+    from config_state import config_response  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -221,8 +223,11 @@ class SmtpUpdateRequest(BaseModel):
 @router.get("/config")
 def smtp_get_config(admin: AdminUser = Depends(get_current_admin)) -> dict:
     cfg, source = _load_config()
-    return {**cfg, "source": source, "applied": source == "env",
-            "note": "DB values require SMTP_* env update + restart to apply" if source != "env" else "live env values in effect"}
+    return config_response(
+        "smtp", cfg, source,
+        "DB values require SMTP_* env update + restart to apply" if source != "env" else "live env values in effect",
+        effective_config=_env_config(),
+    )
 
 
 @router.put("/config")
@@ -243,13 +248,19 @@ def smtp_put_config(req: SmtpUpdateRequest, admin: AdminUser = Depends(require_l
     ok = _db_set_raw(raw, updated_by=getattr(admin, "email", None))
     if ok:
         _inmem = dict(cfg)
-        return {**cfg, "source": "db", "applied": False,
-                "note": "saved; update SMTP_* env on the host and restart services to apply"}
+        return config_response(
+            "smtp", cfg, "db",
+            "saved; update SMTP_* env on the host and restart services to apply",
+            effective_config=_env_config(),
+        )
     if (os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")):
         raise HTTPException(status_code=503, detail="SMTP config DB unavailable in production (fail-closed)")
     _inmem = dict(cfg)
-    return {**cfg, "source": "in-memory", "applied": False,
-            "note": "saved in-memory only (dev); update SMTP_* env and restart to apply"}
+    return config_response(
+        "smtp", cfg, "in-memory",
+        "saved in-memory only (dev); update SMTP_* env and restart to apply",
+        effective_config=_env_config(),
+    )
 
 
 @router.post("/test")
