@@ -14,6 +14,7 @@ import json
 import uuid
 import os
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -21,6 +22,24 @@ from audit_model import AuditCheckpoint, AuditEvent
 
 
 logger = logging.getLogger(__name__)
+
+# Appends are serialized because the chain head is a single value: two appenders
+# that read the same head both chain from it and fork the chain. The lock is
+# module-level (not per instance) because callers construct a fresh AuditLedger
+# per mutation. In addition, the DB path takes a transaction-scoped advisory lock
+# so separate processes serialize too.
+_APPEND_LOCK = threading.Lock()
+ADVISORY_LOCK_KEY = 0x4F414F53  # "OAOS"
+
+# The head is the event no other event links to. Reading it from the stored data
+# (instead of a possibly stale in-memory value) is what keeps concurrent
+# appenders on one chain.
+_CHAIN_TIP_QUERY = (
+    "SELECT a.event_hash FROM audit_events a "
+    "WHERE a.event_hash IS NOT NULL "
+    "AND NOT EXISTS (SELECT 1 FROM audit_events b WHERE b.previous_hash = a.event_hash) "
+    "ORDER BY a.timestamp DESC LIMIT 1"
+)
 
 try:
     from sqlalchemy.exc import SQLAlchemyError
@@ -195,6 +214,46 @@ def _event_to_orm(event: AuditEvent):
     )
 
 
+def _is_postgres(executor) -> bool:
+    """True when the executor (Engine/Session/Connection) speaks PostgreSQL."""
+    try:
+        dialect = getattr(executor, "dialect", None)
+        if dialect is not None:
+            return getattr(dialect, "name", "") == "postgresql"
+        bind = getattr(executor, "bind", None)
+        if bind is not None:
+            return getattr(getattr(bind, "dialect", None), "name", "") == "postgresql"
+        get_bind = getattr(executor, "get_bind", None)
+        if callable(get_bind):
+            return getattr(getattr(get_bind(), "dialect", None), "name", "") == "postgresql"
+    except (AttributeError, TypeError, RuntimeError):
+        return False
+    return False
+
+
+def _lock_chain(executor) -> None:
+    """Serialize appends for the caller's transaction.
+
+    PostgreSQL takes a transaction-scoped advisory lock, which every process
+    shares, so the read of the head and the insert of the child are atomic
+    together even across processes. Other backends (sqlite in tests) already
+    serialize writers.
+    """
+    if not _is_postgres(executor):
+        return
+    from sqlalchemy import text  # type: ignore
+
+    executor.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": ADVISORY_LOCK_KEY})
+
+
+def _chain_tip(executor) -> str | None:
+    """Head as stored — the event nothing links to yet."""
+    from sqlalchemy import text  # type: ignore
+
+    row = executor.execute(text(_CHAIN_TIP_QUERY)).first()
+    return row[0] if row else None
+
+
 def _orm_to_event(row) -> AuditEvent:
     from audit_model import AuditEventType  # type: ignore
 
@@ -279,52 +338,76 @@ class AuditLedger:
                 if _is_prod():
                     raise RuntimeError("AuditLedger hydration failed — audit database unavailable") from e
 
-    def append(self, event: AuditEvent) -> AuditEvent:
+    def append(self, event: AuditEvent, connection=None) -> AuditEvent:
+        """Chain and persist one event.
+
+        Pass `connection` (an open SQLAlchemy connection inside a transaction) to
+        append as part of the caller's transaction, so the audit record and the
+        state change it describes commit together or not at all.
+        """
         if _is_prod():
             _require_db_if_prod()
-        # ensure chaining is consistent with current head (DB or memory)
-        # if DB enabled, recompute head from DB if our in-memory head may be stale due to other process?
-        # For simplicity, use in-memory head (already hydrated at init)
+        if connection is not None:
+            return self._append_within(connection, event)
+        with _APPEND_LOCK:
+            if _db_should_use():
+                return self._append_db(event)
+            if _is_prod():
+                raise RuntimeError("AuditLedger append failed — no DB in production (fail-closed)")
+            return self._append_memory(event)
+
+    def _append_memory(self, event: AuditEvent) -> AuditEvent:
         event.previous_hash = self._head
         event.event_hash = event.compute_hash()
         self._head = event.event_hash
         self._events.append(event)
-        # DB persist — primary store in prod, in-memory only in non-prod fallback
-        if _db_should_use():
-            db_ok = False
-            last_err: Exception | None = None
-            try:
-                session, engine = _db_get_session()
-                if session is None:
-                    last_err = RuntimeError("audit database session unavailable")
-                else:
-                    try:
-                        orm = _event_to_orm(event)
-                        session.add(orm)
-                        session.commit()
-                        db_ok = True
-                    except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
-                        last_err = e
-                        try:
-                            session.rollback()
-                        except SQLAlchemyError as rollback_error:
-                            logger.debug("AuditLedger append rollback failed: %s", type(rollback_error).__name__)
-                        logger.warning("AuditLedger append DB persist failed: %s", type(e).__name__)
-                    finally:
-                        _db_close(session, engine)
-            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
-                last_err = e
-            if _is_prod() and not db_ok:
-                try:
-                    self._events.pop()
-                    self._head = self._events[-1].event_hash if self._events else None
-                except (IndexError, AttributeError) as rollback_error:
-                    logger.debug("AuditLedger in-memory rollback failed: %s", type(rollback_error).__name__)
-                error = RuntimeError(f"AuditLedger append failed — DB persist required in production but failed: {last_err}")
-                raise error from last_err
-        else:
+        return event
+
+    def _append_db(self, event: AuditEvent) -> AuditEvent:
+        session, engine = _db_get_session()
+        if session is None:
             if _is_prod():
-                raise RuntimeError("AuditLedger append failed — no DB in production (fail-closed)")
+                raise RuntimeError("AuditLedger append failed — audit database unavailable (fail-closed)")
+            return self._append_memory(event)
+        error: Exception | None = None
+        try:
+            # The head is read inside the lock so no other appender can chain from
+            # the same parent while this insert is in flight.
+            _lock_chain(session)
+            event.previous_hash = _chain_tip(session)
+            event.event_hash = event.compute_hash()
+            session.add(_event_to_orm(event))
+            session.commit()
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
+            error = e
+            try:
+                session.rollback()
+            except SQLAlchemyError as rollback_error:
+                logger.debug("AuditLedger append rollback failed: %s", type(rollback_error).__name__)
+        finally:
+            _db_close(session, engine)
+        if error is not None:
+            if _is_prod():
+                raise RuntimeError(f"AuditLedger append failed — DB persist required in production but failed: {error}") from error
+            logger.warning("AuditLedger append DB persist failed: %s", type(error).__name__)
+            if event.event_hash is None:
+                return self._append_memory(event)
+        self._head = event.event_hash
+        self._events.append(event)
+        return event
+
+    def _append_within(self, connection, event: AuditEvent) -> AuditEvent:
+        """Append inside the caller's transaction; the caller commits or rolls back."""
+        _lock_chain(connection)
+        event.previous_hash = _chain_tip(connection)
+        event.event_hash = event.compute_hash()
+        orm = _event_to_orm(event)
+        table = type(orm).__table__
+        connection.execute(
+            table.insert().values({column.name: getattr(orm, column.name) for column in table.columns})
+        )
+        self._head = event.event_hash
+        self._events.append(event)
         return event
 
     @property
