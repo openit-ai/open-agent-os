@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.8 — Personal AX Business Platform
+# Open Agent OS v0.1.9 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,7 +13,7 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.8` — single source of truth `admin-console/package.json` `0.1.8` (previous product tag `v0.1.7` → `bc648fd`; the 0.1.8 release content includes the setup-wizard completion fixes PR #20 (`873a634`), the canonical seed opt-out and Outline health path PR #21 (`a1c9f52`), the control-group localization PR #22 (`c10574c`), the control-group structure alignment PR #23 (`1979881`), and the catalog prune + missing-key guard PR #24 (`e512244`); preceding product tag `v0.1.6` → `920723f`). **Architecture document version `v1.7.4` (`docs/architecture-v1.7.4.md`) is distinct from product version `0.1.8`** — v1.7.4 records the completed Admin Console IA transition (§16.15), not the release number.
+- **Product version:** `0.1.9` — single source of truth `admin-console/package.json` `0.1.9` (previous product tag `v0.1.8` → `78c9a29`; the 0.1.9 release content is the audit-ledger integrity fix PR #27 (`351ee4b`) — appends chain from the stored chain tip and are serialized, and policy publish/approve/rollback audit inside the same transaction; preceding product tag `v0.1.7` → `bc648fd`). **Architecture document version `v1.7.4` (`docs/architecture-v1.7.4.md`) is distinct from product version `0.1.9`** — v1.7.4 records the completed Admin Console IA transition (§16.15), not the release number.
 - **Canonical architecture:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 completed Admin Console IA transition (§16.15) + Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
@@ -370,6 +370,16 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Catalog hygiene and a missing-key guard (PR #24)** — 275 keys that no file references are dropped (1,335 → 1,060, ko/en kept identical), and the catalog test now fails the build when a screen looks up a literal key or a dynamic prefix that no catalog entry resolves.
 
 **Measured evidence (main `e512244`, merged PR #23 + #24):** `tsc --noEmit` 0; `vitest run` **31 files / 116 tests passed**; `eslint .` 0; `next build` 0 with **56/56** static pages; catalogs **1,060 = 1,060**. The guard was verified with teeth — adding `t("admin.probe.missingKey")` fails the suite naming that key, and removing it passes again.
+
+### 9g. Release v0.1.9 — product `0.1.9` (arch `v1.7.4` distinct)
+
+**Included (over v0.1.8 — audit-ledger integrity):**
+- **Audit chain can no longer fork (PR #27)** — `AuditLedger.append` chained from a per-process in-memory head, so an instance constructed before another appender wrote used a stale parent and two events could share one. Production ran with 27 such forks. The head is now read from the stored chain (the event nothing links to), and appends are serialized with a module-level lock plus a transaction-scoped PostgreSQL advisory lock so separate processes cannot chain from the same parent. Every event's own hash had still matched, so nothing was tampered with — only the linkage had broken.
+- **A policy change and its audit record are one transaction (PR #27)** — `publish`/`approve`/`rollback` committed the state change and only then appended the audit record, so a failing ledger returned `500` while leaving the change applied; production published `1.0.0` with no audit record as a result. The mutations now take an audit callback and run it inside the same transaction, so a failed audit rolls the change back.
+
+**Measured evidence (PR #27, merged main `351ee4b`):** the 9 new tests **fail against the previous implementation and pass with the fix**; 9 related suites **147 passed**; ruff new findings **0** (`ledger.py` 17→17, `policy.py` 40→40 — existing baseline unchanged).
+
+**Operational note:** `AuditLedger.head`/`events` still prefer in-memory state, so a long-lived process needs a restart to observe history changed on disk.
 
 ## 10. Repository Structure
 

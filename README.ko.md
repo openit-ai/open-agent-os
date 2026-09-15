@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.8 — Personal AX Business Platform
+# Open Agent OS v0.1.9 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,7 +13,7 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.8` — 단일 진실 `admin-console/package.json` `0.1.8` (직전 제품 태그 `v0.1.7` → `bc648fd`; 0.1.8 릴리스 내용은 setup 마법사 완주 수정 PR #20(`873a634`), canonical 시드 opt-out·Outline 헬스 경로 PR #21(`a1c9f52`), 설정 3화면 한글화 PR #22(`c10574c`), 설정 3화면 구조 정렬 PR #23(`1979881`), 카탈로그 정리·누락 키 가드 PR #24(`e512244`)를 포함; 그 이전 제품 태그 `v0.1.6` → `920723f`). **아키텍처 문서 버전 `v1.7.4`(`docs/architecture-v1.7.4.md`)는 제품 버전 `0.1.8`과 별개** — v1.7.4는 Admin Console IA 전환 완료(§16.15)를 기록하며 제품 릴리즈 번호를 의미하지 않는다.
+- **제품 버전:** `0.1.9` — 단일 진실 `admin-console/package.json` `0.1.9` (직전 제품 태그 `v0.1.8` → `78c9a29`; 0.1.9 릴리스 내용은 감사 원장 무결성 수정 PR #27(`351ee4b`) — append가 저장된 체인 끝에서 이어지고 직렬화되며, 정책 publish/approve/rollback이 같은 트랜잭션에서 감사를 기록; 그 이전 제품 태그 `v0.1.7` → `bc648fd`). **아키텍처 문서 버전 `v1.7.4`(`docs/architecture-v1.7.4.md`)는 제품 버전 `0.1.9`와 별개** — v1.7.4는 Admin Console IA 전환 완료(§16.15)를 기록하며 제품 릴리즈 번호를 의미하지 않는다.
 - **기준 아키텍처:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 Admin Console IA 전환 완료(§16.15) + Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
 - **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
@@ -301,6 +301,16 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **카탈로그 정리·누락 키 가드(PR #24)** — 아무 파일도 참조하지 않는 275키를 삭제했고(1,335 → 1,060, ko/en 정합 유지), 카탈로그 테스트가 이제 화면이 조회하는 리터럴 키나 동적 접두사를 카탈로그가 해석하지 못하면 **빌드를 실패**시킵니다.
 
 **측정 근거 (main `e512244`, PR #23 + #24 병합):** `tsc --noEmit` 0; `vitest run` **31 files / 116 tests passed**; `eslint .` 0; `next build` 0(**56/56** 정적 페이지); 카탈로그 **1,060 = 1,060**. 가드는 실효를 실증했습니다 — `t("admin.probe.missingKey")`를 추가하면 그 키를 지목하며 스위트가 실패하고, 제거하면 다시 통과합니다.
+
+### 9g. 릴리즈 v0.1.9 — 제품 `0.1.9` (아키텍처 `v1.7.4`와 별개)
+
+**포함 내역 (v0.1.8 대비 — 감사 원장 무결성):**
+- **감사 체인이 더 이상 분기하지 않습니다(PR #27)** — `AuditLedger.append`가 프로세스 인메모리 head에서 이어져, 다른 appender가 쓴 뒤 생성된 인스턴스가 낡은 부모를 사용해 두 이벤트가 같은 부모를 공유할 수 있었습니다. 상용에 분기 27개가 있었습니다. 이제 head를 저장된 체인(아무도 링크하지 않는 이벤트)에서 읽고, 모듈 수준 락 + 트랜잭션 스코프 PostgreSQL advisory lock으로 append를 직렬화해 프로세스 간에도 같은 부모에서 갈라지지 않습니다. 개별 이벤트의 해시는 전부 일치했으므로 **변조는 없고 연결 구조만** 깨져 있었습니다.
+- **정책 변경과 감사 기록이 한 트랜잭션입니다(PR #27)** — `publish`/`approve`/`rollback`이 상태 변경을 커밋한 뒤 감사를 기록해서, 감사 원장 실패 시 `500`을 반환하면서도 변경이 적용된 채 남았습니다(상용에서 `1.0.0`이 감사 기록 없이 게시됨). 이제 변이 함수가 감사 콜백을 받아 같은 트랜잭션에서 실행하므로, 감사 실패 시 변경도 롤백됩니다.
+
+**측정 근거 (PR #27, 병합 main `351ee4b`):** 신규 테스트 9건이 **이전 구현에서 실패, 수정 후 통과**; 관련 9개 스위트 **147 passed**; ruff 신규 발견 **0**(`ledger.py` 17→17, `policy.py` 40→40 — 기존 baseline 유지).
+
+**운영 주의:** `AuditLedger.head`/`events`는 여전히 인메모리 값을 우선하므로, 디스크에서 이력을 변경한 뒤에는 장수명 프로세스의 **재시작이 필요**합니다.
 
 ## 10. Repository Structure
 
