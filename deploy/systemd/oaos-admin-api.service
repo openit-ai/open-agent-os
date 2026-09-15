@@ -10,8 +10,11 @@ User=oaos
 Group=oaos
 WorkingDirectory=/home/openit/apps/oaos/admin-console/backend
 EnvironmentFile=-/etc/oaos/oaos.env
-# PYTHONPATH: repo root (shared packages) — backend sibling modules resolve by path.
-Environment=PYTHONPATH=/home/openit/apps/oaos:/home/openit/apps/oaos/admin-console/backend
+# PYTHONPATH: repo root + backend + the shared packages the backend imports at
+# runtime. audit_model / delegation_model / mcp_resource_model / agent_runtime are
+# not installed into the venv, so omitting them makes the audit ledger and policy
+# mutations fail closed (publish 500, approve 400).
+Environment=PYTHONPATH=/home/openit/apps/oaos:/home/openit/apps/oaos/admin-console/backend:/home/openit/apps/oaos/packages/audit-model:/home/openit/apps/oaos/packages/delegation-model:/home/openit/apps/oaos/packages/mcp-resource-model:/home/openit/apps/oaos/packages/agent-runtime
 ExecStart=/home/openit/apps/oaos/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8010 --workers 1
 Restart=always
 RestartSec=5
