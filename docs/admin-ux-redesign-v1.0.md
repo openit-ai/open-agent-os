@@ -97,44 +97,44 @@ wc -l admin-console/lib/i18n/ko.json admin-console/lib/i18n/en.json  # 949, 949
 
 ### 원칙과 목표 구조
 
-기존 IA 문서의 아키텍처 경계를 그대로 계승하되, 사용자가 보는 순서는 “시작 → 연결 → 제어 → 실행 → 지식 → 운영 → 관리” 과업 순서로 만든다. `/` 대시보드와 `/setup` 시작하기는 그룹 바깥의 고정 진입점이며, 아래 6개 그룹은 접을 수 있는 사이드바 섹션이다. 모바일에서도 단순 평면 복제가 아니라 동일 그룹과 현재 위치를 유지한다.
+기존 IA 문서의 아키텍처 경계를 그대로 계승하되, 사용자가 보는 순서는 “시작 → 연결 → 설정 → 실행 → 지식 → 모니터링 → 관리” 과업 순서로 만든다. 사이드바 라벨은 마스터 확정(2026-09-15)에 따라 아키텍처 용어가 아니라 **초보자 친화 과업 용어**를 쓴다(제어 평면 → 설정, 운영 → 모니터링). 아키텍처 용어와의 대응은 §11 표에 기록한다. `/` 대시보드와 `/setup` 시작하기는 그룹 바깥의 고정 진입점이며, 아래 6개 그룹은 접을 수 있는 사이드바 섹션이다. 모바일에서도 단순 평면 복제가 아니라 동일 그룹과 현재 위치를 유지한다.
 
 | 그룹 | 목표 화면 | 한 줄 책임 |
 |---|---|---|
 | 고정 | 대시보드 `/` | 필수 연결, 미완료 설정, 승인·장애·최근 변경을 우선순위 순으로 요약한다. |
 | 고정 | 시작하기 `/setup` | 자동 점검 기반 온보딩을 실행·재개하고 완료 조건을 설명한다. |
-| 연결(Ingress) | 연결 개요 `/connections` | 모든 채널 연결의 상태, 발견 후보, 미적용 변경을 한 목록으로 보여준다. |
-| 연결(Ingress) | Mattermost `/connections/mattermost` | Mattermost 봇과 브리지의 인증·연결·적용 상태를 관리한다. |
-| 연결(Ingress) | Slack `/connections/slack` | Slack 연결과 전달 테스트를 관리한다. |
-| 연결(Ingress) | Notion `/connections/notion` | Notion 인그레스 인증과 접근 검사를 관리한다. |
-| 연결(Ingress) | OAuth `/connections/oauth` | 외부 인증 제공자 활성 상태와 승인 흐름을 관리한다. |
-| 연결(Ingress) | SMTP `/connections/smtp` | 알림 메일 전송 연결과 비발송 연결 검사를 관리한다. |
-| 제어(Control Plane) | 제어 개요 `/control` | CP 준비 상태와 정책·승인·감사의 조치 필요 항목을 모은다. |
-| 제어(Control Plane) | ACP `/control/acp` | Hermes ACP 어댑터 설정·연결·적용 상태를 독립 화면에서 관리한다. |
-| 제어(Control Plane) | 런타임 구성 `/control/runtime` | 스냅샷 생성·발행·적용 확인·롤백 이력을 관리한다. |
-| 제어(Control Plane) | 정책 `/control/policy` | 정책 draft 검증·승인·발행·rollback을 관리한다. |
-| 제어(Control Plane) | 승인 `/control/approvals` | 대기 승인 조회와 허용·거절 결정을 처리한다. |
-| 제어(Control Plane) | 감사 `/control/audit` | 감사 이벤트와 체인 무결성·checkpoint를 조회한다. |
-| 실행(Execution) | 실행 개요 `/execution` | 모델 실행 경로, EG, MCP, quota의 가용성을 요약한다. |
-| 실행(Execution) | MCP `/execution/mcp` | MCP 서버 등록·수정·삭제·도구 발견 테스트를 관리한다. |
-| 실행(Execution) | 모델 제공자 `/execution/providers` | LLM 제공자와 모델, credential reference, 연결 테스트를 관리한다. |
-| 실행(Execution) | Fallback `/execution/fallback` | 제공자 fallback 순서와 활성화를 관리한다. |
-| 실행(Execution) | 사용량 `/execution/usage` | 호출·비용·latency·오류 이력을 검색·필터·페이지 조회한다. |
-| 실행(Execution) | Quota `/execution/quota` | tenant별 한도와 현재 사용량을 조회·수정한다. |
-| 지식(Knowledge) | 지식 개요 `/knowledge` | 지식 소스, 인덱스, 메모리 준비 상태를 요약한다. |
-| 지식(Knowledge) | Outline `/knowledge/outline` | Outline 연결과 collection 접근을 관리한다. |
-| 지식(Knowledge) | Embedding `/knowledge/embedding` | 임베딩 제공자·모델·차원 구성을 관리한다. |
-| 지식(Knowledge) | 동기화 `/knowledge/operations` | connector별 동기화·dry-run 결과를 관리한다. |
-| 운영(Operations) | 상태 `/operations/health` | services/live/unified 관측을 하나의 상태 모델로 제공한다. |
-| 운영(Operations) | 인프라 등록 `/operations/services` | 관리 대상 서비스 레지스트리와 probe를 관리한다. |
-| 운영(Operations) | 백업 `/operations/backup` | 백업 상태·생성·보존 이력을 관리한다. |
-| 운영(Operations) | 보안 업데이트 `/operations/security-updates` | 업데이트 및 CVE 상태와 조치 안내를 제공한다. |
-| 운영(Operations) | 라이선스 `/operations/license` | 라이선스 검증과 만료·기능 상태를 제공한다. |
-| 관리(Management) | 사용자 `/management/users` | 관리자 계정과 사용자 매핑 CRUD를 관리한다. |
-| 관리(Management) | 자격증명 `/management/credentials` | 발급·폐기·만료 credential 현황과 이력을 조회한다. |
-| 관리(Management) | 비밀값 `/management/secrets` | 비밀값 설정 여부와 rotation 절차만 노출한다. |
-| 관리(Management) | 기능 플래그 `/management/feature-flags` | 플래그 상태·변경·감사 링크를 관리한다. |
-| 관리(Management) | 프로필 작업 `/management/profile-operations` | 사용자 프로필 backfill/reset 운영 작업을 수행한다. |
+| 연결 | 연결 개요 `/connections` | 모든 채널 연결의 상태, 발견 후보, 미적용 변경을 한 목록으로 보여준다. |
+| 연결 | Mattermost `/connections/mattermost` | Mattermost 봇과 브리지의 인증·연결·적용 상태를 관리한다. |
+| 연결 | Slack `/connections/slack` | Slack 연결과 전달 테스트를 관리한다. |
+| 연결 | Notion `/connections/notion` | Notion 인그레스 인증과 접근 검사를 관리한다. |
+| 연결 | OAuth `/connections/oauth` | 외부 인증 제공자 활성 상태와 승인 흐름을 관리한다. |
+| 연결 | SMTP `/connections/smtp` | 알림 메일 전송 연결과 비발송 연결 검사를 관리한다. |
+| 설정 | 제어 개요 `/control` | CP 준비 상태와 정책·승인·감사의 조치 필요 항목을 모은다. |
+| 설정 | ACP `/control/acp` | Hermes ACP 어댑터 설정·연결·적용 상태를 독립 화면에서 관리한다. |
+| 설정 | 런타임 구성 `/control/runtime` | 스냅샷 생성·발행·적용 확인·롤백 이력을 관리한다. |
+| 설정 | 정책 `/control/policy` | 정책 draft 검증·승인·발행·rollback을 관리한다. |
+| 설정 | 승인 `/control/approvals` | 대기 승인 조회와 허용·거절 결정을 처리한다. |
+| 설정 | 감사 `/control/audit` | 감사 이벤트와 체인 무결성·checkpoint를 조회한다. |
+| 실행 | 실행 개요 `/execution` | 모델 실행 경로, EG, MCP, quota의 가용성을 요약한다. |
+| 실행 | MCP `/execution/mcp` | MCP 서버 등록·수정·삭제·도구 발견 테스트를 관리한다. |
+| 실행 | 모델 제공자 `/execution/providers` | LLM 제공자와 모델, credential reference, 연결 테스트를 관리한다. |
+| 실행 | Fallback `/execution/fallback` | 제공자 fallback 순서와 활성화를 관리한다. |
+| 실행 | 사용량 `/execution/usage` | 호출·비용·latency·오류 이력을 검색·필터·페이지 조회한다. |
+| 실행 | Quota `/execution/quota` | tenant별 한도와 현재 사용량을 조회·수정한다. |
+| 지식 | 지식 개요 `/knowledge` | 지식 소스, 인덱스, 메모리 준비 상태를 요약한다. |
+| 지식 | Outline `/knowledge/outline` | Outline 연결과 collection 접근을 관리한다. |
+| 지식 | Embedding `/knowledge/embedding` | 임베딩 제공자·모델·차원 구성을 관리한다. |
+| 지식 | 동기화 `/knowledge/operations` | connector별 동기화·dry-run 결과를 관리한다. |
+| 모니터링 | 상태 `/operations/health` | services/live/unified 관측을 하나의 상태 모델로 제공한다. |
+| 모니터링 | 인프라 등록 `/operations/services` | 관리 대상 서비스 레지스트리와 probe를 관리한다. |
+| 모니터링 | 백업 `/operations/backup` | 백업 상태·생성·보존 이력을 관리한다. |
+| 모니터링 | 보안 업데이트 `/operations/security-updates` | 업데이트 및 CVE 상태와 조치 안내를 제공한다. |
+| 모니터링 | 라이선스 `/operations/license` | 라이선스 검증과 만료·기능 상태를 제공한다. |
+| 관리 | 사용자 `/management/users` | 관리자 계정과 사용자 매핑 CRUD를 관리한다. |
+| 관리 | 자격증명 `/management/credentials` | 발급·폐기·만료 credential 현황과 이력을 조회한다. |
+| 관리 | 비밀값 `/management/secrets` | 비밀값 설정 여부와 rotation 절차만 노출한다. |
+| 관리 | 기능 플래그 `/management/feature-flags` | 플래그 상태·변경·감사 링크를 관리한다. |
+| 관리 | 프로필 작업 `/management/profile-operations` | 사용자 프로필 backfill/reset 운영 작업을 수행한다. |
 
 ### 묻힘과 중복 해소
 
@@ -146,7 +146,18 @@ wc -l admin-console/lib/i18n/ko.json admin-console/lib/i18n/en.json  # 949, 949
 
 ### URL 호환 규칙
 
-기존 URL은 제거하지 않는다. 새 URL이 안정화된 뒤 단순 경로는 서버 측 permanent redirect(308), 상태를 포함한 링크는 temporary redirect(307) 또는 compatibility resolver로 전환하며 query string은 그대로 전달한다. URL fragment는 서버에 전달되지 않으므로 `/infra#mcp` 같은 북마크는 `/infra`의 얇은 client compatibility resolver가 fragment를 읽어 목표 URL로 `replace`한다.
+기존 URL은 **관찰 기간 동안 보존**한다(마스터 확정 2026-09-15). 새 URL이 안정화된 뒤 단순 경로는 서버 측 permanent redirect(308), 상태를 포함한 링크는 temporary redirect(307) 또는 compatibility resolver로 전환하며 query string은 그대로 전달한다. URL fragment는 서버에 전달되지 않으므로 `/infra#mcp` 같은 북마크는 `/infra`의 얇은 client compatibility resolver가 fragment를 읽어 목표 URL로 `replace`한다.
+
+**정리 정책(마스터 확정)**: 관찰 기간 후 미사용 URL은 정리한다. 정리 조건은 추측이 아니라 계측으로 판정한다.
+
+| 단계 | 기간/조건 | 동작 |
+|---|---|---|
+| 진입 | Phase 6 배포 직후 | 모든 legacy URL에 307(임시) redirect + 접근 계측 시작 |
+| 관찰 | 최소 1회 릴리스 주기 이상, 그리고 마지막 접근 후 30일 경과 | `/var/log/nginx` 접근 로그에서 legacy 경로 request count 집계 |
+| 판정 | 관찰 기간 중 합계 요청 0건 | 정리 후보로 등록(자동 삭제 금지) |
+| 정리 | 마스터 승인 후 | redirect 제거. 제거 전 1회 더 로그 확인, 롤백용 nginx/route 변경 이력 보존 |
+
+요청이 1건이라도 있는 URL은 정리하지 않고 다음 관찰 주기로 넘긴다. 인증·북마크 영향이 큰 `/setup`·`/control/acp`·`/execution/mcp`는 정리 대상에서 제외하고 canonical로 계속 유지한다. 정리 시점·대상은 문서가 아니라 접근 로그 실측으로만 결정한다.
 
 | 기존 URL | 목표 canonical URL | 호환 처리 |
 |---|---|---|
@@ -180,14 +191,14 @@ API URL은 기존 `/v1/acp/*`, `/v1/mcp/*` 등을 삭제하거나 이름만 바�
 |---:|---|---|---|---|
 | 1. 환경 확인 | 필수 | 발견된 배포 환경과 핵심 서비스 확인 | Admin backend, DB, CP가 `healthy`; 검사 시각이 정책 TTL 이내 | 건너뛸 수 없음; 실패 항목별 운영 상태 링크 |
 | 2. 실행 경로 | 필수 | 추천 실행 경로를 선택하고 연결 테스트 | ACP/Hermes 또는 외부 LLM 중 현재 runtime mode에 맞는 경로가 저장·적용·test passed | 건너뛸 수 없음; `/control/acp` 또는 `/execution/providers` |
-| 3. 사용자 진입 채널 | 필수 | 자동 발견된 채널 또는 OAuth 승인으로 하나 연결 | Mattermost/Slack 등 지원 인그레스 중 최소 1개가 configured+applied+healthy | 건너뛸 수 없음; 환경에 채널이 없으면 명시적 “콘솔 전용” 정책 결정 필요 |
+| 3. 사용자 진입 채널 | 필수 | 자동 발견된 채널 또는 OAuth 승인으로 하나 연결 | Mattermost/Slack 등 지원 인그레스 중 최소 1개가 configured+applied+healthy | 건너뛸 수 없음 — **마스터 확정(2026-09-15): 채널 연결 1개 이상을 필수로 둔다** |
 | 4. 정책과 관리자 | 필수 | 관리자 권한·기본 정책 검토 | L5 관리자 존재, active policy version 존재, policy validate 통과 | 건너뛸 수 없음; 사용자/정책 화면 링크 |
 | 5. 도구 연결(MCP) | 선택 | 발견된 MCP 서버를 검토·연결 | 선택한 서버마다 저장 및 test passed; 아무것도 선택하지 않으면 incomplete가 아니라 skipped | 건너뛰기 가능, 언제든 재개 |
 | 6. 지식 연결 | 선택 | Outline/Notion/embedding을 연결 | 선택한 source와 embedding의 구성·접근 test passed | 건너뛰기 가능, 지식 기능 사용 전 경고 |
 | 7. 운영 알림 | 선택 | SMTP/Slack 알림 경로 확인 | 적어도 하나의 알림 목적지 test passed | 건너뛰기 가능 |
 | 8. 최종 검증 | 필수 | 요약을 확인하고 설정 완료 | Step 1~4가 모두 complete이고 최신 readiness snapshot에 blocking failure 0 | 완료 후 `/` 이동; 결과 및 미선택 기능 표시 |
 
-Step 3의 “콘솔 전용” 허용 여부는 제품 정책 결정 사항이다. 허용한다면 단순 skip이 아니라 L5가 이유와 함께 운영 모드를 선택하고, 대시보드에 인그레스 미구성 상태를 계속 `주의`로 표시한다. 허용하지 않으면 최소 한 채널의 성공이 필수다.
+Step 3의 “콘솔 전용” 모드는 **지원하지 않는다(마스터 확정 2026-09-15)** — 최소 한 채널의 성공이 완료 필수 조건이다. Step 8(최종 검증)은 채널 연결 없이는 완료될 수 없다. 단, Step 3의 *발견·연결 시도* 자체는 관리자에게 실패 원인과 조치 링크를 제공해야 하며, 자격증명이 아직 없는 상태는 실패가 아니라 `AUTH_REQUIRED`와 승인 안내로 표현한다.
 
 ### 화면 동작
 
@@ -523,11 +534,11 @@ python3 -m py_compile admin-console/backend/*.py
 
 문장 조합을 코드에서 하지 않고 ICU 또는 현 i18n 계층이 지원하는 named parameter로 완전한 문장을 번역한다. 상태 code는 API에서 안정된 영문 enum으로 유지하고, 사용자 문구는 `message_key`로 번역한다. CI에는 두 JSON의 key set 동일성, JSON parse, 사용되지 않는 신규 키와 누락 키 검사를 추가한다.
 
-## 10. 미해결·결정 필요 항목
+## 10. 결정 필요 항목 (3건 확정 반영, 나머지 미해결)
 
-1. 기존 URL을 언제 307에서 308로 바꾸고 언제 제거 가능한 것으로 볼지, 지원 기간과 외부 bookmark/문서 관찰 기준이 필요하다. 이 설계의 기본값은 제거하지 않음이다.
-2. 사이드바 라벨을 아키텍처 용어(제어/실행)로 유지할지 과업 용어를 더 강화할지, 한·영 제품 용어집 승인이 필요하다.
-3. Step 3에서 인그레스 1개 연결을 필수로 할지, “콘솔 전용” 운영 모드를 공식 지원할지 마스터 결정이 필요하다.
+1. ~~기존 URL 307→308 전환·제거 정책~~ → **확정(2026-09-15): 관찰 기간 후 미사용 URL 정리는 접근 로그 실측으로 판정한다.** §3 “URL 호환 규칙”의 정리 정책 표를 따른다.
+2. ~~사이드바 라벨 용어~~ → **확정(2026-09-15): 초보자 친화 과업 용어를 쓴다.** 대응 표는 §11.
+3. ~~Step 3 인그레스 필수 여부~~ → **확정(2026-09-15): 채널 연결 1개 이상을 필수로 두고, “콘솔 전용” 모드는 지원하지 않는다.** §4 참조.
 4. 자동 발견이 읽을 수 있는 배포 metadata의 공식 source와 권한 경계를 정해야 한다. Docker socket 직접 접근은 기본안에서 제외한다.
 5. OAuth를 지원하지 않는 연결에서 수동 API 키 입력을 계속 허용할지, secret manager reference만 허용할지와 L5 break-glass 정책이 필요하다.
 6. `applied=false` 구성의 적용을 담당할 운영 시스템과 runbook URL, readiness가 effective revision을 확인하는 표준 방법을 정해야 한다.
@@ -537,3 +548,31 @@ python3 -m py_compile admin-console/backend/*.py
 10. Financial palette의 dark mode 확장 여부가 필요하다. v1.0은 라이트 기본만 의무화하고 dark mode는 대비 토큰이 승인될 때까지 비범위로 둔다.
 
 이 결정들은 UX 구현 방식에는 영향을 주지만 ACP/MCP/Policy/Knowledge의 실행 책임이나 데이터 소유권을 바꾸지 않는다. 승인 전에는 additive API, 기존 URL 유지, 비밀값 비노출, 서비스 수동 재시작 금지라는 보수적 기본값을 적용한다.
+
+## 11. 마스터 확정 사항 (2026-09-15)
+
+| # | 항목 | 확정 내용 | 반영 위치 |
+|---:|---|---|---|
+| 1 | 사이드바 용어 | **초보자 친화 과업 용어**를 쓴다(아키텍처 용어는 내부·문서용) | §3, 본 절 표 |
+| 2 | 기존 URL 처리 | 보존 → 관찰 기간 → **접근 로그 실측으로 미사용 URL 정리**(자동 삭제 금지, 마스터 승인 후) | §3 “정리 정책” |
+| 3 | 온보딩 필수 조건 | **채널 연결 1개 이상 필수**, “콘솔 전용” 운영 모드 미지원 | §4 Step 3·Step 8 |
+
+### 사이드바 라벨 대응표
+
+| 그룹(사용자 라벨) | 아키텍처 용어 | 포함 화면 |
+|---|---|---|
+| 대시보드(고정) | — | `/` |
+| 시작하기(고정) | — | `/setup` |
+| 연결 | Ingress | `/connections/*` (Mattermost·Slack·Notion·OAuth·SMTP) |
+| 설정 | Control Plane | `/control/*` (ACP·런타임 구성·정책·승인·감사) |
+| 실행 | Execution | `/execution/*` (MCP·모델 제공자·Fallback·사용량·Quota) |
+| 지식 | Knowledge | `/knowledge/*` (Outline·Embedding·동기화) |
+| 모니터링 | Operations | `/operations/*` (상태·서비스 등록·백업·보안 업데이트·라이선스) |
+| 관리 | Management | `/management/*` (사용자·자격증명·비밀값·기능 플래그·프로필 작업) |
+
+라벨 근거: “제어”·“운영”은 아키텍처 내부 용어로 초기 관리자에게 의미가 즉시 전달되지 않고, “설정”·“모니터링”이 실제 과업을 더 정확히 가리킨다.
+내부 코드·API·문서의 아키텍처 용어(Inress/Control Plane/Execution/Knowledge/Operations/Management)는 유지한다 — 라벨 변경을 경계 변경으로 오해하지 않는다.
+
+### 남은 결정 필요 항목
+
+§10의 4~10번(자동 발견 metadata source·권한 경계, OAuth 미지원 연결의 수동 키 정책, `applied=false` 적용 담당·runbook, cache 계층 구현 방식, 목록 기본 page size·검색 API 우선순위, flag 소유자·종료 조건, dark mode 확장)은 구현 Phase 진행 중 해당 Phase 착수 전에 확정한다.
