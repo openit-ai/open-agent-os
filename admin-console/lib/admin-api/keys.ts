@@ -8,4 +8,6 @@ export const adminKeys = {
   details: (feature: string) => [...adminKeys.feature(feature), "detail"] as const,
   detail: (feature: string, id: string) => [...adminKeys.details(feature), id] as const,
   connection: (connectionId: string) => [...adminKeys.feature("connections"), connectionId] as const,
+  setupProgress: (step?: string) => [...adminKeys.feature("setup"), "progress", step ?? "current"] as const,
+  readiness: () => [...adminKeys.feature("readiness"), "summary"] as const,
 };
