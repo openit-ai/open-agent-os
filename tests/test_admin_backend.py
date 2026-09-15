@@ -116,6 +116,21 @@ async def test_admin_startup_isolates_periodic_probe_failure(monkeypatch, caplog
     assert "Periodic infra probe failed to start: OSError" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_admin_startup_seeds_canonical_registry(monkeypatch, caplog):
+    monkeypatch.setenv("OAOS_INFRA_AUTO_SEED_ENABLED", "true")
+    monkeypatch.setenv("OAOS_INFRA_PROBE_ENABLED", "false")
+    monkeypatch.setattr(_app_mod, "ensure_admin_tables", AsyncMock())
+    seed = MagicMock(return_value={"created_count": 6, "skipped_count": 4})
+    monkeypatch.setattr(infra_mod, "ensure_canonical_registry", seed)
+
+    with caplog.at_level("INFO"):
+        await _app_mod._admin_persistence_startup()
+
+    seed.assert_called_once_with()
+    assert "Canonical infra registry ready (created=6 skipped=4)" in caplog.text
+
+
 def test_login_success_and_me():
     token = _login()
     c = _client()
@@ -359,6 +374,88 @@ def test_health_probe_audit_event():
     r2 = c.get("/v1/infra/audit/events", headers=h)
     assert r2.status_code == 200
     assert len(r2.json()["events"]) >= 1
+
+
+def test_canonical_seed_is_idempotent_and_preserves_existing_and_legacy_rows(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{tmp_path / 'canonical-seed.db'}"
+    monkeypatch.setenv("OAOS_DATABASE_URL", database_url)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
+    engine = create_engine(database_url)
+    AdminInfraServiceORM.__table__.create(engine)
+    existing = infra_mod.InfraService(
+        id="operator_mattermost", name="mattermost", display_name="Operator Mattermost",
+        host="chat.operator.internal", port=9443, health_path="/custom-health",
+        status=infra_mod.InfraStatus.healthy, latency_ms=7.5,
+        last_check=datetime(2026, 9, 15, 11, 0, tzinfo=UTC),
+    )
+    legacy = infra_mod.InfraService(
+        id="legacy_security", name="security", display_name="Legacy Security",
+        host="security.internal", port=9000,
+    )
+    with Session(engine) as session:
+        for service in (existing, legacy):
+            session.add(AdminInfraServiceORM(
+                id=service.id, name=service.name, display_name=service.display_name,
+                host=service.host, port=service.port, health_path=service.health_path,
+                expected_status=service.expected_status, status=service.status.value,
+                latency_ms=service.latency_ms, last_check=service.last_check, extra=None,
+            ))
+        session.commit()
+
+    first = infra_mod.ensure_canonical_registry()
+    second = infra_mod.ensure_canonical_registry()
+    by_name = {service.name: service for service in infra_mod._db_list_services()}
+
+    assert first["created_count"] == 9
+    assert first["skipped"] == ["mattermost"]
+    assert second["created_count"] == 0
+    assert second["skipped_count"] == len(infra_mod.CANONICAL_ORDER)
+    assert set(infra_mod.CANONICAL_ORDER).issubset(by_name)
+    preserved = by_name["mattermost"]
+    assert (
+        preserved.id, preserved.display_name, preserved.host, preserved.port,
+        preserved.health_path, preserved.status, preserved.latency_ms,
+    ) == (
+        existing.id, existing.display_name, existing.host, existing.port,
+        existing.health_path, existing.status, existing.latency_ms,
+    )
+    assert preserved.last_check.replace(tzinfo=UTC) == existing.last_check
+    assert by_name["security"].id == legacy.id
+    assert by_name["security"].host == legacy.host
+    if infra_mod._db_engine is not None:
+        infra_mod._db_engine.dispose()
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_seeded_control_plane_is_probed_and_reaches_readiness_snapshot(monkeypatch):
+    infra_mod.ensure_canonical_registry()
+    readiness_mod = _app_mod._readiness_mod
+    readiness_mod._recent_tests.clear()
+    infra_mod.register_readiness_observation_sink(readiness_mod._record_observation)
+    checked_at = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+    probed_names = []
+
+    async def healthy_probe(candidate):
+        probed_names.append(candidate.name)
+        candidate.status = infra_mod.InfraStatus.healthy
+        candidate.last_check = checked_at
+        candidate.latency_ms = 2.0
+        return candidate
+
+    monkeypatch.setattr(infra_mod, "_probe_one", healthy_probe)
+    await infra_mod.probe_all_services()
+    snapshot = readiness_mod._collect_snapshot(now=checked_at)
+
+    assert set(infra_mod.CANONICAL_ORDER).issubset(probed_names)
+    assert "control-plane" in probed_names
+    assert snapshot["environment"]["control_plane"] == {
+        "ok": True, "code": "OK", "checked_at": checked_at.isoformat(),
+    }
 
 
 def test_connection_observation_persists_in_infra_registry_database(tmp_path, monkeypatch):

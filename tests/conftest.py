@@ -62,6 +62,9 @@ os.environ.setdefault("OAOS_AGENT_CONTEXT_AUDIENCE", "execution-gateway")
 os.environ.setdefault("OAOS_SIGNED_CONTEXT_AUDIENCE", "execution-gateway")
 os.environ.setdefault("OAOS_AGENT_JWT_AUDIENCE", "execution-gateway")
 os.environ.pop("OAOS_ENV", None)
+# Background admin startup work is opt-in per behavior test; production defaults stay enabled.
+os.environ.setdefault("OAOS_INFRA_PROBE_ENABLED", "0")
+os.environ.setdefault("OAOS_INFRA_AUTO_SEED_ENABLED", "0")
 
 import pytest
 import uvloop
@@ -96,6 +99,8 @@ _ADMIN_ENV_SNAPSHOT_KEYS = (
     "OAOS_VAULT_KEY",
     "VAULT_ENCRYPTION_KEY",
     "OAOS_ENV",
+    "OAOS_INFRA_PROBE_ENABLED",
+    "OAOS_INFRA_AUTO_SEED_ENABLED",
     "OAOS_ENFORCE_SIGNED_CONTEXT",
     "OAOS_TEST_ALLOW_PLAINTEXT",
     "PYTEST_CURRENT_TEST",

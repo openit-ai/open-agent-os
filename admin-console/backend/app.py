@@ -102,6 +102,12 @@ def _infra_probe_enabled() -> bool:
     }
 
 
+def _infra_auto_seed_enabled() -> bool:
+    return os.environ.get("OAOS_INFRA_AUTO_SEED_ENABLED", "1").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _infra_probe_interval_seconds() -> int:
     try:
         return max(5, min(int(os.environ.get("OAOS_INFRA_PROBE_INTERVAL_SECONDS", "30")), 3600))
@@ -206,6 +212,17 @@ async def _admin_persistence_startup() -> None:
             logger.warning("Admin persistence startup fallback: %s", exc)
     # Required log line per spec (exact substring match)
     logger.info("Admin persistence: oaos ready (or in-memory fallback)")
+    if _infra_auto_seed_enabled():
+        try:
+            seed_result = _infra_mod.ensure_canonical_registry()
+            logger.info(
+                "Canonical infra registry ready (created=%d skipped=%d)",
+                seed_result["created_count"], seed_result["skipped_count"],
+            )
+        except Exception as exc:  # noqa: BLE001 - report degraded readiness without blocking the API
+            logger.warning("Canonical infra registry seed failed: %s", type(exc).__name__)
+    else:
+        logger.info("Canonical infra registry auto-seed disabled by OAOS_INFRA_AUTO_SEED_ENABLED")
     if not _infra_probe_enabled():
         logger.info("Periodic infra probe disabled by OAOS_INFRA_PROBE_ENABLED")
         return

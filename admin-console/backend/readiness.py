@@ -338,7 +338,11 @@ def _control_plane_observation(now: datetime) -> tuple[bool, dict[str, Any] | No
                 "ok": ok,
                 "status": normalized_status,
                 "code": code,
-                "checked_at": str(checked) if checked else datetime.fromtimestamp(0, UTC).isoformat(),
+                "checked_at": (
+                    checked.isoformat() if isinstance(checked, datetime)
+                    else str(checked) if checked
+                    else datetime.fromtimestamp(0, UTC).isoformat()
+                ),
                 "target_display": f"{host}:{port}" if host and port else "control-plane",
                 "latency_ms": getattr(row, "latency_ms", None) or (row.get("latency_ms") if isinstance(row, dict) else None),
             }

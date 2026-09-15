@@ -1445,24 +1445,12 @@ async def unified_alias(admin: AdminUser = Depends(get_current_admin)):
     }
 
 
-@router.post("/seed")
-def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
-    """Idempotent seed of 10 canonical services into DB — host/port/health_path only, no secrets.
-
-    Backup: before first insert, dumps existing admin_infra_services to timestamped JSON backup file.
-    Idempotent: skips names already present. Returns created/skipped counts.
-    """
+def _backup_registry(existing_items: list[InfraService]) -> str | None:
+    """Best-effort JSON backup used by the manual L5 seed endpoint."""
     import json
     import pathlib
 
-    defs = _canonical_defs_for_seed()
-    backup_path: str | None = None
     try:
-        existing_items: list[InfraService] | None = None
-        if _is_db_enabled():
-            existing_items = _db_list_services()
-        if existing_items is None:
-            existing_items = list(_services.values())
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_dir = pathlib.Path(__file__).resolve().parents[2] / f".backup_infra_seed_{ts}"
         if not backup_dir.parent.exists():
@@ -1470,41 +1458,45 @@ def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
             backup_file = backup_dir / "admin_infra_services_backup.json"
-            dump = [s.model_dump(mode="json") if hasattr(s, "model_dump") else dict(s) for s in (existing_items or [])]
+            dump = [s.model_dump(mode="json") if hasattr(s, "model_dump") else dict(s) for s in existing_items]
             backup_file.write_text(json.dumps(dump, ensure_ascii=False, indent=2), encoding="utf-8")
-            backup_path = str(backup_file)
+            return str(backup_file)
         except (OSError, TypeError, ValueError) as exc:
             logger.warning("Primary infra seed backup failed; trying fallback path: %s", exc)
             try:
                 flat = pathlib.Path(f".backup_infra_seed_{ts}.json")
-                flat.write_text(json.dumps([s.model_dump(mode="json") if hasattr(s, "model_dump") else dict(s) for s in (existing_items or [])], ensure_ascii=False, indent=2), encoding="utf-8")
-                backup_path = str(flat)
+                dump = [s.model_dump(mode="json") if hasattr(s, "model_dump") else dict(s) for s in existing_items]
+                flat.write_text(json.dumps(dump, ensure_ascii=False, indent=2), encoding="utf-8")
+                return str(flat)
             except (OSError, TypeError, ValueError) as fallback_exc:
                 logger.warning("Fallback infra seed backup failed: %s", fallback_exc)
-                backup_path = None
     except (OSError, TypeError, ValueError, AttributeError) as exc:
         logger.warning("Infra seed backup preparation degraded: %s", exc)
-        backup_path = None
+    return None
 
-    existing_names: set[str] = set()
-    try:
-        if _is_db_enabled():
-            items = _db_list_services()
-            if items is not None:
-                existing_names = {s.name for s in items}
-            else:
-                existing_names = {s.name for s in _services.values()}
-        else:
-            existing_names = {s.name for s in _services.values()}
-    except _DB_FAILURES as exc:
-        _backend_failure("load services for seed", exc)
-        existing_names = {s.name for s in _services.values()}
+
+def ensure_canonical_registry(*, create_backup: bool = False) -> dict:
+    """Create missing canonical rows without updating or deleting existing rows."""
+    defs = _canonical_defs_for_seed()
+    items: list[InfraService] | None = None
+    if _is_db_enabled():
+        items = _db_list_services()
+    if items is None:
+        items = list(_services.values())
+    backup_path = _backup_registry(items) if create_backup else None
+
+    existing_names = {service.name for service in items}
 
     created: list[dict] = []
     skipped: list[str] = []
     for d in defs:
         name = d["name"]
         if name in existing_names:
+            skipped.append(name)
+            continue
+        # Close the race between multiple workers that loaded the initial list together.
+        if _is_db_enabled() and name in _get_db_services_map():
+            existing_names.add(name)
             skipped.append(name)
             continue
         sid = f"infra_{name.replace('-', '_')}"
@@ -1548,7 +1540,7 @@ def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
                 created.append(_to_alias_dict(svc))
             else:
                 try:
-                    existing = _db_get_service(check_id)
+                    existing = _get_db_services_map().get(name)
                     if existing is not None:
                         skipped.append(name)
                     else:
@@ -1569,6 +1561,12 @@ def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
         "backup_path": backup_path,
         "note": "host/port/health_path only — no API key/password/DSN stored or displayed",
     }
+
+
+@router.post("/seed")
+def seed_canonical_registry(admin: AdminUser = Depends(require_l5)):
+    """L5 manual entry point for the same idempotent canonical startup seed."""
+    return ensure_canonical_registry(create_backup=True)
 
 
 @router.post("/upsert", response_model=dict, status_code=200)
