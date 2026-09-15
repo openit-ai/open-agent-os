@@ -433,8 +433,19 @@ def test_canonical_seed_is_idempotent_and_preserves_existing_and_legacy_rows(tmp
 
 @pytest.mark.asyncio
 async def test_seeded_control_plane_is_probed_and_reaches_readiness_snapshot(monkeypatch):
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    if infra_mod._db_engine is not None:
+        infra_mod._db_engine.dispose()
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
     infra_mod.ensure_canonical_registry()
     readiness_mod = _app_mod._readiness_mod
+    original_domain = readiness_mod._domain
+    monkeypatch.setattr(
+        readiness_mod, "_domain",
+        lambda name: infra_mod if name == "infra" else original_domain(name),
+    )
     readiness_mod._recent_tests.clear()
     infra_mod.register_readiness_observation_sink(readiness_mod._record_observation)
     checked_at = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
@@ -483,6 +494,11 @@ def test_connection_observation_persists_in_infra_registry_database(tmp_path, mo
     }
     persisted_observation = {**observation, "last_success_at": checked_at}
     readiness_mod = _app_mod._readiness_mod
+    original_domain = readiness_mod._domain
+    monkeypatch.setattr(
+        readiness_mod, "_domain",
+        lambda name: infra_mod if name == "infra" else original_domain(name),
+    )
     readiness_mod._record_observation("mattermost", observation)
     readiness_mod._recent_tests.clear()  # simulate an admin-api process restart
 
