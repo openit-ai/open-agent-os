@@ -13,7 +13,7 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.6` — single source of truth `admin-console/package.json` `0.1.6` (candidate branch `release/v0.1.3-remediation` at `6d91f3b710`, tag `v0.1.3` not yet created — previous `v0.1.2` was `34f0981e71`). **Architecture document version `v1.7.3` (`docs/architecture-v1.7.3.md`) is distinct from product version `0.1.6`** — v1.7.3 describes the Adaptive Profile Engine design (§16.12) and Control-Plane-centric IA aliases (§16.14), not the release number.
+- **Product version:** `0.1.6` — single source of truth `admin-console/package.json` `0.1.6` (tag `v0.1.6` → `920723f`; previous product tag `v0.1.5` → `2406da63ac`). **Architecture document version `v1.7.3` (`docs/architecture-v1.7.3.md`) is distinct from product version `0.1.6`** — v1.7.3 describes the Adaptive Profile Engine design (§16.12) and Control-Plane-centric IA aliases (§16.14), not the release number.
 - **Canonical architecture:** [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) — v1.7.3 Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
