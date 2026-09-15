@@ -23,6 +23,7 @@ export interface StepWizardProps {
 const statusPresentation = {
   complete: { Icon: CheckCircle2, className: "text-status-ok-text" },
   needs_attention: { Icon: TriangleAlert, className: "text-status-danger-text" },
+  incomplete: { Icon: TriangleAlert, className: "text-status-warn-text" },
   checking: { Icon: CircleDashed, className: "animate-spin text-status-warn-text motion-reduce:animate-none" },
   skipped: { Icon: Circle, className: "text-status-neutral-text" },
   pending: { Icon: Circle, className: "text-status-neutral-text" },
