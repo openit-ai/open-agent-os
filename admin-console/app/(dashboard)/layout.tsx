@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { clearToken, getToken, getAvatarUrl, setAvatarUrl, clearAvatarUrl, changePassword, updateProfile, getMe, listUsers, login, setToken, type AdminUserPublic } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { VersionDisplay } from "@/components/VersionDisplay";
+import { clearSetupDeferral } from "@/lib/setup-session";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -73,6 +74,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [dropdownOpen]);
 
   function handleLogout() {
+    clearSetupDeferral();
     clearToken();
     router.replace("/login");
   }
@@ -298,7 +300,7 @@ function AdminModal({ email, onClose, onSwitched }: { email: string | null; onCl
     setSwitchErr(null);
     if (!switchEmail || !switchPw) { setSwitchErr(t("modals.switchValidation")); return; }
     setSwitching(true);
-    try { const r = await login(switchEmail, switchPw); setToken(r.access_token); onSwitched(); } catch (e) { setSwitchErr(e instanceof Error ? e.message : t("modals.loginFailed")); } finally { setSwitching(false); }
+    try { const r = await login(switchEmail, switchPw); setToken(r.access_token); clearSetupDeferral(); onSwitched(); } catch (e) { setSwitchErr(e instanceof Error ? e.message : t("modals.loginFailed")); } finally { setSwitching(false); }
   }
   async function handleEditName() {
     setEditErr(null); setEditMsg(null);

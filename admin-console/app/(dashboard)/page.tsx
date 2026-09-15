@@ -1,11 +1,17 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch, getToken } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { Activity, Users, ClipboardCheck, ScrollText } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { ErrorState, RequiredConnectionsSummary, Skeleton } from "@/components/admin";
+import { getAdminReadiness, getSetupProgress, normalizeAdminError } from "@/lib/admin-api/client";
+import { adminKeys } from "@/lib/admin-api/keys";
+import { isSetupDeferredForSession } from "@/lib/setup-session";
 
 interface DashboardStats { total_users: number; total_agents: number; pending_approvals: number; audit_events_today: number; }
 interface InfraItem { id: string; service: string; status: string; host: string; port: number; latency_ms: number | null; last_check: string | null; }
@@ -20,6 +26,21 @@ export default function DashboardPage() {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [audit, setAudit] = useState<AuditChain | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [setupDeferred, setSetupDeferred] = useState(false);
+  const authenticated = Boolean(getToken());
+
+  const setupQuery = useQuery({
+    queryKey: adminKeys.setupProgress(),
+    queryFn: ({ signal }) => getSetupProgress(signal),
+    enabled: authenticated,
+    retry: false,
+  });
+  const readinessQuery = useQuery({
+    queryKey: adminKeys.readiness(),
+    queryFn: ({ signal }) => getAdminReadiness(signal),
+    enabled: authenticated,
+    retry: false,
+  });
 
   useEffect(() => {
     if (!getToken()) { router.replace("/login"); return; }
@@ -49,6 +70,15 @@ export default function DashboardPage() {
     return () => { cancelled = true; };
   }, [router, t]);
 
+  useEffect(() => {
+    if (!setupQuery.data || setupQuery.data.required_complete) return;
+    if (isSetupDeferredForSession()) {
+      setSetupDeferred(true);
+      return;
+    }
+    router.replace("/setup");
+  }, [router, setupQuery.data]);
+
   const healthy = infra.filter((x) => x.status === "healthy").length;
   const unhealthy = infra.filter((x) => x.status === "unhealthy").length;
   const unknown = infra.length - healthy - unhealthy;
@@ -57,6 +87,21 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">{t("dashboard.title")}</h1>
       {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
+
+      {readinessQuery.isPending ? <Skeleton variant="card" ariaLabel={t("admin.readiness.summary.checking")} /> : null}
+      {readinessQuery.isError ? (() => {
+        const readinessError = normalizeAdminError(readinessQuery.error);
+        return <ErrorState title={t("admin.readiness.summary.loadFailed")} description={t(readinessError.message_key)} code={readinessError.code} correlationId={readinessError.correlation_id} retry={() => void readinessQuery.refetch()} />;
+      })() : null}
+      {readinessQuery.data ? <RequiredConnectionsSummary readiness={readinessQuery.data} checking={readinessQuery.isFetching} onRecheck={() => void readinessQuery.refetch()} /> : null}
+
+      {setupQuery.data && !setupQuery.data.required_complete && setupDeferred ? (
+        <section className="rounded-lg border border-status-warn bg-status-warn-surface p-4 text-status-warn-text" aria-labelledby="continue-setup-title">
+          <h2 id="continue-setup-title" className="font-semibold">{t("admin.readiness.summary.continueSetupTitle")}</h2>
+          <p className="mt-1 text-sm">{t("admin.readiness.summary.continueSetupDescription")}</p>
+          <Link href={`/setup?step=${setupQuery.data.current_step}`} className="mt-3 inline-flex h-9 items-center rounded-md border border-status-warn bg-background px-4 text-sm font-medium">{t("admin.readiness.summary.continueSetupAction")}</Link>
+        </section>
+      ) : null}
 
       {/* 통계 카드 */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

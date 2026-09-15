@@ -41,6 +41,15 @@ function previousStep(id: SetupStepId) {
 }
 
 export default function SetupPage() {
+  const { t } = useI18n();
+  return (
+    <React.Suspense fallback={<Skeleton variant="form" rows={6} ariaLabel={t("admin.setup.page.loading")} />}>
+      <SetupPageContent />
+    </React.Suspense>
+  );
+}
+
+function SetupPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { t } = useI18n();
