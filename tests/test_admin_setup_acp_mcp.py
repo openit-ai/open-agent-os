@@ -96,6 +96,40 @@ def test_openapi_has_new_prefixes(client):
     assert any(p.startswith("/v1/mcp") for p in paths)
 
 
+def test_acp_mcp_additive_aliases_use_canonical_handlers(client):
+    tok = _login(client)
+    canonical_acp = client.get("/v1/acp/config", headers=_h(tok))
+    alias_acp = client.get("/v1/control/acp/config", headers=_h(tok))
+    assert alias_acp.status_code == canonical_acp.status_code == 200
+    for key in ("hermes_base_url", "hermes_model", "acp_enabled", "source", "applied"):
+        assert alias_acp.json()[key] == canonical_acp.json()[key]
+
+    canonical_mcp = client.get("/v1/mcp/servers", headers=_h(tok))
+    alias_mcp = client.get("/v1/execution/mcp/servers", headers=_h(tok))
+    assert alias_mcp.status_code == canonical_mcp.status_code == 200
+    assert alias_mcp.json() == canonical_mcp.json()
+
+
+def test_phase2a_aggregate_routes_are_mounted(client):
+    tok = _login(client)
+    progress = client.get("/v1/setup/progress", headers=_h(tok))
+    assert progress.status_code == 200, progress.text
+    assert [step["id"] for step in progress.json()["steps"]] == [
+        "environment", "runtime", "ingress", "policy", "mcp", "knowledge",
+        "notifications", "verify",
+    ]
+
+    readiness = client.get("/v1/admin/readiness", headers=_h(tok))
+    assert readiness.status_code == 200, readiness.text
+    assert readiness.json()["required_total"] == 4
+
+    discovery = client.get(
+        "/v1/admin/connections/discovery?kind=smtp", headers=_h(tok)
+    )
+    assert discovery.status_code == 200, discovery.text
+    assert set(discovery.json()) == {"kind", "candidates", "reasons"}
+
+
 def test_setup_status_public_first_run(client):
     r = client.get("/v1/setup/status")
     assert r.status_code == 200
