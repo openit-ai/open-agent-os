@@ -5,19 +5,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getOlConfig, updateOlConfig, testOlConnection, apiFetch, type OlConfig, type OlTestResult } from "@/lib/api";
+import { getOlConfig, updateOlConfig, apiFetch, type OlConfig } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { BookOpen, Loader2 } from "lucide-react";
+import { ConfigurationApplyState, TestConnectionButton } from "@/components/admin";
 
 export function OlPanel() {
   const { t } = useI18n();
   const [cfg, setCfg] = useState<OlConfig | null>(null);
   const [url, setUrl] = useState("");
   const [key, setKey] = useState("");
-  const [testRes, setTestRes] = useState<OlTestResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -73,19 +72,6 @@ export function OlPanel() {
     }
   };
 
-  const test = async () => {
-    setTesting(true);
-    setError(null);
-    try {
-      const res = await testOlConnection(key.trim() ? { api_key: key.trim() } : undefined);
-      setTestRes(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "test failed");
-    } finally {
-      setTesting(false);
-    }
-  };
-
   if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
 
   return (
@@ -109,6 +95,7 @@ export function OlPanel() {
           {cfg?.note && <CardDescription>{cfg.note}</CardDescription>}
         </CardHeader>
         <CardContent className="space-y-3">
+          {cfg ? <ConfigurationApplyState value={cfg} service="Outline" /> : null}
           <div>
             <Label>{t("ol.url")}</Label>
             <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://note.oaos.cloud" />
@@ -121,15 +108,8 @@ export function OlPanel() {
           <div className="text-sm text-muted-foreground">{t("ol.keySet")}: {String(cfg?.api_key_set)}</div>
           <div className="flex gap-2">
             <Button onClick={save} disabled={saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("ol.save")}</Button>
-            <Button variant="outline" onClick={test} disabled={testing}>{testing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("ol.test")}</Button>
+            <TestConnectionButton connectionId="outline" configRevision={cfg?.config_revision} />
           </div>
-          {testRes && (
-            <div className="text-sm">
-              {testRes.ok
-                ? <span className="text-green-700">OK · {t("ol.collections")}: {testRes.collection_count} · {testRes.latency_ms} ms</span>
-                : <span className="text-red-600">FAIL · {testRes.error ?? testRes.status_code}</span>}
-            </div>
-          )}
         </CardContent>
       </Card>
     </div>

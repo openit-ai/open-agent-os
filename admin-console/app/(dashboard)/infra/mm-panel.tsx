@@ -5,9 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getMmConfig, updateMmConfig, testMmConnection, getMmBridge, mmBridgeAction, apiFetch, type MmConfig, type MmTestResult, type MmBridgeStatus } from "@/lib/api";
+import { getMmConfig, updateMmConfig, getMmBridge, apiFetch, type MmConfig, type MmBridgeStatus } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { MessageSquare, Loader2 } from "lucide-react";
+import { ConfigurationApplyState, TestConnectionButton } from "@/components/admin";
 
 export function MmPanel() {
   const { t } = useI18n();
@@ -16,12 +17,9 @@ export function MmPanel() {
   const [botUsername, setBotUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [token, setToken] = useState("");
-  const [testRes, setTestRes] = useState<MmTestResult | null>(null);
   const [bridge, setBridge] = useState<MmBridgeStatus | null>(null);
-  const [bridging, setBridging] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -51,20 +49,6 @@ export function MmPanel() {
   }, []);
 
   useEffect(() => { fetchBridge(); }, [fetchBridge]);
-
-  const bridgeAct = async (action: "start" | "stop" | "restart") => {
-    setBridging(action);
-    setError(null);
-    try {
-      const res = await mmBridgeAction(action);
-      setBridge(res);
-      setMsg(`${action}: ${res.active}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : `${action} failed`);
-    } finally {
-      setBridging(null);
-    }
-  };
 
   const save = async () => {
     setSaving(true);
@@ -105,19 +89,6 @@ export function MmPanel() {
     }
   };
 
-  const test = async () => {
-    setTesting(true);
-    setError(null);
-    try {
-      const res = await testMmConnection(token.trim() ? { bot_token: token.trim() } : undefined);
-      setTestRes(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "test failed");
-    } finally {
-      setTesting(false);
-    }
-  };
-
   if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
 
   return (
@@ -141,6 +112,7 @@ export function MmPanel() {
           {cfg?.note && <CardDescription>{cfg.note}</CardDescription>}
         </CardHeader>
         <CardContent className="space-y-3">
+          {cfg ? <ConfigurationApplyState value={cfg} service="Mattermost" /> : null}
           <div>
             <Label>{t("mm.url")}</Label>
             <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:8065" />
@@ -162,15 +134,8 @@ export function MmPanel() {
           </div>
           <div className="flex gap-2">
             <Button onClick={save} disabled={saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.save")}</Button>
-            <Button variant="outline" onClick={test} disabled={testing}>{testing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.test")}</Button>
+            <TestConnectionButton connectionId="mattermost" configRevision={cfg?.config_revision} />
           </div>
-          {testRes && (
-            <div className="text-sm">
-              {testRes.ok
-                ? <span className="text-green-700">OK · @{testRes.bot_username} · {testRes.bot_user_id} · {testRes.latency_ms} ms</span>
-                : <span className="text-red-600">FAIL · {testRes.error ?? testRes.status_code}</span>}
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -188,17 +153,7 @@ export function MmPanel() {
           <div className="text-xs text-muted-foreground">
             installed: {String(bridge?.installed)} · configured: {String(bridge?.configured)}
           </div>
-          <div className="flex gap-2">
-            <Button onClick={() => bridgeAct("start")} disabled={bridging !== null}>
-              {bridging === "start" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.bridge_start")}
-            </Button>
-            <Button variant="outline" onClick={() => bridgeAct("restart")} disabled={bridging !== null}>
-              {bridging === "restart" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.bridge_restart")}
-            </Button>
-            <Button variant="destructive" onClick={() => bridgeAct("stop")} disabled={bridging !== null}>
-              {bridging === "stop" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t("mm.bridge_stop")}
-            </Button>
-          </div>
+          <p className="text-sm text-muted-foreground">{t("admin.connections.mattermost.bridgeOperatorManaged")}</p>
         </CardContent>
       </Card>
     </div>

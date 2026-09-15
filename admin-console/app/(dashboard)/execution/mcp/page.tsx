@@ -1,13 +1,10 @@
 "use client";
 
-import { McpPanel } from "../../infra/mcp-panel";
+import { ConnectionFlow } from "@/components/admin/connections/connection-flow";
+import { McpPanel } from "@/components/admin/connections/mcp-feature";
+import { useI18n } from "@/lib/i18n";
 
-// Alias view: Execution > MCP (canonical panel stays in infra/mcp-panel).
-// Existing /infra#mcp URL untouched. No DB/secret change.
 export default function ExecutionMcpPage() {
-  return (
-    <div className="space-y-6 p-6">
-      <McpPanel />
-    </div>
-  );
+  const { t } = useI18n();
+  return <ConnectionFlow kind="mcp" title={t("admin.connections.kind.mcp.title")} description={t("admin.connections.kind.mcp.description")} serviceLabel="MCP"><McpPanel /></ConnectionFlow>;
 }

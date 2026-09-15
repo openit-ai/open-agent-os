@@ -1097,6 +1097,19 @@
         "continueSetupTitle": "Required setup is not complete",
         "continueSetupDescription": "You can use this dashboard for the current session, but skipped required steps are not counted as complete.",
         "continueSetupAction": "Continue setup"
+      },
+      "actions": {
+        "openHealth": "Open operations health",
+        "configureRuntime": "Configure execution path",
+        "configureAcp": "Configure ACP",
+        "configureIngress": "Configure connections",
+        "configureMattermost": "Configure Mattermost",
+        "configureSlack": "Configure Slack",
+        "configurePolicy": "Configure policy",
+        "configureMcp": "Configure MCP",
+        "configureKnowledge": "Configure knowledge",
+        "configureNotifications": "Configure notifications",
+        "reviewProblems": "Review readiness problems"
       }
     },
     "connections": {
@@ -1115,7 +1128,107 @@
         "savedNotApplied": "Saved, but not yet applied",
         "affectedServices": "Affected services: {services}",
         "operatorAction": "Follow the approved operator procedure. The console will not restart services.",
-        "openProcedure": "Open operator procedure"
+        "openProcedure": "Open operator procedure",
+        "persisted": "Persisted",
+        "applied": "Applied",
+        "configRevision": "Saved revision",
+        "effectiveRevision": "Effective revision",
+        "strategy": "Apply strategy",
+        "restartRequired": "Restart required"
+      },
+      "overview": {
+        "title": "Connections",
+        "description": "Review every ingress connection together. Missing, unapplied, and failed connections appear first.",
+        "open": "Open connection",
+        "configureRequired": "Configuration is required"
+      },
+      "flow": {
+        "label": "Connection flow",
+        "discover": "Discover",
+        "select": "Select candidate",
+        "connect": "Connect",
+        "test": "Test"
+      },
+      "discovery": {
+        "title": "Discovered candidates",
+        "description": "Choose a masked server-side candidate before entering connection details.",
+        "refresh": "Discover again",
+        "loading": "Discovering connection candidates",
+        "failed": "Candidates could not be discovered",
+        "noCandidates": "No safe connection candidate was discovered.",
+        "unsupportedKind": "This connection kind does not support discovery.",
+        "recommended": "Recommended",
+        "source": "Source",
+        "confidence": "Confidence",
+        "credential": "Credential",
+        "applyState": "Apply state"
+      },
+      "credential": {
+        "available": "Configured",
+        "authorization_required": "Authorization required",
+        "missing": "Not configured"
+      },
+      "test": {
+        "title": "Connection test",
+        "selectedTarget": "Test the selected candidate: {target}",
+        "selectFirst": "Select a candidate before testing.",
+        "ok": "Connection is healthy.",
+        "authRequired": "Authorization is required. Approve the provider or configure a secret reference.",
+        "permissionDenied": "The provider denied access. Review the granted permissions.",
+        "unreachable": "The target cannot be reached. Open operations health for the next action.",
+        "timeout": "The connection check timed out. Try again or review service health.",
+        "notApplied": "The saved revision is not the effective revision.",
+        "misconfigured": "The connection is not configured correctly.",
+        "unknown": "The connection test failed. Use the correlation ID in server logs."
+      },
+      "advanced": {
+        "title": "Advanced settings",
+        "description": "Edit {service} details only when discovery or provider authorization cannot complete the connection."
+      },
+      "mattermost": {
+        "bridgeOperatorManaged": "Bridge lifecycle is operator-managed. This console only reports its state and never starts, stops, or restarts the service."
+      },
+      "kind": {
+        "acp": { "title": "ACP execution path", "description": "Manage Hermes ACP discovery, configuration, application state, and connection checks." },
+        "mattermost": { "title": "Mattermost", "description": "Manage Mattermost bot and bridge connectivity." },
+        "slack": { "title": "Slack", "description": "Manage Slack authorization and safe delivery-path checks." },
+        "notion": { "title": "Notion", "description": "Manage Notion ingress authorization and access checks." },
+        "oauth": { "title": "OAuth providers", "description": "Review provider activation and authorization requirements." },
+        "smtp": { "title": "SMTP", "description": "Manage SMTP notifications with a no-mail connection check." },
+        "outline": { "title": "Outline", "description": "Manage the Outline secret reference and collection access checks." },
+        "mcp": { "title": "MCP servers", "description": "Discover and manage MCP servers and tool discovery checks." }
+      }
+    },
+    "infraResolver": {
+      "resolving": "Opening the canonical administration page"
+    },
+    "providers": {
+      "acpSummary": {
+        "title": "ACP execution path",
+        "hermesActive": "Hermes is the active runtime. ACP configuration is owned by its dedicated screen.",
+        "externalActive": "An external model provider is active. ACP remains available as a separate execution path.",
+        "open": "View ACP execution path"
+      }
+    },
+    "operations": {
+      "health": {
+        "title": "Operations health",
+        "description": "Observe live and unified service health without changing the service registry.",
+        "loadFailed": "Operations health could not be loaded",
+        "observedServices": "Observed services"
+      },
+      "services": {
+        "title": "Service registry",
+        "description": "Register and maintain probe targets separately from health observations.",
+        "loadFailed": "The service registry could not be loaded",
+        "actionFailed": "The service registry action failed",
+        "saveFailed": "The service could not be saved",
+        "invalidTarget": "Enter a host and a port between 1 and 65535.",
+        "register": "Register service",
+        "edit": "Edit service",
+        "target": "Target",
+        "deleteTitle": "Delete registered service?",
+        "deleteDescription": "Health observations for this registered target will no longer be available."
       }
     }
   }

@@ -43,7 +43,7 @@ _recent_tests: dict[str, tuple[float, dict[str, Any]]] = {}
 
 _SUPPORTED_KINDS = {
     "acp", "control-plane", "mattermost", "slack", "outline", "notion",
-    "smtp", "mcp",
+    "oauth", "smtp", "mcp",
 }
 
 # Product defaults only.  This fixed table is the complete loopback probe
@@ -724,6 +724,18 @@ def _registry_candidates(kind: str) -> list[dict[str, Any]]:
 
 
 def _env_candidate(kind: str) -> list[dict[str, Any]]:
+    if kind == "oauth":
+        google = bool(os.environ.get("GOOGLE_CLIENT_ID", "").strip() and os.environ.get("GOOGLE_CLIENT_SECRET", "").strip())
+        microsoft = bool(
+            (os.environ.get("MICROSOFT_CLIENT_ID") or os.environ.get("MS_CLIENT_ID") or "").strip()
+            and (os.environ.get("MICROSOFT_CLIENT_SECRET") or os.environ.get("MS_CLIENT_SECRET") or "").strip()
+        )
+        if not (google or microsoft):
+            return []
+        return [{
+            "kind": "oauth", "target": "oauth-provider", "source": "env", "confidence": "high",
+            "credential_state": "available", "applied": True, "requires_restart": False,
+        }]
     specs: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         "control-plane": (("OAOS_CONTROL_PLANE_URL", "OAOS_CP_URL"), ()),
         "acp": (("OAOS_CP_HERMES_BASE_URL", "HERMES_BASE_URL"), ("OAOS_CP_HERMES_API_KEY", "HERMES_API_KEY")),
@@ -804,7 +816,7 @@ def discover_candidates(kind: str) -> dict[str, Any]:
             "applied": False, "requires_restart": kind not in {"control-plane"},
         })
     # OAuth-first for SaaS when no injected authorization is available.
-    if kind in {"slack", "notion"} and not any(c["credential_state"] == "available" for c in candidates):
+    if kind in {"slack", "notion", "oauth"} and not any(c["credential_state"] == "available" for c in candidates):
         candidates.append({
             "kind": kind, "target": f"{kind}.com", "source": "default", "confidence": "high",
             "credential_state": "authorization_required", "applied": False,
@@ -871,6 +883,16 @@ def _connection_config(connection_id: str) -> dict[str, Any]:
         if base == "smtp" and target:
             target = f"{target}:{cfg.get('smtp_port', 587)}"
         return {"config": cfg, "source": source, "target": target, **meta}
+    if base == "oauth":
+        mod = _domain("oauth_config")
+        prefs, source = mod._load_prefs()
+        cfg = {**mod._env_config(), **prefs}
+        revision = public_revision("oauth", cfg)
+        return {
+            "config": cfg, "source": source, "target": "oauth-provider",
+            "persisted": True, "applied": True, "config_revision": revision,
+            "effective_revision": revision, "requires_restart": False,
+        }
     if base == "control-plane":
         revision = public_revision("control-plane", {"target": "127.0.0.1:8100"})
         return {"config": {}, "source": "default", "target": "http://127.0.0.1:8100", "persisted": True, "applied": True, "config_revision": revision, "effective_revision": revision, "requires_restart": False}
@@ -882,6 +904,9 @@ def _connection_config(connection_id: str) -> dict[str, Any]:
             raise _AdapterFailure("MISCONFIGURED")
         revision = public_revision(connection_id, {k: v for k, v in cfg.items() if k != "headers"})
         return {"config": cfg, "source": source, "target": cfg.get("url") or cfg.get("command"), "persisted": True, "applied": True, "config_revision": revision, "effective_revision": revision, "requires_restart": False}
+    if base == "mcp":
+        revision = public_revision("mcp", {"discovery": True})
+        return {"config": {"transport": "streamable-http"}, "source": "discovery", "target": None, "persisted": False, "applied": False, "config_revision": revision, "effective_revision": revision, "requires_restart": False}
     raise _AdapterFailure("MISCONFIGURED")
 
 
@@ -918,12 +943,20 @@ def _run_adapter(
         return {"status_code": 200, "latency_ms": round((time.monotonic() - started) * 1000, 1), "target_display": _target_display(target)}
 
     import httpx
+    if base == "oauth":
+        google_ready = bool(cfg.get("google_enabled") and cfg.get("google_client_id_set") and cfg.get("google_client_secret_set"))
+        microsoft_ready = bool(cfg.get("microsoft_enabled") and cfg.get("microsoft_client_id_set") and cfg.get("microsoft_client_secret_set"))
+        if not (google_ready or microsoft_ready):
+            raise _AdapterFailure("AUTH_REQUIRED")
+        discovery_target = "https://accounts.google.com/.well-known/openid-configuration" if google_ready else "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
+        response = httpx.get(discovery_target, timeout=timeout_seconds)
+        return _http_result(response, started, discovery_target)
     if base == "slack":
-        if mode != "write_probe":
-            raise _AdapterFailure("MISCONFIGURED")
         webhook = next((os.environ.get(k, "").strip() for k in ("SLACK_WEBHOOK_URL", "SLACK_INCOMING_WEBHOOK_URL", "OAOS_SLACK_WEBHOOK_URL") if os.environ.get(k, "").strip()), "")
         if not webhook:
             raise _AdapterFailure("AUTH_REQUIRED")
+        if mode == "safe":
+            return {"status_code": 200, "latency_ms": round((time.monotonic() - started) * 1000, 1), "target_display": _target_display(webhook)}
         response = httpx.post(webhook, json={"text": "OAOS admin connection test"}, timeout=timeout_seconds)
         return _http_result(response, started, webhook)
     if base == "mattermost":

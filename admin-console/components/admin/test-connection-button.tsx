@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, LoaderCircle, XCircle } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { testConnection, AdminApiError, normalizeAdminError } from "@/lib/admin-api/client";
 import type { AdminError, TestConnectionResult } from "@/lib/admin-api/types";
@@ -54,6 +55,8 @@ export function TestConnectionButton({ connectionId, candidateId, configRevision
     return translated === result.message_key ? result.summary : translated;
   })() : null;
   const errorText = error ? t(error.message_key) : null;
+  const isFullyHealthy = Boolean(result?.ok && result.applied && result.status === "healthy");
+  const isWarning = Boolean(result && !isFullyHealthy && (result.status === "warning" || !result.applied));
 
   return (
     <div className="inline-flex flex-col items-start gap-2">
@@ -62,10 +65,14 @@ export function TestConnectionButton({ connectionId, candidateId, configRevision
         {pending ? t("admin.common.connectionTest.checking") : t("admin.common.connectionTest.start")}
       </Button>
       {result ? (
-        <p role="status" className={result.ok ? "flex items-center gap-1.5 text-sm text-status-ok-text" : "flex items-center gap-1.5 text-sm text-status-danger-text"}>
-          {result.ok ? <CheckCircle2 aria-hidden="true" className="h-4 w-4" /> : <XCircle aria-hidden="true" className="h-4 w-4" />}
-          <span>{resultText}</span>
-        </p>
+        <div role="status" className={isFullyHealthy ? "text-sm text-status-ok-text" : isWarning ? "text-sm text-status-warn-text" : "text-sm text-status-danger-text"}>
+          <p className="flex items-center gap-1.5">
+            {isFullyHealthy ? <CheckCircle2 aria-hidden="true" className="h-4 w-4" /> : isWarning ? <TriangleAlert aria-hidden="true" className="h-4 w-4" /> : <XCircle aria-hidden="true" className="h-4 w-4" />}
+            <span><span className="font-medium">{result.code}</span> · {resultText}</span>
+          </p>
+          {!result.applied ? <p className="mt-1">{t("admin.connections.apply.savedNotApplied")}</p> : null}
+          {result.next_action ? <Link className="mt-1 inline-flex font-medium underline" href={result.next_action.href}>{t(result.next_action.label_key)}</Link> : null}
+        </div>
       ) : null}
       {error ? <p role="alert" className="flex items-center gap-1.5 text-sm text-status-danger-text"><XCircle aria-hidden="true" className="h-4 w-4" />{errorText}</p> : null}
     </div>

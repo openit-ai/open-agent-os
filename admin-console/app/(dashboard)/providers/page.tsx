@@ -11,7 +11,6 @@ import { getToken, listLLMProviders, createLLMProvider, updateLLMProvider, delet
 import { RefreshCw, Trash2, Pencil, Plus, Cpu, Plug2, Ban, CheckCircle2, Info, BarChart3 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import Link from "next/link";
-import { AcpSection } from "./acp-section";
 
 const PROVIDER_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "opencode-go", "openrouter", "ollama"];
 const APIKEY_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "openrouter"];
@@ -239,8 +238,10 @@ export default function ProvidersPage() {
         </CardContent>
       </Card>
 
-      {/* ACP connection (agent runtime endpoint + probe) */}
-      <AcpSection />
+      <Card>
+        <CardHeader><CardTitle className="text-base">{t("admin.providers.acpSummary.title")}</CardTitle><CardDescription>{isHermes ? t("admin.providers.acpSummary.hermesActive") : t("admin.providers.acpSummary.externalActive")}</CardDescription></CardHeader>
+        <CardContent><Button asChild variant="outline"><Link href="/control/acp"><Plug2 aria-hidden="true" className="h-4 w-4" />{t("admin.providers.acpSummary.open")}</Link></Button></CardContent>
+      </Card>
 
       {/* Hermes banner */}
       {isHermes ? (
