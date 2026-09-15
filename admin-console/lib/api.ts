@@ -85,6 +85,13 @@ function formatApiErrorDetail(value: unknown, fallback: string): string {
 }
 
 // ---- generic fetch ----
+export class ApiFetchError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiFetchError";
+  }
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -122,7 +129,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     if (detail === "[object Object]" || detail.includes("[object Object]")) {
       detail = fallback !== "[object Object]" ? fallback : `Request failed: ${res.status}`;
     }
-    throw new Error(detail || fallback);
+    throw new ApiFetchError(detail || fallback, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
