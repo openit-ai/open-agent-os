@@ -5,6 +5,7 @@ import importlib.util
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
@@ -109,3 +110,89 @@ def test_percent_counts_required_checks_not_optional_steps():
     snapshot["optionals"]["mcp"] = {"selected": True, "complete": False}
     snapshot["optionals"]["knowledge"] = {"selected": True, "complete": False}
     assert readiness.build_setup_progress(snapshot)["percent"] == baseline
+
+
+def test_apply_state_uses_config_and_effective_revision_equality():
+    desired = {"enabled": True, "url": "http://service.internal"}
+
+    env_only = readiness.apply_state_fields("sample", desired, "env")
+    db_applied = readiness.apply_state_fields(
+        "sample", desired, "db", effective_config=dict(desired),
+    )
+    db_pending = readiness.apply_state_fields(
+        "sample", desired, "db",
+        effective_config={"enabled": False, "url": "http://service.internal"},
+    )
+
+    assert env_only["applied"] is True
+    assert env_only["requires_restart"] is False
+    assert env_only["config_revision"] == env_only["effective_revision"]
+    assert db_applied["applied"] is True
+    assert db_applied["requires_restart"] is False
+    assert db_applied["apply_strategy"] == "immediate"
+    assert db_pending["applied"] is False
+    assert db_pending["requires_restart"] is True
+    assert db_pending["apply_strategy"] == "restart_required"
+
+
+def test_matching_db_and_env_config_complete_runtime_and_ingress(monkeypatch):
+    now = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+    acp_config = {
+        "acp_enabled": True, "hermes_base_url": "http://hermes.internal:8642",
+        "hermes_model": "default", "api_key_set": True,
+    }
+    mattermost_config = {
+        "mattermost_url": "http://mattermost.internal:8065", "bot_token_set": True,
+        "bot_username": "oaos", "default_display_name": "",
+    }
+    slack_config = {"webhook_url_set": False}
+    modules = {
+        "runtime_mode": SimpleNamespace(get_mode=lambda: SimpleNamespace(value="hermes")),
+        "acp_config": SimpleNamespace(
+            _load_config=lambda: (dict(acp_config), "db"),
+            _env_config=lambda: dict(acp_config),
+        ),
+        "mattermost_config": SimpleNamespace(
+            _load_config=lambda: (dict(mattermost_config), "db"),
+            _env_config=lambda: dict(mattermost_config),
+        ),
+        "slack_config": SimpleNamespace(
+            _load_config=lambda: (dict(slack_config), "env"),
+            _env_config=lambda: dict(slack_config),
+        ),
+    }
+    observations = {
+        name: {
+            "ok": True, "status": "healthy", "code": "OK",
+            "checked_at": now.isoformat(), "last_success_at": now.isoformat(),
+        }
+        for name in ("acp", "mattermost")
+    }
+    monkeypatch.setattr(readiness, "_domain", lambda name: modules[name])
+    monkeypatch.setattr(readiness, "_redacted_observation", observations.get)
+
+    runtime, _ = readiness._runtime_connection(now)
+    ingress, _ = readiness._ingress_connection(now)
+
+    assert (runtime["state"], runtime["applied"], runtime["requires_restart"]) == (
+        "healthy", True, False,
+    )
+    assert (ingress["state"], ingress["applied"], ingress["requires_restart"]) == (
+        "healthy", True, False,
+    )
+
+    fixed_snapshot = _complete_snapshot()
+    fixed_snapshot["required_connections"][1] = runtime
+    fixed_snapshot["required_connections"][2] = ingress
+    assert readiness.build_setup_progress(fixed_snapshot)["percent"] == 100
+
+    stale_snapshot = _complete_snapshot()
+    for connection_id in ("execution", "ingress"):
+        connection = next(
+            item for item in stale_snapshot["required_connections"]
+            if item["id"] == connection_id
+        )
+        connection.update({"state": "warning", "applied": False, "_code": "NOT_APPLIED"})
+    stale_progress = readiness.build_setup_progress(stale_snapshot)
+    assert stale_progress["percent"] == 64
+    assert readiness.build_setup_progress(fixed_snapshot)["percent"] == 100
