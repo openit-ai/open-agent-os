@@ -33,6 +33,19 @@
     --success: 142 76% 36%;
     --warning: 38 92% 50%;
     --danger: 0 84% 60%;
+    /* Admin semantic status tokens (light mode) */
+    --status-ok: #22C55E;
+    --status-ok-text: #15803D;
+    --status-ok-surface: #F0FDF4;
+    --status-warn: #F59E0B;
+    --status-warn-text: #92400E;
+    --status-warn-surface: #FFFBEB;
+    --status-danger: #DC2626;
+    --status-danger-text: #B91C1C;
+    --status-danger-surface: #FEF2F2;
+    --status-neutral-text: #334155;
+    --status-neutral-border: #CBD5E1;
+    --status-neutral-surface: #F8FAFC;
   }
   .dark {
     --background: 222 47% 11%;

@@ -945,5 +945,63 @@
     "actionFailed": "Action failed",
     "via": "via",
     "source": "source"
+  },
+  "admin": {
+    "common": {
+      "action": {
+        "cancel": "Cancel",
+        "retry": "Retry",
+        "close": "Close"
+      },
+      "dialog": {
+        "close": "Close dialog"
+      },
+      "status": {
+        "healthy": "Healthy",
+        "warning": "Warning",
+        "failed": "Failed",
+        "unknown": "Unknown"
+      },
+      "connectionTest": {
+        "start": "Test connection",
+        "checking": "Checking connection",
+        "success": "Connected",
+        "failed": "Connection failed"
+      },
+      "error": {
+        "authRequired": "Authentication is required.",
+        "permissionDenied": "You do not have permission to perform this action.",
+        "unreachable": "The service cannot be reached.",
+        "timeout": "The request timed out.",
+        "notApplied": "The saved configuration has not been applied yet.",
+        "misconfigured": "Check the configuration.",
+        "unknown": "The request could not be completed.",
+        "correlationId": "Correlation ID: {id}"
+      }
+    },
+    "table": {
+      "search": "Search",
+      "selectAll": "Select all rows on this page",
+      "selectRow": "Select row",
+      "actions": "Row actions",
+      "sortAscending": "Sort ascending",
+      "sortDescending": "Sort descending",
+      "previousPage": "Previous page",
+      "nextPage": "Next page",
+      "pageStatus": "Page {page} of {pages}",
+      "rowsPerPage": "Rows per page",
+      "totalRows": "{total} total"
+    },
+    "toast": {
+      "dismiss": "Dismiss notification",
+      "duplicateCount": "{count} times"
+    },
+    "confirm": {
+      "requiredText": "Type {text} to continue",
+      "error": "The action could not be completed."
+    },
+    "loading": {
+      "content": "Loading content"
+    }
   }
 }
