@@ -1350,6 +1350,9 @@
           "urlInvalid": "유효한 HTTP 또는 HTTPS URL을 입력하세요.",
           "urlHint": "기본 엔드포인트를 사용하는 제공자에서는 선택 항목입니다."
         }
+      },
+      "mcp": {
+        "deleteDescription": "서버 구성과 발견된 도구 연결 정보를 제거합니다."
       }
     }
   }

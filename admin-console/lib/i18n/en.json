@@ -1350,6 +1350,9 @@
           "urlInvalid": "Enter a valid HTTP or HTTPS URL.",
           "urlHint": "Optional for providers that use a built-in endpoint."
         }
+      },
+      "mcp": {
+        "deleteDescription": "The server configuration and its discovered tool association will be removed."
       }
     }
   }
