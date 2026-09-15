@@ -263,8 +263,13 @@ def _validate_rules(rules: list[dict], allow_remove_mandatory: bool = False) -> 
                 errors.append("mandatory security rule 'deny-external-export' is missing — set allow_remove_mandatory=true as L5 to bypass")
     return (len(errors)==0), errors
 
-def _audit_append(action: str, admin: AdminUser, detail: dict, version: str | None = None) -> None:
-    """Best-effort audit ledger append; fail-closed in production if DB required."""
+def _audit_append(action: str, admin: AdminUser, detail: dict, version: str | None = None, connection=None) -> None:
+    """Append a policy-mutation audit record.
+
+    Pass `connection` from inside the mutation's transaction to make the audit
+    record atomic with the change it describes — a failed audit then rolls the
+    change back instead of leaving it unrecorded.
+    """
     try:
         # Reuse security audit ledger pattern: try import security.app audit_ledger
         ledger = None
@@ -300,7 +305,7 @@ def _audit_append(action: str, admin: AdminUser, detail: dict, version: str | No
         )
         # attach result_hash as short json snippet if available
         try:
-            ledger.append(evt)
+            ledger.append(evt, connection=connection)
         except Exception as e:
             if _is_prod():
                 raise
@@ -311,6 +316,23 @@ def _audit_append(action: str, admin: AdminUser, detail: dict, version: str | No
         if _is_prod():
             raise RuntimeError(f"Audit append failed in production: {e}") from e
         logger.debug(f"audit append skipped: {e}")
+
+def _mutation_audit(action: str, admin: AdminUser, tenant_id: str, decision: str, resource: str | None = None, resource_key: str = "bundle_id"):
+    """Audit callback handed to a mutation so it runs inside that transaction."""
+
+    def _append(connection, record: dict | None) -> None:
+        record = record or {}
+        target = resource if resource is not None else record.get(resource_key)
+        _audit_append(
+            action,
+            admin,
+            {"tenant_id": tenant_id, "decision": decision, "resource": target},
+            version=record.get("version"),
+            connection=connection,
+        )
+
+    return _append
+
 
 def _next_version(current: str | None) -> str:
     if not current:
@@ -432,7 +454,7 @@ def _db_save_draft(tenant_id: str, bundle_id: str, name: str, rules: list[dict],
         except SQLAlchemyError:
             logger.debug("policy engine dispose failed (best-effort)")
 
-def _db_mark_approved(tenant_id: str, approved_by: str) -> Optional[dict]:
+def _db_mark_approved(tenant_id: str, approved_by: str, audit=None) -> Optional[dict]:
     draft = _db_get_draft(tenant_id)
     if draft is None or draft.get("status")!="draft":
         return None
@@ -443,6 +465,8 @@ def _db_mark_approved(tenant_id: str, approved_by: str) -> Optional[dict]:
         draft["approved_at"] = now
         global _mem_draft
         _mem_draft = draft
+        if audit is not None:
+            audit(None, draft)
         return draft
     eng = _db_get_sync_engine()
     if eng is None:
@@ -452,11 +476,16 @@ def _db_mark_approved(tenant_id: str, approved_by: str) -> Optional[dict]:
         draft["approved_by"] = approved_by
         draft["approved_at"] = now
         _mem_draft = draft
+        if audit is not None:
+            audit(None, draft)
         return draft
     try:
         from sqlalchemy import text  # type: ignore
         with eng.begin() as conn:
             conn.execute(text("UPDATE admin_policy_versions SET status='approved', approved_by=:ab, approved_at=:at WHERE id=:id"), {"ab": approved_by, "at": now, "id": draft["id"]})
+            # Same transaction as the status change: a failed audit rolls it back.
+            if audit is not None:
+                audit(conn, draft)
         draft["status"]="approved"; draft["approved_by"]=approved_by; draft["approved_at"]=now
         return draft
     finally:
@@ -464,7 +493,7 @@ def _db_mark_approved(tenant_id: str, approved_by: str) -> Optional[dict]:
         except SQLAlchemyError:
             logger.debug("policy engine dispose failed (best-effort)")
 
-def _db_publish(tenant_id: str, published_by: str) -> dict:
+def _db_publish(tenant_id: str, published_by: str, audit=None) -> dict:
     draft = _db_get_draft(tenant_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="No draft/approved version to publish")
@@ -493,12 +522,17 @@ def _db_publish(tenant_id: str, published_by: str) -> dict:
         global _mem_draft
         _mem_draft = None
         # also keep published in versions for history
+        if audit is not None:
+            audit(None, published_record)
         return published_record
     eng = _db_get_sync_engine()
     if eng is None:
         if _is_prod():
             raise RuntimeError("DB required for publish")
-        _mem_versions.append(published_record); _mem_draft=None; return published_record
+        _mem_versions.append(published_record); _mem_draft=None
+        if audit is not None:
+            audit(None, published_record)
+        return published_record
     try:
         from sqlalchemy import text  # type: ignore
         with eng.begin() as conn:
@@ -506,13 +540,17 @@ def _db_publish(tenant_id: str, published_by: str) -> dict:
                          {"id": new_id, "tenant_id": tenant_id, "bundle_id": published_record["bundle_id"], "name": published_record["name"], "version": next_ver, "status": "published", "rules_json": published_record["rules_json"], "created_by": published_by, "created_at": now, "approved_by": published_record["approved_by"], "approved_at": published_record["approved_at"], "published_at": now, "parent_version": published_record["parent_version"]})
             # remove the draft/approved row (it becomes history as published copy; draft cleared)
             conn.execute(text("DELETE FROM admin_policy_versions WHERE id=:id"), {"id": draft["id"]})
+            # Same transaction as the publish: a failed audit rolls the publish back,
+            # so a published bundle can never lack its audit record.
+            if audit is not None:
+                audit(conn, published_record)
         return published_record
     finally:
         try: eng.dispose()
         except SQLAlchemyError:
             logger.debug("policy engine dispose failed (best-effort)")
 
-def _db_rollback(target_version: str, tenant_id: str, actor: str, allow_remove_mandatory: bool = False) -> dict:
+def _db_rollback(target_version: str, tenant_id: str, actor: str, allow_remove_mandatory: bool = False, audit=None) -> dict:
     # find target historical published version
     versions = _db_list_versions(tenant_id)
     target = next((v for v in versions if v.get("version")==target_version and v.get("status")=="published"), None)
@@ -532,17 +570,25 @@ def _db_rollback(target_version: str, tenant_id: str, actor: str, allow_remove_m
     }
     if not _store_is_db():
         _mem_versions.append(record)
+        if audit is not None:
+            audit(None, record)
         return record
     eng = _db_get_sync_engine()
     if eng is None:
         if _is_prod():
             raise RuntimeError("DB required for rollback")
-        _mem_versions.append(record); return record
+        _mem_versions.append(record)
+        if audit is not None:
+            audit(None, record)
+        return record
     try:
         from sqlalchemy import text  # type: ignore
         with eng.begin() as conn:
             conn.execute(text("INSERT INTO admin_policy_versions (id, tenant_id, bundle_id, name, version, status, rules_json, created_by, created_at, approved_by, approved_at, published_at, parent_version) VALUES (:id,:tenant_id,:bundle_id,:name,:version,:status,:rules_json,:created_by,:created_at,:approved_by,:approved_at,:published_at,:parent_version)"),
                          {"id": new_id, "tenant_id": tenant_id, "bundle_id": record["bundle_id"], "name": record["name"], "version": next_ver, "status": "published", "rules_json": record["rules_json"], "created_by": actor, "created_at": now, "approved_by": None, "approved_at": None, "published_at": now, "parent_version": target_version})
+            # Same transaction as the rollback: a failed audit rolls it back.
+            if audit is not None:
+                audit(conn, record)
         return record
     finally:
         try: eng.dispose()
@@ -727,26 +773,37 @@ def approve(body: ApproveRequest, admin: AdminUser = Depends(require_l5)):
     ok, errs = _validate_rules(draft.get("rules") or [], allow_remove_mandatory=bool(draft.get("allow_remove_mandatory")))
     if not ok:
         raise HTTPException(status_code=400, detail="Validation failed: " + "; ".join(errs))
-    rec = _db_mark_approved(body.tenant_id, admin.email)
+    rec = _db_mark_approved(
+        body.tenant_id,
+        admin.email,
+        audit=_mutation_audit("policy.approve", admin, body.tenant_id, "approve", resource=draft.get("bundle_id")),
+    )
     if rec is None:
         raise HTTPException(status_code=400, detail="Draft not in approvable state")
-    _audit_append("policy.approve", admin, {"tenant_id": body.tenant_id, "decision": "approve", "resource": draft.get("bundle_id")}, version=draft.get("version"))
     return {"draft": _bundle_from_record(rec), "status": "approved"}
 
 @router.post("/publish")
 def publish(body: PublishRequest, admin: AdminUser = Depends(require_l5)):
     if _is_prod() and not _db_enabled():
         raise HTTPException(status_code=500, detail="DB required in production (fail-closed)")
-    rec = _db_publish(body.tenant_id, admin.email)
-    _audit_append("policy.publish", admin, {"tenant_id": body.tenant_id, "decision": "publish", "resource": rec.get("bundle_id")}, version=rec.get("version"))
+    rec = _db_publish(
+        body.tenant_id,
+        admin.email,
+        audit=_mutation_audit("policy.publish", admin, body.tenant_id, "publish"),
+    )
     return {"published": _bundle_from_record(rec), "active_version": rec.get("version")}
 
 @router.post("/rollback")
 def rollback(body: RollbackRequest, admin: AdminUser = Depends(require_l5)):
     if _is_prod() and not _db_enabled():
         raise HTTPException(status_code=500, detail="DB required in production (fail-closed)")
-    rec = _db_rollback(body.target_version, body.tenant_id, admin.email, allow_remove_mandatory=body.allow_remove_mandatory)
-    _audit_append("policy.rollback", admin, {"tenant_id": body.tenant_id, "decision": "rollback", "resource": body.target_version}, version=rec.get("version"))
+    rec = _db_rollback(
+        body.target_version,
+        body.tenant_id,
+        admin.email,
+        allow_remove_mandatory=body.allow_remove_mandatory,
+        audit=_mutation_audit("policy.rollback", admin, body.tenant_id, "rollback", resource=body.target_version),
+    )
     return {"published": _bundle_from_record(rec), "rolled_back_from": body.target_version, "active_version": rec.get("version")}
 
 # Helpers for app.py to get active published without circular import
