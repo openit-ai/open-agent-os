@@ -219,7 +219,7 @@ function LLMUsagePageContent() {
         </div>
         <div className="flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href="/providers">
+            <Link href="/execution/providers">
               <ExternalLink className="mr-1 h-4 w-4" aria-hidden="true" />
               {t("llmUsage.viewProviders")}
             </Link>
@@ -232,7 +232,7 @@ function LLMUsagePageContent() {
       </div>
 
       <div className="flex gap-1 border-b" role="tablist" aria-label="providers tabs">
-        <Link href="/providers" className="rounded-t-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" role="tab" aria-selected="false"><span className="inline-flex items-center gap-1"><Cpu className="h-3.5 w-3.5" />{t("nav.providers")}</span></Link>
+        <Link href="/execution/providers" className="rounded-t-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" role="tab" aria-selected="false"><span className="inline-flex items-center gap-1"><Cpu className="h-3.5 w-3.5" />{t("nav.providers")}</span></Link>
         <span className="rounded-t-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground inline-flex items-center gap-1" role="tab" aria-selected="true"><BarChart3 className="h-3.5 w-3.5" />{t("providers.usageTab")}</span>
       </div>
 
