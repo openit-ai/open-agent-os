@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { TestConnectionButton } from "./test-connection-button";
 import { testConnection } from "@/lib/admin-api/client";
 import type { TestConnectionResult } from "@/lib/admin-api/types";
@@ -9,11 +9,26 @@ vi.mock("@/lib/admin-api/client", async (importOriginal) => {
   return { ...actual, testConnection: vi.fn() };
 });
 
+/**
+ * `renderWithProviders` supplies the app-wide ToastProvider, which always mounts an
+ * empty fixed live region with role="status". Pick the component's own status node.
+ */
+async function findComponentStatus(container: HTMLElement): Promise<HTMLElement> {
+  let own: HTMLElement | undefined;
+  await waitFor(() => {
+    // The toast region always exists, so retry until the component's own status appears.
+    const nodes = within(container).queryAllByRole("status");
+    own = nodes.find((node) => !node.className.includes("fixed")) as HTMLElement | undefined;
+    expect(own).toBeTruthy();
+  });
+  return own as HTMLElement;
+}
+
 describe("TestConnectionButton", () => {
   it("blocks duplicate clicks immediately and renders an icon with the result text", async () => {
     let resolve!: (result: TestConnectionResult) => void;
     vi.mocked(testConnection).mockReturnValue(new Promise((done) => { resolve = done; }));
-    renderWithProviders(<TestConnectionButton connectionId="provider-a" />);
+    const first = renderWithProviders(<TestConnectionButton connectionId="provider-a" />);
 
     const button = screen.getByRole("button", { name: "Test connection" });
     fireEvent.click(button);
@@ -33,7 +48,7 @@ describe("TestConnectionButton", () => {
       correlation_id: "corr-safe",
     });
 
-    const status = await screen.findByRole("status");
+    const status = await findComponentStatus(first.container);
     expect(status).toHaveTextContent("OK · Connection is healthy");
     expect(status.querySelector("svg")).toBeInTheDocument();
   });
@@ -50,9 +65,9 @@ describe("TestConnectionButton", () => {
       requires_restart: true,
       correlation_id: "corr-unapplied",
     });
-    renderWithProviders(<TestConnectionButton connectionId="mattermost" />);
+    const second = renderWithProviders(<TestConnectionButton connectionId="mattermost" />);
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-    const status = await screen.findByRole("status");
+    const status = await findComponentStatus(second.container);
     expect(status).toHaveClass("text-status-warn-text");
     expect(screen.getByText("Saved, but not yet applied")).toBeVisible();
   });
@@ -77,9 +92,9 @@ describe("TestConnectionButton", () => {
       next_action: { label_key: "admin.connections.overview.open", href: "/operations/health" },
       correlation_id: `corr-${code}`,
     });
-    renderWithProviders(<TestConnectionButton connectionId="mattermost" />);
+    const each = renderWithProviders(<TestConnectionButton connectionId="mattermost" />);
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-    const status = await screen.findByRole("status");
+    const status = await findComponentStatus(each.container);
     expect(status).toHaveTextContent(code);
     expect(status).toHaveTextContent(message);
     expect(screen.getByRole("link", { name: "Open connection" })).toHaveAttribute("href", "/operations/health");

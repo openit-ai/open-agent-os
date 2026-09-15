@@ -1,6 +1,6 @@
 import * as React from "react";
 import { act, fireEvent, screen } from "@testing-library/react";
-import { ToastProvider, useToast } from "./toast";
+import { useToast } from "./toast";
 import { renderWithProviders } from "@/test/render";
 
 function ToastHarness() {
@@ -13,7 +13,7 @@ describe("Toast", () => {
 
   it("renders in a polite live region, merges duplicates, and auto-dismisses", () => {
     vi.useFakeTimers();
-    renderWithProviders(<ToastProvider><ToastHarness /></ToastProvider>);
+    renderWithProviders(<ToastHarness />);
     fireEvent.click(screen.getByRole("button", { name: "Notify" }));
     fireEvent.click(screen.getByRole("button", { name: "Notify" }));
     expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
@@ -29,7 +29,7 @@ describe("Toast", () => {
       React.useEffect(() => { toast({ title: "Failed", variant: "error" }); }, [toast]);
       return null;
     }
-    renderWithProviders(<ToastProvider><ErrorHarness /></ToastProvider>);
+    renderWithProviders(<ErrorHarness />);
     expect(await screen.findByRole("alert")).toHaveAttribute("aria-live", "assertive");
   });
 });
