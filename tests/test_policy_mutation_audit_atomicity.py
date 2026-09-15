@@ -11,12 +11,17 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Import the module as `backend.policy` (admin-console is the parent of the
+# `backend` package). Loading it as top-level `policy` makes its `from .auth
+# import ...` fall back to `from auth import ...`, which can resolve to
+# security/auth.py — a different module without AdminUser/require_l5 — depending
+# on sys.path order, so the suite failed only when another test changed the path.
 for _p in [
     ROOT,
     ROOT / "security",
     ROOT / "security" / "audit",
     ROOT / "packages" / "audit-model",
-    ROOT / "admin-console" / "backend",  # the deployed layout: modules import as top-level
+    ROOT / "admin-console",
 ]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -47,11 +52,11 @@ def policy_db(tmp_path, monkeypatch):
     monkeypatch.setenv("OAOS_ENV", "development")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db}")
     monkeypatch.setenv("OAOS_DATABASE_URL", f"sqlite:///{db}")
-    # Re-assert the deployed module layout here: other suites rebuild sys.path.
-    backend = str(ROOT / "admin-console" / "backend")
-    if backend not in sys.path:
-        sys.path.insert(0, backend)
-    import policy as pol
+    # Re-assert the package parent here: other suites rebuild sys.path.
+    parent = str(ROOT / "admin-console")
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    from backend import policy as pol
 
     pol = importlib.reload(pol)
     engine = pol._db_get_sync_engine()
