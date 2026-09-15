@@ -55,7 +55,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex min-h-screen">
       {/* Sidebar desktop */}
-      <aside className="hidden w-60 shrink-0 border-r bg-card md:flex md:flex-col">
+      <aside className="hidden w-60 shrink-0 border-r bg-card md:sticky md:top-0 md:flex md:h-screen md:self-start md:flex-col">
         <div className="flex h-14 items-center border-b px-4">
           <span className="text-sm font-semibold">Open Agent OS</span>
           <span className="ml-2 rounded bg-secondary px-2 py-0.5 text-xs">Admin</span>
