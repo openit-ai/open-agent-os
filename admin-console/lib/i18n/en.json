@@ -1254,6 +1254,45 @@
         "deleteTitle": "Delete registered service?",
         "deleteDescription": "Health observations for this registered target will no longer be available."
       }
+    },
+    "phase5": {
+      "all": "All",
+      "yes": "Yes",
+      "no": "No",
+      "filteredEmpty": "No results match the current search or filter.",
+      "users": {
+        "description": "Manage administrator accounts and user-to-agent mappings as separate responsibilities.",
+        "searchAccounts": "Search accounts",
+        "searchMappings": "Search mappings",
+        "accountCreated": "Administrator account created",
+        "mappingSaved": "User mapping saved",
+        "editMapping": "Edit user mapping",
+        "deleted": "Item deleted",
+        "deleteDescription": "This removes access or identity association for the selected item."
+      },
+      "credentials": {
+        "redactionNote": "Credential values are never displayed; this screen shows status and history metadata only."
+      },
+      "secrets": {
+        "reference": "Secret reference",
+        "guidance": "Guidance",
+        "empty": "No secret references are configured"
+      },
+      "flags": {
+        "name": "Flag",
+        "source": "Source",
+        "empty": "No feature flags are available",
+        "history": "Changes in this session",
+        "confirmTitle": "Change feature flag?",
+        "confirmDescription": "Confirm the new state before recording this change."
+      },
+      "profile": {
+        "noProfile": "No profile",
+        "lastResult": "Latest operation result",
+        "auditLink": "View profile operation history",
+        "resetDescription": "Reset the selected user's derived profile data.",
+        "resetConsequence": "This high-risk operation delegates an irreversible profile reset."
+      }
     }
   }
 }
