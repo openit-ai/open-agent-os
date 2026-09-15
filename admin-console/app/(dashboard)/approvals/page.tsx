@@ -70,7 +70,7 @@ function ApprovalsPageContent() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h1 className="flex items-center gap-2 text-2xl font-semibold"><ClipboardCheck aria-hidden="true" className="h-6 w-6" />Approvals</h1><p className="text-sm text-muted-foreground">{t("approvals.subtitle")}</p></div>
+        <div><h1 className="flex items-center gap-2 text-2xl font-semibold"><ClipboardCheck aria-hidden="true" className="h-6 w-6" />{t("approvals.title")}</h1><p className="text-sm text-muted-foreground">{t("approvals.subtitle")}</p></div>
         <Button variant="outline" size="sm" disabled={approvals.isFetching} onClick={() => approvals.refetch()}><RefreshCw aria-hidden="true" className="h-4 w-4" />{t("common.refresh")}</Button>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -84,11 +84,11 @@ function ApprovalsPageContent() {
       <DataTable
         rows={visible.rows}
         columns={[
-          { id: "requester", header: "Requester", accessor: (row) => row.user_id, sortable: true },
-          { id: "agent", header: "Agent", accessor: (row) => row.agent_id },
-          { id: "action", header: "Action", accessor: (row) => row.action },
-          { id: "resource", header: "Resource", accessor: (row) => row.resource },
-          { id: "risk", header: "Risk", accessor: (row) => row.risk, sortable: true },
+          { id: "requester", header: t("approvals.colRequester"), accessor: (row) => row.user_id, sortable: true },
+          { id: "agent", header: t("approvals.colAgent"), accessor: (row) => row.agent_id },
+          { id: "action", header: t("approvals.colAction"), accessor: (row) => row.action },
+          { id: "resource", header: t("approvals.colResource"), accessor: (row) => row.resource },
+          { id: "risk", header: t("approvals.colRisk"), accessor: (row) => row.risk, sortable: true },
           { id: "requested", header: t("approvals.requestedAt"), cell: (row) => formatTime(row.created_at), sortable: true },
           { id: "expires", header: t("approvals.expires"), cell: (row) => formatTime(row.expires_at), sortable: true },
         ]}
@@ -101,13 +101,13 @@ function ApprovalsPageContent() {
         totalRows={visible.totalRows}
         searchable
         rowActions={(row) => [
-          { id: "approve-once", label: "Approve once", disabled: decision.isPending, onSelect: () => decide(row, "APPROVED_ONCE") },
-          { id: "approve-user", label: "Always user", disabled: decision.isPending, onSelect: () => decide(row, "APPROVED_USER_ALWAYS") },
-          { id: "approve-group", label: "Always group", disabled: decision.isPending, onSelect: () => decide(row, "APPROVED_GROUP_ALWAYS") },
-          { id: "deny", label: "Deny", tone: "danger", disabled: decision.isPending, onSelect: () => decide(row, "DENIED") },
+          { id: "approve-once", label: t("approvals.decideOnce"), disabled: decision.isPending, onSelect: () => decide(row, "APPROVED_ONCE") },
+          { id: "approve-user", label: t("approvals.decideUserAlways"), disabled: decision.isPending, onSelect: () => decide(row, "APPROVED_USER_ALWAYS") },
+          { id: "approve-group", label: t("approvals.decideGroupAlways"), disabled: decision.isPending, onSelect: () => decide(row, "APPROVED_GROUP_ALWAYS") },
+          { id: "deny", label: t("approvals.decideDeny"), tone: "danger", disabled: decision.isPending, onSelect: () => decide(row, "DENIED") },
         ]}
         empty={{ title: t("approvals.emptyTitle"), description: t("approvals.emptyDesc"), filtered: Boolean(table.query.search || risk !== "all") }}
-        ariaLabel={t("approvals.pendingTitle")}
+        ariaLabel={t("approvals.ariaList")}
       />
     </div>
   );
@@ -119,8 +119,9 @@ function ApprovalsPageContent() {
  * to sit under a Suspense boundary during prerendering.
  */
 export default function ApprovalsPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+    <Suspense fallback={<Skeleton variant="table" ariaLabel={t("common.loading")} />}>
       <ApprovalsPageContent />
     </Suspense>
   );
