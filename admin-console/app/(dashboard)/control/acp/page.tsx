@@ -1,13 +1,10 @@
 "use client";
 
-import { AcpSection } from "../../providers/acp-section";
+import { AcpSection } from "@/components/admin/connections/acp-feature";
+import { ConnectionFlow } from "@/components/admin/connections/connection-flow";
+import { useI18n } from "@/lib/i18n";
 
-// Alias view: Control Plane > ACP (canonical editor stays in providers/acp-section).
-// Existing /providers URL untouched. No DB/secret change.
 export default function ControlAcpPage() {
-  return (
-    <div className="space-y-6 p-6">
-      <AcpSection />
-    </div>
-  );
+  const { t } = useI18n();
+  return <ConnectionFlow kind="acp" title={t("admin.connections.kind.acp.title")} description={t("admin.connections.kind.acp.description")} serviceLabel="ACP / Hermes"><AcpSection /></ConnectionFlow>;
 }

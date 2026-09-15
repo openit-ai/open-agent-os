@@ -5,9 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer, testMcpServer, type McpServer, type McpServerTestResult } from "@/lib/api";
+import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer, type McpServer } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { Boxes, Loader2, Plus, Trash2 } from "lucide-react";
+import { TestConnectionButton } from "@/components/admin";
 
 const TRANSPORTS = ["stdio", "sse", "streamable-http"] as const;
 
@@ -26,8 +27,6 @@ export function McpPanel() {
   const [args, setArgs] = useState("");
   const [headers, setHeaders] = useState("");
   const [saving, setSaving] = useState(false);
-  const [testRes, setTestRes] = useState<Record<string, McpServerTestResult>>({});
-  const [testing, setTesting] = useState<string | null>(null);
 
   const fetchServers = useCallback(async () => {
     setError(null);
@@ -98,18 +97,6 @@ export function McpPanel() {
       await fetchServers();
     } catch (e) {
       setError(e instanceof Error ? e.message : "delete failed");
-    }
-  };
-
-  const test = async (n: string) => {
-    setTesting(n);
-    try {
-      const res = await testMcpServer(n);
-      setTestRes((p) => ({ ...p, [n]: res }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "test failed");
-    } finally {
-      setTesting(null);
     }
   };
 
@@ -184,17 +171,8 @@ export function McpPanel() {
             </CardHeader>
             <CardContent className="flex flex-wrap items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => openEdit(s)}>Edit</Button>
-              <Button size="sm" variant="outline" onClick={() => test(s.name)} disabled={testing === s.name}>
-                {testing === s.name && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}{t("mcp.test")}
-              </Button>
+              <TestConnectionButton connectionId={`mcp:${s.name}`} />
               <Button size="sm" variant="destructive" onClick={() => remove(s.name)}><Trash2 className="mr-1 h-3 w-3" />{t("mcp.delete")}</Button>
-              {testRes[s.name] && (
-                <div className="w-full text-xs">
-                  {testRes[s.name].ok === null && <span className="text-muted-foreground">{testRes[s.name].note}</span>}
-                  {testRes[s.name].ok === true && <span className="text-green-700">OK · {testRes[s.name].tool_count} {t("mcp.tools")} · {testRes[s.name].latency_ms} ms{(testRes[s.name].tools ?? []).slice(0, 8).join(", ")}</span>}
-                  {testRes[s.name].ok === false && <span className="text-red-600">FAIL · {testRes[s.name].error ?? testRes[s.name].status_code}</span>}
-                </div>
-              )}
             </CardContent>
           </Card>
         ))}
