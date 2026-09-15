@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,6 +15,7 @@ import { getToken, listLLMProviders, createLLMProvider, updateLLMProvider, delet
 import { RefreshCw, Trash2, Pencil, Plus, Cpu, Plug2, Ban, CheckCircle2, Info, BarChart3 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import Link from "next/link";
+import { resolveProvidersDestination } from "@/lib/providers-compat";
 
 const PROVIDER_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "opencode-go", "openrouter", "ollama"];
 const APIKEY_TYPES: LLMProviderType[] = ["claude", "codex", "gemini", "openrouter"];
@@ -222,7 +223,7 @@ function ProvidersPageContent() {
 
       <div className="flex gap-1 border-b" role="tablist" aria-label="providers tabs">
         <span className="rounded-t-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground" role="tab" aria-selected="true">{t("providers.title")}</span>
-        <Link href="/llm-usage" className="rounded-t-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" role="tab" aria-selected="false">{t("providers.usageTab")}</Link>
+        <Link href="/execution/usage" className="rounded-t-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" role="tab" aria-selected="false">{t("providers.usageTab")}</Link>
       </div>
 
       {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
@@ -390,7 +391,26 @@ function ProvidersPageContent() {
 export default function ProvidersPage() {
   return (
     <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
-      <ProvidersPageContent />
+      <ProvidersRoute />
     </Suspense>
   );
+}
+
+function ProvidersRoute() {
+  const pathname = usePathname();
+  return pathname === "/providers" ? <ProvidersCompatibilityResolver /> : <ProvidersPageContent />;
+}
+
+function ProvidersCompatibilityResolver() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const replace = () => router.replace(resolveProvidersDestination(searchParams.toString(), window.location.hash));
+    replace();
+    window.addEventListener("hashchange", replace);
+    return () => window.removeEventListener("hashchange", replace);
+  }, [router, searchParams]);
+
+  return <div aria-live="polite"><Skeleton variant="table" ariaLabel="Loading" /></div>;
 }

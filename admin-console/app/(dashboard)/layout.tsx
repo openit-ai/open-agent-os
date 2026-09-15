@@ -1,16 +1,15 @@
 "use client";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { LayoutDashboard, Server, Users, Shield, ClipboardCheck, ScrollText, KeyRound, LogOut, BadgeCheck, ShieldAlert, DatabaseBackup, Image as ImageIcon, UserCog, ChevronDown, Globe, Cpu, BarChart3, Layers, Settings2, Gauge, Database, Lock, Flag } from "lucide-react";
+import { KeyRound, LogOut, Image as ImageIcon, UserCog, ChevronDown, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
 import { clearToken, getToken, getAvatarUrl, setAvatarUrl, clearAvatarUrl, changePassword, updateProfile, getMe, listUsers, login, setToken, type AdminUserPublic } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { VersionDisplay } from "@/components/VersionDisplay";
 import { clearSetupDeferral } from "@/lib/setup-session";
+import { AdminNavigation } from "@/components/admin/admin-navigation";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -27,32 +26,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [showAdminModal, setShowAdminModal] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const navItems = [
-    { href: "/", label: t("nav.dashboard"), icon: LayoutDashboard },
-    { href: "/infra", label: t("nav.infra"), icon: Server },
-    { href: "/providers", label: t("nav.providers"), icon: Cpu },
-    { href: "/fallback", label: t("nav.fallback"), icon: Layers },
-    { href: "/runtime-config", label: t("nav.runtimeConfig"), icon: Settings2 },
-    { href: "/control/acp", label: t("nav.controlAcp"), icon: Globe },
-    { href: "/control/runtime", label: t("nav.controlRuntime"), icon: Settings2 },
-    { href: "/execution/mcp", label: t("nav.executionMcp"), icon: Database },
-    { href: "/llm-usage", label: t("nav.llmUsage"), icon: BarChart3 },
-    { href: "/quota", label: t("nav.quota"), icon: Gauge },
-    { href: "/embedding", label: t("nav.embedding"), icon: Database },
-    { href: "/secrets", label: t("nav.secrets"), icon: Lock },
-    { href: "/feature-flags", label: t("nav.featureFlags"), icon: Flag },
-    { href: "/profile-ops", label: t("nav.profileOps"), icon: UserCog },
-    { href: "/knowledge-ops", label: t("nav.knowledgeOps"), icon: Database },
-    { href: "/users", label: t("nav.users"), icon: Users },
-    { href: "/policy", label: t("nav.policy"), icon: Shield },
-    { href: "/approvals", label: t("nav.approvals"), icon: ClipboardCheck },
-    { href: "/audit", label: t("nav.audit"), icon: ScrollText },
-    { href: "/credentials", label: t("nav.credentials"), icon: KeyRound },
-    { href: "/license", label: t("nav.license"), icon: BadgeCheck },
-    { href: "/security-updates", label: t("nav.securityUpdates"), icon: ShieldAlert },
-    { href: "/backup", label: t("nav.backup"), icon: DatabaseBackup },
-  ];
 
   useEffect(() => {
     const token = getToken();
@@ -82,21 +55,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex min-h-screen">
       {/* Sidebar desktop */}
-      <aside className="hidden w-60 shrink-0 border-r bg-card md:flex md:flex-col">
+      <aside className="hidden w-60 shrink-0 border-r bg-card md:sticky md:top-0 md:flex md:h-screen md:self-start md:flex-col">
         <div className="flex h-14 items-center border-b px-4">
           <span className="text-sm font-semibold">Open Agent OS</span>
           <span className="ml-2 rounded bg-secondary px-2 py-0.5 text-xs">Admin</span>
         </div>
-        <nav className="flex-1 space-y-1 p-3">
-          {navItems.map((item) => {
-            const active = pathname === item.href;
-            return (
-              <Link key={item.href} href={item.href} className={cn("flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors", active ? "bg-primary text-primary-foreground" : "hover:bg-accent")}>
-                <item.icon className="h-4 w-4" />{item.label}
-              </Link>
-            );
-          })}
-        </nav>
+        <AdminNavigation idPrefix="desktop-nav" pathname={pathname} t={t} className="flex-1 overflow-y-auto p-3" />
         <div className="border-t px-4 py-3">
           <VersionDisplay />
         </div>
@@ -106,7 +70,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Header */}
         <header className="flex h-14 items-center justify-between border-b bg-card px-4">
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(!drawerOpen)} aria-label={t("header.menu")}>☰</Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              onClick={() => setDrawerOpen(!drawerOpen)}
+              aria-label={t("header.menu")}
+              aria-expanded={drawerOpen}
+              aria-controls="mobile-admin-navigation"
+            >☰</Button>
             <span className="text-sm font-medium md:hidden">Open Agent OS</span>
           </div>
           <div className="flex items-center gap-3">
@@ -168,17 +140,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Mobile drawer */}
         {drawerOpen && (
-          <div className="border-b bg-card p-3 md:hidden">
-            <nav className="space-y-1">
-              {navItems.map((item) => {
-                const active = pathname === item.href;
-                return (
-                  <Link key={item.href} href={item.href} onClick={() => setDrawerOpen(false)} className={cn("flex items-center gap-2 rounded-md px-3 py-2 text-sm", active ? "bg-primary text-primary-foreground" : "hover:bg-accent")}>
-                    <item.icon className="h-4 w-4" />{item.label}
-                  </Link>
-                );
-              })}
-            </nav>
+          <div id="mobile-admin-navigation" className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-b bg-card p-3 md:hidden">
+            <AdminNavigation idPrefix="mobile-nav" pathname={pathname} t={t} onNavigate={() => setDrawerOpen(false)} />
             <div className="mt-3 border-t pt-3">
               <p className="text-[11px] text-muted-foreground">{t("header.copyright")}</p>
             </div>

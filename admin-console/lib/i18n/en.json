@@ -947,6 +947,49 @@
     "source": "source"
   },
   "admin": {
+    "nav": {
+      "label": "Admin navigation",
+      "group": {
+        "connections": "Connections",
+        "control": "Settings",
+        "execution": "Execution",
+        "knowledge": "Knowledge",
+        "operations": "Monitoring",
+        "management": "Management"
+      },
+      "item": {
+        "dashboard": "Dashboard",
+        "gettingStarted": "Get started",
+        "mattermost": "Mattermost",
+        "slack": "Slack",
+        "notion": "Notion",
+        "oauth": "OAuth",
+        "smtp": "SMTP",
+        "acp": "ACP",
+        "runtime": "Runtime configuration",
+        "policy": "Policy",
+        "approvals": "Approvals",
+        "audit": "Audit",
+        "mcp": "MCP",
+        "providers": "Model providers",
+        "fallback": "Fallback",
+        "usage": "Usage",
+        "quota": "Quota",
+        "outline": "Outline",
+        "embedding": "Embedding",
+        "knowledgeOperations": "Synchronization",
+        "health": "Health",
+        "services": "Services",
+        "backup": "Backup",
+        "securityUpdates": "Security updates",
+        "license": "License",
+        "users": "Users",
+        "credentials": "Credentials",
+        "secrets": "Secrets",
+        "featureFlags": "Feature flags",
+        "profileOperations": "Profile operations"
+      }
+    },
     "common": {
       "action": {
         "cancel": "Cancel",

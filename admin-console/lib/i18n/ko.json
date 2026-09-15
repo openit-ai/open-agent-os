@@ -947,6 +947,49 @@
     "source": "출처"
   },
   "admin": {
+    "nav": {
+      "label": "관리자 내비게이션",
+      "group": {
+        "connections": "연결",
+        "control": "설정",
+        "execution": "실행",
+        "knowledge": "지식",
+        "operations": "모니터링",
+        "management": "관리"
+      },
+      "item": {
+        "dashboard": "대시보드",
+        "gettingStarted": "시작하기",
+        "mattermost": "Mattermost",
+        "slack": "Slack",
+        "notion": "Notion",
+        "oauth": "OAuth",
+        "smtp": "SMTP",
+        "acp": "ACP",
+        "runtime": "런타임 구성",
+        "policy": "정책",
+        "approvals": "승인",
+        "audit": "감사",
+        "mcp": "MCP",
+        "providers": "모델 제공자",
+        "fallback": "Fallback",
+        "usage": "사용량",
+        "quota": "할당량",
+        "outline": "Outline",
+        "embedding": "임베딩",
+        "knowledgeOperations": "동기화",
+        "health": "상태",
+        "services": "서비스 등록",
+        "backup": "백업",
+        "securityUpdates": "보안 업데이트",
+        "license": "라이선스",
+        "users": "사용자",
+        "credentials": "자격증명",
+        "secrets": "비밀값",
+        "featureFlags": "기능 플래그",
+        "profileOperations": "프로필 작업"
+      }
+    },
     "common": {
       "action": {
         "cancel": "취소",
