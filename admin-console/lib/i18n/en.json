@@ -1002,6 +1002,121 @@
     },
     "loading": {
       "content": "Loading content"
+    },
+    "setup": {
+      "page": {
+        "title": "Set up Open Agent OS",
+        "description": "Complete the required checks to make this environment ready for users.",
+        "loading": "Loading setup progress",
+        "loadFailed": "Setup progress could not be loaded",
+        "invalidProgress": "Setup progress is unavailable",
+        "invalidProgressDescription": "The progress response does not contain a valid step."
+      },
+      "wizard": {
+        "stepsLabel": "Setup steps",
+        "progressTitle": "Overall progress",
+        "requiredProgress": "{done} of {total} required checks complete ({percent}%)",
+        "requiredProgressLabel": "Required setup progress",
+        "optionalProgress": "Optional {done}/{total}",
+        "required": "Required",
+        "optional": "Optional",
+        "back": "Previous",
+        "next": "Next",
+        "later": "Later",
+        "finish": "Finish",
+        "stepNumber": "Step {current} of {total}"
+      },
+      "status": {
+        "pending": "Pending",
+        "checking": "Checking",
+        "complete": "Complete",
+        "needs_attention": "Needs attention",
+        "skipped": "Skipped"
+      },
+      "check": {
+        "recheck": "Check again",
+        "checking": "Running automatic checks",
+        "checkedAt": "Last checked: {time}",
+        "neverChecked": "Not checked yet",
+        "blockingIssues": "Blocking issues",
+        "openSettings": "Open settings and next actions"
+      },
+      "steps": {
+        "environment": {
+          "title": "Environment check",
+          "description": "Confirm the detected deployment environment and the health of the admin backend, database, and control plane."
+        },
+        "runtime": {
+          "title": "Execution path",
+          "description": "Choose the recommended execution path and confirm that it is saved, applied, and reachable."
+        },
+        "ingress": {
+          "title": "User entry channel",
+          "description": "Connect at least one supported ingress channel. Console-only operation is not supported."
+        },
+        "policy": {
+          "title": "Policy and administrator",
+          "description": "Confirm an L5 administrator, an active policy version, and a successful policy validation."
+        },
+        "mcp": {
+          "title": "Tool connections (MCP)",
+          "description": "Review discovered MCP servers and test the servers you choose to connect."
+        },
+        "knowledge": {
+          "title": "Knowledge connections",
+          "description": "Connect and test a knowledge source and embedding configuration when needed."
+        },
+        "notifications": {
+          "title": "Operations notifications",
+          "description": "Test at least one SMTP or Slack notification destination when needed."
+        },
+        "verify": {
+          "title": "Final verification",
+          "description": "Review the summary and confirm that no blocking readiness failures remain.",
+          "ingressRequired": "A healthy, configured, and applied ingress channel is required before final verification."
+        }
+      },
+      "complete": {
+        "title": "Setup status",
+        "description": "This page remains available after setup so current readiness can always be reviewed.",
+        "requiredReady": "All required setup checks are complete.",
+        "automaticStatus": "Status is calculated automatically. A broken required check will return to needs attention without another completion action."
+      }
+    },
+    "readiness": {
+      "summary": {
+        "title": "Required connections",
+        "requiredCount": "{total} required, {healthy} healthy, {attention} need attention",
+        "lastChecked": "Last full check: {time}",
+        "unknownTime": "Unknown",
+        "resolve": "Resolve issues",
+        "openDetails": "Open details",
+        "recheckAll": "Check all again",
+        "checking": "Checking all connections",
+        "loadFailed": "Readiness could not be loaded",
+        "continueSetupTitle": "Required setup is not complete",
+        "continueSetupDescription": "You can use this dashboard for the current session, but skipped required steps are not counted as complete.",
+        "continueSetupAction": "Continue setup"
+      }
+    },
+    "connections": {
+      "card": {
+        "secret": "Credential",
+        "configured": "Configured",
+        "notConfigured": "Not configured",
+        "source": "Source",
+        "lastChecked": "Last checked",
+        "neverChecked": "Never",
+        "latency": "Latency",
+        "latencyValue": "{latency} ms",
+        "notAvailable": "Not available"
+      },
+      "apply": {
+        "savedNotApplied": "Saved, but not yet applied",
+        "affectedServices": "Affected services: {services}",
+        "operatorAction": "Follow the approved operator procedure. The console will not restart services.",
+        "openProcedure": "Open operator procedure"
+      }
     }
   }
 }
