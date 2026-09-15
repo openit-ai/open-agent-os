@@ -59,7 +59,13 @@ except Exception:
 
 
 @pytest.fixture(autouse=True)
-def isolate():
+def isolate(monkeypatch):
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    if infra_mod._db_engine is not None:
+        infra_mod._db_engine.dispose()
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
     # clear canonical and any bare-alias copies to avoid cross-suite leak
     for mod_name in ("admin_console.backend.infra", "infra", "admin_infra", "admin_infra_liveedit", "admin_auth", "admin_auth_liveedit", "admin_console.backend.auth", "auth"):
         m = sys.modules.get(mod_name)
@@ -84,6 +90,10 @@ def isolate():
     except Exception:
         pass
     yield
+    if infra_mod._db_engine is not None:
+        infra_mod._db_engine.dispose()
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
     for mod_name in ("admin_console.backend.infra", "infra", "admin_infra", "admin_infra_liveedit", "admin_auth", "admin_auth_liveedit", "admin_console.backend.auth", "auth"):
         m = sys.modules.get(mod_name)
         if m is not None:

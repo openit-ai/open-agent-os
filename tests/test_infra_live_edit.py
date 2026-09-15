@@ -46,10 +46,20 @@ admin_app = _app_mod.app
 
 
 @pytest.fixture(autouse=True)
-def isolate():
+def isolate(monkeypatch):
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    if infra_mod._db_engine is not None:
+        infra_mod._db_engine.dispose()
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
     auth_mod.clear_users()
     infra_mod.clear_services()
     yield
+    if infra_mod._db_engine is not None:
+        infra_mod._db_engine.dispose()
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
     auth_mod.clear_users()
     infra_mod.clear_services()
 
