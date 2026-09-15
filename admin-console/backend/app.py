@@ -95,6 +95,21 @@ def _is_production() -> bool:
             return True
     return False
 
+
+def _infra_probe_enabled() -> bool:
+    return os.environ.get("OAOS_INFRA_PROBE_ENABLED", "1").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _infra_probe_interval_seconds() -> int:
+    try:
+        return max(5, min(int(os.environ.get("OAOS_INFRA_PROBE_INTERVAL_SECONDS", "30")), 3600))
+    except (TypeError, ValueError):
+        logger.warning("Invalid OAOS_INFRA_PROBE_INTERVAL_SECONDS; using 30 seconds")
+        return 30
+
+
 # ── CORS — whitelist via OAOS_CORS_ORIGINS, deny * when credentials true ─
 _DEFAULT_CORS_ORIGINS = [
     "http://localhost:3012",
@@ -191,6 +206,27 @@ async def _admin_persistence_startup() -> None:
             logger.warning("Admin persistence startup fallback: %s", exc)
     # Required log line per spec (exact substring match)
     logger.info("Admin persistence: oaos ready (or in-memory fallback)")
+    if not _infra_probe_enabled():
+        logger.info("Periodic infra probe disabled by OAOS_INFRA_PROBE_ENABLED")
+        return
+    interval_seconds = _infra_probe_interval_seconds()
+    try:
+        task = _infra_mod.start_periodic_check(interval_seconds)
+        if task is None:
+            logger.info("Periodic infra probe enabled but owned by another worker")
+        else:
+            logger.info("Periodic infra probe started (interval_seconds=%d)", interval_seconds)
+    except Exception as exc:  # noqa: BLE001 - probe startup must not block the API
+        logger.warning("Periodic infra probe failed to start: %s", type(exc).__name__)
+
+
+@app.on_event("shutdown")
+async def _admin_infra_shutdown() -> None:
+    """Release the periodic probe task and cross-worker lock."""
+    try:
+        _infra_mod.stop_periodic_check()
+    except Exception as exc:  # noqa: BLE001 - shutdown cleanup is best-effort
+        logger.warning("Periodic infra probe failed to stop cleanly: %s", type(exc).__name__)
 
 
 # ── Routers ──────────────────────────────────────────────────────

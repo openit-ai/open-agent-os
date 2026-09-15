@@ -84,6 +84,34 @@ def test_seed_admin_exists():
     assert auth_mod.get_user_by_email("admin@openit.co.kr") is not None
 
 
+@pytest.mark.asyncio
+async def test_admin_startup_starts_periodic_infra_probe(monkeypatch, caplog):
+    monkeypatch.setenv("OAOS_INFRA_PROBE_ENABLED", "true")
+    monkeypatch.setenv("OAOS_INFRA_PROBE_INTERVAL_SECONDS", "47")
+    monkeypatch.setattr(_app_mod, "ensure_admin_tables", AsyncMock())
+    started_task = MagicMock()
+    start = MagicMock(return_value=started_task)
+    monkeypatch.setattr(infra_mod, "start_periodic_check", start)
+
+    with caplog.at_level("INFO"):
+        await _app_mod._admin_persistence_startup()
+
+    start.assert_called_once_with(47)
+    assert "Periodic infra probe started (interval_seconds=47)" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_admin_startup_isolates_periodic_probe_failure(monkeypatch, caplog):
+    monkeypatch.setenv("OAOS_INFRA_PROBE_ENABLED", "true")
+    monkeypatch.setattr(_app_mod, "ensure_admin_tables", AsyncMock())
+    monkeypatch.setattr(infra_mod, "start_periodic_check", MagicMock(side_effect=OSError("boom")))
+
+    with caplog.at_level("WARNING"):
+        await _app_mod._admin_persistence_startup()
+
+    assert "Periodic infra probe failed to start: OSError" in caplog.text
+
+
 def test_login_success_and_me():
     token = _login()
     c = _client()

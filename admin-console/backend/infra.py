@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import os
 import time
@@ -536,6 +537,22 @@ async def probe_all_services() -> list[InfraService]:
 
 # periodic check structure
 _periodic_task: Optional[asyncio.Task] = None
+_periodic_lock_file = None
+
+
+def _release_periodic_lock() -> None:
+    global _periodic_lock_file
+    if _periodic_lock_file is None:
+        return
+    try:
+        fcntl.flock(_periodic_lock_file.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        logger.debug("Periodic infra probe lock release failed: %s", exc)
+    try:
+        _periodic_lock_file.close()
+    except OSError as exc:
+        logger.debug("Periodic infra probe lock close failed: %s", exc)
+    _periodic_lock_file = None
 
 
 async def periodic_health_check(interval_seconds: int = 30) -> None:
@@ -545,14 +562,32 @@ async def periodic_health_check(interval_seconds: int = 30) -> None:
             await probe_all_services()
         except InfraBackendUnavailable as exc:
             logger.warning("Periodic infra probe backend unavailable: %s", exc.detail)
+        except Exception as exc:  # noqa: BLE001 - keep the scheduler alive and observable
+            logger.warning("Periodic infra probe failed; retrying next interval: %s", type(exc).__name__)
         await asyncio.sleep(interval_seconds)
 
 
-def start_periodic_check(interval_seconds: int = 30) -> asyncio.Task:
-    """Start background periodic check (call on app startup)."""
-    global _periodic_task
+def start_periodic_check(interval_seconds: int = 30) -> asyncio.Task | None:
+    """Start one background periodic check per host (call on app startup)."""
+    global _periodic_task, _periodic_lock_file
     if _periodic_task is not None and not _periodic_task.done():
         return _periodic_task
+    if _periodic_task is not None and _periodic_task.done():
+        _periodic_task = None
+        _release_periodic_lock()
+
+    lock_path = os.environ.get("OAOS_INFRA_PROBE_LOCK_FILE", "/tmp/oaos-infra-probe.lock")
+    try:
+        lock_file = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115 - held for task lifetime
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            lock_file.close()
+        except (OSError, UnboundLocalError):
+            pass
+        logger.info("Periodic infra probe not started: another worker owns %s", lock_path)
+        return None
+    _periodic_lock_file = lock_file
     loop = asyncio.get_event_loop()
     _periodic_task = loop.create_task(periodic_health_check(interval_seconds))
     return _periodic_task
@@ -563,6 +598,7 @@ def stop_periodic_check() -> None:
     if _periodic_task is not None:
         _periodic_task.cancel()
         _periodic_task = None
+    _release_periodic_lock()
 
 
 # ---------------------------------------------------------------------------
