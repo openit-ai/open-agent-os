@@ -1254,6 +1254,106 @@
         "deleteTitle": "Delete registered service?",
         "deleteDescription": "Health observations for this registered target will no longer be available."
       }
+    },
+    "phase5": {
+      "all": "All",
+      "yes": "Yes",
+      "no": "No",
+      "filteredEmpty": "No results match the current search or filter.",
+      "users": {
+        "description": "Manage administrator accounts and user-to-agent mappings as separate responsibilities.",
+        "searchAccounts": "Search accounts",
+        "searchMappings": "Search mappings",
+        "accountCreated": "Administrator account created",
+        "mappingSaved": "User mapping saved",
+        "editMapping": "Edit user mapping",
+        "deleted": "Item deleted",
+        "deleteDescription": "This removes access or identity association for the selected item."
+      },
+      "credentials": {
+        "redactionNote": "Credential values are never displayed; this screen shows status and history metadata only."
+      },
+      "secrets": {
+        "reference": "Secret reference",
+        "guidance": "Guidance",
+        "empty": "No secret references are configured"
+      },
+      "flags": {
+        "name": "Flag",
+        "source": "Source",
+        "empty": "No feature flags are available",
+        "history": "Changes in this session",
+        "confirmTitle": "Change feature flag?",
+        "confirmDescription": "Confirm the new state before recording this change."
+      },
+      "profile": {
+        "noProfile": "No profile",
+        "lastResult": "Latest operation result",
+        "auditLink": "View profile operation history",
+        "resetDescription": "Reset the selected user's derived profile data.",
+        "resetConsequence": "This high-risk operation delegates an irreversible profile reset."
+      },
+      "operations": {
+        "backup": {
+          "title": "Backup and upgrade",
+          "description": "Search backup history, review retention, and trigger an administrator backup.",
+          "history": "Backup history",
+          "trigger": "Trigger backup",
+          "triggering": "Triggering backup",
+          "triggered": "Backup triggered",
+          "failed": "Backup trigger failed",
+          "empty": "No backup history",
+          "emptyDescription": "Trigger the first backup to establish a recovery point.",
+          "expired": "Expired",
+          "expires": "Expires",
+          "size": "Size",
+          "actor": "Triggered by",
+          "upgrade": "Upgrade status",
+          "currentVersion": "Current version",
+          "availableVersion": "Available version",
+          "retention": "Backups expire according to the configured retention policy."
+        },
+        "security": {
+          "cveList": "Security update CVE list",
+          "openCve": "Open {id} details in a new tab",
+          "version": "Version",
+          "available": "Available",
+          "installed": "Installed",
+          "released": "Released"
+        },
+        "license": {
+          "verified": "License verification completed",
+          "expired": "Expired",
+          "expiresSoon": "Expires in {days} days",
+          "redactionNote": "The license value is never displayed after verification.",
+          "inputHint": "The value is submitted for verification and immediately cleared from the form."
+        }
+      },
+      "knowledge": {
+        "operations": {
+          "runTitle": "Run connector synchronization",
+          "runDescription": "Use dry-run to review the plan before enqueueing a synchronization job.",
+          "history": "Knowledge synchronization history",
+          "cursor": "Cursor",
+          "lastSync": "Last synchronized",
+          "updated": "Updated",
+          "lastResult": "Latest synchronization result",
+          "empty": "No synchronization checkpoints",
+          "emptyDescription": "Run a connector synchronization to establish the first checkpoint."
+        },
+        "embedding": {
+          "configuration": "Embedding configuration",
+          "candidateHint": "Selecting a provider fills its recommended default candidate.",
+          "defaultsDescription": "Review the detected configuration and recommended defaults before saving.",
+          "modelRequired": "Enter an embedding model.",
+          "dimensionInvalid": "Enter a positive whole-number dimension.",
+          "urlInvalid": "Enter a valid HTTP or HTTPS URL.",
+          "urlHint": "Optional for providers that use a built-in endpoint."
+        }
+      },
+      "mcp": {
+        "deleteDescription": "The server configuration and its discovered tool association will be removed."
+      }
     }
   }
 }

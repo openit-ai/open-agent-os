@@ -1254,6 +1254,106 @@
         "deleteTitle": "등록 서비스를 삭제할까요?",
         "deleteDescription": "이 등록 대상의 상태 관측을 더 이상 사용할 수 없습니다."
       }
+    },
+    "phase5": {
+      "all": "전체",
+      "yes": "예",
+      "no": "아니요",
+      "filteredEmpty": "현재 검색 또는 필터에 일치하는 결과가 없습니다.",
+      "users": {
+        "description": "관리자 계정과 사용자-에이전트 매핑 책임을 분리해 관리합니다.",
+        "searchAccounts": "계정 검색",
+        "searchMappings": "매핑 검색",
+        "accountCreated": "관리자 계정을 생성했습니다",
+        "mappingSaved": "사용자 매핑을 저장했습니다",
+        "editMapping": "사용자 매핑 수정",
+        "deleted": "항목을 삭제했습니다",
+        "deleteDescription": "선택한 항목의 접근 권한 또는 ID 연결을 제거합니다."
+      },
+      "credentials": {
+        "redactionNote": "자격증명 원문은 표시하지 않으며 상태와 이력 메타데이터만 제공합니다."
+      },
+      "secrets": {
+        "reference": "시크릿 참조",
+        "guidance": "안내",
+        "empty": "설정된 시크릿 참조가 없습니다"
+      },
+      "flags": {
+        "name": "플래그",
+        "source": "출처",
+        "empty": "사용 가능한 기능 플래그가 없습니다",
+        "history": "이번 세션의 변경 이력",
+        "confirmTitle": "기능 플래그를 변경할까요?",
+        "confirmDescription": "변경을 기록하기 전에 새 상태를 확인하세요."
+      },
+      "profile": {
+        "noProfile": "프로필 없음",
+        "lastResult": "최근 작업 결과",
+        "auditLink": "프로필 작업 이력 보기",
+        "resetDescription": "선택한 사용자의 파생 프로필 데이터를 초기화합니다.",
+        "resetConsequence": "되돌릴 수 없는 프로필 초기화를 위임하는 고위험 작업입니다."
+      },
+      "operations": {
+        "backup": {
+          "title": "백업과 업그레이드",
+          "description": "백업 이력을 검색하고 보관 정책을 확인하며 관리자 백업을 실행합니다.",
+          "history": "백업 이력",
+          "trigger": "백업 실행",
+          "triggering": "백업 실행 중",
+          "triggered": "백업을 실행했습니다",
+          "failed": "백업 실행 실패",
+          "empty": "백업 이력이 없습니다",
+          "emptyDescription": "첫 백업을 실행해 복구 지점을 만드세요.",
+          "expired": "만료",
+          "expires": "만료 시각",
+          "size": "크기",
+          "actor": "실행자",
+          "upgrade": "업그레이드 상태",
+          "currentVersion": "현재 버전",
+          "availableVersion": "사용 가능 버전",
+          "retention": "백업은 설정된 보관 정책에 따라 만료됩니다."
+        },
+        "security": {
+          "cveList": "보안 업데이트 CVE 목록",
+          "openCve": "새 탭에서 {id} 상세 열기",
+          "version": "버전",
+          "available": "사용 가능",
+          "installed": "설치됨",
+          "released": "공개일"
+        },
+        "license": {
+          "verified": "라이선스 검증을 완료했습니다",
+          "expired": "만료됨",
+          "expiresSoon": "{days}일 후 만료",
+          "redactionNote": "검증 후 라이선스 값은 표시하지 않습니다.",
+          "inputHint": "검증을 위해 전송한 뒤 폼에서 즉시 지웁니다."
+        }
+      },
+      "knowledge": {
+        "operations": {
+          "runTitle": "커넥터 동기화 실행",
+          "runDescription": "실제 동기화 작업을 투입하기 전에 드라이런으로 계획을 확인하세요.",
+          "history": "지식 동기화 이력",
+          "cursor": "커서",
+          "lastSync": "최근 동기화",
+          "updated": "갱신 시각",
+          "lastResult": "최근 동기화 결과",
+          "empty": "동기화 체크포인트가 없습니다",
+          "emptyDescription": "커넥터 동기화를 실행해 첫 체크포인트를 만드세요."
+        },
+        "embedding": {
+          "configuration": "임베딩 구성",
+          "candidateHint": "제공자를 선택하면 권장 기본 후보를 채웁니다.",
+          "defaultsDescription": "저장하기 전에 탐지된 구성과 권장 기본값을 검토하세요.",
+          "modelRequired": "임베딩 모델을 입력하세요.",
+          "dimensionInvalid": "0보다 큰 정수 차원을 입력하세요.",
+          "urlInvalid": "유효한 HTTP 또는 HTTPS URL을 입력하세요.",
+          "urlHint": "기본 엔드포인트를 사용하는 제공자에서는 선택 항목입니다."
+        }
+      },
+      "mcp": {
+        "deleteDescription": "서버 구성과 발견된 도구 연결 정보를 제거합니다."
+      }
     }
   }
 }

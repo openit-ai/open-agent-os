@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer, type McpServer } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { Boxes, Loader2, Plus, Trash2 } from "lucide-react";
-import { TestConnectionButton } from "@/components/admin";
+import { ConfirmDialog, TestConnectionButton } from "@/components/admin";
 
 const TRANSPORTS = ["stdio", "sse", "streamable-http"] as const;
 
@@ -27,6 +27,7 @@ export function McpPanel() {
   const [args, setArgs] = useState("");
   const [headers, setHeaders] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<McpServer | null>(null);
 
   const fetchServers = useCallback(async () => {
     setError(null);
@@ -90,13 +91,15 @@ export function McpPanel() {
     }
   };
 
-  const remove = async (n: string) => {
-    if (!confirm(t("mcp.deleteConfirm"))) return;
+  const remove = async () => {
+    if (!deleting) return;
     try {
-      await deleteMcpServer(n);
+      await deleteMcpServer(deleting.name);
+      setDeleting(null);
       await fetchServers();
     } catch (e) {
       setError(e instanceof Error ? e.message : "delete failed");
+      throw e;
     }
   };
 
@@ -172,11 +175,21 @@ export function McpPanel() {
             <CardContent className="flex flex-wrap items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => openEdit(s)}>Edit</Button>
               <TestConnectionButton connectionId={`mcp:${s.name}`} />
-              <Button size="sm" variant="destructive" onClick={() => remove(s.name)}><Trash2 className="mr-1 h-3 w-3" />{t("mcp.delete")}</Button>
+              <Button size="sm" variant="destructive" onClick={() => setDeleting(s)}><Trash2 className="mr-1 h-3 w-3" />{t("mcp.delete")}</Button>
             </CardContent>
           </Card>
         ))}
       </div>
+      <ConfirmDialog
+        open={Boolean(deleting)}
+        title={t("mcp.deleteConfirm")}
+        description={t("admin.phase5.mcp.deleteDescription")}
+        targetLabel={deleting?.name}
+        confirmLabel={t("mcp.delete")}
+        tone="danger"
+        onConfirm={remove}
+        onOpenChange={(open) => { if (!open) setDeleting(null); }}
+      />
     </div>
   );
 }
