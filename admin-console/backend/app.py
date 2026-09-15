@@ -69,6 +69,7 @@ _auth_mod = _load_admin_sibling("auth")
 auth_router = _auth_mod.router
 get_current_admin = _auth_mod.get_current_admin
 AdminUser = _auth_mod.AdminUser
+_config_state_mod = _load_admin_sibling("config_state")
 _infra_mod = _load_admin_sibling("infra")
 infra_router = _infra_mod.router
 _business_mod = _load_admin_sibling("business")
@@ -143,6 +144,7 @@ _CORS_ALLOW_HEADERS = [
     "X-Agent-Id",
     "X-Groups",
     "X-Memory-Policy-Override",
+    "X-Request-Timeout-Ms",
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -354,6 +356,16 @@ try:
     logger.info("Policy router mounted at /v1/policy")
 except ImportError as _pe:
     logger.warning("Policy router not mounted: %s", _pe)
+
+# Phase 2A aggregate contracts.  This router reads the domain modules mounted
+# above; it does not replace their routes or sources of truth.
+try:
+    _readiness_mod = _load_admin_sibling("readiness")
+    readiness_router = _readiness_mod.router
+    app.include_router(readiness_router)
+    logger.info("Admin readiness router mounted")
+except ImportError as _re:
+    logger.warning("Admin readiness router not mounted: %s", _re)
 
 # ── Runtime Configuration Plane Stage-1 (versioned/signed, fail-graceful) ──
 try:
