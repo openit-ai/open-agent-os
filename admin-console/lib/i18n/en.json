@@ -1292,6 +1292,42 @@
         "auditLink": "View profile operation history",
         "resetDescription": "Reset the selected user's derived profile data.",
         "resetConsequence": "This high-risk operation delegates an irreversible profile reset."
+      },
+      "operations": {
+        "backup": {
+          "title": "Backup and upgrade",
+          "description": "Search backup history, review retention, and trigger an administrator backup.",
+          "history": "Backup history",
+          "trigger": "Trigger backup",
+          "triggering": "Triggering backup",
+          "triggered": "Backup triggered",
+          "failed": "Backup trigger failed",
+          "empty": "No backup history",
+          "emptyDescription": "Trigger the first backup to establish a recovery point.",
+          "expired": "Expired",
+          "expires": "Expires",
+          "size": "Size",
+          "actor": "Triggered by",
+          "upgrade": "Upgrade status",
+          "currentVersion": "Current version",
+          "availableVersion": "Available version",
+          "retention": "Backups expire according to the configured retention policy."
+        },
+        "security": {
+          "cveList": "Security update CVE list",
+          "openCve": "Open {id} details in a new tab",
+          "version": "Version",
+          "available": "Available",
+          "installed": "Installed",
+          "released": "Released"
+        },
+        "license": {
+          "verified": "License verification completed",
+          "expired": "Expired",
+          "expiresSoon": "Expires in {days} days",
+          "redactionNote": "The license value is never displayed after verification.",
+          "inputHint": "The value is submitted for verification and immediately cleared from the form."
+        }
       }
     }
   }

@@ -1292,6 +1292,42 @@
         "auditLink": "프로필 작업 이력 보기",
         "resetDescription": "선택한 사용자의 파생 프로필 데이터를 초기화합니다.",
         "resetConsequence": "되돌릴 수 없는 프로필 초기화를 위임하는 고위험 작업입니다."
+      },
+      "operations": {
+        "backup": {
+          "title": "백업과 업그레이드",
+          "description": "백업 이력을 검색하고 보관 정책을 확인하며 관리자 백업을 실행합니다.",
+          "history": "백업 이력",
+          "trigger": "백업 실행",
+          "triggering": "백업 실행 중",
+          "triggered": "백업을 실행했습니다",
+          "failed": "백업 실행 실패",
+          "empty": "백업 이력이 없습니다",
+          "emptyDescription": "첫 백업을 실행해 복구 지점을 만드세요.",
+          "expired": "만료",
+          "expires": "만료 시각",
+          "size": "크기",
+          "actor": "실행자",
+          "upgrade": "업그레이드 상태",
+          "currentVersion": "현재 버전",
+          "availableVersion": "사용 가능 버전",
+          "retention": "백업은 설정된 보관 정책에 따라 만료됩니다."
+        },
+        "security": {
+          "cveList": "보안 업데이트 CVE 목록",
+          "openCve": "새 탭에서 {id} 상세 열기",
+          "version": "버전",
+          "available": "사용 가능",
+          "installed": "설치됨",
+          "released": "공개일"
+        },
+        "license": {
+          "verified": "라이선스 검증을 완료했습니다",
+          "expired": "만료됨",
+          "expiresSoon": "{days}일 후 만료",
+          "redactionNote": "검증 후 라이선스 값은 표시하지 않습니다.",
+          "inputHint": "검증을 위해 전송한 뒤 폼에서 즉시 지웁니다."
+        }
       }
     }
   }
