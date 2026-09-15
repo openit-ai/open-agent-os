@@ -31,6 +31,12 @@ module.exports = {
         success: { DEFAULT: "#22C55E", foreground: "#ffffff" },
         warning: { DEFAULT: "#F59E0B", foreground: "#ffffff" },
         danger: { DEFAULT: "#DC2626", foreground: "#ffffff" },
+        status: {
+          ok: { DEFAULT: "var(--status-ok)", text: "var(--status-ok-text)", surface: "var(--status-ok-surface)" },
+          warn: { DEFAULT: "var(--status-warn)", text: "var(--status-warn-text)", surface: "var(--status-warn-surface)" },
+          danger: { DEFAULT: "var(--status-danger)", text: "var(--status-danger-text)", surface: "var(--status-danger-surface)" },
+          neutral: { text: "var(--status-neutral-text)", border: "var(--status-neutral-border)", surface: "var(--status-neutral-surface)" },
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
