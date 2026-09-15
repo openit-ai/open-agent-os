@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-production-config.sh — friendly production preflight for systemd
 # Verifies required env vars for OAOS systemd units without leaking secrets.
-# - Checks file existence & permissions (0600 recommended)
+# - Checks file existence & permissions (0600/0400 private or root:oaos 0640)
 # - Validates required keys, placeholder rejection, length & OAOS_ENV=production fail-closed
 # - Never prints secret values (only masked length / presence)
 # Exit codes: 0 = OK, 1 = missing/weak config, 2 = file not found / unreadable
@@ -26,6 +26,7 @@ fi
 ENV_FILE=""
 STRICT=0
 VERBOSE=0
+SERVICE_GROUP="oaos"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,7 +50,8 @@ Auto-discovery order:
   6) $REPO_ROOT/.env
 
 Checks (fail-closed, no secret output):
-  - File exists & readable; warns if >0600
+  - File exists & readable; accepts 0600/0400 or service-group 0640;
+    rejects world-readable permissions
   - Required: DATABASE_URL, JWT_SIGNING_KEY, AUDIT_SIGNING_KEY,
               ADMIN_JWT_SECRET, VAULT_ENCRYPTION_KEY|OAOS_ENCRYPTION_KEY,
               OAOS_ENV=production
@@ -174,16 +176,27 @@ fi
 
 info "Checking env file: ${ENV_FILE}"
 
-# permission check (0600 ideal)
+# Permission check: private owner-only files remain valid, while systemd's
+# User=oaos services require group-readable root:oaos 0640.
 if command -v stat >/dev/null 2>&1; then
-  perms="$(stat -c %a "${ENV_FILE}" 2>/dev/null || stat -f %A "${ENV_FILE}" 2>/dev/null || echo "unknown")"
-  if [[ "${perms}" != "600" && "${perms}" != "400" && "${perms}" != "unknown" ]]; then
-    warn_msg "File permissions are ${perms} (expected 0600). Fix: chmod 600 ${ENV_FILE}"
+  file_stat="$(stat -c '%a|%U|%G' "${ENV_FILE}" 2>/dev/null || stat -f '%Lp|%Su|%Sg' "${ENV_FILE}" 2>/dev/null || echo 'unknown|unknown|unknown')"
+  IFS='|' read -r perms owner group <<< "${file_stat}"
+  if [[ "${perms}" == "unknown" ]]; then
+    ok "File permissions unknown (stat unsupported)"
+  elif [[ "${perms}" =~ [0-7]*[4-7]$ ]]; then
+    warn_msg "File permissions are ${perms} (${owner}:${group}, world-readable). Fix: chmod 640 ${ENV_FILE} && chown root:${SERVICE_GROUP} ${ENV_FILE}"
     if [[ $STRICT -eq 1 ]]; then
       err "Strict mode: world-readable env file rejected"
     fi
+  elif [[ "${perms}" == "600" || "${perms}" == "400" ]]; then
+    ok "File permissions ${perms} (${owner}:${group}, private)"
+  elif [[ "${perms}" == "640" && "${group}" == "${SERVICE_GROUP}" ]]; then
+    ok "File permissions ${perms} (${owner}:${group}, service-readable)"
   else
-    ok "File permissions ${perms} (secure)"
+    warn_msg "File permissions are ${perms} (${owner}:${group}; expected 0600/0400 or 0640 with group ${SERVICE_GROUP}). Fix: chmod 640 ${ENV_FILE} && chown root:${SERVICE_GROUP} ${ENV_FILE}"
+    if [[ $STRICT -eq 1 ]]; then
+      err "Strict mode: insecure env file permissions or ownership rejected"
+    fi
   fi
 fi
 
@@ -380,7 +393,6 @@ if ! command -v python3 >/dev/null 2>&1; then
   warn_msg "python3 not found in PATH (required for services)"
 fi
 # Final summary line for automation (machine-friendly)
-if [[ $fail -eq 0 ]]; then
-  # python already printed summary; add concise line
-  true
+if [[ $fail -ne 0 ]]; then
+  exit 1
 fi
