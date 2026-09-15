@@ -333,7 +333,7 @@
     "headHash": "헤드 해시",
     "noCheckpoint": "checkpoint 없음",
     "currentHead": "현재 헤드",
-    "timelineTitle": "Audit 이벤트 타임라인",
+    "timelineTitle": "감사 이벤트 타임라인",
     "timelineDesc": "시간 역순 · 최신 이벤트가 가장 위에 표시됩니다 ({count}건)",
     "loading": "로딩 중...",
     "noEvents": "감사 이벤트가 없습니다",
