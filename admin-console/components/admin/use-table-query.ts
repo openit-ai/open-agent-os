@@ -56,3 +56,19 @@ export function useTableQuery({ defaultPageSize = 20 }: UseTableQueryOptions = {
 
   return { query, onQueryChange };
 }
+
+export function useUrlFilter(key: string, defaultValue = "") {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const value = searchParams.get(key) ?? defaultValue;
+  const setValue = React.useCallback((next: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next && next !== defaultValue) params.set(key, next);
+    else params.delete(key);
+    params.delete("page");
+    const nextSearch = params.toString();
+    router.push(nextSearch ? `${pathname}?${nextSearch}` : pathname, { scroll: false });
+  }, [defaultValue, key, pathname, router, searchParams]);
+  return [value, setValue] as const;
+}

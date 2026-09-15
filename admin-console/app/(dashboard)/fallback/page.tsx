@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { getToken, getFallbackConfig, updateFallbackConfig, getRuntimeMode, type FallbackConfig, type FallbackEntry } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { ConfigurationApplyState, ConfirmDialog, DataTable, Skeleton, useTableQuery, useToast } from "@/components/admin";
+import { normalizeAdminError } from "@/lib/admin-api/client";
+import { applyClientListQuery } from "@/lib/admin-api/list-query";
 import { RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, Save, Info, Layers, Cpu, ShieldAlert } from "lucide-react";
 
 const PROVIDER_TYPES = ["claude", "codex", "gemini", "opencode-go", "openrouter", "ollama"] as const;
@@ -25,9 +28,11 @@ function providerBadge(p: string) {
   return map[p] ?? "bg-secondary";
 }
 
-export default function FallbackPage() {
+function FallbackPageContent() {
   const router = useRouter();
   const { t } = useI18n();
+  const table = useTableQuery();
+  const { toast } = useToast();
   const [cfg, setCfg] = useState<FallbackConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -41,6 +46,7 @@ export default function FallbackPage() {
   const [addEnabled, setAddEnabled] = useState(true);
   const [fallbackModel, setFallbackModel] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [removing, setRemoving] = useState<number | null>(null);
 
   const fetchCfg = useCallback(async () => {
     setError(null);
@@ -94,9 +100,9 @@ export default function FallbackPage() {
 
   function removeAt(idx: number) {
     if (!cfg) return;
-    if (!confirm(t("fallback.removeConfirm"))) return;
     const next = cfg.chain.filter((_, i) => i !== idx);
     setCfg({ ...cfg, chain: next });
+    toast({ title: t("common.delete"), description: t("fallback.helpNote"), variant: "info" });
   }
 
   function move(idx: number, dir: -1 | 1) {
@@ -128,15 +134,27 @@ export default function FallbackPage() {
       setEnabled(saved.enabled);
       setFallbackModel(saved.fallback_model ?? "");
       setSaveMsg(t("fallback.saved"));
-      setTimeout(() => setSaveMsg(null), 2500);
+      toast({ title: t("fallback.saved"), description: t("admin.lists.savedAndApplied"), variant: "success" });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("fallback.saveFailed"));
+      toast({ title: t("fallback.saveFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" });
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) return <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>;
+  // Fallback is a small ordered configuration without server list parameters; client query preserves the existing API.
+  const visibleChain = useMemo(() => {
+    const indexedChain = (cfg?.chain ?? []).map((entry, index) => ({ ...entry, index }));
+    return applyClientListQuery(
+      indexedChain,
+      table.query,
+      [(row) => row.provider, (row) => row.model],
+      { order: (row) => row.index, provider: (row) => row.provider, model: (row) => row.model ?? "", status: (row) => row.enabled },
+    );
+  }, [cfg?.chain, table.query]);
+
+  if (loading) return <Skeleton variant="form" ariaLabel={t("common.loading")} />;
 
   // Hermes-owned: show ownership banner, do not present fallback as Hermes config
   if (runtimeMode === "hermes") {
@@ -205,26 +223,31 @@ export default function FallbackPage() {
       <Card>
         <CardHeader><CardTitle className="text-base">{t("fallback.chainTitle")}</CardTitle><CardDescription>{t("fallback.chainDesc")}</CardDescription></CardHeader>
         <CardContent className="space-y-3">
-          {cfg && cfg.chain.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t("fallback.emptyChain")}</p>
-          ) : (
-            <div className="space-y-2">
-              {cfg?.chain.map((e, idx) => (
-                <div key={`${e.provider}-${e.model ?? ""}-${idx}`} className={`flex items-center gap-2 rounded-md border p-2 ${!e.enabled ? "opacity-60 bg-muted/30" : "bg-card"}`}>
-                  <span className="text-xs font-mono text-muted-foreground w-5 text-center">{idx + 1}</span>
-                  <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${providerBadge(e.provider)}`}>{e.provider}</span>
-                  <span className="text-sm font-mono truncate flex-1">{e.model ?? <span className="text-muted-foreground italic">default model</span>}</span>
-                  <label className="flex items-center gap-1 text-xs">
-                    <input type="checkbox" checked={e.enabled} onChange={() => toggleEntry(idx)} className="h-3.5 w-3.5 accent-primary" />
-                    {e.enabled ? "on" : "off"}
-                  </label>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" disabled={idx === 0} onClick={() => move(idx, -1)} aria-label={t("fallback.moveUp")}><ArrowUp className="h-3.5 w-3.5" /></Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" disabled={idx === (cfg.chain.length - 1)} onClick={() => move(idx, 1)} aria-label={t("fallback.moveDown")}><ArrowDown className="h-3.5 w-3.5" /></Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeAt(idx)} aria-label={t("common.delete")}><Trash2 className="h-3.5 w-3.5" /></Button>
-                </div>
-              ))}
-            </div>
-          )}
+          <DataTable
+            rows={visibleChain.rows}
+            columns={[
+              { id: "order", header: "#", accessor: (row) => row.index + 1, sortable: true },
+              { id: "provider", header: t("fallback.providerLabel"), cell: (row) => <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${providerBadge(row.provider)}`}>{row.provider}</span>, sortable: true },
+              { id: "model", header: t("fallback.modelLabel"), accessor: (row) => row.model ?? "default model", sortable: true },
+              { id: "status", header: t("common.status"), cell: (row) => row.enabled ? <Badge variant="success">on</Badge> : <Badge variant="secondary">off</Badge>, sortable: true },
+            ]}
+            rowKey={(row) => `${row.provider}:${row.model ?? ""}:${row.index}`}
+            query={table.query}
+            error={error ? normalizeAdminError(new Error(error)) : undefined}
+            onRetry={fetchCfg}
+            onQueryChange={table.onQueryChange}
+            totalRows={visibleChain.totalRows}
+            searchable
+            pageSizeOptions={[10, 20, 50]}
+            rowActions={(row) => [
+              { id: "up", label: t("fallback.moveUp"), icon: ArrowUp, disabled: row.index === 0, onSelect: () => move(row.index, -1) },
+              { id: "down", label: t("fallback.moveDown"), icon: ArrowDown, disabled: row.index === (cfg?.chain.length ?? 0) - 1, onSelect: () => move(row.index, 1) },
+              { id: "toggle", label: row.enabled ? "Disable" : "Enable", onSelect: () => toggleEntry(row.index) },
+              { id: "remove", label: t("common.delete"), icon: Trash2, tone: "danger", onSelect: () => setRemoving(row.index) },
+            ]}
+            empty={{ title: t("fallback.emptyChain"), description: t("fallback.addTitle"), filtered: Boolean(table.query.search) }}
+            ariaLabel={t("fallback.chainTitle")}
+          />
 
           <div className="rounded-md border p-3 space-y-3 bg-muted/20">
             <p className="text-sm font-medium">{t("fallback.addTitle")}</p>
@@ -261,8 +284,44 @@ export default function FallbackPage() {
             <Button onClick={handleSave} disabled={saving}><Save className="mr-1 h-4 w-4" />{saving ? t("fallback.saving") : t("fallback.saveBtn")}</Button>
             <span className="text-xs text-muted-foreground self-center">{t("fallback.l5Only")}</span>
           </div>
+          {cfg?.updated_at ? (
+            <ConfigurationApplyState
+              value={{
+                persisted: true,
+                applied: true,
+                config_revision: cfg.updated_at,
+                effective_revision: cfg.updated_at,
+                requires_restart: false,
+                apply_strategy: "immediate",
+              }}
+              service="Execution Gateway fallback"
+            />
+          ) : null}
         </CardContent>
       </Card>
+      <ConfirmDialog
+        open={removing !== null}
+        title={t("fallback.removeConfirm")}
+        description={t("fallback.removeConfirm")}
+        targetLabel={removing !== null ? `${cfg?.chain[removing]?.provider ?? ""} ${cfg?.chain[removing]?.model ?? ""}`.trim() : undefined}
+        confirmLabel={t("common.delete")}
+        tone="danger"
+        onOpenChange={(open) => { if (!open) setRemoving(null); }}
+        onConfirm={() => { if (removing !== null) removeAt(removing); }}
+      />
     </div>
+  );
+}
+
+
+/**
+ * `useTableQuery`/`useUrlFilter` call `useSearchParams()`, which Next.js 15 requires
+ * to sit under a Suspense boundary during prerendering.
+ */
+export default function FallbackPage() {
+  return (
+    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+      <FallbackPageContent />
+    </Suspense>
   );
 }

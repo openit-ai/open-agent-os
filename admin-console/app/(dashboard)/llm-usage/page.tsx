@@ -1,11 +1,11 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableQuery, useToast, useUrlFilter, DataTable, FormField, Skeleton } from "@/components/admin";
 import { getToken, getLLMUsageSummary, getLLMUsageHistory, type LLMUsageSummary, type LLMUsageHistoryItem } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { RefreshCw, BarChart3, Coins, Clock3, Activity, Timer, TrendingUp, ExternalLink, Cpu } from "lucide-react";
@@ -123,21 +123,38 @@ function formatTime(iso: string | null | undefined): string {
   }
 }
 
-export default function LLMUsagePage() {
+function LLMUsagePageContent() {
   const router = useRouter();
   const { t } = useI18n();
+  const table = useTableQuery();
+  const { toast } = useToast();
+  const [tenantFilter, setTenantFilter] = useUrlFilter("tenant");
+  const [providerFilter, setProviderFilter] = useUrlFilter("provider");
+  const [statusFilter, setStatusFilter] = useUrlFilter("status", "all");
+  const [from, setFrom] = useUrlFilter("from");
+  const [to, setTo] = useUrlFilter("to");
 
   const [summary, setSummary] = useState<LLMUsageSummary | null>(null);
   const [history, setHistory] = useState<LLMUsageHistoryItem[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "success" | "error">("all");
   const [tick, setTick] = useState(0);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, h] = await Promise.all([getLLMUsageSummary(), getLLMUsageHistory({ limit: 30 })]);
+      const [s, h] = await Promise.all([getLLMUsageSummary(), getLLMUsageHistory({
+        limit: table.query.pageSize,
+        offset: (table.query.page - 1) * table.query.pageSize,
+        tenant: tenantFilter || undefined,
+        provider: providerFilter || undefined,
+        status: statusFilter === "all" ? undefined : statusFilter,
+        search: table.query.search,
+        sort: table.query.sort?.id ?? "timestamp",
+        direction: table.query.sort?.direction ?? "desc",
+        from: from ? from + "T00:00:00" : undefined,
+        to: to ? to + "T23:59:59.999" : undefined,
+      })]);
       // Defensive: api.ts already normalizes, but keep extra guard for mixed shapes
       const rawItems = (h as { items?: unknown[] }).items ?? (Array.isArray(h) ? (h as unknown as unknown[]) : []);
       const items: LLMUsageHistoryItem[] = (rawItems as Record<string, unknown>[]).map((it) => ({
@@ -160,10 +177,11 @@ export default function LLMUsagePage() {
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("common.error"));
+      if (history.length > 0) toast({ title: t("admin.lists.backgroundError"), description: e instanceof Error ? e.message : undefined, variant: "error" });
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [from, history.length, providerFilter, statusFilter, t, table.query, tenantFilter, toast, to]);
 
   useEffect(() => {
     if (!getToken()) {
@@ -177,13 +195,6 @@ export default function LLMUsagePage() {
     }, 10_000);
     return () => clearInterval(id);
   }, [fetchAll, router]);
-
-  // re-fetch on tick is done via interval above; tick just for countdown display
-  const filteredHistory = useMemo(() => {
-    if (filter === "all") return history;
-    if (filter === "error") return history.filter((h) => h.status !== "success");
-    return history.filter((h) => h.status === filter);
-  }, [history, filter]);
 
   const qRatio = summary?.daily_usage_ratio ?? 0;
   const qColor = quotaColor(qRatio);
@@ -393,107 +404,54 @@ export default function LLMUsagePage() {
       {/* History table */}
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">{t("llmUsage.historyTitle")}</CardTitle>
-              <CardDescription>
-                {t("llmUsage.historyDesc", { count: String(historyTotal || filteredHistory.length) })}
-              </CardDescription>
-            </div>
-            <div className="flex items-center gap-1" role="tablist" aria-label="history filter">
-              {(
-                [
-                  ["all", t("llmUsage.filterAll")],
-                  ["success", t("llmUsage.filterSuccess")],
-                  ["error", t("llmUsage.filterError")],
-                ] as const
-              ).map(([key, label]) => (
-                <Button
-                  key={key}
-                  variant={filter === key ? "default" : "outline"}
-                  size="sm"
-                  role="tab"
-                  aria-selected={filter === key}
-                  onClick={() => setFilter(key)}
-                  className="h-7 px-2.5 text-xs"
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </div>
+          <CardTitle className="text-base">{t("llmUsage.historyTitle")}</CardTitle>
+          <CardDescription>{t("llmUsage.historyDesc", { count: String(historyTotal) })}</CardDescription>
         </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col">{t("llmUsage.colTime")}</TableHead>
-                  <TableHead scope="col">{t("llmUsage.colTenant")}</TableHead>
-                  <TableHead scope="col">{t("llmUsage.colProvider")}</TableHead>
-                  <TableHead scope="col">{t("llmUsage.colModel")}</TableHead>
-                  <TableHead scope="col" className="text-right">
-                    {t("llmUsage.colLatency")}
-                  </TableHead>
-                  <TableHead scope="col" className="text-right">
-                    {t("llmUsage.colTokens")}
-                  </TableHead>
-                  <TableHead scope="col" className="text-right">
-                    {t("llmUsage.colCost")}
-                  </TableHead>
-                  <TableHead scope="col">{t("llmUsage.colStatus")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading && history.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
-                      {t("llmUsage.loading")}
-                    </TableCell>
-                  </TableRow>
-                ) : filteredHistory.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
-                      {t("llmUsage.noHistory")}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filteredHistory.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="whitespace-nowrap text-xs font-mono">{formatTime(row.timestamp)}</TableCell>
-                      <TableCell className="text-xs">
-                        <Badge variant="outline" className="text-[11px]">
-                          {row.tenant}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{row.provider}</span>
-                      </TableCell>
-                      <TableCell className="max-w-[160px] truncate text-xs font-mono" title={row.model}>
-                        {row.model}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs" style={{ color: latencyColor(row.latency_ms) }}>
-                        {row.latency_ms}ms
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {formatNumber(row.prompt_tokens)} / {formatNumber(row.completion_tokens)}{" "}
-                        <span className="text-muted-foreground">({formatNumber(row.total_tokens)})</span>
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs">{formatCost(row.cost_usd)}</TableCell>
-                      <TableCell>
-                        <Badge variant={statusBadgeVariant(row.status)} className="text-[11px]">
-                          {row.status}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <FormField id="usage-tenant" label={t("llmUsage.colTenant")}><input value={tenantFilter} onChange={(event) => setTenantFilter(event.target.value)} className="flex h-9 w-full rounded-md border bg-background px-3 text-sm" /></FormField>
+            <FormField id="usage-provider" label={t("llmUsage.colProvider")}><input value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} className="flex h-9 w-full rounded-md border bg-background px-3 text-sm" /></FormField>
+            <FormField id="usage-status" label={t("llmUsage.colStatus")}><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="flex h-9 w-full rounded-md border bg-background px-3 text-sm"><option value="all">{t("llmUsage.filterAll")}</option><option value="success">success</option><option value="error">error</option><option value="timeout">timeout</option></select></FormField>
+            <FormField id="usage-from" label={t("admin.lists.fromDate")}><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="flex h-9 w-full rounded-md border bg-background px-3 text-sm" /></FormField>
+            <FormField id="usage-to" label={t("admin.lists.toDate")}><input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="flex h-9 w-full rounded-md border bg-background px-3 text-sm" /></FormField>
           </div>
-          <p className="px-4 py-2 text-xs text-muted-foreground">10초마다 자동 갱신 · 백엔드 미배포 시 목업 데이터로 표시됩니다.</p>
+          <DataTable
+            rows={history}
+            columns={[
+              { id: "timestamp", header: t("llmUsage.colTime"), cell: (row) => formatTime(row.timestamp), sortable: true },
+              { id: "tenant", header: t("llmUsage.colTenant"), accessor: (row) => row.tenant, sortable: true },
+              { id: "provider", header: t("llmUsage.colProvider"), accessor: (row) => row.provider, sortable: true },
+              { id: "model", header: t("llmUsage.colModel"), accessor: (row) => row.model, sortable: true },
+              { id: "latency", header: t("llmUsage.colLatency"), cell: (row) => `${row.latency_ms}ms`, sortable: true, align: "end" },
+              { id: "tokens", header: t("llmUsage.colTokens"), accessor: (row) => formatNumber(row.total_tokens), sortable: true, align: "end" },
+              { id: "cost", header: t("llmUsage.colCost"), accessor: (row) => formatCost(row.cost_usd), sortable: true, align: "end" },
+              { id: "status", header: t("llmUsage.colStatus"), cell: (row) => <Badge variant={statusBadgeVariant(row.status)}>{row.status}</Badge>, sortable: true },
+            ]}
+            rowKey={(row) => row.id}
+            loading={loading && history.length === 0}
+            query={table.query}
+            onQueryChange={table.onQueryChange}
+            totalRows={historyTotal}
+            searchable
+            empty={{ title: t("llmUsage.noHistory"), description: t("llmUsage.historyTitle"), filtered: Boolean(table.query.search || tenantFilter || providerFilter || statusFilter !== "all" || from || to) }}
+            ariaLabel={t("llmUsage.historyTitle")}
+          />
+          <p className="text-xs text-muted-foreground">{t("admin.usage.chartAlternative")} · 10초마다 자동 갱신</p>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+
+/**
+ * `useTableQuery`/`useUrlFilter` call `useSearchParams()`, which Next.js 15 requires
+ * to sit under a Suspense boundary during prerendering.
+ */
+export default function LLMUsagePage() {
+  return (
+    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+      <LLMUsagePageContent />
+    </Suspense>
   );
 }

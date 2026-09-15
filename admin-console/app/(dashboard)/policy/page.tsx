@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useTableQuery, useToast, ConfirmDialog, DataTable, Skeleton } from "@/components/admin";
+import { applyClientListQuery } from "@/lib/admin-api/list-query";
+import { normalizeAdminError } from "@/lib/admin-api/client";
 import { useI18n } from "@/lib/i18n";
 import {
   getToken,
@@ -77,9 +80,11 @@ function newEmptyRule(): PolicyRule {
   return { id: "", source: "default_bundle", action: "*", resource_pattern: "*", effect: "ALLOW", priority: 100 };
 }
 
-export default function PolicyPage() {
+function PolicyPageContent() {
   const router = useRouter();
   const { t } = useI18n();
+  const table = useTableQuery();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("bundles");
   const [bundles, setBundles] = useState<PolicyBundle[]>([]);
   const [evalOrder, setEvalOrder] = useState<string[]>(EVALUATION_ORDER_FALLBACK);
@@ -106,6 +111,7 @@ export default function PolicyPage() {
   const [simResult, setSimResult] = useState<{ decision: string; source: string; reason: string; matched_rule: PolicyRule | null } | null>(null);
   const [simLoading, setSimLoading] = useState(false);
   const [simError, setSimError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ kind: "publish" | "rollback"; version?: string } | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -210,16 +216,23 @@ export default function PolicyPage() {
 
   async function handlePublish() {
     setActionMsg(null);
-    try { const r = await publishPolicy("default"); setActionMsg(`Published — active ${r.active_version}`); await fetchAll(); }
-    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); }
+    try { const r = await publishPolicy("default"); setActionMsg(`Published — active ${r.active_version}`); toast({ title: `Published — active ${r.active_version}`, variant: "success" }); await fetchAll(); }
+    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); toast({ title: "Publish failed", description: e instanceof Error ? e.message : undefined, variant: "error" }); throw e; }
   }
 
   async function handleRollback(v: string) {
-    if (!confirm(`Rollback to ${v}? This creates a new published version copying that historical rules.`)) return;
     setActionMsg(null);
-    try { const r = await rollbackPolicy(v, "default"); setActionMsg(`Rolled back to ${v} → now ${r.active_version}`); await fetchAll(); }
-    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); }
+    try { const r = await rollbackPolicy(v, "default"); setActionMsg(`Rolled back to ${v} → now ${r.active_version}`); toast({ title: `Rolled back to ${v}`, variant: "success" }); await fetchAll(); }
+    catch (e) { setActionMsg(e instanceof Error ? e.message : String(e)); toast({ title: "Rollback failed", description: e instanceof Error ? e.message : undefined, variant: "error" }); throw e; }
   }
+
+  // Policy history has no list query parameters; preserve the API and paginate the immutable client snapshot.
+  const visibleHistory = useMemo(() => applyClientListQuery(
+    history,
+    table.query,
+    [(row) => row.version, (row) => row.name, (row) => row.created_by, (row) => row.status],
+    { version: (row) => row.version, status: (row) => row.status, created: (row) => row.created_at ?? "", actor: (row) => row.created_by ?? "" },
+  ), [history, table.query]);
 
   return (
     <div className="mx-auto w-full max-w-[1200px] space-y-6">
@@ -320,7 +333,7 @@ export default function PolicyPage() {
               <CardContent className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={handleValidate}><CheckCircle2 className="h-4 w-4" />Validate</Button>
                 <Button size="sm" variant="secondary" onClick={handleApprove}>Approve (L5)</Button>
-                <Button size="sm" onClick={handlePublish}><Upload className="h-4 w-4" />Publish (L5)</Button>
+                <Button size="sm" onClick={() => setConfirmAction({ kind: "publish" })}><Upload className="h-4 w-4" />Publish (L5)</Button>
                 <Button size="sm" variant="outline" onClick={() => setActiveTab("draft")}>Edit Draft</Button>
               </CardContent>
             </Card>
@@ -378,7 +391,7 @@ export default function PolicyPage() {
                 <Button variant="outline" onClick={handleValidate}><CheckCircle2 className="h-4 w-4" />Validate</Button>
                 <Button onClick={handleSaveDraft} disabled={saving}>{saving ? "Saving..." : "Save Draft (L5)"}</Button>
                 <Button variant="secondary" onClick={handleApprove}>Approve (L5)</Button>
-                <Button onClick={handlePublish}><Upload className="h-4 w-4" />Publish (L5)</Button>
+                <Button onClick={() => setConfirmAction({ kind: "publish" })}><Upload className="h-4 w-4" />Publish (L5)</Button>
               </div>
 
               {validateResult && (
@@ -418,31 +431,60 @@ export default function PolicyPage() {
         <TabsContent value="history">
           <Card>
             <CardHeader><CardTitle className="text-base flex items-center gap-2"><History className="h-4 w-4" />Version History — rollback creates new published version</CardTitle><CardDescription>Immutable history; rollback copies target rules into a new published version (incremented). Requires L5.</CardDescription></CardHeader>
-            <CardContent className="p-0">
-              {history.length === 0 ? <div className="p-6 text-center text-sm text-muted-foreground">No history yet — publish a draft to create a version.</div> : (
-                <div className="overflow-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>version</TableHead><TableHead>status</TableHead><TableHead>bundle</TableHead><TableHead>rules</TableHead><TableHead>created_by</TableHead><TableHead>created_at</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {[...history].sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? "")).map((h) => (
-                        <TableRow key={h.id_row ?? h.id + h.version} className={h.version === activeVersion ? "bg-[#22C55E]/5" : ""}>
-                          <TableCell className="font-mono text-xs">v{h.version}{h.version === activeVersion && <Badge variant="success" className="ml-2">active</Badge>}</TableCell>
-                          <TableCell><Badge variant={h.status === "published" ? "success" : h.status === "approved" ? "warning" : "secondary"}>{h.status}</Badge></TableCell>
-                          <TableCell className="text-xs">{h.name}<span className="ml-1 font-mono text-muted-foreground">{h.id}</span></TableCell>
-                          <TableCell className="text-xs">{h.rules?.length ?? 0}</TableCell>
-                          <TableCell className="text-xs">{h.created_by ?? "-"}</TableCell>
-                          <TableCell className="text-xs">{h.created_at ? new Date(h.created_at).toLocaleString() : "-"}</TableCell>
-                          <TableCell className="text-right">{h.status === "published" ? <Button size="sm" variant="outline" onClick={() => handleRollback(h.version)}><RotateCcw className="h-3.5 w-3.5" />Rollback</Button> : <span className="text-xs text-muted-foreground">-</span>}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
+            <CardContent>
+              <DataTable
+                rows={visibleHistory.rows}
+                columns={[
+                  { id: "version", header: "Version", cell: (row) => <span className="font-mono">v{row.version}{row.version === activeVersion ? <Badge variant="success" className="ml-2">active</Badge> : null}</span>, sortable: true },
+                  { id: "status", header: "Status", cell: (row) => <Badge variant={row.status === "published" ? "success" : row.status === "approved" ? "warning" : "secondary"}>{row.status}</Badge>, sortable: true },
+                  { id: "bundle", header: "Bundle", cell: (row) => <>{row.name}<span className="ml-1 font-mono text-muted-foreground">{row.id}</span></> },
+                  { id: "rules", header: "Rules", accessor: (row) => row.rules?.length ?? 0 },
+                  { id: "actor", header: "Created by", accessor: (row) => row.created_by, sortable: true },
+                  { id: "created", header: "Created at", cell: (row) => row.created_at ? new Date(row.created_at).toLocaleString() : "—", sortable: true },
+                ]}
+                rowKey={(row) => row.id_row ?? row.id + row.version}
+                loading={loading}
+                error={error ? normalizeAdminError(new Error(error)) : undefined}
+                onRetry={fetchAll}
+                query={table.query}
+                onQueryChange={table.onQueryChange}
+                totalRows={visibleHistory.totalRows}
+                searchable
+                rowActions={(row) => row.status === "published" ? [{ id: "rollback", label: "Rollback", icon: RotateCcw, tone: "danger", onSelect: () => setConfirmAction({ kind: "rollback", version: row.version }) }] : []}
+                empty={{ title: "No history", description: "Publish a draft to create an immutable version.", filtered: Boolean(table.query.search) }}
+                ariaLabel="Policy version history"
+              />
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+      <ConfirmDialog
+        open={Boolean(confirmAction)}
+        title={confirmAction?.kind === "publish" ? "Publish policy" : "Rollback policy"}
+        description={confirmAction?.kind === "publish"
+          ? "Publish the approved draft as the active policy."
+          : `Rollback to ${confirmAction?.version ?? ""}. A new published version will be created.`}
+        targetLabel={confirmAction?.version ?? draft?.version}
+        consequence={t("admin.lists.highRiskConsequence")}
+        confirmLabel={confirmAction?.kind === "publish" ? "Publish" : "Rollback"}
+        tone="danger"
+        requireText={confirmAction?.kind === "publish" ? (draft?.version ?? "PUBLISH") : confirmAction?.version}
+        onOpenChange={(open) => { if (!open) setConfirmAction(null); }}
+        onConfirm={() => confirmAction?.kind === "publish" ? handlePublish() : confirmAction?.version ? handleRollback(confirmAction.version) : undefined}
+      />
     </div>
+  );
+}
+
+
+/**
+ * `useTableQuery`/`useUrlFilter` call `useSearchParams()`, which Next.js 15 requires
+ * to sit under a Suspense boundary during prerendering.
+ */
+export default function PolicyPage() {
+  return (
+    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+      <PolicyPageContent />
+    </Suspense>
   );
 }

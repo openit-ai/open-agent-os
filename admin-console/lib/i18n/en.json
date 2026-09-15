@@ -1203,12 +1203,36 @@
       "resolving": "Opening the canonical administration page"
     },
     "providers": {
+      "credentialState": "Credential state",
+      "secretConfigured": "Secret reference configured",
+      "secretMissing": "Authorization or secret reference required",
+      "connectionTargetConfigured": "Connection target configured",
       "acpSummary": {
         "title": "ACP execution path",
         "hermesActive": "Hermes is the active runtime. ACP configuration is owned by its dedicated screen.",
         "externalActive": "An external model provider is active. ACP remains available as a separate execution path.",
         "open": "View ACP execution path"
       }
+    },
+    "lists": {
+      "backgroundError": "Refresh failed; showing the last available results",
+      "riskFilter": "Risk filter",
+      "fromDate": "From date",
+      "toDate": "To date",
+      "highRiskConsequence": "This high-risk action changes the effective runtime configuration.",
+      "savedAndApplied": "The configuration was persisted and applied immediately."
+    },
+    "audit": {
+      "integrityValid": "Audit chain integrity verified",
+      "integrityInvalid": "Audit chain integrity failed",
+      "integrityInvalidDescription": "Do not rely on this history until the audit chain is investigated."
+    },
+    "quota": {
+      "positiveInteger": "Enter a whole number greater than zero.",
+      "historyLink": "View quota change history"
+    },
+    "usage": {
+      "chartAlternative": "The request table provides the values represented by the charts"
     },
     "operations": {
       "health": {

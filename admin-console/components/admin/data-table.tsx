@@ -18,6 +18,7 @@ export interface DataTableProps<T> {
   rowKey: (row: T) => string;
   loading?: boolean;
   error?: AdminError;
+  onRetry?: () => void;
   query: AdminQuery;
   onQueryChange: (next: DataTableProps<T>["query"]) => void;
   totalRows: number;
@@ -48,6 +49,7 @@ export function DataTable<T>({
   rowKey,
   loading = false,
   error,
+  onRetry,
   query,
   onQueryChange,
   totalRows,
@@ -88,7 +90,7 @@ export function DataTable<T>({
 
   if (loading) return <Skeleton variant="table" rows={query.pageSize > 5 ? 5 : query.pageSize} ariaLabel={t("admin.loading.content")} />;
   if (error && rows.length === 0) {
-    return <ErrorState title={t(error.message_key)} description={t(error.message_key)} code={error.code} correlationId={error.correlation_id} />;
+    return <ErrorState title={t(error.message_key)} description={t(error.message_key)} code={error.code} correlationId={error.correlation_id} retry={onRetry} />;
   }
   if (rows.length === 0) {
     return (
@@ -107,7 +109,7 @@ export function DataTable<T>({
 
   return (
     <div className="space-y-4">
-      {error ? <ErrorState compact title={t(error.message_key)} description={t(error.message_key)} code={error.code} correlationId={error.correlation_id} /> : null}
+      {error ? <ErrorState compact title={t(error.message_key)} description={t(error.message_key)} code={error.code} correlationId={error.correlation_id} retry={onRetry} /> : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {searchable ? (
           <label className="relative block w-full max-w-sm">

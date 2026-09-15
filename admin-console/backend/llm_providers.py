@@ -1413,7 +1413,18 @@ def _admin_clear_usage() -> None:
         except (ImportError, ModuleNotFoundError, SQLAlchemyError) as e:
             logger.debug(f"usage DB clear failed (best-effort cleanup): {e}")
 
-def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[dict]:
+def _admin_usage_history_page(
+    limit: int = 20,
+    offset: int = 0,
+    tenant_id: str | None = None,
+    provider: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    sort_by: str = "created_at",
+    direction: str = "desc",
+    from_at: str | None = None,
+    to_at: str | None = None,
+) -> tuple[list[dict], int]:
     items: list[dict] = []
     # try DB first if enabled, else in-memory; merge: prefer DB for persistence
     if _is_db_enabled():
@@ -1422,31 +1433,57 @@ def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[
             if factory is not None:
                 from security.models.orm import AdminLlmUsageORM
                 with factory() as s:
-                    q = s.query(AdminLlmUsageORM).order_by(AdminLlmUsageORM.created_at.desc())
+                    q = s.query(AdminLlmUsageORM)
                     if tenant_id:
                         q = q.filter(AdminLlmUsageORM.tenant_id == tenant_id)
-                    q = q.limit(max(1, min(100, limit)))
                     for r in q.all():
                         _ts = r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at)
                         items.append({"id": r.id, "tenant_id": r.tenant_id, "tenant": r.tenant_id, "provider": r.provider, "model": r.model, "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens, "total_tokens": r.total_tokens, "cost_usd": r.cost_usd, "latency_ms": r.latency_ms, "status": r.status, "error": r.error, "created_at": _ts, "timestamp": _ts})
                     if items:
-                        return items
+                        pass
         except (SQLAlchemyError, ImportError, ModuleNotFoundError, ValueError, AttributeError, OSError) as e:
             # DB history unavailable: explicit in-memory fallback below (telemetered).
             logger.warning(f"usage history DB read failed, in-memory fallback: {e}")
     # fallback in-memory
-    recs = list(_admin_usage_records)
-    if tenant_id:
-        recs = [r for r in recs if r["tenant_id"] == tenant_id]
-    recs = sorted(recs, key=lambda x: x["created_at"], reverse=True)[: max(1, min(100, limit))]
-    for r in recs:
-        c = dict(r)
-        if hasattr(c["created_at"], "isoformat"):
-            c["created_at"] = c["created_at"].isoformat()
-        # frontend aliases
-        c["tenant"] = c.get("tenant") or c.get("tenant_id") or "default"
-        c["timestamp"] = c.get("timestamp") or c.get("created_at") or ""
-        items.append(c)
+    if not items:
+        recs = list(_admin_usage_records)
+        if tenant_id:
+            recs = [r for r in recs if r["tenant_id"] == tenant_id]
+        for r in recs:
+            c = dict(r)
+            if hasattr(c["created_at"], "isoformat"):
+                c["created_at"] = c["created_at"].isoformat()
+            c["tenant"] = c.get("tenant") or c.get("tenant_id") or "default"
+            c["timestamp"] = c.get("timestamp") or c.get("created_at") or ""
+            items.append(c)
+
+    needle = (search or "").strip().lower()
+    if provider:
+        items = [item for item in items if str(item.get("provider") or "") == provider]
+    if status:
+        items = [item for item in items if str(item.get("status") or "") == status]
+    if from_at:
+        items = [item for item in items if str(item.get("timestamp") or item.get("created_at") or "") >= from_at]
+    if to_at:
+        items = [item for item in items if str(item.get("timestamp") or item.get("created_at") or "") <= to_at]
+    if needle:
+        items = [item for item in items if any(needle in str(item.get(field) or "").lower() for field in ("tenant", "tenant_id", "provider", "model", "status"))]
+
+    sort_fields = {
+        "timestamp": "timestamp", "tenant": "tenant", "provider": "provider",
+        "model": "model", "latency": "latency_ms", "tokens": "total_tokens",
+        "cost": "cost_usd", "status": "status", "created_at": "created_at",
+    }
+    sort_field = sort_fields.get(sort_by, "created_at")
+    items.sort(key=lambda item: item.get(sort_field) or "", reverse=direction != "asc")
+    total = len(items)
+    start = max(0, offset)
+    page_limit = max(1, min(100, limit))
+    return items[start:start + page_limit], total
+
+
+def _admin_usage_history(limit: int = 20, tenant_id: str | None = None) -> list[dict]:
+    items, _ = _admin_usage_history_page(limit=limit, tenant_id=tenant_id)
     return items
 
 def _admin_usage_summary(tenant_id: str | None = None) -> dict:
@@ -1571,9 +1608,26 @@ def usage_summary(tenant_id: str | None = None, admin: AdminUser = Depends(get_c
     return _admin_usage_summary(tenant_id=tenant_id)
 
 @router.get("/usage/history")
-def usage_history(limit: int = 20, tenant_id: str | None = None, admin: AdminUser = Depends(get_current_admin)):
-    items = _admin_usage_history(limit=limit, tenant_id=tenant_id)
-    return {"items": items, "count": len(items), "total": len(items)}
+def usage_history(
+    limit: int = 20,
+    offset: int = 0,
+    tenant_id: str | None = None,
+    tenant: str | None = None,
+    provider: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    sort: str = "timestamp",
+    direction: str = "desc",
+    from_at: str | None = None,
+    to_at: str | None = None,
+    admin: AdminUser = Depends(get_current_admin),
+):
+    items, total = _admin_usage_history_page(
+        limit=limit, offset=offset, tenant_id=tenant_id or tenant, provider=provider,
+        status=status, search=search, sort_by=sort, direction=direction,
+        from_at=from_at, to_at=to_at,
+    )
+    return {"items": items, "count": len(items), "total": total, "offset": max(0, offset), "limit": max(1, min(100, limit))}
 
 def clear_usage() -> None:
     _admin_clear_usage()

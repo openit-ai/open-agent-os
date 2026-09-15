@@ -12,5 +12,6 @@ export * from "./skeleton";
 export * from "./status-badge";
 export * from "./step-wizard";
 export * from "./test-connection-button";
+export * from "./use-background-query-toast";
 export * from "./toast";
 export * from "./use-table-query";
