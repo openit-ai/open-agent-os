@@ -5,13 +5,13 @@ import path from "path";
 export const dynamic = "force-static";
 export const revalidate = 3600; // cache latest check 1h
 
-// Authoritative installed version: OAOS_VERSION env > admin-console/package.json (0.1.3) > fallback
-// v1.7.2 is architecture doc version, not product version.
+// Authoritative installed version: OAOS_VERSION env > admin-console/package.json > fallback
+// The architecture document version (v1.7.4) is not the product version.
 function getInstalledVersion(): string {
   // 1) env (set at deploy / systemd / docker)
   const env = process.env.OAOS_VERSION || process.env.NEXT_PUBLIC_OAOS_VERSION;
   if (env && /^\d+\.\d+/.test(env.trim())) return env.trim().replace(/^v/, "");
-  // 2) package.json in admin-console — single source of truth for product version (현재 0.1.3)
+  // 2) package.json in admin-console — single source of truth for product version
   try {
     const pkgPath = path.join(process.cwd(), "package.json");
     const raw = fs.readFileSync(pkgPath, "utf-8");

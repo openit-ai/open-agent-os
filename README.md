@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.7 — Personal AX Business Platform
+# Open Agent OS v0.1.8 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,7 +13,7 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.7` — single source of truth `admin-console/package.json` `0.1.7` (previous tag `v0.1.6` → `920723f`; the 0.1.7 release content includes the Phase 6 IA merge `983dc4c` and the deploy/audit fixes `c68bf47`; preceding product tag `v0.1.5` → `2406da63ac`). **Architecture document version `v1.7.4` (`docs/architecture-v1.7.4.md`) is distinct from product version `0.1.7`** — v1.7.4 records the completed Admin Console IA transition (§16.15), not the release number.
+- **Product version:** `0.1.8` — single source of truth `admin-console/package.json` `0.1.8` (previous product tag `v0.1.7` → `bc648fd`; the 0.1.8 release content includes the setup-wizard completion fixes PR #20 (`873a634`), the canonical seed opt-out and Outline health path PR #21 (`a1c9f52`), the control-group localization PR #22 (`c10574c`), the control-group structure alignment PR #23 (`1979881`), and the catalog prune + missing-key guard PR #24 (`e512244`); preceding product tag `v0.1.6` → `920723f`). **Architecture document version `v1.7.4` (`docs/architecture-v1.7.4.md`) is distinct from product version `0.1.8`** — v1.7.4 records the completed Admin Console IA transition (§16.15), not the release number.
 - **Canonical architecture:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 completed Admin Console IA transition (§16.15) + Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
@@ -359,6 +359,17 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 - **Six-group canonical IA (§16.15)** — 30 canonical navigation links across Connections, Control, Execution, Knowledge, Operations, and Management, with the same `AdminNavigation` hierarchy in the desktop sidebar and mobile drawer.
 - **Compatibility policy** — 17 simple legacy URLs use temporary server-side `307` aliases with query preservation; fragment-dependent `/infra` and `/providers` keep client resolvers; legacy client pages remain available as rollback paths.
 - **Shared Admin UX kit** — standardized table/query, dialog/confirmation, toast, form, loading/empty/error/status, accessibility, i18n, and `useSearchParams()`/`Suspense` contracts.
+
+### 9f. Release v0.1.8 — product `0.1.8` (arch `v1.7.4` distinct)
+
+**Included (over v0.1.7 — Admin Console finishing work):**
+- **Setup wizard reaches completion (PR #20)** — the periodic check service now starts at boot and shuts down cleanly; observed check results persist to the database instead of living in a 300-second memory TTL; the canonical infrastructure registry seeds idempotently; `applied` is decided by `config_revision == effective_revision` rather than `source == "env"`; and each blocking reason renders as human guidance (ko/en) with the diagnostic code kept as secondary text.
+- **Canonical seed opt-out + Outline health (PR #21)** — `OAOS_INFRA_SEED_EXCLUDE` permanently excludes an operator-deleted row from all three re-seed paths (startup, `/seed`, console listing); the Outline live check uses `/_health`, whose `GET /` returned `301` to a port-less `https://127.0.0.1/` and could never reach `200` through a redirect.
+- **Control group localization (PR #22)** — policy, approvals, and audit render every label through the catalog. The direct cause was English values parked in `ko.json` (e.g. `approvals.requester = "Requester"`), not absent keys; inline English in the three screens was also converted to `t()` lookups.
+- **Control group structure alignment (PR #23)** — the three screen bodies move to `components/admin/control/control-features.tsx` and the routes become 11-line `Suspense` wrappers, matching every other group. Moving the code into `components/admin/**` brought it into eslint's scope and surfaced two pre-existing `exhaustive-deps` warnings, fixed by memoizing the derived arrays.
+- **Catalog hygiene and a missing-key guard (PR #24)** — 275 keys that no file references are dropped (1,335 → 1,060, ko/en kept identical), and the catalog test now fails the build when a screen looks up a literal key or a dynamic prefix that no catalog entry resolves.
+
+**Measured evidence (main `e512244`, merged PR #23 + #24):** `tsc --noEmit` 0; `vitest run` **31 files / 116 tests passed**; `eslint .` 0; `next build` 0 with **56/56** static pages; catalogs **1,060 = 1,060**. The guard was verified with teeth — adding `t("admin.probe.missingKey")` fails the suite naming that key, and removing it passes again.
 
 ## 10. Repository Structure
 
