@@ -98,13 +98,20 @@ export type SetupStepId =
   | "notifications"
   | "verify";
 
-export type SetupStepStatus = "pending" | "checking" | "complete" | "needs_attention" | "skipped";
+export type SetupStepStatus = "pending" | "checking" | "complete" | "incomplete" | "needs_attention" | "skipped";
+
+export interface SetupBlockingCheck {
+  code: string;
+  message_key: string;
+  summary?: string;
+  next_action?: { label_key: string; href: string };
+}
 
 export interface SetupProgressStep {
   id: SetupStepId;
   status: SetupStepStatus;
   checked_at?: string;
-  blocking_checks: TestConnectionResult[];
+  blocking_checks: SetupBlockingCheck[];
   optional_skipped: boolean;
 }
 

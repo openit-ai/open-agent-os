@@ -1073,6 +1073,7 @@
         "pending": "Pending",
         "checking": "Checking",
         "complete": "Complete",
+        "incomplete": "Setup required",
         "needs_attention": "Needs attention",
         "skipped": "Skipped"
       },
@@ -1083,6 +1084,63 @@
         "neverChecked": "Not checked yet",
         "blockingIssues": "Blocking issues",
         "openSettings": "Open settings and next actions"
+      },
+      "guidance": {
+        "whatToDo": "What to do:",
+        "codeLabel": "Diagnostic code",
+        "openAction": "Open the action screen",
+        "problems": {
+          "CHECK_REQUIRED": "No recent health check is available for this required connection.",
+          "CHECK_EXPIRED": "The last successful connection check is older than the allowed freshness window.",
+          "NOT_APPLIED": "The saved configuration does not match the configuration currently used by the service.",
+          "REQUIRED_MISSING": "A required connection has not been configured.",
+          "UNREACHABLE": "The configured service could not be reached.",
+          "TIMEOUT": "The connection check timed out before the service responded.",
+          "AUTH_REQUIRED": "The service needs credentials or authorization before it can connect.",
+          "PERMISSION_DENIED": "The configured credentials do not have the required permission.",
+          "MISCONFIGURED": "The saved connection settings are incomplete or invalid.",
+          "L5_ADMIN_MISSING": "No L5 administrator is available to complete governance setup.",
+          "ACTIVE_POLICY_MISSING": "There is no published active policy bundle.",
+          "POLICY_INVALID": "The policy bundle does not pass the required rule validation.",
+          "MCP_CHECK_REQUIRED": "A selected MCP server has not passed a recent connection test.",
+          "KNOWLEDGE_CHECK_REQUIRED": "A selected knowledge source has not passed a recent connection test.",
+          "NOTIFICATION_CHECK_REQUIRED": "A selected notification destination has not passed a recent test.",
+          "REQUIRED_STEPS_INCOMPLETE": "One or more required setup stages are still incomplete.",
+          "BLOCKING_FAILURE": "A required readiness check is still failing."
+        },
+        "actions": {
+          "environment": {
+            "default": "Open Operations Health, click Refresh, and confirm that the database and Control Plane show Healthy. Return here and click Check again."
+          },
+          "runtime": {
+            "default": "Open ACP settings and click Test connection. If it fails, correct the Hermes URL or credentials, click Save, and test again.",
+            "REQUIRED_MISSING": "Open ACP settings, enable ACP, enter the Hermes base URL, click Save, and then click Test connection.",
+            "NOT_APPLIED": "Have an operator apply the saved values to the service environment and restart it through the approved procedure. Then open ACP settings, click Test connection, and return here to Check again. The console will not restart services."
+          },
+          "ingress": {
+            "default": "Open Connections, open the configured Mattermost or Slack connection, and click Test connection. Correct the settings and Save before testing again if needed.",
+            "REQUIRED_MISSING": "Open Connections, choose Mattermost or Slack, enter the required URL and credentials, click Save, and then click Test connection.",
+            "NOT_APPLIED": "Have an operator apply the saved connection values and restart the affected service through the approved procedure. Then open that connection and click Test connection. The console will not restart services."
+          },
+          "policy": {
+            "default": "Sign in as an L5 administrator. On Policy, open Draft, correct the rules, click Validate, Save Draft (L5), Approve (L5), and Publish (L5).",
+            "L5_ADMIN_MISSING": "Ask an existing L5 administrator to sign in or create an L5 administrator under Management > Users. Policy approval and publishing require L5.",
+            "ACTIVE_POLICY_MISSING": "As an L5 administrator, open Policy > Draft, save and Validate the draft, click Approve (L5), then Publish (L5) and complete the confirmation. OAOS will not publish a policy automatically.",
+            "POLICY_INVALID": "As an L5 administrator, open Policy > Draft, fix every validation error, click Validate, Save Draft (L5), Approve (L5), and Publish (L5)."
+          },
+          "mcp": {
+            "default": "Open MCP settings, select the server, complete its command or URL settings, Save, and click Test connection."
+          },
+          "knowledge": {
+            "default": "Open Knowledge Operations to identify the configured connector. For Notion, open Connections > Notion; for Outline, open Knowledge > Outline. Click Test connection for that source, then return here and click Check again."
+          },
+          "notifications": {
+            "default": "Open Connections, open the configured Slack or SMTP destination, click Save, and then click Test connection."
+          },
+          "verify": {
+            "default": "Open each earlier stage marked Needs attention, complete its listed action, and then return to Final verification and click Check again."
+          }
+        }
       },
       "steps": {
         "environment": {

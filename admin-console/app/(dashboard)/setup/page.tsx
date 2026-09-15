@@ -184,12 +184,28 @@ function StepCheckResult({ step, actionHref }: { step: SetupProgressStep; action
       {step.blocking_checks.length > 0 ? (
         <ul className="space-y-3" aria-label={t("admin.setup.check.blockingIssues")}>
           {step.blocking_checks.map((check) => {
-            const translated = t(check.message_key);
-            return <li key={check.correlation_id} className="rounded-md border border-status-danger bg-status-danger-surface p-4 text-status-danger-text"><p className="font-mono text-sm font-semibold">{check.code}</p><p className="mt-1 text-sm">{translated === check.message_key ? check.summary : translated}</p>{check.next_action ? <Link href={check.next_action.href} className="mt-3 inline-flex items-center gap-1 text-sm font-medium underline">{t(check.next_action.label_key)}<ExternalLink aria-hidden="true" className="h-3.5 w-3.5" /></Link> : null}</li>;
+            const problemKey = `admin.setup.guidance.problems.${check.code}`;
+            const translatedProblem = t(problemKey);
+            const legacyMessage = t(check.message_key);
+            const problem = translatedProblem !== problemKey
+              ? translatedProblem
+              : legacyMessage !== check.message_key ? legacyMessage : check.summary ?? check.code;
+            const specificActionKey = `admin.setup.guidance.actions.${step.id}.${check.code}`;
+            const defaultActionKey = `admin.setup.guidance.actions.${step.id}.default`;
+            const specificAction = t(specificActionKey);
+            const action = specificAction !== specificActionKey ? specificAction : t(defaultActionKey);
+            return (
+              <li key={`${step.id}-${check.code}`} className="rounded-md border border-status-danger bg-status-danger-surface p-4 text-status-danger-text">
+                <p className="font-semibold">{problem}</p>
+                <p className="mt-2 text-sm"><span className="font-semibold">{t("admin.setup.guidance.whatToDo")}</span> {action}</p>
+                <p className="mt-2 font-mono text-xs opacity-80">{t("admin.setup.guidance.codeLabel")}: {check.code}</p>
+                <Link href={actionHref} className="mt-3 inline-flex items-center gap-1 text-sm font-medium underline">{t("admin.setup.guidance.openAction")}<ExternalLink aria-hidden="true" className="h-3.5 w-3.5" /></Link>
+              </li>
+            );
           })}
         </ul>
       ) : null}
-      <Link href={actionHref} className="inline-flex items-center gap-1 text-sm font-medium text-primary underline">{t("admin.setup.check.openSettings")}<ExternalLink aria-hidden="true" className="h-3.5 w-3.5" /></Link>
+      {step.blocking_checks.length === 0 ? <Link href={actionHref} className="inline-flex items-center gap-1 text-sm font-medium text-primary underline">{t("admin.setup.check.openSettings")}<ExternalLink aria-hidden="true" className="h-3.5 w-3.5" /></Link> : null}
     </div>
   );
 }

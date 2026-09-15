@@ -1,9 +1,8 @@
 """Admin onboarding progress, readiness, discovery, and test contracts.
 
-Readiness is computed from existing domain configuration and health observations;
-it is never persisted as another source of truth.  The only local caches are
-short-lived discovery references required by the API contract and recent,
-redacted test observations produced by this router.
+Readiness is computed from existing domain configuration and persisted, redacted
+health observations. The in-memory observation cache is only a fallback when no
+admin database is configured.
 """
 from __future__ import annotations
 
@@ -140,6 +139,20 @@ def _target_display(target: str | None) -> str | None:
 
 
 def _redacted_observation(connection_id: str) -> dict[str, Any] | None:
+    infra = None
+    db_enabled = False
+    try:
+        infra = _domain("infra")
+        db_enabled = infra.readiness_observation_backend_enabled()
+    except Exception as exc:  # noqa: BLE001 - in-memory mode can load without infra
+        logger.debug("readiness observation backend detection failed: %s", type(exc).__name__)
+    if db_enabled:
+        try:
+            observation = infra.load_readiness_observation(connection_id)
+            return dict(observation) if observation else None
+        except Exception as exc:  # noqa: BLE001 - DB remains authoritative when configured
+            logger.warning("readiness observation load failed: %s", type(exc).__name__)
+            return None
     with _cache_lock:
         item = _recent_tests.get(connection_id)
         if not item:
@@ -152,7 +165,27 @@ def _redacted_observation(connection_id: str) -> dict[str, Any] | None:
 
 
 def _record_observation(connection_id: str, observation: dict[str, Any]) -> None:
-    """Cache a bounded, redacted observation; never an authoritative state."""
+    """Persist a redacted observation, with a bounded in-memory no-DB fallback."""
+    stored = dict(observation)
+    previous = _redacted_observation(connection_id)
+    if stored.get("ok") is True and stored.get("code") == "OK":
+        stored["last_success_at"] = stored.get("checked_at")
+    elif previous and previous.get("last_success_at"):
+        stored["last_success_at"] = previous["last_success_at"]
+    infra = None
+    db_enabled = False
+    try:
+        infra = _domain("infra")
+        db_enabled = infra.readiness_observation_backend_enabled()
+    except Exception as exc:  # noqa: BLE001 - in-memory mode can load without infra
+        logger.debug("readiness observation backend detection failed: %s", type(exc).__name__)
+    if db_enabled:
+        try:
+            infra.persist_readiness_observation(connection_id, stored)
+            return
+        except Exception as exc:  # noqa: BLE001 - never replace DB state with memory
+            logger.warning("readiness observation persistence failed: %s", type(exc).__name__)
+            return
     now = time.monotonic()
     with _cache_lock:
         expired = [key for key, (expires, _) in _recent_tests.items() if expires <= now]
@@ -161,7 +194,7 @@ def _record_observation(connection_id: str, observation: dict[str, Any]) -> None
         if len(_recent_tests) >= 256:
             oldest = min(_recent_tests, key=lambda key: _recent_tests[key][0])
             _recent_tests.pop(oldest, None)
-        _recent_tests[connection_id] = (now + _ttl_seconds(), dict(observation))
+        _recent_tests[connection_id] = (now + _ttl_seconds(), stored)
 
 
 def _classify(
@@ -178,9 +211,14 @@ def _classify(
         return "warning", "NOT_APPLIED"
     if not observation:
         return "warning", "CHECK_REQUIRED"
-    if not _fresh(observation.get("checked_at"), now):
-        return "warning", "CHECK_EXPIRED"
     code = str(observation.get("code") or "UNKNOWN")
+    freshness_at = (
+        observation.get("last_success_at") or observation.get("checked_at")
+        if observation.get("ok") is True and code == "OK"
+        else observation.get("checked_at")
+    )
+    if not _fresh(freshness_at, now):
+        return "warning", "CHECK_EXPIRED"
     if observation.get("ok") is True and code == "OK":
         return "healthy", "OK"
     if observation.get("status") == "warning" or code == "NOT_APPLIED":
@@ -300,7 +338,11 @@ def _control_plane_observation(now: datetime) -> tuple[bool, dict[str, Any] | No
                 "ok": ok,
                 "status": normalized_status,
                 "code": code,
-                "checked_at": str(checked) if checked else datetime.fromtimestamp(0, UTC).isoformat(),
+                "checked_at": (
+                    checked.isoformat() if isinstance(checked, datetime)
+                    else str(checked) if checked
+                    else datetime.fromtimestamp(0, UTC).isoformat()
+                ),
                 "target_display": f"{host}:{port}" if host and port else "control-plane",
                 "latency_ms": getattr(row, "latency_ms", None) or (row.get("latency_ms") if isinstance(row, dict) else None),
             }

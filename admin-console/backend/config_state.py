@@ -38,13 +38,10 @@ def apply_state_fields(
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     """Build the §5 common fields without changing legacy response fields."""
-    applied = source == "env"
     config_revision = public_revision(namespace, config)
-    effective_revision = (
-        config_revision
-        if applied
-        else public_revision(namespace, effective_config or {})
-    )
+    effective = config if source == "env" and effective_config is None else (effective_config or {})
+    effective_revision = public_revision(namespace, effective)
+    applied = config_revision == effective_revision
     timestamp = updated_at or utc_now_iso()
     return {
         "persisted": source in {"db", "env", "in-memory"} if persisted is None else persisted,
