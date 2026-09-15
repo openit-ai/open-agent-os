@@ -1,12 +1,14 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ConfirmDialog, DataTable, useTableQuery, useToast } from "@/components/admin";
+import { applyClientListQuery } from "@/lib/admin-api/list-query";
+import { normalizeAdminError } from "@/lib/admin-api/client";
 import { getToken, listRuntimeSnapshots, getRuntimeSnapshot, createRuntimeSnapshot, publishRuntimeSnapshot, rollbackRuntimeSnapshot, getRuntimeStatus, getRuntimeAppliedStatus, getRuntimeConfig, type RuntimeConfigSnapshot, type RuntimeStatusResponse, type RuntimeAppliedStatusResponse } from "@/lib/api";
 import { RefreshCw, UploadCloud, History, ShieldCheck, AlertTriangle, FileText, CheckCircle2, RotateCcw, Plus, Eye } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
@@ -37,6 +39,8 @@ function langLocale(): string {
 export function RuntimeConfigFeature() {
   const router = useRouter();
   const { t } = useI18n();
+  const table = useTableQuery();
+  const { toast } = useToast();
   const [tenant, setTenant] = useState("default");
   const [snapshots, setSnapshots] = useState<RuntimeConfigSnapshot[]>([]);
   const [total, setTotal] = useState(0);
@@ -59,6 +63,7 @@ export function RuntimeConfigFeature() {
   const [creating, setCreating] = useState(false);
   const [publishing, setPublishing] = useState<number | null>(null);
   const [rollingBack, setRollingBack] = useState<number | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ kind: "publish" | "rollback"; version: number } | null>(null);
 
   const fetchAll = useCallback(async () => {
     setError(null);
@@ -81,6 +86,7 @@ export function RuntimeConfigFeature() {
         }
       } else {
         setError(snapRes.reason instanceof Error ? snapRes.reason.message : t("runtimeConfig.fetchFailed"));
+        toast({ title: t("admin.lists.backgroundError"), description: snapRes.reason instanceof Error ? snapRes.reason.message : undefined, variant: "error" });
       }
       if (st.status === "fulfilled") setStatus(st.value as RuntimeStatusResponse);
       else setStatus(null);
@@ -99,7 +105,7 @@ export function RuntimeConfigFeature() {
     } finally {
       setLoading(false);
     }
-  }, [tenant, t, selectedVersion]);
+  }, [tenant, t, selectedVersion, toast]);
 
   useEffect(() => {
     if (!getToken()) {
@@ -163,7 +169,6 @@ export function RuntimeConfigFeature() {
   }
 
   async function handlePublish(version: number) {
-    if (!confirm(t("runtimeConfig.confirmPublish", { version: String(version) }))) return;
     setActionMsg(null);
     setActionErr(null);
     setPublishing(version);
@@ -172,16 +177,18 @@ export function RuntimeConfigFeature() {
       if (tenant && tenant.trim()) payload.tenant_id = tenant.trim();
       const res = await publishRuntimeSnapshot(payload);
       setActionMsg(t("runtimeConfig.publishSuccess", { version: String(res.published_version ?? version) }));
+      toast({ title: t("runtimeConfig.publishSuccess", { version: String(res.published_version ?? version) }), variant: "success" });
       await fetchAll();
     } catch (e) {
       setActionErr(e instanceof Error ? e.message : t("runtimeConfig.publishFailed"));
+      toast({ title: t("runtimeConfig.publishFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" });
+      throw e;
     } finally {
       setPublishing(null);
     }
   }
 
   async function handleRollback(version: number) {
-    if (!confirm(t("runtimeConfig.confirmRollback", { version: String(version) }))) return;
     setActionMsg(null);
     setActionErr(null);
     setRollingBack(version);
@@ -190,15 +197,25 @@ export function RuntimeConfigFeature() {
       if (tenant && tenant.trim()) payload.tenant_id = tenant.trim();
       const res = await rollbackRuntimeSnapshot(payload);
       setActionMsg(t("runtimeConfig.rollbackSuccess", { version: String(res.published_version ?? version) }));
+      toast({ title: t("runtimeConfig.rollbackSuccess", { version: String(res.published_version ?? version) }), variant: "success" });
       await fetchAll();
     } catch (e) {
       setActionErr(e instanceof Error ? e.message : t("runtimeConfig.rollbackFailed"));
+      toast({ title: t("runtimeConfig.rollbackFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" });
+      throw e;
     } finally {
       setRollingBack(null);
     }
   }
 
   const failClosedBanner = isFailClosed(error) || isFailClosed(actionErr) || isFailClosed(detailError);
+  // Runtime snapshot listing has no additive list parameters yet, so the compatibility adapter handles search/sort/page client-side.
+  const visibleSnapshots = useMemo(() => applyClientListQuery(
+    snapshots,
+    table.query,
+    [(row) => row.version, (row) => row.created_by, (row) => row.note, (row) => row.config_hash],
+    { version: (row) => row.version, created: (row) => row.created_at, actor: (row) => row.created_by, status: (row) => row.published },
+  ), [snapshots, table.query]);
 
   return (
     <div className="space-y-4">
@@ -311,51 +328,32 @@ export function RuntimeConfigFeature() {
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-3">
           <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><History className="h-4 w-4" /> {t("runtimeConfig.snapshotsTitle")}</CardTitle><CardDescription>{t("runtimeConfig.snapshotsDesc", { count: String(total) })}</CardDescription></CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("runtimeConfig.versionCol")}</TableHead>
-                    <TableHead>{t("runtimeConfig.hashCol")}</TableHead>
-                    <TableHead>{t("runtimeConfig.sigCol")}</TableHead>
-                    <TableHead>{t("runtimeConfig.createdByCol")}</TableHead>
-                    <TableHead>{t("runtimeConfig.createdAtCol")}</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">{t("common.actions")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading ? (
-                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">{t("runtimeConfig.loading")}</TableCell></TableRow>
-                  ) : snapshots.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">{t("runtimeConfig.noSnapshots")}</TableCell></TableRow>
-                  ) : snapshots.map((s) => (
-                    <TableRow key={`${s.tenant_id}:${s.version}`} className={selectedVersion === s.version ? "bg-accent/50" : "cursor-pointer hover:bg-accent/30"} onClick={() => setSelectedVersion(s.version)}>
-                      <TableCell className="font-mono font-medium">v{s.version}{s.parent_version != null ? <span className="ml-1 text-[11px] text-muted-foreground">←{s.parent_version}</span> : null}</TableCell>
-                      <TableCell className="font-mono text-xs" title={s.config_hash}>{hashPrefix(s.config_hash)}</TableCell>
-                      <TableCell className="font-mono text-xs" title={s.signature}>{sigPrefix(s.signature)}</TableCell>
-                      <TableCell className="text-xs truncate max-w-[120px]" title={s.created_by}>{s.created_by}</TableCell>
-                      <TableCell className="text-xs" title={s.created_at}>{s.created_at ? new Date(s.created_at).toLocaleString(langLocale()) : "-"}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {s.published ? <Badge variant="success">{t("runtimeConfig.publishedBadge")}</Badge> : <Badge variant="secondary">{t("runtimeConfig.draftBadge")}</Badge>}
-                          {s.rollback_from != null && <Badge variant="warning">{t("runtimeConfig.rollbackFrom")} {s.rollback_from}</Badge>}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                          <Button variant="outline" size="sm" onClick={() => setSelectedVersion(s.version)}><Eye className="h-3 w-3" /> Detail</Button>
-                          <Button variant="default" size="sm" disabled={!!publishing || !!rollingBack} onClick={() => handlePublish(s.version)}>{publishing === s.version ? t("runtimeConfig.publishing") : t("runtimeConfig.publish")}</Button>
-                          <Button variant="secondary" size="sm" disabled={!!publishing || !!rollingBack} onClick={() => handleRollback(s.version)}>{rollingBack === s.version ? t("runtimeConfig.rollingBack") : t("runtimeConfig.rollback")}</Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-            <p className="px-4 py-2 text-xs text-muted-foreground">{t("common.mobileScrollNote")}</p>
+          <CardContent>
+            <DataTable
+              rows={visibleSnapshots.rows}
+              columns={[
+                { id: "version", header: t("runtimeConfig.versionCol"), cell: (row) => `v${row.version}`, sortable: true },
+                { id: "hash", header: t("runtimeConfig.hashCol"), cell: (row) => <span className="font-mono text-xs" title={row.config_hash}>{hashPrefix(row.config_hash)}</span> },
+                { id: "actor", header: t("runtimeConfig.createdByCol"), accessor: (row) => row.created_by, sortable: true },
+                { id: "created", header: t("runtimeConfig.createdAtCol"), cell: (row) => row.created_at ? new Date(row.created_at).toLocaleString(langLocale()) : "—", sortable: true },
+                { id: "status", header: "Status", cell: (row) => row.published ? <Badge variant="success">{t("runtimeConfig.publishedBadge")}</Badge> : <Badge variant="secondary">{t("runtimeConfig.draftBadge")}</Badge>, sortable: true },
+              ]}
+              rowKey={(row) => `${row.tenant_id}:${row.version}`}
+              loading={loading}
+              error={error ? normalizeAdminError(new Error(error)) : undefined}
+              onRetry={fetchAll}
+              query={table.query}
+              onQueryChange={table.onQueryChange}
+              totalRows={visibleSnapshots.totalRows}
+              searchable
+              rowActions={(row) => [
+                { id: "detail", label: "Detail", icon: Eye, onSelect: () => setSelectedVersion(row.version) },
+                { id: "publish", label: t("runtimeConfig.publish"), disabled: Boolean(publishing || rollingBack), onSelect: () => setConfirmAction({ kind: "publish", version: row.version }) },
+                { id: "rollback", label: t("runtimeConfig.rollback"), tone: "danger", disabled: Boolean(publishing || rollingBack), onSelect: () => setConfirmAction({ kind: "rollback", version: row.version }) },
+              ]}
+              empty={{ title: t("runtimeConfig.noSnapshots"), description: t("runtimeConfig.snapshotsTitle"), filtered: Boolean(table.query.search) }}
+              ariaLabel={t("runtimeConfig.snapshotsTitle")}
+            />
           </CardContent>
         </Card>
 
@@ -396,14 +394,29 @@ export function RuntimeConfigFeature() {
                   </details>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => handlePublish(detail.version)} disabled={!!publishing || !!rollingBack}><UploadCloud className="mr-1 h-4 w-4" />{publishing === detail.version ? t("runtimeConfig.publishing") : t("runtimeConfig.publish")}</Button>
-                  <Button size="sm" variant="secondary" onClick={() => handleRollback(detail.version)} disabled={!!publishing || !!rollingBack}><RotateCcw className="mr-1 h-4 w-4" />{rollingBack === detail.version ? t("runtimeConfig.rollingBack") : t("runtimeConfig.rollback")}</Button>
+                  <Button size="sm" onClick={() => setConfirmAction({ kind: "publish", version: detail.version })} disabled={!!publishing || !!rollingBack}><UploadCloud className="mr-1 h-4 w-4" />{publishing === detail.version ? t("runtimeConfig.publishing") : t("runtimeConfig.publish")}</Button>
+                  <Button size="sm" variant="secondary" onClick={() => setConfirmAction({ kind: "rollback", version: detail.version })} disabled={!!publishing || !!rollingBack}><RotateCcw className="mr-1 h-4 w-4" />{rollingBack === detail.version ? t("runtimeConfig.rollingBack") : t("runtimeConfig.rollback")}</Button>
                 </div>
               </div>
             ) : <p className="text-sm text-muted-foreground">{t("runtimeConfig.detailEmpty")}</p>}
           </CardContent>
         </Card>
       </div>
+      <ConfirmDialog
+        open={Boolean(confirmAction)}
+        title={confirmAction?.kind === "publish" ? t("runtimeConfig.publish") : t("runtimeConfig.rollback")}
+        description={confirmAction?.kind === "publish"
+          ? t("runtimeConfig.confirmPublish", { version: String(confirmAction?.version ?? "") })
+          : t("runtimeConfig.confirmRollback", { version: String(confirmAction?.version ?? "") })}
+        targetLabel={confirmAction ? `v${confirmAction.version}` : undefined}
+        consequence={t("admin.lists.highRiskConsequence")}
+        confirmLabel={confirmAction?.kind === "publish" ? t("runtimeConfig.publish") : t("runtimeConfig.rollback")}
+        tone="danger"
+        requireText={confirmAction ? String(confirmAction.version) : undefined}
+        pending={Boolean(publishing || rollingBack)}
+        onOpenChange={(open) => { if (!open) setConfirmAction(null); }}
+        onConfirm={() => confirmAction?.kind === "publish" ? handlePublish(confirmAction.version) : confirmAction ? handleRollback(confirmAction.version) : undefined}
+      />
       <p className="text-xs text-muted-foreground">{t("runtimeConfig.secretNote")} · {t("runtimeConfig.productionFailClosed")}</p>
     </div>
   );

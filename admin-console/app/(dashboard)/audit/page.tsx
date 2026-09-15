@@ -1,208 +1,126 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+
+import { useEffect, useMemo, Suspense } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { RefreshCw, ScrollText, ShieldCheck } from "lucide-react";
+import { useBackgroundQueryToast, useTableQuery, useToast, useUrlFilter, DataTable, ErrorState, FormField, Skeleton } from "@/components/admin";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { getToken, getAuditEvents, verifyAuditChain, getAuditCheckpoint, type AuditEventItem, type AuditVerifyResponse, type AuditCheckpoint } from "@/lib/api";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { applyClientListQuery } from "@/lib/admin-api/list-query";
+import { normalizeAdminError } from "@/lib/admin-api/client";
+import { adminKeys } from "@/lib/admin-api/keys";
+import { getAuditCheckpoint, getAuditEvents, getToken, verifyAuditChain } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { ScrollText, ShieldCheck, ShieldAlert, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 
-function eventBadgeVariant(t: string) {
-  const u = t.toUpperCase();
-  if (u.includes("APPROVAL")) return "warning" as const;
-  if (u.includes("POLICY")) return "secondary" as const;
-  if (u.includes("DELEGATION")) return "default" as const;
-  if (u.includes("CAPABILITY")) return "success" as const;
-  if (u.includes("DATA") || u.includes("TOOL")) return "outline" as const;
-  return "secondary" as const;
+function formatTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-function formatTime(iso: string) {
-  try {
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
-    const locale = typeof window !== "undefined" && localStorage.getItem("oaos_lang") === "ko" ? "ko-KR" : "en-US";
-    return d.toLocaleString(locale, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  } catch { return iso; }
-}
-
-export default function AuditPage() {
+function AuditPageContent() {
   const router = useRouter();
   const { t } = useI18n();
-  const [events, setEvents] = useState<AuditEventItem[]>([]);
-  const [head, setHead] = useState<string | null>(null);
-  const [count, setCount] = useState(0);
-  const [verify, setVerify] = useState<AuditVerifyResponse | null>(null);
-  const [checkpoint, setCheckpoint] = useState<AuditCheckpoint | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [verifying, setVerifying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const table = useTableQuery();
+  const [from, setFrom] = useUrlFilter("from");
+  const [to, setTo] = useUrlFilter("to");
 
-  const fetchAll = useCallback(async () => {
-    setError(null);
-    try {
-      const [evRes, cpRes] = await Promise.allSettled([getAuditEvents(), getAuditCheckpoint()]);
-      if (evRes.status === "fulfilled") {
-        setEvents(evRes.value.events ?? []);
-        setHead(evRes.value.head ?? null);
-        setCount(evRes.value.count ?? evRes.value.events?.length ?? 0);
-      }
-      if (cpRes.status === "fulfilled") {
-        setCheckpoint(cpRes.value);
-      }
-      // also try verify silently
-      try {
-        const v = await verifyAuditChain();
-        setVerify(v);
-        if (v.checkpoint) setCheckpoint(v.checkpoint);
-        if (v.head) setHead(v.head);
-        if (typeof v.event_count === "number") setCount(v.event_count);
-      } catch { /* ignore */ }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("common.fetchFailed"));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  useEffect(() => { if (!getToken()) router.replace("/login"); }, [router]);
 
-  useEffect(() => {
-    if (!getToken()) { router.replace("/login"); return; }
-    fetchAll();
-  }, [fetchAll, router]);
+  const audit = useQuery({
+    queryKey: adminKeys.list("audit", table.query),
+    queryFn: async () => {
+      const [events, checkpoint, verification] = await Promise.all([
+        getAuditEvents(),
+        getAuditCheckpoint().catch(() => null),
+        verifyAuditChain().catch(() => null),
+      ]);
+      return { events, checkpoint, verification };
+    },
+  });
+  const sourceRows = audit.data?.events.events ?? [];
+  useBackgroundQueryToast(audit.error, sourceRows.length > 0, t("admin.lists.backgroundError"));
 
-  async function handleVerify() {
-    setVerifying(true);
-    setMsg(null);
-    try {
-      const v = await verifyAuditChain();
-      setVerify(v);
-      setMsg(`chain_valid=${String(v.chain_valid)} · checkpoint_valid=${String(v.checkpoint_valid ?? "n/a")}`);
-      if (v.checkpoint) setCheckpoint(v.checkpoint);
-      if (v.head) setHead(v.head);
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : t("common.verifyFailed"));
-    } finally {
-      setVerifying(false);
-    }
-  }
+  const verify = useMutation({
+    mutationFn: verifyAuditChain,
+    onSuccess: async (result) => {
+      toast({ title: result.chain_valid ? t("admin.audit.integrityValid") : t("admin.audit.integrityInvalid"), variant: result.chain_valid ? "success" : "error" });
+      await queryClient.invalidateQueries({ queryKey: adminKeys.lists("audit") });
+    },
+    onError: (error) => toast({ title: t("common.verifyFailed"), description: error instanceof Error ? error.message : undefined, variant: "error" }),
+  });
 
-  const sorted = [...events].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const datedRows = useMemo(() => sourceRows.filter((row) => {
+    const timestamp = new Date(row.timestamp).getTime();
+    if (from && timestamp < new Date(from + "T00:00:00").getTime()) return false;
+    if (to && timestamp > new Date(to + "T23:59:59.999").getTime()) return false;
+    return true;
+  }), [from, sourceRows, to]);
+  // Audit events currently arrive as one compatible response; client filtering/paging is used until additive server parameters exist.
+  const visible = useMemo(() => applyClientListQuery(
+    datedRows,
+    table.query.sort ? table.query : { ...table.query, sort: { id: "timestamp", direction: "desc" } },
+    [(row) => row.event_type, (row) => row.user_id, (row) => row.agent_id, (row) => row.action, (row) => row.resource],
+    { timestamp: (row) => row.timestamp, actor: (row) => row.user_id ?? row.agent_id ?? "", event: (row) => row.event_type },
+  ), [datedRows, table.query]);
+  const integrityFailed = audit.data?.verification && !audit.data.verification.chain_valid;
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold"><ScrollText className="h-6 w-6" /> Audit</h1>
-          <p className="text-sm text-muted-foreground">{t("audit.subtitle")}</p>
-        </div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h1 className="flex items-center gap-2 text-2xl font-semibold"><ScrollText aria-hidden="true" className="h-6 w-6" />Audit</h1><p className="text-sm text-muted-foreground">{t("audit.subtitle")}</p></div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchAll(); }} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> {t("common.refresh")}
-          </Button>
-          <Button size="sm" onClick={handleVerify} disabled={verifying}>
-            <ShieldCheck className="h-4 w-4" /> {verifying ? t("common.verifying") : t("common.verify")}
-          </Button>
+          <Button variant="outline" size="sm" disabled={audit.isFetching} onClick={() => audit.refetch()}><RefreshCw aria-hidden="true" className="h-4 w-4" />{t("common.refresh")}</Button>
+          <Button size="sm" disabled={verify.isPending} onClick={() => verify.mutate()}><ShieldCheck aria-hidden="true" className="h-4 w-4" />{t("common.verify")}</Button>
         </div>
       </div>
-
-      {error && <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">{error}</div>}
-      {msg && <div className="rounded-md border bg-card px-3 py-2 text-sm" role="status">{msg}</div>}
-
-      {/* 검증 배지 / 카운트 / checkpoint 요약 */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">{t("audit.eventCount")}</CardTitle></CardHeader>
-          <CardContent><div className="text-2xl font-bold">{loading ? "-" : count}</div><CardDescription>{t("audit.chainLengthDesc")}</CardDescription></CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">{t("audit.chainIntegrity")}</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
-            {verify ? (
-              <div className="flex items-center gap-2">
-                {verify.chain_valid ? <CheckCircle2 className="h-5 w-5 text-[#22C55E]" /> : <XCircle className="h-5 w-5 text-[#DC2626]" />}
-                <Badge variant={verify.chain_valid ? "success" : "danger"}>{verify.chain_valid ? "chain_valid" : "tampered"}</Badge>
-              </div>
-            ) : <span className="text-sm text-muted-foreground">{t("audit.verifyToCheck")}</span>}
-            {verify?.checkpoint_valid !== undefined && (
-              <div className="flex items-center gap-2">
-                {verify.checkpoint_valid ? <CheckCircle2 className="h-4 w-4 text-[#22C55E]" /> : <XCircle className="h-4 w-4 text-[#DC2626]" />}
-                <Badge variant={verify.checkpoint_valid ? "success" : "danger"}>checkpoint_{verify.checkpoint_valid ? "valid" : "invalid"}</Badge>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">Checkpoint</CardTitle></CardHeader>
-          <CardContent className="space-y-1 text-xs">
-            {checkpoint ? (
-              <>
-                <div className="flex justify-between gap-2"><span className="text-muted-foreground">head hash</span><span className="truncate font-mono" title={checkpoint.chain_head_hash}>{checkpoint.chain_head_hash.slice(0, 16)}...{checkpoint.chain_head_hash.slice(-6)}</span></div>
-                <div className="flex justify-between gap-2"><span className="text-muted-foreground">event_count</span><span className="font-mono">{checkpoint.event_count}</span></div>
-                <div className="flex justify-between gap-2"><span className="text-muted-foreground">created</span><span className="font-mono text-[11px]">{formatTime(checkpoint.created_at)}</span></div>
-                <div className="pt-1"><span className="text-muted-foreground">signature</span><div className="mt-1 break-all rounded bg-muted p-2 font-mono text-[10px] leading-relaxed">{checkpoint.signature}</div></div>
-              </>
-            ) : (
-              <span className="text-muted-foreground">{t("audit.noCheckpoint")}</span>
-            )}
-            {head && (
-              <div className="pt-2 border-t mt-2"><span className="text-muted-foreground">current head</span><div className="mt-1 break-all font-mono text-[10px]">{head}</div></div>
-            )}
-          </CardContent>
-        </Card>
+      {integrityFailed ? <ErrorState title={t("admin.audit.integrityInvalid")} description={t("admin.audit.integrityInvalidDescription")} code="AUDIT_INTEGRITY_FAILED" retry={() => verify.mutate()} /> : null}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FormField id="audit-from" label={t("admin.lists.fromDate")}><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="flex h-9 w-full rounded-md border bg-background px-3 text-sm" /></FormField>
+        <FormField id="audit-to" label={t("admin.lists.toDate")}><input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="flex h-9 w-full rounded-md border bg-background px-3 text-sm" /></FormField>
       </div>
-
-      {/* 타임라인 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("audit.timelineTitle")}</CardTitle>
-          <CardDescription>{t("audit.timelineDesc", { count: String(sorted.length) })}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">{t("common.loading")}</div>
-          ) : sorted.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted"><ScrollText className="h-6 w-6 text-muted-foreground" /></div>
-              <p className="text-sm font-medium">{t("audit.noEvents")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t("audit.noEventsDesc")}</p>
-            </div>
-          ) : (
-            <div className="relative">
-              {/* vertical line */}
-              <div className="absolute left-2 top-2 bottom-2 w-px bg-border hidden sm:block" />
-              <ul className="space-y-3">
-                {sorted.map((ev) => (
-                  <li key={ev.event_id} className="relative flex gap-3 rounded-lg border p-3 sm:ml-4">
-                    <span className="absolute -left-[1.35rem] top-4 hidden h-2.5 w-2.5 rounded-full border-2 border-primary bg-background sm:block" />
-                    <div className="flex-1 space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={eventBadgeVariant(ev.event_type)}>{ev.event_type}</Badge>
-                        <span className="text-xs text-muted-foreground">{formatTime(ev.timestamp)}</span>
-                        <span className="font-mono text-[11px] text-muted-foreground">{ev.event_id}</span>
-                        {ev.decision && <Badge variant="outline">{ev.decision}</Badge>}
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-                        <div><span className="text-muted-foreground">user</span><div className="truncate font-medium">{ev.user_id ?? "-"}</div></div>
-                        <div><span className="text-muted-foreground">agent</span><div className="truncate font-medium">{ev.agent_id ?? "-"}</div></div>
-                        <div><span className="text-muted-foreground">resource</span><div className="truncate font-mono text-[11px]" title={ev.resource ?? ""}>{ev.resource ?? "-"}</div></div>
-                        <div><span className="text-muted-foreground">action</span><div className="truncate">{ev.action ?? "-"}</div></div>
-                      </div>
-                      {(ev.event_hash || ev.previous_hash) && (
-                        <div className="flex flex-col gap-1 rounded bg-muted/50 p-2 font-mono text-[10px] leading-relaxed">
-                          {ev.event_hash && <div className="flex gap-1"><span className="shrink-0 text-muted-foreground">hash</span><span className="break-all">{ev.event_hash}</span></div>}
-                          {ev.previous_hash && <div className="flex gap-1"><span className="shrink-0 text-muted-foreground">prev </span><span className="break-all">{ev.previous_hash}</span></div>}
-                        </div>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">{t("audit.eventCount")}</CardTitle></CardHeader><CardContent className="text-2xl font-semibold">{audit.data?.events.count ?? sourceRows.length}</CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">{t("audit.chainIntegrity")}</CardTitle></CardHeader><CardContent><Badge variant={audit.data?.verification?.chain_valid ? "success" : "secondary"}>{audit.data?.verification?.chain_valid ? "valid" : "unknown"}</Badge></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Checkpoint</CardTitle></CardHeader><CardContent className="truncate font-mono text-xs">{audit.data?.checkpoint?.chain_head_hash ?? "—"}</CardContent></Card>
+      </div>
+      <DataTable
+        rows={visible.rows}
+        columns={[
+          { id: "timestamp", header: t("llmUsage.colTime"), cell: (row) => formatTime(row.timestamp), sortable: true },
+          { id: "event", header: "Event", accessor: (row) => row.event_type, sortable: true },
+          { id: "actor", header: "Actor", accessor: (row) => row.user_id ?? row.agent_id ?? "—", sortable: true },
+          { id: "action", header: "Action", accessor: (row) => row.action },
+          { id: "resource", header: "Resource", accessor: (row) => row.resource },
+          { id: "decision", header: "Decision", accessor: (row) => row.decision },
+        ]}
+        rowKey={(row) => row.event_id}
+        loading={audit.isLoading}
+        error={audit.error ? normalizeAdminError(audit.error) : undefined}
+        onRetry={() => audit.refetch()}
+        query={table.query}
+        onQueryChange={table.onQueryChange}
+        totalRows={visible.totalRows}
+        searchable
+        empty={{ title: t("audit.noEvents"), description: t("audit.noEventsDesc"), filtered: Boolean(table.query.search || from || to) }}
+        ariaLabel={t("audit.timelineTitle")}
+      />
     </div>
+  );
+}
+
+
+/**
+ * `useTableQuery`/`useUrlFilter` call `useSearchParams()`, which Next.js 15 requires
+ * to sit under a Suspense boundary during prerendering.
+ */
+export default function AuditPage() {
+  return (
+    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+      <AuditPageContent />
+    </Suspense>
   );
 }

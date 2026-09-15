@@ -1203,12 +1203,36 @@
       "resolving": "canonical 관리 화면으로 이동 중"
     },
     "providers": {
+      "credentialState": "자격증명 상태",
+      "secretConfigured": "secret reference 설정됨",
+      "secretMissing": "승인 또는 secret reference 필요",
+      "connectionTargetConfigured": "연결 대상 설정됨",
       "acpSummary": {
         "title": "ACP 실행 경로",
         "hermesActive": "Hermes가 활성 runtime입니다. ACP 구성은 독립 화면이 소유합니다.",
         "externalActive": "외부 모델 제공자가 활성 상태입니다. ACP는 별도 실행 경로로 유지됩니다.",
         "open": "ACP 실행 경로 보기"
       }
+    },
+    "lists": {
+      "backgroundError": "새로고침에 실패해 마지막 조회 결과를 표시합니다",
+      "riskFilter": "위험도 필터",
+      "fromDate": "시작일",
+      "toDate": "종료일",
+      "highRiskConsequence": "실제 런타임 구성에 영향을 주는 고위험 작업입니다.",
+      "savedAndApplied": "구성이 저장되고 즉시 적용되었습니다."
+    },
+    "audit": {
+      "integrityValid": "감사 체인 무결성을 확인했습니다",
+      "integrityInvalid": "감사 체인 무결성 검증 실패",
+      "integrityInvalidDescription": "감사 체인을 조사하기 전에는 이 이력을 신뢰하지 마세요."
+    },
+    "quota": {
+      "positiveInteger": "0보다 큰 정수를 입력하세요.",
+      "historyLink": "Quota 변경 이력 보기"
+    },
+    "usage": {
+      "chartAlternative": "요청 표에서 차트와 동일한 원자료를 확인할 수 있습니다"
     },
     "operations": {
       "health": {

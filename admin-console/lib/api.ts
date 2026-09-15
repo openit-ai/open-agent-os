@@ -773,6 +773,11 @@ export interface LLMUsageHistoryParams {
   tenant?: string;
   provider?: string;
   status?: string;
+  search?: string;
+  sort?: string;
+  direction?: "asc" | "desc";
+  from?: string;
+  to?: string;
 }
 
 // ---- LLM usage normalizers: bridge backend contract (tenant_id,total_requests,success_count,failed_count,total_tokens,avg_latency_ms,p95_latency_ms,daily_count,per_minute_count,created_at/tenant_id) -> frontend contract (daily_tokens,daily_quota,daily_usage_ratio,per_minute_tokens,success_rate,hourly_*,timestamp/tenant) ----
@@ -929,6 +934,11 @@ export async function getLLMUsageHistory(params: LLMUsageHistoryParams = {}): Pr
   if (params.tenant) qs.set("tenant", params.tenant);
   if (params.provider) qs.set("provider", params.provider);
   if (params.status) qs.set("status", params.status);
+  if (params.search) qs.set("search", params.search);
+  if (params.sort) qs.set("sort", params.sort);
+  if (params.direction) qs.set("direction", params.direction);
+  if (params.from) qs.set("from_at", params.from);
+  if (params.to) qs.set("to_at", params.to);
   const suffix = qs.toString() ? `?${qs}` : "";
   try {
     const raw = await apiFetch<unknown>(`/v1/llm/usage/history${suffix}`);
