@@ -1,14 +1,19 @@
 """Admin Console backend tests — auth, JWT, infra CRUD, health probe mock, RBAC."""
 from __future__ import annotations
 
+import importlib.util
 import sys
-import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from security.models.orm import AdminInfraServiceORM
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "admin-console" / "backend"
@@ -18,7 +23,6 @@ BACKEND = ROOT / "admin-console" / "backend"
 # `from auth import ...` / `from infra import ...` fallback (see backend/*.py).
 # Alias is cleaned up after import and via teardown; test_workstream_c now uses
 # importlib absolute path so it is immune to this temporary pollution.
-import importlib.util
 
 def _load_admin_module(name: str, filename: str, bare_alias: str | None = None):
     # Ensure backend dir is on sys.path during exec so `from auth import` resolves
@@ -355,6 +359,79 @@ def test_health_probe_audit_event():
     r2 = c.get("/v1/infra/audit/events", headers=h)
     assert r2.status_code == 200
     assert len(r2.json()["events"]) >= 1
+
+
+def test_connection_observation_persists_in_infra_registry_database(tmp_path, monkeypatch):
+    db_path = tmp_path / "readiness-observations.db"
+    database_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("OAOS_DATABASE_URL", database_url)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
+
+    engine = create_engine(database_url)
+    AdminInfraServiceORM.__table__.create(engine)
+    with Session(engine) as session:
+        session.add(AdminInfraServiceORM(
+            id="infra_admin_api", name="admin-api", display_name="Admin API",
+            host="127.0.0.1", port=8010, health_path="/health", expected_status=200,
+            status="unknown", latency_ms=None, last_check=None, extra=None,
+        ))
+        session.commit()
+
+    checked_at = "2026-09-15T12:00:00+00:00"
+    observation = {
+        "ok": True, "status": "healthy", "code": "OK", "checked_at": checked_at,
+        "latency_ms": 4.2, "target_display": "service.internal:443",
+    }
+    persisted_observation = {**observation, "last_success_at": checked_at}
+    readiness_mod = _app_mod._readiness_mod
+    readiness_mod._record_observation("mattermost", observation)
+    readiness_mod._recent_tests.clear()  # simulate an admin-api process restart
+
+    assert readiness_mod._redacted_observation("mattermost") == persisted_observation
+    with Session(engine) as session:
+        row = session.get(AdminInfraServiceORM, "infra_admin_api")
+        assert row is not None
+        assert row.extra["readiness_observations"]["mattermost"] == persisted_observation
+
+    if infra_mod._db_engine is not None:
+        infra_mod._db_engine.dispose()
+    infra_mod._db_engine = None
+    infra_mod._db_session_factory = None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_periodic_probe_refreshes_readiness_observation_within_ttl(monkeypatch):
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("OAOS_ADMIN_READINESS_TTL_SECONDS", "300")
+    readiness_mod = _app_mod._readiness_mod
+    readiness_mod._recent_tests.clear()
+    infra_mod.register_readiness_observation_sink(readiness_mod._record_observation)
+    checked_at = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+    service = infra_mod.InfraService(
+        id="infra_mattermost", name="mattermost", display_name="Mattermost",
+        host="mattermost.internal", port=8065,
+    )
+    infra_mod._services[service.id] = service
+
+    async def healthy_probe(candidate):
+        candidate.status = infra_mod.InfraStatus.healthy
+        candidate.last_check = checked_at
+        candidate.latency_ms = 3.0
+        return candidate
+
+    monkeypatch.setattr(infra_mod, "_probe_one", healthy_probe)
+    await infra_mod.probe_all_services()
+
+    observation = readiness_mod._redacted_observation("mattermost")
+    assert observation is not None
+    assert readiness_mod._classify(
+        required=True, configured=True, applied=True, observation=observation,
+        now=checked_at + timedelta(seconds=299),
+    ) == ("healthy", "OK")
 
 
 # ---------------------------------------------------------------------------

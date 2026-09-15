@@ -83,7 +83,8 @@ _ADMIN_DDL = [
         expected_status INTEGER NOT NULL DEFAULT 200,
         status TEXT NOT NULL DEFAULT 'unknown',
         latency_ms DOUBLE PRECISION,
-        last_check TIMESTAMPTZ
+        last_check TIMESTAMPTZ,
+        extra JSONB
     )
     """,
     """
@@ -206,7 +207,8 @@ _ADMIN_DDL_SQLITE = [
         expected_status INTEGER NOT NULL DEFAULT 200,
         status TEXT NOT NULL DEFAULT 'unknown',
         latency_ms REAL,
-        last_check TEXT
+        last_check TEXT,
+        extra TEXT
     )
     """,
     """
@@ -366,8 +368,15 @@ async def ensure_admin_tables() -> None:
                         await conn.execute(text(f"ALTER TABLE admin_user_mappings ADD COLUMN {col} {typ}"))
                     else:
                         await conn.execute(text(f"ALTER TABLE admin_user_mappings ADD COLUMN IF NOT EXISTS {col} {typ}"))
-                except Exception:
-                    pass
+                except SQLAlchemyError as exc:
+                    logger.debug("Admin user mapping column already present: %s", exc)
+            try:
+                if is_sqlite:
+                    await conn.execute(text("ALTER TABLE admin_infra_services ADD COLUMN extra TEXT"))
+                else:
+                    await conn.execute(text("ALTER TABLE admin_infra_services ADD COLUMN IF NOT EXISTS extra JSONB"))
+            except SQLAlchemyError as exc:
+                logger.debug("Admin infra extra column already present: %s", exc)
         logger.info("Admin persistence: oaos ready")
     except Exception as e:
         if is_prod:

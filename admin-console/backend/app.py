@@ -397,6 +397,7 @@ except ImportError as _pe:
 # above; it does not replace their routes or sources of truth.
 try:
     _readiness_mod = _load_admin_sibling("readiness")
+    _infra_mod.register_readiness_observation_sink(_readiness_mod._record_observation)
     readiness_router = _readiness_mod.router
     app.include_router(readiness_router)
     logger.info("Admin readiness router mounted")

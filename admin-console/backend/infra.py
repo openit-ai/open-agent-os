@@ -14,9 +14,10 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal, Optional
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -154,6 +155,14 @@ _services: dict[str, InfraService] = {}
 
 # simple in-memory audit events for health probes
 _audit_events: list[dict] = []
+_readiness_observation_sink: Callable[[str, dict], None] | None = None
+
+_READINESS_CONNECTIONS_BY_SERVICE = {
+    "control-plane": ("control-plane",),
+    "hermes": ("acp",),
+    "mattermost": ("mattermost",),
+    "outline": ("outline",),
+}
 
 
 def clear_services() -> None:
@@ -165,6 +174,12 @@ def clear_services() -> None:
             _db_clear_all()
         except InfraBackendUnavailable:
             raise
+
+
+def register_readiness_observation_sink(sink: Callable[[str, dict], None]) -> None:
+    """Connect infra probes to readiness without importing the router cyclically."""
+    global _readiness_observation_sink
+    _readiness_observation_sink = sink
 
 
 def _validate_name(name: str) -> None:
@@ -421,6 +436,92 @@ def _db_persist_probe(svc: InfraService) -> None:
     except _DB_FAILURES as exc:
         _backend_failure("persist probe", exc)
 
+
+def readiness_observation_backend_enabled() -> bool:
+    """Whether readiness observations must use the configured DB as source of truth."""
+    return _is_db_enabled()
+
+
+def load_readiness_observation(connection_id: str) -> dict | None:
+    """Load one redacted readiness observation from the canonical admin-api row."""
+    if not _is_db_enabled():
+        return None
+    factory = _get_session_factory()
+    if factory is None:
+        _backend_failure("load readiness observation", RuntimeError("database session factory unavailable"))
+        return None
+    try:
+        from security.models.orm import AdminInfraServiceORM  # type: ignore
+
+        with factory() as s:
+            row = (
+                s.query(AdminInfraServiceORM)
+                .filter(AdminInfraServiceORM.name == "admin-api")
+                .first()
+            )
+            if row is None or not isinstance(row.extra, dict):
+                return None
+            observations = row.extra.get("readiness_observations")
+            if not isinstance(observations, dict):
+                return None
+            observation = observations.get(connection_id)
+            return dict(observation) if isinstance(observation, dict) else None
+    except _DB_FAILURES as exc:
+        return _backend_failure("load readiness observation", exc)
+
+
+def persist_readiness_observation(connection_id: str, observation: dict) -> bool:
+    """Persist a redacted observation in admin_infra_services.extra."""
+    if not _is_db_enabled():
+        return False
+    factory = _get_session_factory()
+    if factory is None:
+        _backend_failure("persist readiness observation", RuntimeError("database session factory unavailable"))
+        return False
+    try:
+        from security.models.orm import AdminInfraServiceORM  # type: ignore
+
+        with factory() as s:
+            row = (
+                s.query(AdminInfraServiceORM)
+                .filter(AdminInfraServiceORM.name == "admin-api")
+                .with_for_update()
+                .first()
+            )
+            if row is None:
+                logger.warning("Readiness observation not persisted: canonical admin-api row is missing")
+                return False
+            extra = dict(row.extra) if isinstance(row.extra, dict) else {}
+            observations = dict(extra.get("readiness_observations") or {})
+            observations[connection_id] = dict(observation)
+            extra["readiness_observations"] = observations
+            row.extra = extra
+            s.commit()
+            return True
+    except _DB_FAILURES as exc:
+        _backend_failure("persist readiness observation", exc)
+        return False
+
+
+def _publish_probe_observation(service: InfraService) -> None:
+    if _readiness_observation_sink is None:
+        return
+    connection_ids = _READINESS_CONNECTIONS_BY_SERVICE.get(service.name, ())
+    if not connection_ids:
+        return
+    checked_at = service.last_check or datetime.now(timezone.utc)
+    healthy = service.status == InfraStatus.healthy
+    observation = {
+        "ok": healthy,
+        "status": "healthy" if healthy else "failed",
+        "code": "OK" if healthy else "UNREACHABLE",
+        "checked_at": checked_at.isoformat(),
+        "target_display": f"{service.host}:{service.port}",
+        "latency_ms": service.latency_ms,
+    }
+    for connection_id in connection_ids:
+        _readiness_observation_sink(connection_id, observation)
+
 # ---------------------------------------------------------------------------
 # Health probe logic
 # ---------------------------------------------------------------------------
@@ -519,6 +620,7 @@ async def probe_all_services() -> list[InfraService]:
             _db_persist_probe(updated)
         except InfraBackendUnavailable:
             raise
+        _publish_probe_observation(updated)
         results.append(updated)
         # audit event
         _audit_events.append(
