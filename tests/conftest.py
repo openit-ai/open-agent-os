@@ -444,5 +444,34 @@ def _runtime_config_isolation_guard():
         except Exception:
             pass
 
+
+# Snapshot the environment once, before collection imports any test module. Several
+# admin test modules set OAOS_ENV/DATABASE_URL at import time with plain
+# os.environ[...] for their own app imports; those values would otherwise outlive the
+# module. A later module that legitimately expects "no database configured" then reads
+# another module's sqlite file (test_auth_production_hardening got its admin user from
+# test_admin_p1_connectors' database, failing its password assertion). Each module's
+# own tests still see its environment; the next module starts clean.
+_SESSION_ENV_BASELINE: dict[str, "str | None"] = {}
+
+# pytest manages PYTEST_CURRENT_TEST itself; restoring it here breaks its teardown.
+_ENV_BASELINE_KEYS = tuple(k for k in _ADMIN_ENV_SNAPSHOT_KEYS if k != "PYTEST_CURRENT_TEST")
+
+
+def pytest_sessionstart(session):
+    for _k in _ENV_BASELINE_KEYS:
+        _SESSION_ENV_BASELINE[_k] = os.environ.get(_k)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_env_after_module():
+    yield
+    for _k, _v in _SESSION_ENV_BASELINE.items():
+        if _v is None:
+            os.environ.pop(_k, None)
+        else:
+            os.environ[_k] = _v
+
+
 @pytest.fixture
 def tenant_id(): return "test-tenant"
