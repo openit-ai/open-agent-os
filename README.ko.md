@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.9 — Personal AX Business Platform
+# Open Agent OS v0.1.10 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,8 +13,8 @@
 
 - **브랜드:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **제품 버전:** `0.1.9` — 단일 진실 `admin-console/package.json` `0.1.9` (직전 제품 태그 `v0.1.8` → `78c9a29`; 0.1.9 릴리스 내용은 감사 원장 무결성 수정 PR #27(`351ee4b`) — append가 저장된 체인 끝에서 이어지고 직렬화되며, 정책 publish/approve/rollback이 같은 트랜잭션에서 감사를 기록; 그 이전 제품 태그 `v0.1.7` → `bc648fd`). **아키텍처 문서 버전 `v1.7.4`(`docs/architecture-v1.7.4.md`)는 제품 버전 `0.1.9`와 별개** — v1.7.4는 Admin Console IA 전환 완료(§16.15)를 기록하며 제품 릴리즈 번호를 의미하지 않는다.
-- **기준 아키텍처:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 Admin Console IA 전환 완료(§16.15) + Control-Plane 중심 IA 별칭(§16.14) + Adaptive Profile Engine 설계(§16.12)
+- **제품 버전:** `0.1.10` — 단일 진실 `admin-console/package.json` `0.1.10` (직전 제품 태그 `v0.1.9` → `2079bb8`; 0.1.10 릴리스 내용은 테스트/import/store 격리 PR #29(`569f8a5`), oaos.cloud 기본값 PR #30(`ac20c76`), live registry 격리 PR #31(`5d7b89e`)을 포함; 그 이전 제품 태그 `v0.1.8` → `78c9a29`). **아키텍처 문서 버전 `v1.7.5`(`docs/architecture-v1.7.5.md`)는 제품 버전 `0.1.10`과 별개** — v1.7.5는 v1.7.4 이후 병합 완료 내역(§16.16)을 기록하며 제품 릴리즈 번호를 의미하지 않는다.
+- **기준 아키텍처:** [`docs/architecture-v1.7.5.md`](docs/architecture-v1.7.5.md) — v1.7.5 v1.7.4 이후 완료 기록(§16.16) + Admin Console IA 전환 완료(§16.15) + Control-Plane 중심 IA 별칭(§16.14)
 - **사용자 등록:** [`OAOS 사용자 등록 표준 가이드 v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost 계정 확인, 인사말·호칭·최초 성향 파악, 세션 분리, 선택적 Google Workspace OAuth 절차
 
 ---
@@ -312,6 +312,17 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 **운영 주의:** `AuditLedger.head`/`events`는 여전히 인메모리 값을 우선하므로, 디스크에서 이력을 변경한 뒤에는 장수명 프로세스의 **재시작이 필요**합니다.
 
+### 9h. 릴리즈 v0.1.10 — 제품 `0.1.10` (아키텍처 `v1.7.5`와 별개)
+
+**포함 내역 (v0.1.9 대비 — 결정적 테스트, oaos.cloud 기본값, 레지스트리 격리):**
+- **패키지 경유 import와 테스트 상태 격리(PR #29)** — 정책 원자성 테스트가 `backend.policy`를 패키지 경유로 import하여 경로 순서가 잘못된 `auth` 모듈을 해석하지 못하게 했습니다. 모듈 사이에서 import-time 환경 변경을 복원하고, Outline/infra 커버리지가 실제 배포 도메인 `note.oaos.cloud`와 `chat.oaos.cloud`를 사용하며, 로드된 모든 admin infra store를 초기화하고 EOF의 불필요한 빈 줄을 제거했습니다.
+- **Outline/Mattermost 기본값 oaos.cloud 전환(PR #30)** — 백엔드 기본값, UI fixture, Outline 테스트 fixture, Mattermost bridge 기본값을 `note.oaos.cloud`와 `chat.oaos.cloud`로 바꿨습니다. 저장소 검색에서 `note.openit.co.kr` 잔존 **0건**, `chat.openit.co.kr` 잔존 **0건**을 실측했습니다.
+- **live registry 테스트의 고아 모듈 상태 제거(PR #31)** — fixture가 `sys.modules` 별칭 교체 전에 admin app이 보관한 infra 모듈까지 포함해 live registry 상태를 격리하므로, 고아 module alias의 이전 행이 다음 테스트에 유출되지 않습니다.
+
+**측정 근거:** PR #29 최종 전체-suite 순서 실행은 **1551 passed, 32 skipped**였고 영향받던 Outline 3건은 모두 통과했습니다. 표적 검증 **4 passed**, admin/infra subsystem **42 passed**, 고아 alias 축약 순서 재현 **8 passed**였습니다. PR #30 도메인 변경 검증은 Outline **3 passed**, infrastructure UI **4 passed**, TypeScript와 표적 ESLint exit 0이었습니다. PR #31 live registry suite는 **5 passed**, 표적 Ruff도 통과했습니다.
+
+**잔여:** PR #29 전체-suite에는 personal-wiki 파일시스템, migration timeout, systemd installer 쓰기와 관련된 기존 환경 의존 실패 **8건**이 남았습니다. 이번 릴리스 준비에서는 live 외부 통합과 배포를 수행하지 않았습니다.
+
 ## 10. Repository Structure
 
 ```text
@@ -325,12 +336,12 @@ packages/personal-wiki/    # Personal Wiki Vault FS(journal/notes/projects/files
 examples/morning-briefing/ # MVP — orchestrator(per-user kim vs lee) + output.json(13KB) + README
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + firewall(hermes-egress.nft)
 tests/                     # 검증 근거 참조 — 현재 수치는 pytest -q로 확인
-docs/architecture-v1.7.4.md  # 최신 정본 — v1.7.4 Admin Console IA 전환 완료(§16.15) 포함
+docs/architecture-v1.7.5.md  # 최신 정본 — v1.7.5 v1.7.4 이후 완료 기록(§16.16) 포함
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — 최신 정본 구현 아키텍처이며 Admin Console IA 전환 완료(§16.15), v1.7.3 IA 별칭(§16.14), Adaptive Profile Engine 설계(§16.12)를 포함한다. 이전 [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md)와 [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md)는 과거 기준으로 보존한다.
+- [`docs/architecture-v1.7.5.md`](docs/architecture-v1.7.5.md) — 최신 정본 구현 아키텍처이며 v1.7.4 이후 병합 완료 기록(§16.16), Admin Console IA 전환 완료(§16.15), v1.7.3 IA 별칭(§16.14)을 포함한다. 이전 [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md), [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md), [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md)는 과거 기준으로 보존한다.
 - [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening 설계(C1/H1–H8, Personal Wiki JWT, 전사 Knowledge Index spec, readiness strict, 분산 상태).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service 연동.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.

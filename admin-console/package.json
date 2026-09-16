@@ -1,7 +1,7 @@
 {
   "name": "open-agent-os-admin-console",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "engines": {
     "node": ">=22.13.0"
   },
