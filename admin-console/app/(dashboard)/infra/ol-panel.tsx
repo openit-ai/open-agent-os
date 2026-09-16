@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { getOlConfig, updateOlConfig, apiFetch, type OlConfig } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { BookOpen, Loader2 } from "lucide-react";
-import { ConfigurationApplyState, TestConnectionButton } from "@/components/admin";
+import { ConfigurationApplyState, Skeleton, TestConnectionButton } from "@/components/admin";
 
 export function OlPanel() {
   const { t } = useI18n();
@@ -72,7 +72,7 @@ export function OlPanel() {
     }
   };
 
-  if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
+  if (loading) return <Skeleton variant="form" rows={3} ariaLabel={t("admin.loading.content")} />;
 
   return (
     <div className="space-y-6">

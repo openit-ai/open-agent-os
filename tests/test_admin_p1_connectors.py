@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ BACKEND = ROOT / "admin-console" / "backend"
 os.environ["OAOS_ENV"] = "test"
 os.environ["DATABASE_URL"] = "sqlite:////tmp/oaos_p1_connectors_test.db"
 for k in ("OAOS_DATABASE_URL", "OAOS_CP_HERMES_BASE_URL", "HERMES_BASE_URL",
-          "NOTION_API_KEY", "NOTION_TOKEN", "SLACK_WEBHOOK_URL",
+          "NOTION_API_KEY", "NOTION_TOKEN", "OAOS_NOTION_TOKEN", "NOTION_API_TOKEN", "SLACK_WEBHOOK_URL",
           "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
           "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MICROSOFT_CLIENT_ID",
           "SMTP_HOST", "SMTP_PASSWORD"):
@@ -97,9 +98,21 @@ def test_notion_config_roundtrip_write_only_key(client):
     body = r.json()
     assert body["api_key_set"] is True
     assert "secret_notion_xyz" not in r.text
+    assert "encrypted_api_key" not in body
+    assert "secret_ref" not in body
+    notion_mod = sys.modules["admin_console.backend.notion_config"]
+    raw = notion_mod._db_get_raw()
+    assert raw is not None
+    stored = json.loads(raw)
+    assert stored["secret_ref"] == "vault://admin_settings/notion_config/api_key"
+    assert stored["encrypted_api_key"]
+    assert "secret_notion_xyz" not in raw
+    assert notion_mod.resolve_api_key() == "secret_notion_xyz"
     r = client.get("/v1/notion/config", headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["api_key_set"] is True
+    assert "encrypted_api_key" not in r.json()
+    assert "secret_ref" not in r.json()
     assert "secret_notion_xyz" not in r.text
 
 

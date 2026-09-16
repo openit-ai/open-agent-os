@@ -42,7 +42,7 @@ export function ConnectionsOverview() {
     <div className="space-y-6">
       <header><h1 className="flex items-center gap-2 text-2xl font-semibold"><Cable aria-hidden="true" className="h-6 w-6" />{t("admin.connections.overview.title")}</h1><p className="mt-1 text-sm text-muted-foreground">{t("admin.connections.overview.description")}</p></header>
       <div className="grid gap-3">
-        {rows.map((row) => row.loading ? <Skeleton key={row.kind} variant="card" /> : (
+        {rows.map((row) => row.loading ? <Skeleton key={row.kind} variant="card" ariaLabel={t("admin.loading.content")} /> : (
           <article key={row.kind} className="flex flex-col justify-between gap-4 rounded-lg border bg-card p-5 sm:flex-row sm:items-center">
             <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="font-semibold">{t(`admin.connections.kind.${row.kind}.title`)}</h2><StatusBadge status={row.status} /></div><p className="mt-1 text-sm text-muted-foreground">{row.candidate ? row.candidate.display_target : t("admin.connections.discovery.noCandidates")}</p><p className="mt-2 text-xs text-muted-foreground">{row.candidate ? `${row.candidate.source} · ${row.candidate.confidence} · ${t(`admin.connections.credential.${row.candidate.credential_state}`)}` : t("admin.connections.overview.configureRequired")}</p></div>
             <Link href={row.href} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border px-4 text-sm font-medium transition-colors duration-200 hover:bg-accent motion-reduce:transition-none">{t("admin.connections.overview.open")}<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link>

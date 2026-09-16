@@ -30,6 +30,15 @@ describe("serviceDisplayLabel", () => {
 });
 
 describe("OperationsHealthFeature", () => {
+  it("shows a spinning loading indicator while health is pending", () => {
+    vi.mocked(api.apiFetch).mockReturnValue(new Promise(() => undefined));
+
+    const view = renderWithProviders(<OperationsHealthFeature />);
+
+    expect(screen.getByRole("status", { name: "Loading content" })).toBeVisible();
+    expect(view.container.querySelector(".animate-spin")).toBeTruthy();
+  });
+
   it("renders a duplicate-valued service label exactly once", async () => {
     const outline: InfrastructureRow = {
       id: "outline",

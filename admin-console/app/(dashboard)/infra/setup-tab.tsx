@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { getSetupStatus, postSetupChecks, postSetupComplete, getSetupEffective, type SetupStatus, type SetupChecks, type SetupEffective } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Skeleton } from "@/components/admin";
 
 function CheckBadge({ ok }: { ok?: boolean }) {
   if (ok === undefined) return <Badge variant="secondary">—</Badge>;
@@ -79,7 +80,7 @@ export function SetupTab() {
     }
   };
 
-  if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
+  if (loading) return <Skeleton variant="form" rows={3} ariaLabel={t("admin.loading.content")} />;
 
   return (
     <div className="space-y-6">
@@ -162,4 +163,3 @@ export function SetupTab() {
     </div>
   );
 }
-
