@@ -4,18 +4,16 @@ import {
   BadgeCheck,
   BarChart3,
   BookOpen,
+  Bot,
   ClipboardCheck,
   Cpu,
   Database,
   DatabaseBackup,
   FileText,
   Flag,
-  Gauge,
   Globe,
   KeyRound,
-  Layers,
   LayoutDashboard,
-  Lock,
   Mail,
   MessageSquare,
   RefreshCcw,
@@ -38,9 +36,16 @@ export interface AdminNavigationItem {
   icon: LucideIcon;
 }
 
+export interface AdminNavigationSubgroup {
+  id: string;
+  labelKey: string;
+  items: readonly AdminNavigationItem[];
+}
+
 export interface AdminNavigationGroup {
   id: string;
   labelKey: string;
+  subgroups?: readonly AdminNavigationSubgroup[];
   items: readonly AdminNavigationItem[];
 }
 
@@ -53,10 +58,35 @@ export const ADMIN_NAV_GROUPS: readonly AdminNavigationGroup[] = [
   {
     id: "connections",
     labelKey: "admin.nav.group.connections",
+    subgroups: [
+      {
+        id: "community",
+        labelKey: "admin.nav.subgroup.community",
+        items: [
+          { href: "/connections/mattermost", labelKey: "admin.nav.item.mattermost", icon: MessageSquare },
+          { href: "/connections/slack", labelKey: "admin.nav.item.slack", icon: Slack },
+        ],
+      },
+      {
+        id: "knowledge",
+        labelKey: "admin.nav.subgroup.knowledge",
+        items: [
+          { href: "/connections/knowledge/outline", labelKey: "admin.nav.item.outline", icon: BookOpen },
+          { href: "/connections/knowledge/notion", labelKey: "admin.nav.item.notion", icon: FileText },
+          { href: "/connections/knowledge/embedding", labelKey: "admin.nav.item.embedding", icon: Database },
+          { href: "/connections/knowledge/operations", labelKey: "admin.nav.item.knowledgeOperations", icon: RefreshCcw },
+        ],
+      },
+      {
+        id: "harness",
+        labelKey: "admin.nav.subgroup.harness",
+        items: [
+          { href: "/connections/harness/hermes-agent", labelKey: "admin.nav.item.hermesAgent", icon: Bot },
+          { href: "/connections/harness/llm-runtime", labelKey: "admin.nav.item.llmRuntime", icon: Cpu },
+        ],
+      },
+    ],
     items: [
-      { href: "/connections/mattermost", labelKey: "admin.nav.item.mattermost", icon: MessageSquare },
-      { href: "/connections/slack", labelKey: "admin.nav.item.slack", icon: Slack },
-      { href: "/connections/notion", labelKey: "admin.nav.item.notion", icon: FileText },
       { href: "/connections/oauth", labelKey: "admin.nav.item.oauth", icon: KeyRound },
       { href: "/connections/smtp", labelKey: "admin.nav.item.smtp", icon: Mail },
     ],
@@ -65,7 +95,9 @@ export const ADMIN_NAV_GROUPS: readonly AdminNavigationGroup[] = [
     id: "control",
     labelKey: "admin.nav.group.control",
     items: [
+      { href: "/control/services", labelKey: "admin.nav.item.services", icon: Server },
       { href: "/control/acp", labelKey: "admin.nav.item.acp", icon: Globe },
+      { href: "/control/mcp", labelKey: "admin.nav.item.mcp", icon: Database },
       { href: "/control/runtime", labelKey: "admin.nav.item.runtime", icon: Settings2 },
       { href: "/control/policy", labelKey: "admin.nav.item.policy", icon: Shield },
       { href: "/control/approvals", labelKey: "admin.nav.item.approvals", icon: ClipboardCheck },
@@ -73,34 +105,11 @@ export const ADMIN_NAV_GROUPS: readonly AdminNavigationGroup[] = [
     ],
   },
   {
-    id: "execution",
-    labelKey: "admin.nav.group.execution",
-    items: [
-      { href: "/execution/mcp", labelKey: "admin.nav.item.mcp", icon: Database },
-      { href: "/execution/providers", labelKey: "admin.nav.item.providers", icon: Cpu },
-      { href: "/execution/fallback", labelKey: "admin.nav.item.fallback", icon: Layers },
-      { href: "/execution/usage", labelKey: "admin.nav.item.usage", icon: BarChart3 },
-      { href: "/execution/quota", labelKey: "admin.nav.item.quota", icon: Gauge },
-    ],
-  },
-  {
-    id: "knowledge",
-    labelKey: "admin.nav.group.knowledge",
-    items: [
-      { href: "/knowledge/outline", labelKey: "admin.nav.item.outline", icon: BookOpen },
-      { href: "/knowledge/embedding", labelKey: "admin.nav.item.embedding", icon: Database },
-      { href: "/knowledge/operations", labelKey: "admin.nav.item.knowledgeOperations", icon: RefreshCcw },
-    ],
-  },
-  {
     id: "operations",
     labelKey: "admin.nav.group.operations",
     items: [
       { href: "/operations/health", labelKey: "admin.nav.item.health", icon: Activity },
-      { href: "/operations/services", labelKey: "admin.nav.item.services", icon: Server },
-      { href: "/operations/backup", labelKey: "admin.nav.item.backup", icon: DatabaseBackup },
-      { href: "/operations/security-updates", labelKey: "admin.nav.item.securityUpdates", icon: ShieldAlert },
-      { href: "/operations/license", labelKey: "admin.nav.item.license", icon: BadgeCheck },
+      { href: "/operations/usage", labelKey: "admin.nav.item.usage", icon: BarChart3 },
     ],
   },
   {
@@ -108,10 +117,12 @@ export const ADMIN_NAV_GROUPS: readonly AdminNavigationGroup[] = [
     labelKey: "admin.nav.group.management",
     items: [
       { href: "/management/users", labelKey: "admin.nav.item.users", icon: Users },
-      { href: "/management/credentials", labelKey: "admin.nav.item.credentials", icon: KeyRound },
-      { href: "/management/secrets", labelKey: "admin.nav.item.secrets", icon: Lock },
+      { href: "/management/security-keys", labelKey: "admin.nav.item.securityKeys", icon: KeyRound },
       { href: "/management/feature-flags", labelKey: "admin.nav.item.featureFlags", icon: Flag },
       { href: "/management/profile-operations", labelKey: "admin.nav.item.profileOperations", icon: UserCog },
+      { href: "/management/backup", labelKey: "admin.nav.item.backup", icon: DatabaseBackup },
+      { href: "/management/updates", labelKey: "admin.nav.item.securityUpdates", icon: ShieldAlert },
+      { href: "/management/license", labelKey: "admin.nav.item.license", icon: BadgeCheck },
     ],
   },
 ];
@@ -141,14 +152,19 @@ function NavigationLink({ item, pathname, t, onNavigate }: Pick<AdminNavigationP
   );
 }
 
+function NavigationItems({ items, ...props }: Pick<AdminNavigationProps, "pathname" | "t" | "onNavigate"> & { items: readonly AdminNavigationItem[] }) {
+  return (
+    <div className="space-y-1">
+      {items.map((item) => <NavigationLink key={item.href} item={item} {...props} />)}
+    </div>
+  );
+}
+
 export function AdminNavigation({ idPrefix, pathname, t, onNavigate, className }: AdminNavigationProps) {
+  const navigationProps = { pathname, t, onNavigate };
   return (
     <nav aria-label={t("admin.nav.label")} className={cn("space-y-4", className)}>
-      <div className="space-y-1">
-        {ADMIN_NAV_FIXED_ITEMS.map((item) => (
-          <NavigationLink key={item.href} item={item} pathname={pathname} t={t} onNavigate={onNavigate} />
-        ))}
-      </div>
+      <NavigationItems items={ADMIN_NAV_FIXED_ITEMS} {...navigationProps} />
 
       {ADMIN_NAV_GROUPS.map((group) => {
         const headingId = `${idPrefix}-${group.id}-heading`;
@@ -157,11 +173,18 @@ export function AdminNavigation({ idPrefix, pathname, t, onNavigate, className }
             <h2 id={headingId} className="mb-1 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t(group.labelKey)}
             </h2>
-            <div className="space-y-1">
-              {group.items.map((item) => (
-                <NavigationLink key={item.href} item={item} pathname={pathname} t={t} onNavigate={onNavigate} />
-              ))}
-            </div>
+            {group.subgroups?.map((subgroup) => {
+              const subgroupHeadingId = `${idPrefix}-${group.id}-${subgroup.id}-heading`;
+              return (
+                <section key={subgroup.id} role="group" aria-labelledby={subgroupHeadingId} className="mb-2">
+                  <h3 id={subgroupHeadingId} className="mb-1 px-3 pl-5 text-[11px] font-medium text-muted-foreground">
+                    {t(subgroup.labelKey)}
+                  </h3>
+                  <div className="pl-2"><NavigationItems items={subgroup.items} {...navigationProps} /></div>
+                </section>
+              );
+            })}
+            <NavigationItems items={group.items} {...navigationProps} />
           </section>
         );
       })}

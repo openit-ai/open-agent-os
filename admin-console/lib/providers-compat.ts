@@ -8,5 +8,5 @@ export function resolveProvidersDestination(search: string, hash: string): strin
   }
 
   const hashSuffix = fragment ? `#${fragment}` : "";
-  return `/execution/providers${querySuffix}${hashSuffix}`;
+  return `/connections/harness/llm-runtime${querySuffix}${hashSuffix}`;
 }

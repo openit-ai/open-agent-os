@@ -13,7 +13,7 @@ export function Tabs({ defaultValue, value: controlled, onValueChange, className
 }
 
 export function TabsList({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground", className)} {...props} />;
+  return <div role="tablist" className={cn("inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground", className)} {...props} />;
 }
 
 export function TabsTrigger({ value, children, className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { value: string }) {
@@ -22,6 +22,8 @@ export function TabsTrigger({ value, children, className, ...props }: React.Butt
   const active = ctx.value === value;
   return (
     <button
+      role="tab"
+      aria-selected={active}
       className={cn("inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50", active && "bg-background text-foreground shadow", className)}
       data-state={active ? "active" : "inactive"}
       onClick={() => ctx.onValueChange(value)}
@@ -34,5 +36,5 @@ export function TabsContent({ value, children, className, ...props }: React.HTML
   const ctx = React.useContext(TabsContext);
   if (!ctx) throw new Error("TabsContent must be inside Tabs");
   if (ctx.value !== value) return null;
-  return <div className={cn("mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)} {...props}>{children}</div>;
+  return <div role="tabpanel" className={cn("mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)} {...props}>{children}</div>;
 }

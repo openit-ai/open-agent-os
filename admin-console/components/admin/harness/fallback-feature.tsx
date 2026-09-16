@@ -1,0 +1,327 @@
+"use client";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { getToken, getFallbackConfig, updateFallbackConfig, getRuntimeMode, type FallbackConfig, type FallbackEntry } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
+import { ConfigurationApplyState, ConfirmDialog, DataTable, Skeleton, useTableQuery, useToast } from "@/components/admin";
+import { normalizeAdminError } from "@/lib/admin-api/client";
+import { applyClientListQuery } from "@/lib/admin-api/list-query";
+import { RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, Save, Info, Layers, Cpu, ShieldAlert } from "lucide-react";
+
+const PROVIDER_TYPES = ["claude", "codex", "gemini", "opencode-go", "openrouter", "ollama"] as const;
+
+function providerBadge(p: string) {
+  const map: Record<string, string> = {
+    claude: "bg-purple-600 text-white",
+    codex: "bg-black text-white",
+    gemini: "bg-blue-600 text-white",
+    "opencode-go": "bg-zinc-700 text-white",
+    openrouter: "bg-pink-600 text-white",
+    ollama: "bg-orange-500 text-white",
+  };
+  return map[p] ?? "bg-secondary";
+}
+
+function FallbackPageContent() {
+  const router = useRouter();
+  const { t } = useI18n();
+  const table = useTableQuery();
+  const { toast } = useToast();
+  const [cfg, setCfg] = useState<FallbackConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [runtimeMode, setRuntimeMode] = useState<string | null>(null);
+
+  // add form
+  const [addProvider, setAddProvider] = useState<string>("claude");
+  const [addModel, setAddModel] = useState("");
+  const [addEnabled, setAddEnabled] = useState(true);
+  const [fallbackModel, setFallbackModel] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [removing, setRemoving] = useState<number | null>(null);
+
+  const fetchCfg = useCallback(async () => {
+    setError(null);
+    try {
+      // Gate: check runtime ownership first — hermes owns routing
+      try {
+        const rm = await getRuntimeMode();
+        setRuntimeMode(rm.mode);
+        if (rm.mode === "hermes") {
+          // Do not fetch fallback as Hermes config; show banner instead
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // fail-open: if runtime mode unavailable, still try fallback
+      }
+      const res = await getFallbackConfig();
+      setCfg(res);
+      setEnabled(res.enabled);
+      setFallbackModel(res.fallback_model ?? "");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t("fallback.loadFailed");
+      // Detect 409 hermes gate from API
+      if (msg.includes("HERMES_MODE_NOOP") || msg.includes("Hermes Runtime")) {
+        setRuntimeMode("hermes");
+      }
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (!getToken()) { router.replace("/login"); return; }
+    fetchCfg();
+  }, [fetchCfg, router]);
+
+  function addEntry() {
+    if (!cfg) return;
+    const provider = addProvider.trim();
+    if (!provider) { setError(t("fallback.validationProvider")); return; }
+    const normalized = provider === "opencode" ? "opencode-go" : provider;
+    const entry: FallbackEntry = { provider: normalized, model: addModel.trim() || null, enabled: addEnabled };
+    // duplicate check
+    const dup = cfg.chain.some((e) => e.provider === entry.provider && (e.model ?? "") === (entry.model ?? ""));
+    if (dup) { setError(t("fallback.validationDuplicate")); return; }
+    setError(null);
+    setCfg({ ...cfg, chain: [...cfg.chain, entry] });
+    setAddModel("");
+  }
+
+  function removeAt(idx: number) {
+    if (!cfg) return;
+    const next = cfg.chain.filter((_, i) => i !== idx);
+    setCfg({ ...cfg, chain: next });
+    toast({ title: t("common.delete"), description: t("fallback.helpNote"), variant: "info" });
+  }
+
+  function move(idx: number, dir: -1 | 1) {
+    if (!cfg) return;
+    const next = [...cfg.chain];
+    const target = idx + dir;
+    if (target < 0 || target >= next.length) return;
+    const tmp = next[idx];
+    next[idx] = next[target];
+    next[target] = tmp;
+    setCfg({ ...cfg, chain: next });
+  }
+
+  function toggleEntry(idx: number) {
+    if (!cfg) return;
+    const next = cfg.chain.map((e, i) => i === idx ? { ...e, enabled: !e.enabled } : e);
+    setCfg({ ...cfg, chain: next });
+  }
+
+  async function handleSave() {
+    if (!cfg) return;
+    setSaving(true);
+    setSaveMsg(null);
+    setError(null);
+    try {
+      const payload = { enabled, chain: cfg.chain, fallback_model: fallbackModel.trim() || null };
+      const saved = await updateFallbackConfig(payload);
+      setCfg(saved);
+      setEnabled(saved.enabled);
+      setFallbackModel(saved.fallback_model ?? "");
+      setSaveMsg(t("fallback.saved"));
+      toast({ title: t("fallback.saved"), description: t("admin.lists.savedAndApplied"), variant: "success" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("fallback.saveFailed"));
+      toast({ title: t("fallback.saveFailed"), description: e instanceof Error ? e.message : undefined, variant: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Fallback is a small ordered configuration without server list parameters; client query preserves the existing API.
+  const visibleChain = useMemo(() => {
+    const indexedChain = (cfg?.chain ?? []).map((entry, index) => ({ ...entry, index }));
+    return applyClientListQuery(
+      indexedChain,
+      table.query,
+      [(row) => row.provider, (row) => row.model],
+      { order: (row) => row.index, provider: (row) => row.provider, model: (row) => row.model ?? "", status: (row) => row.enabled },
+    );
+  }, [cfg?.chain, table.query]);
+
+  if (loading) return <Skeleton variant="form" ariaLabel={t("common.loading")} />;
+
+  // Hermes-owned: show ownership banner, do not present fallback as Hermes config
+  if (runtimeMode === "hermes") {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-semibold"><Layers className="h-6 w-6" /> {t("fallback.title")}</h1>
+            <p className="text-sm text-muted-foreground">{t("fallback.subtitle")}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline" size="sm"><Link href="/providers"><Cpu className="mr-1 h-4 w-4" />{t("fallback.viewProviders")}</Link></Button>
+            <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchCfg(); }}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
+          </div>
+        </div>
+        <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20">
+          <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm text-amber-800 dark:text-amber-200"><ShieldAlert className="h-4 w-4" /> {t("fallback.hermesBannerTitle")}</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-amber-800 dark:text-amber-200">
+            <p>{t("fallback.hermesBannerDesc")}</p>
+            <p className="text-xs text-muted-foreground">{t("fallback.hermesBannerDetail")}</p>
+            <p className="text-xs"><Link href="/providers" className="underline">{t("fallback.viewProviders")}</Link> · {t("fallback.hermesBannerAction")}</p>
+          </CardContent>
+        </Card>
+        {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold"><Layers className="h-6 w-6" /> {t("fallback.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("fallback.subtitle")}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm"><Link href="/providers"><Cpu className="mr-1 h-4 w-4" />{t("fallback.viewProviders")}</Link></Button>
+          <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchCfg(); }}><RefreshCw className="mr-1 h-4 w-4" />{t("common.refresh")}</Button>
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-[#DC2626]" role="alert">{error}</p>}
+      {saveMsg && <p className="text-sm text-green-600" role="status">{saveMsg}</p>}
+
+      <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+        <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><Info className="h-4 w-4" /> {t("fallback.helpTitle")}</CardTitle></CardHeader>
+        <CardContent className="space-y-1 text-xs text-muted-foreground">
+          <p>{t("fallback.helpDesc")}</p>
+          <p>{t("fallback.helpChain")}</p>
+          <p>{t("fallback.helpModel")}</p>
+          <p className="flex items-start gap-1"><ShieldAlert className="h-3 w-3 mt-0.5" />{t("fallback.helpNote")}</p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">{t("fallback.enabledLabel")}</CardTitle><CardDescription>{t("fallback.enabledDesc")}</CardDescription></CardHeader>
+        <CardContent className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="h-4 w-4 accent-primary" />
+            {enabled ? <Badge variant="success">enabled</Badge> : <Badge variant="secondary">disabled</Badge>}
+          </label>
+          {cfg?.updated_by && <span className="text-xs text-muted-foreground">{t("fallback.updatedBy")}: {cfg.updated_by} {cfg.updated_at ? `· ${new Date(cfg.updated_at).toLocaleString()}` : ""}</span>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">{t("fallback.chainTitle")}</CardTitle><CardDescription>{t("fallback.chainDesc")}</CardDescription></CardHeader>
+        <CardContent className="space-y-3">
+          <DataTable
+            rows={visibleChain.rows}
+            columns={[
+              { id: "order", header: "#", accessor: (row) => row.index + 1, sortable: true },
+              { id: "provider", header: t("fallback.providerLabel"), cell: (row) => <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${providerBadge(row.provider)}`}>{row.provider}</span>, sortable: true },
+              { id: "model", header: t("fallback.modelLabel"), accessor: (row) => row.model ?? "default model", sortable: true },
+              { id: "status", header: t("common.status"), cell: (row) => row.enabled ? <Badge variant="success">on</Badge> : <Badge variant="secondary">off</Badge>, sortable: true },
+            ]}
+            rowKey={(row) => `${row.provider}:${row.model ?? ""}:${row.index}`}
+            query={table.query}
+            error={error ? normalizeAdminError(new Error(error)) : undefined}
+            onRetry={fetchCfg}
+            onQueryChange={table.onQueryChange}
+            totalRows={visibleChain.totalRows}
+            searchable
+            pageSizeOptions={[10, 20, 50]}
+            rowActions={(row) => [
+              { id: "up", label: t("fallback.moveUp"), icon: ArrowUp, disabled: row.index === 0, onSelect: () => move(row.index, -1) },
+              { id: "down", label: t("fallback.moveDown"), icon: ArrowDown, disabled: row.index === (cfg?.chain.length ?? 0) - 1, onSelect: () => move(row.index, 1) },
+              { id: "toggle", label: row.enabled ? "Disable" : "Enable", onSelect: () => toggleEntry(row.index) },
+              { id: "remove", label: t("common.delete"), icon: Trash2, tone: "danger", onSelect: () => setRemoving(row.index) },
+            ]}
+            empty={{ title: t("fallback.emptyChain"), description: t("fallback.addTitle"), filtered: Boolean(table.query.search) }}
+            ariaLabel={t("fallback.chainTitle")}
+          />
+
+          <div className="rounded-md border p-3 space-y-3 bg-muted/20">
+            <p className="text-sm font-medium">{t("fallback.addTitle")}</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <Label>{t("fallback.providerLabel")}</Label>
+                <select value={addProvider} onChange={(e) => setAddProvider(e.target.value)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm">
+                  {PROVIDER_TYPES.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label>{t("fallback.modelLabel")}</Label>
+                <Input placeholder={t("fallback.modelPlaceholder")} value={addModel} onChange={(e) => setAddModel(e.target.value)} />
+              </div>
+              <div className="flex items-end gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={addEnabled} onChange={(e) => setAddEnabled(e.target.checked)} className="h-4 w-4 accent-primary" />
+                  Enabled
+                </label>
+                <Button type="button" size="sm" onClick={addEntry} className="ml-auto"><Plus className="mr-1 h-4 w-4" />{t("fallback.addBtn")}</Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label>{t("fallback.fallbackModelLabel")}</Label>
+              <Input placeholder={t("fallback.fallbackModelPlaceholder")} value={fallbackModel} onChange={(e) => setFallbackModel(e.target.value)} />
+              <p className="text-xs text-muted-foreground">{t("fallback.fallbackModelHelp")}</p>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <Button onClick={handleSave} disabled={saving}><Save className="mr-1 h-4 w-4" />{saving ? t("fallback.saving") : t("fallback.saveBtn")}</Button>
+            <span className="text-xs text-muted-foreground self-center">{t("fallback.l5Only")}</span>
+          </div>
+          {cfg?.updated_at ? (
+            <ConfigurationApplyState
+              value={{
+                persisted: true,
+                applied: true,
+                config_revision: cfg.updated_at,
+                effective_revision: cfg.updated_at,
+                requires_restart: false,
+                apply_strategy: "immediate",
+              }}
+              service="Execution Gateway fallback"
+            />
+          ) : null}
+        </CardContent>
+      </Card>
+      <ConfirmDialog
+        open={removing !== null}
+        title={t("fallback.removeConfirm")}
+        description={t("fallback.removeConfirm")}
+        targetLabel={removing !== null ? `${cfg?.chain[removing]?.provider ?? ""} ${cfg?.chain[removing]?.model ?? ""}`.trim() : undefined}
+        confirmLabel={t("common.delete")}
+        tone="danger"
+        onOpenChange={(open) => { if (!open) setRemoving(null); }}
+        onConfirm={() => { if (removing !== null) removeAt(removing); }}
+      />
+    </div>
+  );
+}
+
+
+/**
+ * `useTableQuery`/`useUrlFilter` call `useSearchParams()`, which Next.js 15 requires
+ * to sit under a Suspense boundary during prerendering.
+ */
+export default function FallbackPage() {
+  return (
+    <Suspense fallback={<Skeleton variant="table" ariaLabel="Loading" />}>
+      <FallbackPageContent />
+    </Suspense>
+  );
+}

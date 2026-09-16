@@ -12,7 +12,7 @@ import { useI18n } from "@/lib/i18n";
 const connections: Array<{ kind: ConnectionKind; href: string }> = [
   { kind: "mattermost", href: "/connections/mattermost" },
   { kind: "slack", href: "/connections/slack" },
-  { kind: "notion", href: "/connections/notion" },
+  { kind: "notion", href: "/connections/knowledge/notion" },
   { kind: "oauth", href: "/connections/oauth" },
   { kind: "smtp", href: "/connections/smtp" },
 ];

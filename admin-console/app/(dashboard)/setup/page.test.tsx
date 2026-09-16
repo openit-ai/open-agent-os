@@ -105,7 +105,7 @@ describe("SetupPage", () => {
         blocking_checks: [{
           code: "ACTIVE_POLICY_MISSING",
           message_key: "admin.setup.checks.active_policy_missing",
-          next_action: { label_key: "admin.readiness.actions.configurePolicy", href: "/policy" },
+          next_action: { label_key: "admin.readiness.actions.configurePolicy", href: "/control/policy" },
         }],
       } : step),
     });
@@ -116,6 +116,6 @@ describe("SetupPage", () => {
     expect(screen.getByText(/L5 관리자로 정책 > 초안을 열어/)).toBeVisible();
     expect(screen.getByText(/OAOS는 정책을 자동 발행하지 않습니다/)).toBeVisible();
     expect(screen.getByText("진단 코드: ACTIVE_POLICY_MISSING")).toBeVisible();
-    expect(screen.getByRole("link", { name: "조치 화면 열기" })).toHaveAttribute("href", "/policy");
+    expect(screen.getByRole("link", { name: "조치 화면 열기" })).toHaveAttribute("href", "/control/policy");
   });
 });

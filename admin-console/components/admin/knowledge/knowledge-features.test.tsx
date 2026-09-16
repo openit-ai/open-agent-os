@@ -5,7 +5,7 @@ import { EmbeddingFeature, KnowledgeOperationsFeature } from "./knowledge-featur
 import * as api from "@/lib/api";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), params: new URLSearchParams() }));
-vi.mock("next/navigation", () => ({ usePathname: () => "/knowledge/operations", useRouter: () => ({ push: navigation.push, replace: navigation.replace }), useSearchParams: () => navigation.params }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/connections/knowledge/operations", useRouter: () => ({ push: navigation.push, replace: navigation.replace }), useSearchParams: () => navigation.params }));
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, getToken: vi.fn(), getKnowledgeOpsStatus: vi.fn(), postKnowledgeSync: vi.fn(), getEmbeddingConfig: vi.fn(), updateEmbeddingConfig: vi.fn() };

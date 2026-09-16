@@ -56,15 +56,15 @@ _DEFAULT_TARGETS: dict[str, tuple[str, ...]] = {
 
 _NEXT_ACTIONS = {
     "control-plane": {"label_key": "admin.readiness.actions.openHealth", "href": "/operations/health"},
-    "execution": {"label_key": "admin.readiness.actions.configureRuntime", "href": "/execution"},
+    "execution": {"label_key": "admin.readiness.actions.configureRuntime", "href": "/connections/harness/llm-runtime"},
     "acp": {"label_key": "admin.readiness.actions.configureAcp", "href": "/control/acp"},
     "ingress": {"label_key": "admin.readiness.actions.configureIngress", "href": "/connections"},
     "mattermost": {"label_key": "admin.readiness.actions.configureMattermost", "href": "/connections/mattermost"},
     "slack": {"label_key": "admin.readiness.actions.configureSlack", "href": "/connections/slack"},
     "policy": {"label_key": "admin.readiness.actions.configurePolicy", "href": "/control/policy"},
     "environment": {"label_key": "admin.readiness.actions.openHealth", "href": "/operations/health"},
-    "mcp": {"label_key": "admin.readiness.actions.configureMcp", "href": "/execution/mcp"},
-    "knowledge": {"label_key": "admin.readiness.actions.configureKnowledge", "href": "/knowledge"},
+    "mcp": {"label_key": "admin.readiness.actions.configureMcp", "href": "/control/mcp"},
+    "knowledge": {"label_key": "admin.readiness.actions.configureKnowledge", "href": "/connections/knowledge/outline"},
     "notifications": {"label_key": "admin.readiness.actions.configureNotifications", "href": "/connections"},
     "verify": {"label_key": "admin.readiness.actions.reviewProblems", "href": "/"},
 }

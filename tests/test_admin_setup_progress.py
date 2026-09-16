@@ -78,6 +78,17 @@ def test_progress_has_eight_ordered_steps_and_optional_skip():
     assert progress["current_step"] == "verify"
 
 
+def test_setup_next_actions_use_the_new_canonical_ia():
+    assert readiness._NEXT_ACTIONS["execution"]["href"] == "/connections/harness/llm-runtime"
+    assert readiness._NEXT_ACTIONS["mcp"]["href"] == "/control/mcp"
+    assert readiness._NEXT_ACTIONS["knowledge"]["href"] == "/connections/knowledge/outline"
+    legacy_prefixes = ("/execution/", "/knowledge/", "/operations/services")
+    assert all(
+        not action["href"].startswith(legacy_prefixes)
+        for action in readiness._NEXT_ACTIONS.values()
+    )
+
+
 def test_ingress_is_required_and_console_only_is_not_supported():
     snapshot = _complete_snapshot()
     ingress = next(c for c in snapshot["required_connections"] if c["id"] == "ingress")

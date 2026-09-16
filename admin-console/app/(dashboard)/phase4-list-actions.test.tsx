@@ -164,7 +164,7 @@ describe("Phase 4 destructive action dialogs", () => {
     await user.click(publish);
     await waitFor(() => expect(api.publishPolicy).toHaveBeenCalled());
 
-    await user.click(screen.getByRole("button", { name: /History/ }));
+    await user.click(screen.getByRole("tab", { name: /History/ }));
     await user.click(await screen.findByRole("button", { name: "Rollback" }));
     dialog = screen.getByRole("dialog", { name: "Rollback policy" });
     const rollback = within(dialog).getByRole("button", { name: "Rollback" });

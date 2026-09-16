@@ -6,15 +6,15 @@ function source(relativePath: string) {
 
 const routes = [
   ["users", "management/users", "UsersFeature", true],
-  ["credentials", "management/credentials", "CredentialsFeature", true],
-  ["secrets", "management/secrets", "SecretsFeature", true],
+  ["credentials", "management/security-keys", "SecurityKeysFeature", false],
+  ["secrets", "management/security-keys", "SecurityKeysFeature", false],
   ["feature-flags", "management/feature-flags", "FeatureFlagsFeature", true],
   ["profile-ops", "management/profile-operations", "ProfileOperationsFeature", false],
-  ["backup", "operations/backup", "BackupFeature", true],
-  ["security-updates", "operations/security-updates", "SecurityUpdatesFeature", true],
-  ["license", "operations/license", "LicenseFeature", false],
-  ["knowledge-ops", "knowledge/operations", "KnowledgeOperationsFeature", true],
-  ["embedding", "knowledge/embedding", "EmbeddingFeature", false],
+  ["backup", "management/backup", "BackupFeature", true],
+  ["security-updates", "management/updates", "SecurityUpdatesFeature", true],
+  ["license", "management/license", "LicenseFeature", false],
+  ["knowledge-ops", "connections/knowledge/operations", "KnowledgeOperationsFeature", true],
+  ["embedding", "connections/knowledge/embedding", "EmbeddingFeature", false],
 ] as const;
 
 describe("Phase 5 canonical and compatibility routes", () => {

@@ -131,9 +131,9 @@ describe("control group features", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "정책 번들" })).toBeInTheDocument(),
     );
-    // The tab strip renders as buttons, not role="tab".
+    // Tabs use the ARIA tab role while remaining native buttons.
     for (const tab of ["게시됨", "초안", "시뮬레이션", "이력 / 롤백"]) {
-      expect(screen.getByRole("button", { name: tab })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
     }
     expect(screen.getByRole("heading", { name: /평가 순서/ })).toBeInTheDocument();
     expect(screen.getByText("게시된 번들이 없습니다.")).toBeInTheDocument();
