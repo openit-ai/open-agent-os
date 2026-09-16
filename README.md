@@ -379,7 +379,7 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 **Measured evidence (PR #27, merged main `351ee4b`):** the 9 new tests **fail against the previous implementation and pass with the fix**; 9 related suites **147 passed**; ruff new findings **0** (`ledger.py` 17→17, `policy.py` 40→40 — existing baseline unchanged).
 
-**Operational note:** `AuditLedger.head`/`events` still prefer in-memory state, so a long-lived process needs a restart to observe history changed on disk.
+**Operational note (updated PR #33, main `38aae73`):** the chain now restores from the DB in hash-link order at startup (UTC-normalized, failed/rollback events excluded from cache, committed state re-queried), so restarts preserve approval requests and the audit chain instead of losing them. New persistence suites: 15 passed; related subsystems 69 passed.
 
 ### 9h. Release v0.1.10 — product `0.1.10` (arch `v1.7.5` distinct)
 
