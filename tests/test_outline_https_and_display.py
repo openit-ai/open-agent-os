@@ -239,4 +239,3 @@ def test_oaos_cloud_infra_rows_resolve_to_public_domains():
     assert postgres["probe_type"] == "tcp"
     assert postgres["url"] == "tcp://localhost:5432"
     assert "127.0.0.1" not in outline["url"], "the live loopback fallback must not win over the DB row"
-
