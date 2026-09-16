@@ -1011,7 +1011,21 @@ def _run_adapter(
         key = os.environ.get("OUTLINE_API_KEY")
         if not key:
             raise _AdapterFailure("AUTH_REQUIRED")
-        response = httpx.post(target.rstrip("/") + "/api/collections.list", json={"token": key}, timeout=timeout_seconds)
+        outline_target = target.rstrip("/") + "/api/collections.list"
+        scheme = urlsplit(target).scheme.lower() or "http"
+        response = httpx.post(
+            outline_target,
+            json={"token": key},
+            headers={"X-Forwarded-Proto": scheme},
+            timeout=timeout_seconds,
+        )
+        if response.status_code == 405 and scheme == "http":
+            response = httpx.post(
+                outline_target,
+                json={"token": key},
+                headers={"X-Forwarded-Proto": "https"},
+                timeout=timeout_seconds,
+            )
         return _http_result(response, started, target)
     if base == "notion":
         key = ""

@@ -299,3 +299,56 @@ def test_notion_adapter_uses_saved_secret_reference_without_leaking(monkeypatch)
     assert captured["headers"]["Authorization"] == "Bearer secret_saved_notion"
     assert captured["headers"]["Notion-Version"] == "2022-06-28"
     assert "secret_saved_notion" not in json.dumps(result)
+
+
+def test_outline_adapter_retries_405_with_https_forwarded_proto(monkeypatch):
+    calls: list[dict[str, object]] = []
+    responses = iter([SimpleNamespace(status_code=405), SimpleNamespace(status_code=200)])
+
+    monkeypatch.setenv("OUTLINE_API_KEY", "test-outline-key")
+
+    def fake_post(url, json, headers, timeout):
+        calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return next(responses)
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    result = readiness_mod._run_adapter(
+        "outline",
+        {"config": {}, "target": "http://outline.internal"},
+        None,
+        2.5,
+        "safe",
+    )
+
+    assert result["status_code"] == 200
+    assert len(calls) == 2
+    assert [call["headers"] for call in calls] == [
+        {"X-Forwarded-Proto": "http"},
+        {"X-Forwarded-Proto": "https"},
+    ]
+
+
+def test_outline_adapter_returns_405_when_https_retry_also_fails(monkeypatch):
+    calls: list[dict[str, object]] = []
+    responses = iter([SimpleNamespace(status_code=405), SimpleNamespace(status_code=405)])
+
+    monkeypatch.setenv("OUTLINE_API_KEY", "test-outline-key")
+
+    def fake_post(url, json, headers, timeout):
+        calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return next(responses)
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    result = readiness_mod._run_adapter(
+        "outline",
+        {"config": {}, "target": "http://outline.internal"},
+        None,
+        2.5,
+        "safe",
+    )
+
+    assert result["status_code"] == 405
+    assert len(calls) == 2
+    assert calls[-1]["headers"] == {"X-Forwarded-Proto": "https"}
