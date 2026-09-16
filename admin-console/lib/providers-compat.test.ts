@@ -6,10 +6,10 @@ describe("providers compatibility resolver", () => {
   });
 
   it("routes the legacy page to canonical providers with its query intact", () => {
-    expect(resolveProvidersDestination("?tenant=acme&sort=name", "")).toBe("/execution/providers?tenant=acme&sort=name");
+    expect(resolveProvidersDestination("?tenant=acme&sort=name", "")).toBe("/connections/harness/llm-runtime?tenant=acme&sort=name");
   });
 
   it("preserves unknown fragments on the canonical providers screen", () => {
-    expect(resolveProvidersDestination("", "#custom-section")).toBe("/execution/providers#custom-section");
+    expect(resolveProvidersDestination("", "#custom-section")).toBe("/connections/harness/llm-runtime#custom-section");
   });
 });

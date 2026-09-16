@@ -19,11 +19,11 @@ const FINAL_PREREQUISITES = new Set<SetupStepId>(["environment", "runtime", "ing
 
 const ACTION_HREF: Record<SetupStepId, string> = {
   environment: "/operations/health",
-  runtime: "/control/acp",
+  runtime: "/connections/harness/llm-runtime",
   ingress: "/connections",
-  policy: "/policy",
-  mcp: "/execution/mcp",
-  knowledge: "/knowledge-ops",
+  policy: "/control/policy",
+  mcp: "/control/mcp",
+  knowledge: "/connections/knowledge/operations",
   notifications: "/connections",
   verify: "/setup",
 };

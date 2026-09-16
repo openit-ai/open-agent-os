@@ -1,13 +1,13 @@
 export const INFRA_COMPAT_ROUTES = {
   setup: "/setup",
-  mcp: "/execution/mcp",
+  mcp: "/control/mcp",
   mm: "/connections/mattermost",
   slack: "/connections/slack",
-  notion: "/connections/notion",
+  notion: "/connections/knowledge/notion",
   oauth: "/connections/oauth",
   smtp: "/connections/smtp",
-  ol: "/knowledge/outline",
-  services: "/operations/services",
+  ol: "/connections/knowledge/outline",
+  services: "/control/services",
   live: "/operations/health",
   unified: "/operations/health",
 } as const;

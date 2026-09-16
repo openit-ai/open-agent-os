@@ -8,7 +8,7 @@
 - query string은 canonical URL까지 보존한다.
 - URL fragment는 HTTP 요청에 포함되지 않으므로 nginx나 Next.js 서버에서 판정하지 않는다.
 - 요청이 1건이라도 확인된 URL은 정리하지 않고 다음 관찰 주기로 넘긴다.
-- `/setup`, `/control/acp`, `/execution/mcp`는 legacy URL이 아니라 계속 유지할 canonical URL이며 정리 대상에서 제외한다.
+- `/setup`, `/control/acp`, `/control/mcp`는 계속 유지할 canonical URL이며 정리 대상에서 제외한다.
 
 ## 호환 처리 대상
 
@@ -17,29 +17,44 @@
 | Legacy URL | Canonical URL |
 |---|---|
 | `/runtime-config` | `/control/runtime` |
-| `/fallback` | `/execution/fallback` |
-| `/llm-usage` | `/execution/usage` |
-| `/quota` | `/execution/quota` |
+| `/fallback` | `/connections/harness/llm-runtime` |
+| `/llm-usage` | `/operations/usage` |
+| `/quota` | `/operations/usage` |
 | `/policy` | `/control/policy` |
 | `/approvals` | `/control/approvals` |
 | `/audit` | `/control/audit` |
-| `/embedding` | `/knowledge/embedding` |
-| `/knowledge-ops` | `/knowledge/operations` |
+| `/embedding` | `/connections/knowledge/embedding` |
+| `/knowledge-ops` | `/connections/knowledge/operations` |
 | `/users` | `/management/users` |
-| `/credentials` | `/management/credentials` |
-| `/secrets` | `/management/secrets` |
+| `/credentials` | `/management/security-keys` |
+| `/secrets` | `/management/security-keys` |
 | `/feature-flags` | `/management/feature-flags` |
 | `/profile-ops` | `/management/profile-operations` |
-| `/backup` | `/operations/backup` |
-| `/security-updates` | `/operations/security-updates` |
-| `/license` | `/operations/license` |
+| `/backup` | `/management/backup` |
+| `/security-updates` | `/management/updates` |
+| `/license` | `/management/license` |
+| `/connections/notion` | `/connections/knowledge/notion` |
+| `/knowledge/outline` | `/connections/knowledge/outline` |
+| `/knowledge/embedding` | `/connections/knowledge/embedding` |
+| `/knowledge/operations` | `/connections/knowledge/operations` |
+| `/execution/providers` | `/connections/harness/llm-runtime` |
+| `/execution/fallback` | `/connections/harness/llm-runtime` |
+| `/execution/mcp` | `/control/mcp` |
+| `/execution/usage` | `/operations/usage` |
+| `/execution/quota` | `/operations/usage` |
+| `/operations/services` | `/control/services` |
+| `/management/credentials` | `/management/security-keys` |
+| `/management/secrets` | `/management/security-keys` |
+| `/operations/backup` | `/management/backup` |
+| `/operations/security-updates` | `/management/updates` |
+| `/operations/license` | `/management/license` |
 
 다음 URL은 fragment 호환 때문에 client resolver를 유지한다.
 
 | Legacy URL | Client 처리 |
 |---|---|
-| `/infra` | `tab` 또는 fragment를 연결·실행·지식·모니터링 canonical URL로 해석한다. 알 수 없는 값은 `/operations/health`로 보낸다. |
-| `/providers` | `#acp`는 `/control/acp`로 보내고, 그 외 요청은 `/execution/providers`로 보낸다. query string은 보존한다. |
+| `/infra` | `tab` 또는 fragment를 연결·설정·모니터링 canonical URL로 해석한다. 알 수 없는 값은 `/operations/health`로 보낸다. |
+| `/providers` | `#acp`는 `/control/acp`로 보내고, 그 외 요청은 `/connections/harness/llm-runtime`으로 보낸다. query string은 보존한다. |
 
 서버는 fragment를 수신할 수 없으므로 위 두 경로에 일괄 서버 redirect를 추가하면 안 된다. nginx 로그에는 `/infra` 또는 `/providers`의 base path와 query까지만 남으며 fragment는 남지 않는다.
 
@@ -47,7 +62,7 @@
 
 | 단계 | 기간 또는 조건 | 운영 동작 |
 |---|---|---|
-| 진입 | Phase 6 배포 직후 | 17개 단순 경로의 307 redirect와 2개 client resolver를 활성화하고 nginx 접근 로그 집계를 시작한다. |
+| 진입 | IA 전환 배포 직후 | 32개 단순 경로의 307 redirect와 2개 client resolver를 활성화하고 nginx 접근 로그 집계를 시작한다. |
 | 관찰 | 최소 1회 릴리스 주기 이상이며, 각 URL의 마지막 접근 후 30일이 경과 | legacy base path별 request count와 마지막 접근 시각을 집계한다. |
 | 판정 | 위 관찰 조건을 충족하고 관찰 기간 합계가 0건 | 해당 URL을 정리 후보 목록에 등록한다. 자동 삭제나 redirect 제거는 금지한다. |
 | 정리 | 마스터 승인 후 | 제거 직전에 로그를 다시 확인한다. 여전히 0건인 승인 대상만 redirect 또는 resolver 정리 변경에 포함한다. |
@@ -65,13 +80,13 @@
 예시 필터는 다음과 같다. 실제 access log format의 request field 위치가 다르면 운영 환경 형식에 맞춰 조정하고, 조정 내용을 결과에 기록한다.
 
 ```bash
-sudo zgrep -hE '"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) /(runtime-config|fallback|llm-usage|quota|policy|approvals|audit|embedding|knowledge-ops|users|credentials|secrets|feature-flags|profile-ops|backup|security-updates|license|infra|providers)([? ]|$)' /var/log/nginx/access.log*
+sudo zgrep -hE '"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) /(runtime-config|fallback|llm-usage|quota|policy|approvals|audit|embedding|knowledge-ops|users|credentials|secrets|feature-flags|profile-ops|backup|security-updates|license|connections/notion|knowledge/(outline|embedding|operations)|execution/(providers|fallback|mcp|usage|quota)|operations/(services|backup|security-updates|license)|management/(credentials|secrets)|infra|providers)([? ]|$)' /var/log/nginx/access.log*
 ```
 
 필터 결과는 base path별로 집계한다. 예를 들어 request field가 `$7`인 combined log라면 query를 제거한 뒤 count할 수 있다.
 
 ```bash
-sudo zgrep -hE '"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) /(runtime-config|fallback|llm-usage|quota|policy|approvals|audit|embedding|knowledge-ops|users|credentials|secrets|feature-flags|profile-ops|backup|security-updates|license|infra|providers)([? ]|$)' /var/log/nginx/access.log* \
+sudo zgrep -hE '"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) /(runtime-config|fallback|llm-usage|quota|policy|approvals|audit|embedding|knowledge-ops|users|credentials|secrets|feature-flags|profile-ops|backup|security-updates|license|connections/notion|knowledge/(outline|embedding|operations)|execution/(providers|fallback|mcp|usage|quota)|operations/(services|backup|security-updates|license)|management/(credentials|secrets)|infra|providers)([? ]|$)' /var/log/nginx/access.log* \
   | awk '{ split($7, request_path, "?"); count[request_path]++ } END { for (path in count) print path, count[path] }' \
   | sort
 ```
@@ -86,7 +101,7 @@ sudo zgrep -hE '"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) /(runtime-config|fallb
 - 마지막 접근 이후 30일이 지났다.
 - 관찰 기간의 해당 legacy URL 요청 합계가 0건이다.
 - 로그 rotation과 보존 기간이 전체 관찰 구간을 덮는지 확인했다.
-- `/setup`, `/control/acp`, `/execution/mcp`가 후보에 포함되지 않았다.
+- `/setup`, `/control/acp`, `/control/mcp`가 후보에 포함되지 않았다.
 
 요청이 1건이라도 있거나 로그 구간이 불완전하면 후보로 등록하지 않고 다음 관찰 주기로 이월한다. 합계 0건은 정리 승인 자체가 아니라 후보 등록 조건일 뿐이다.
 

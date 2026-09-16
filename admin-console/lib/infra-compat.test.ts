@@ -15,6 +15,6 @@ describe("infra compatibility resolver", () => {
   });
 
   it("gives the query tab precedence over the fragment", () => {
-    expect(resolveInfraDestination("?tab=mcp", "#slack")).toBe("/execution/mcp");
+    expect(resolveInfraDestination("?tab=mcp", "#slack")).toBe("/control/mcp");
   });
 });

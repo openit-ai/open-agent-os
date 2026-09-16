@@ -429,7 +429,7 @@
   },
   "acp": {
     "title": "ACP Settings",
-    "subtitle": "Agent runtime (Hermes/ACP) connection settings",
+    "subtitle": "ACP adapter protocol settings for channel requests routed to Hermes Agent",
     "baseUrl": "Hermes Base URL",
     "acpEnabled": "ACP enabled",
     "apiKeySet": "API key set",
@@ -694,10 +694,13 @@
       "group": {
         "connections": "Connections",
         "control": "Settings",
-        "execution": "Execution",
-        "knowledge": "Knowledge",
         "operations": "Monitoring",
-        "management": "Management"
+        "management": "Management settings"
+      },
+      "subgroup": {
+        "community": "Community",
+        "knowledge": "Knowledge stores",
+        "harness": "Harness"
       },
       "item": {
         "dashboard": "Dashboard",
@@ -707,6 +710,8 @@
         "notion": "Notion",
         "oauth": "OAuth",
         "smtp": "SMTP",
+        "hermesAgent": "Hermes Agent",
+        "llmRuntime": "LLM Runtime",
         "acp": "ACP",
         "runtime": "Runtime configuration",
         "policy": "Policy",
@@ -715,21 +720,49 @@
         "mcp": "MCP",
         "providers": "Model providers",
         "fallback": "Fallback",
-        "usage": "Usage",
+        "usage": "LLM usage",
         "quota": "Quota",
         "outline": "Outline",
         "embedding": "Embedding",
         "knowledgeOperations": "Synchronization",
-        "health": "Health",
+        "health": "System health",
         "services": "Services",
         "backup": "Backup",
         "securityUpdates": "Security updates",
         "license": "License",
         "users": "Users",
+        "securityKeys": "Security keys",
         "credentials": "Credentials",
         "secrets": "Secrets",
         "featureFlags": "Feature flags",
         "profileOperations": "Profile operations"
+      }
+    },
+    "harness": {
+      "hermesAgent": {
+        "title": "Hermes Agent",
+        "description": "Automatically shows the current runtime path and Hermes connection status from existing configuration.",
+        "executionPath": "Execution path",
+        "hermesPath": "hermes",
+        "externalPath": "external LLM",
+        "status": "Status",
+        "active": "Active",
+        "standby": "Standby",
+        "attention": "Needs attention",
+        "defaultModel": "Default model",
+        "agentDefaultModel": "Hermes Agent default model (automatic)",
+        "endpoint": "Hermes endpoint",
+        "source": "Configuration source",
+        "acpBoundary": "External channel requests from Mattermost, Slack, and other channels pass through the ACP boundary to Hermes Agent. ACP is the adapter protocol for Hermes; LLM Runtime does not depend on ACP.",
+        "openAcp": "Open ACP technical settings",
+        "openRuntime": "Open runtime configuration",
+        "loadFailed": "Hermes Agent information could not be loaded."
+      },
+      "llmRuntime": {
+        "title": "LLM Runtime",
+        "description": "Manage model providers and the fallback order on one screen.",
+        "providersSection": "Model providers",
+        "fallbackSection": "Fallback"
       }
     },
     "common": {

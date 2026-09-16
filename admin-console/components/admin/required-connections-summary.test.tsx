@@ -9,8 +9,8 @@ const readiness: AdminReadiness = {
   checked_at: "2026-09-15T00:00:00Z",
   connections: [
     { id: "cp", title_key: "admin.setup.steps.environment.title", description_key: "admin.setup.steps.environment.description", status: "healthy", required: true, configured: true, applied: true, secret_configured: true, source: "manifest", code: "OK", message_key: "admin.common.connectionTest.success" },
-    { id: "runtime", title_key: "admin.setup.steps.runtime.title", description_key: "admin.setup.steps.runtime.description", status: "warning", required: true, configured: true, applied: false, secret_configured: true, source: "env", code: "NOT_APPLIED", message_key: "admin.common.error.notApplied", affected_services: ["ACP"], operation_href: "/infra" },
-    { id: "ingress", title_key: "admin.setup.steps.ingress.title", description_key: "admin.setup.steps.ingress.description", status: "failed", required: true, configured: false, applied: false, secret_configured: false, source: "discovery", code: "AUTH_REQUIRED", message_key: "admin.common.error.authRequired", next_action: { label_key: "admin.readiness.summary.resolve", href: "/infra" } },
+    { id: "runtime", title_key: "admin.setup.steps.runtime.title", description_key: "admin.setup.steps.runtime.description", status: "warning", required: true, configured: true, applied: false, secret_configured: true, source: "env", code: "NOT_APPLIED", message_key: "admin.common.error.notApplied", affected_services: ["ACP"], operation_href: "/control/services" },
+    { id: "ingress", title_key: "admin.setup.steps.ingress.title", description_key: "admin.setup.steps.ingress.description", status: "failed", required: true, configured: false, applied: false, secret_configured: false, source: "discovery", code: "AUTH_REQUIRED", message_key: "admin.common.error.authRequired", next_action: { label_key: "admin.readiness.summary.resolve", href: "/connections" } },
   ],
 };
 

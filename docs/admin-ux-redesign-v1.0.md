@@ -97,51 +97,48 @@ wc -l admin-console/lib/i18n/ko.json admin-console/lib/i18n/en.json  # 949, 949
 
 ### 원칙과 목표 구조
 
-기존 IA 문서의 아키텍처 경계를 그대로 계승하되, 사용자가 보는 순서는 “시작 → 연결 → 설정 → 실행 → 지식 → 모니터링 → 관리” 과업 순서로 만든다. 사이드바 라벨은 마스터 확정(2026-09-15)에 따라 아키텍처 용어가 아니라 **초보자 친화 과업 용어**를 쓴다(제어 평면 → 설정, 운영 → 모니터링). 아키텍처 용어와의 대응은 §11 표에 기록한다. `/` 대시보드와 `/setup` 시작하기는 그룹 바깥의 고정 진입점이며, 아래 6개 그룹은 접을 수 있는 사이드바 섹션이다. 모바일에서도 단순 평면 복제가 아니라 동일 그룹과 현재 위치를 유지한다.
+사용자가 보는 순서는 “시작 → 연결 → 설정 → 모니터링 → 관리설정” 과업 순서로 만든다. `/` 대시보드와 `/setup` 시작하기는 그룹 바깥의 고정 진입점이며, 사이드바는 4개 최상위 그룹을 사용한다. 연결 그룹은 커뮤니티·지식저장소·Harness의 2단 하위 그룹과 OAuth·SMTP 일반 항목을 함께 가진다. 데스크톱과 모바일 드로어는 같은 데이터와 `role="group"`/`aria-labelledby` 계층을 사용한다.
 
 | 그룹 | 목표 화면 | 한 줄 책임 |
 |---|---|---|
 | 고정 | 대시보드 `/` | 필수 연결, 미완료 설정, 승인·장애·최근 변경을 우선순위 순으로 요약한다. |
 | 고정 | 시작하기 `/setup` | 자동 점검 기반 온보딩을 실행·재개하고 완료 조건을 설명한다. |
-| 연결 | 연결 개요 `/connections` | 모든 채널 연결의 상태, 발견 후보, 미적용 변경을 한 목록으로 보여준다. |
-| 연결 | Mattermost `/connections/mattermost` | Mattermost 봇과 브리지의 인증·연결·적용 상태를 관리한다. |
-| 연결 | Slack `/connections/slack` | Slack 연결과 전달 테스트를 관리한다. |
-| 연결 | Notion `/connections/notion` | Notion 인그레스 인증과 접근 검사를 관리한다. |
+| 연결 > 커뮤니티 | Mattermost `/connections/mattermost` | Mattermost 봇과 브리지의 인증·연결·적용 상태를 관리한다. |
+| 연결 > 커뮤니티 | Slack `/connections/slack` | Slack 연결과 전달 테스트를 관리한다. |
+| 연결 > 지식저장소 | Outline `/connections/knowledge/outline` | Outline 연결과 collection 접근을 관리한다. |
+| 연결 > 지식저장소 | Notion `/connections/knowledge/notion` | Notion 인그레스 인증과 접근 검사를 관리한다. |
+| 연결 > 지식저장소 | 임베딩 `/connections/knowledge/embedding` | 임베딩 제공자·모델·차원 구성을 관리한다. |
+| 연결 > 지식저장소 | 동기화 `/connections/knowledge/operations` | connector별 동기화·dry-run 결과를 관리한다. |
+| 연결 > Harness | Hermes Agent `/connections/harness/hermes-agent` | 현재 `runtime_mode`, Hermes 상태, default model을 기존 API에서 자동 표시한다. |
+| 연결 > Harness | LLM Runtime `/connections/harness/llm-runtime` | 모델 제공자와 Fallback을 통합하고 Hermes 모드에서는 비활성 안내한다. |
 | 연결 | OAuth `/connections/oauth` | 외부 인증 제공자 활성 상태와 승인 흐름을 관리한다. |
 | 연결 | SMTP `/connections/smtp` | 알림 메일 전송 연결과 비발송 연결 검사를 관리한다. |
-| 설정 | 제어 개요 `/control` | CP 준비 상태와 정책·승인·감사의 조치 필요 항목을 모은다. |
-| 설정 | ACP `/control/acp` | Hermes ACP 어댑터 설정·연결·적용 상태를 독립 화면에서 관리한다. |
+| 설정 | 서비스 등록 `/control/services` | 관리 대상 서비스 레지스트리와 probe를 관리한다. |
+| 설정 | ACP `/control/acp` | 채널 요청을 Hermes로 연결하는 ACP 어댑터 프로토콜의 설정·적용 상태를 관리한다. |
+| 설정 | MCP `/control/mcp` | MCP 서버 등록·수정·삭제·도구 발견 테스트를 관리한다. |
 | 설정 | 런타임 구성 `/control/runtime` | 스냅샷 생성·발행·적용 확인·롤백 이력을 관리한다. |
 | 설정 | 정책 `/control/policy` | 정책 draft 검증·승인·발행·rollback을 관리한다. |
 | 설정 | 승인 `/control/approvals` | 대기 승인 조회와 허용·거절 결정을 처리한다. |
 | 설정 | 감사 `/control/audit` | 감사 이벤트와 체인 무결성·checkpoint를 조회한다. |
-| 실행 | 실행 개요 `/execution` | 모델 실행 경로, EG, MCP, quota의 가용성을 요약한다. |
-| 실행 | MCP `/execution/mcp` | MCP 서버 등록·수정·삭제·도구 발견 테스트를 관리한다. |
-| 실행 | 모델 제공자 `/execution/providers` | LLM 제공자와 모델, credential reference, 연결 테스트를 관리한다. |
-| 실행 | Fallback `/execution/fallback` | 제공자 fallback 순서와 활성화를 관리한다. |
-| 실행 | 사용량 `/execution/usage` | 호출·비용·latency·오류 이력을 검색·필터·페이지 조회한다. |
-| 실행 | Quota `/execution/quota` | tenant별 한도와 현재 사용량을 조회·수정한다. |
-| 지식 | 지식 개요 `/knowledge` | 지식 소스, 인덱스, 메모리 준비 상태를 요약한다. |
-| 지식 | Outline `/knowledge/outline` | Outline 연결과 collection 접근을 관리한다. |
-| 지식 | Embedding `/knowledge/embedding` | 임베딩 제공자·모델·차원 구성을 관리한다. |
-| 지식 | 동기화 `/knowledge/operations` | connector별 동기화·dry-run 결과를 관리한다. |
-| 모니터링 | 상태 `/operations/health` | services/live/unified 관측을 하나의 상태 모델로 제공한다. |
-| 모니터링 | 인프라 등록 `/operations/services` | 관리 대상 서비스 레지스트리와 probe를 관리한다. |
-| 모니터링 | 백업 `/operations/backup` | 백업 상태·생성·보존 이력을 관리한다. |
-| 모니터링 | 보안 업데이트 `/operations/security-updates` | 업데이트 및 CVE 상태와 조치 안내를 제공한다. |
-| 모니터링 | 라이선스 `/operations/license` | 라이선스 검증과 만료·기능 상태를 제공한다. |
-| 관리 | 사용자 `/management/users` | 관리자 계정과 사용자 매핑 CRUD를 관리한다. |
-| 관리 | 자격증명 `/management/credentials` | 발급·폐기·만료 credential 현황과 이력을 조회한다. |
-| 관리 | 비밀값 `/management/secrets` | 비밀값 설정 여부와 rotation 절차만 노출한다. |
-| 관리 | 기능 플래그 `/management/feature-flags` | 플래그 상태·변경·감사 링크를 관리한다. |
-| 관리 | 프로필 작업 `/management/profile-operations` | 사용자 프로필 backfill/reset 운영 작업을 수행한다. |
+| 모니터링 | 시스템 상태 `/operations/health` | services/live/unified 관측을 하나의 상태 모델로 제공한다. |
+| 모니터링 | LLM 사용량 `/operations/usage` | 호출·비용·latency·오류와 tenant별 quota를 통합한다. |
+| 관리설정 | 사용자 `/management/users` | 관리자 계정과 사용자 매핑 CRUD를 관리한다. |
+| 관리설정 | 보안키 `/management/security-keys` | 자격증명 현황과 비밀값 설정 여부·rotation 안내를 통합하되 원문은 노출하지 않는다. |
+| 관리설정 | 기능 플래그 `/management/feature-flags` | 플래그 상태·변경·감사 링크를 관리한다. |
+| 관리설정 | 프로필 작업 `/management/profile-operations` | 사용자 프로필 backfill/reset 운영 작업을 수행한다. |
+| 관리설정 | 백업 `/management/backup` | 백업 상태·생성·보존 이력을 관리한다. |
+| 관리설정 | 업데이트 `/management/updates` | 업데이트 및 CVE 상태와 조치 안내를 제공한다. |
+| 관리설정 | 라이선스 `/management/license` | 라이선스 검증과 만료·기능 상태를 제공한다. |
 
 ### 묻힘과 중복 해소
 
-- ACP는 Providers 내부 탭에서 제거하고 `/control/acp`를 단일 canonical 화면으로 삼는다. 모델 제공자 화면에는 “ACP 실행 경로 보기” 링크와 요약 상태만 둔다.
-- MCP는 `/infra` 탭에서 제거하고 이미 존재하는 `/execution/mcp`를 canonical로 삼는다. Infra에서 같은 React panel을 재수출하지 않는다.
+- ACP는 Providers 내부에서 제거하고 `/control/acp`를 기술 설정 canonical로 삼는다. ACP는 채널 외부 요청이 Hermes로 들어가는 경계이자 Hermes 연결용 어댑터 프로토콜이며, LLM Runtime은 ACP에 종속되지 않는다. 실행 경로 요약은 Harness의 Hermes Agent 화면이 소유한다.
+- MCP는 `/infra` 탭에서 제거하고 `/control/mcp`를 canonical로 삼는다.
+- LLM Runtime은 모델 제공자와 Fallback 기능을 한 화면의 탭으로 통합한다. `runtime_mode=hermes`이면 기존 조건부 비활성 안내와 API 가드를 유지한다.
+- 지식 그룹은 해체하고 Outline·Notion·임베딩·동기화를 연결 > 지식저장소로 옮긴다.
+- 사용량과 할당량은 `/operations/usage`, 자격증명과 비밀값은 `/management/security-keys`로 통합한다.
 - `/control/runtime`는 `/runtime-config`로 client redirect하는 14줄 별칭을 끝내고 실제 canonical 화면을 소유한다. `/runtime-config`가 새 URL로 redirect한다.
-- `/infra` 11개 탭은 setup→`/setup`, mcp→`/execution/mcp`, mm/slack/notion/oauth/smtp→`/connections/*`, ol→`/knowledge/outline`, services/live/unified→`/operations/services|health`로 분해한다.
+- `/infra` 11개 탭은 setup→`/setup`, mcp→`/control/mcp`, mm/slack/oauth/smtp→`/connections/*`, notion/ol→`/connections/knowledge/*`, services→`/control/services`, live/unified→`/operations/health`로 분해한다.
 - 공통 기능은 route page가 아니라 feature component에서 소유한다. 과도기 alias가 필요해도 두 화면에서 별도 state/fetch를 만들지 않고 같은 feature entry를 사용한다.
 
 ### URL 호환 규칙
@@ -157,19 +154,24 @@ wc -l admin-console/lib/i18n/ko.json admin-console/lib/i18n/en.json  # 949, 949
 | 판정 | 관찰 기간 중 합계 요청 0건 | 정리 후보로 등록(자동 삭제 금지) |
 | 정리 | 마스터 승인 후 | redirect 제거. 제거 전 1회 더 로그 확인, 롤백용 nginx/route 변경 이력 보존 |
 
-요청이 1건이라도 있는 URL은 정리하지 않고 다음 관찰 주기로 넘긴다. 인증·북마크 영향이 큰 `/setup`·`/control/acp`·`/execution/mcp`는 정리 대상에서 제외하고 canonical로 계속 유지한다. 정리 시점·대상은 문서가 아니라 접근 로그 실측으로만 결정한다.
+요청이 1건이라도 있는 URL은 정리하지 않고 다음 관찰 주기로 넘긴다. `/setup`·`/control/acp`·`/control/mcp`는 canonical로 계속 유지한다. 정리 시점·대상은 문서가 아니라 접근 로그 실측으로만 결정한다.
 
 | 기존 URL | 목표 canonical URL | 호환 처리 |
 |---|---|---|
-| `/providers` | `/execution/providers` | query 보존 308; ACP fragment가 있으면 `/control/acp`로 client resolve |
-| `/runtime-config` | `/control/runtime` | query 보존 308 |
+| `/providers` | `/connections/harness/llm-runtime` | query 보존 client resolve; ACP fragment는 `/control/acp` |
+| `/runtime-config` | `/control/runtime` | query 보존 307 |
 | `/control/acp` | 동일 | 기존 별칭을 실제 화면으로 승격 |
-| `/execution/mcp` | 동일 | 기존 별칭을 실제 화면으로 승격 |
-| `/fallback`, `/llm-usage`, `/quota` | `/execution/fallback`, `/execution/usage`, `/execution/quota` | query 보존 308 |
-| `/policy`, `/approvals`, `/audit` | `/control/policy`, `/control/approvals`, `/control/audit` | query 보존 308 |
-| `/embedding`, `/knowledge-ops` | `/knowledge/embedding`, `/knowledge/operations` | query 보존 308 |
-| `/users`, `/credentials`, `/secrets`, `/feature-flags`, `/profile-ops` | 대응 `/management/*` | query 보존 308 |
-| `/backup`, `/security-updates`, `/license` | 대응 `/operations/*` | query 보존 308 |
+| `/execution/providers`, `/execution/fallback`, `/fallback` | `/connections/harness/llm-runtime` | query 보존 307 |
+| `/execution/mcp` | `/control/mcp` | query 보존 307 |
+| `/execution/usage`, `/execution/quota`, `/llm-usage`, `/quota` | `/operations/usage` | query 보존 307 |
+| `/policy`, `/approvals`, `/audit` | `/control/policy`, `/control/approvals`, `/control/audit` | query 보존 307 |
+| `/knowledge/*`, `/connections/notion`, `/embedding`, `/knowledge-ops` | 대응 `/connections/knowledge/*` | query 보존 307 |
+| `/operations/services` | `/control/services` | query 보존 307 |
+| `/management/credentials`, `/management/secrets`, `/credentials`, `/secrets` | `/management/security-keys` | query 보존 307 |
+| `/operations/backup`, `/backup` | `/management/backup` | query 보존 307 |
+| `/operations/security-updates`, `/security-updates` | `/management/updates` | query 보존 307 |
+| `/operations/license`, `/license` | `/management/license` | query 보존 307 |
+| `/users`, `/feature-flags`, `/profile-ops` | 대응 `/management/*` | query 보존 307 |
 | `/setup` | 동일 | redirect 껍데기를 제거하고 온보딩 canonical로 승격 |
 | `/infra` 및 알려진 tab/hash | 위 분해 대상 | tab/hash mapping 후 `replace`; 알 수 없는 값은 `/operations/health` |
 
@@ -190,7 +192,7 @@ API URL은 기존 `/v1/acp/*`, `/v1/mcp/*` 등을 삭제하거나 이름만 바�
 | Step | 구분 | 사용자 과업 | 자동 완료 판정 | 건너뛰기/후속 |
 |---:|---|---|---|---|
 | 1. 환경 확인 | 필수 | 발견된 배포 환경과 핵심 서비스 확인 | Admin backend, DB, CP가 `healthy`; 검사 시각이 정책 TTL 이내 | 건너뛸 수 없음; 실패 항목별 운영 상태 링크 |
-| 2. 실행 경로 | 필수 | 추천 실행 경로를 선택하고 연결 테스트 | ACP/Hermes 또는 외부 LLM 중 현재 runtime mode에 맞는 경로가 저장·적용·test passed | 건너뛸 수 없음; `/control/acp` 또는 `/execution/providers` |
+| 2. 실행 경로 | 필수 | 추천 실행 경로를 선택하고 연결 테스트 | Hermes Agent 또는 external LLM 중 현재 runtime mode에 맞는 경로가 저장·적용·test passed | 건너뛸 수 없음; `/connections/harness/hermes-agent` 또는 `/connections/harness/llm-runtime` |
 | 3. 사용자 진입 채널 | 필수 | 자동 발견된 채널 또는 OAuth 승인으로 하나 연결 | Mattermost/Slack 등 지원 인그레스 중 최소 1개가 configured+applied+healthy | 건너뛸 수 없음 — **마스터 확정(2026-09-15): 채널 연결 1개 이상을 필수로 둔다** |
 | 4. 정책과 관리자 | 필수 | 관리자 권한·기본 정책 검토 | L5 관리자 존재, active policy version 존재, policy validate 통과 | 건너뛸 수 없음; 사용자/정책 화면 링크 |
 | 5. 도구 연결(MCP) | 선택 | 발견된 MCP 서버를 검토·연결 | 선택한 서버마다 저장 및 test passed; 아무것도 선택하지 않으면 incomplete가 아니라 skipped | 건너뛰기 가능, 언제든 재개 |
@@ -469,7 +471,7 @@ hover, drawer, accordion, Toast의 전환은 150~300ms로 제한하고 위치 �
 | 3. 연결·IA 분해 | `/infra`, ACP, MCP, mm/slack/notion/oauth/smtp/outline | `/connections/*`, canonical ACP/MCP, infra compatibility resolver, connection cards | 기존/신규 URL render, 발견→테스트, saved/not-applied 시나리오 | 새 nav feature flag off, 기존 route feature components 유지 |
 | 4. 제어·실행 목록 | providers/fallback/runtime/policy/approvals/audit/usage/quota | DataTable·Dialog·Toast 적용, native popup 제거 | CRUD, 정렬/검색/page URL, publish/rollback 권한 및 오류 test | 화면 단위 flag로 legacy view 복귀, API 경로 유지 |
 | 5. 지식·운영·관리 | knowledge, infra status, backup/security/license, users/credentials/secrets/flags/profile | 나머지 화면 공통 상태·CRUD 전환 | 화면별 targeted test, empty/error/loading, keyboard, 기존 URL smoke | 그룹/화면 단위 legacy view 복귀 |
-| 6. 기본 IA 전환 | layout/nav/i18n, alias 정리 | 6그룹 sidebar 기본화, server redirects, 운영 runbook | build/typecheck/py_compile, redirect query/hash, 링크 crawler, AA audit | old-nav flag와 compatibility routes 유지 |
+| 6. 기본 IA 전환 | layout/nav/i18n, alias 정리 | 4그룹+연결 subgroup sidebar 기본화, server redirects, 운영 runbook | build/typecheck/py_compile, redirect query/hash, 링크 crawler, AA audit | old-nav flag와 compatibility routes 유지 |
 
 롤백은 DB나 서비스 재시작이 아니라 frontend 화면/네비게이션 feature flag와 additive API adapter 수준에서 가능해야 한다. 새 API가 실패하면 기존 도메인 API로 fallback할 수 있으나, 실패를 정상으로 가장하거나 stale 상태를 최신으로 표시하지 않는다. permanent redirect는 충분한 관찰 기간과 마스터 승인 전에는 307로 운용하는 선택지도 남긴다.
 
@@ -480,30 +482,26 @@ hover, drawer, accordion, Toast의 전환은 150~300ms로 제한하고 위치 �
 | `/` | `/` | 필수 연결 요약, 설정 이어하기, 조치 우선 dashboard, 공통 상태 적용 |
 | `/setup` | `/setup` | redirect 제거, 8단 StepWizard와 자동 판정·재개 구현 |
 | `/infra` | compatibility resolver | 11탭 제거, tab/hash→새 canonical URL mapping |
-| `/control/acp` + Providers ACP section | `/control/acp` | ACP 단일 소유, 자동 발견, 표준 테스트, persisted/applied 분리 |
+| `/control/acp` + Providers ACP section | `/control/acp` | ACP 기술 설정 단일 소유, 채널→Hermes 경계 설명, persisted/applied 분리 |
 | `/control/runtime` + `/runtime-config` | `/control/runtime` | redirect 방향 역전, snapshot 이력 DataTable, publish/rollback dialog |
-| `/execution/mcp` + Infra MCP | `/execution/mcp` | MCP 단일 소유, 발견 후보, CRUD·테스트 표준화 |
-| `/providers` | `/execution/providers` | ACP 제거, provider CRUD DataTable, secret ref/OAuth 우선 |
-| `/fallback` | `/execution/fallback` | 순서 편집 접근성, 제거 ConfirmDialog, 저장/적용 상태 |
-| `/llm-usage` | `/execution/usage` | 기간·tenant·provider 검색/필터, 서버 정렬·페이지, chart 대체 정보 |
-| `/quota` | `/execution/quota` | tenant 조회, FormField 검증, 변경 이력 링크 |
+| `/execution/mcp` + Infra MCP | `/control/mcp` | MCP 단일 소유, 발견 후보, CRUD·테스트 표준화 |
+| `/providers`, `/execution/providers`, `/fallback` | `/connections/harness/llm-runtime` | provider+Fallback 통합, Hermes 모드 조건부 비활성 유지 |
+| 신규 | `/connections/harness/hermes-agent` | runtime mode·상태·default model 자동 표시, ACP 요약 단일 소유 |
+| `/llm-usage`, `/quota`, `/execution/usage`, `/execution/quota` | `/operations/usage` | 사용량·quota 통합, 검색/필터와 tenant 조회 유지 |
 | `/policy` | `/control/policy` | 탭 책임 정리, history DataTable, publish/rollback 고위험 확인 |
 | `/approvals` | `/control/approvals` | 검색·위험 필터·페이지, decision pending/실패 표준화 |
 | `/audit` | `/control/audit` | 서버 최신순·기간/행위자 검색·페이지, 무결성 ErrorState |
-| Infra MM/Slack/Notion/OAuth/SMTP panels | `/connections/*` | 독립 route, 발견·승인·테스트·적용 카드, 고급 입력 접기 |
-| Infra OL panel | `/knowledge/outline` | 단일 Outline 연결 화면, secret ref와 접근 테스트 |
-| `/embedding` | `/knowledge/embedding` | 자동 후보·기본값, FormField와 적용 상태 |
-| `/knowledge-ops` | `/knowledge/operations` | 동기화 이력 DataTable, dry-run/result 상태 표준화 |
-| Infra services/live/unified | `/operations/services`, `/operations/health` | 등록 CRUD와 관측을 분리, 중복 row model 통합 |
-| `/backup` | `/operations/backup` | 백업 이력 검색·정렬·페이지, trigger 결과·오류 표준화 |
-| `/security-updates` | `/operations/security-updates` | severity filter, CVE 목록 DataTable, 외부 링크 접근성 |
-| `/license` | `/operations/license` | 상태·만료 경고, 검증 FormField/Toast, 값 노출 방지 |
+| Infra MM/Slack/OAuth/SMTP panels | `/connections/*` | 독립 route, 발견·승인·테스트·적용 카드, 고급 입력 접기 |
+| Infra OL/Notion, `/embedding`, `/knowledge-ops` | `/connections/knowledge/*` | 지식저장소 하위에서 연결·임베딩·동기화 기능 유지 |
+| Infra services/live/unified | `/control/services`, `/operations/health` | 등록 CRUD와 관측을 분리, 중복 row model 통합 |
+| `/backup` | `/management/backup` | 백업 이력 검색·정렬·페이지, trigger 결과·오류 표준화 |
+| `/security-updates` | `/management/updates` | severity filter, CVE 목록 DataTable, 외부 링크 접근성 |
+| `/license` | `/management/license` | 상태·만료 경고, 검증 FormField/Toast, 값 노출 방지 |
 | `/users` | `/management/users` | 계정/매핑 책임 분리, DataTable, create/edit dialog, 삭제 확인 |
-| `/credentials` | `/management/credentials` | 상태/최근 이력 DataTable, 검색·filter·pagination |
-| `/secrets` | `/management/secrets` | 설정 여부 EmptyState, rotation guide, 원문 비노출 검증 |
+| `/credentials`, `/secrets` | `/management/security-keys` | 자격증명 상태와 비밀값 메타데이터 통합, 원문 비노출 검증 |
 | `/feature-flags` | `/management/feature-flags` | DataTable, toggle 확인 기준, 변경 이력/actor 표시 |
 | `/profile-ops` | `/management/profile-operations` | backfill/reset 결과, 고위험 ConfirmDialog, 이력 링크 |
-| `layout.tsx` | grouped shell | 23개 평면 nav를 6그룹+고정 2항목으로 교체, 모바일 동일 계층 |
+| `layout.tsx` | grouped shell | 평면 nav를 4그룹+연결 2단 subgroup+고정 2항목으로 교체, 모바일 동일 계층 |
 
 ## 9. 검증 게이트
 
@@ -563,12 +561,10 @@ python3 -m py_compile admin-console/backend/*.py
 |---|---|---|
 | 대시보드(고정) | — | `/` |
 | 시작하기(고정) | — | `/setup` |
-| 연결 | Ingress | `/connections/*` (Mattermost·Slack·Notion·OAuth·SMTP) |
-| 설정 | Control Plane | `/control/*` (ACP·런타임 구성·정책·승인·감사) |
-| 실행 | Execution | `/execution/*` (MCP·모델 제공자·Fallback·사용량·Quota) |
-| 지식 | Knowledge | `/knowledge/*` (Outline·Embedding·동기화) |
-| 모니터링 | Operations | `/operations/*` (상태·서비스 등록·백업·보안 업데이트·라이선스) |
-| 관리 | Management | `/management/*` (사용자·자격증명·비밀값·기능 플래그·프로필 작업) |
+| 연결 | Ingress + Knowledge + Runtime 선택 | 커뮤니티 `/connections/{mattermost,slack}`, 지식저장소 `/connections/knowledge/*`, Harness `/connections/harness/*`, OAuth·SMTP |
+| 설정 | Control Plane / 기술 설정 | `/control/*` (서비스 등록·ACP·MCP·런타임 구성·정책·승인·감사) |
+| 모니터링 | Operations | `/operations/health`, `/operations/usage` |
+| 관리설정 | Management | `/management/*` (사용자·보안키·기능 플래그·프로필 작업·백업·업데이트·라이선스) |
 
 라벨 근거: “제어”·“운영”은 아키텍처 내부 용어로 초기 관리자에게 의미가 즉시 전달되지 않고, “설정”·“모니터링”이 실제 과업을 더 정확히 가리킨다.
 내부 코드·API·문서의 아키텍처 용어(Inress/Control Plane/Execution/Knowledge/Operations/Management)는 유지한다 — 라벨 변경을 경계 변경으로 오해하지 않는다.
