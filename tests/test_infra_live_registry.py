@@ -1,10 +1,11 @@
 """Regression: unified Infra Registry edit for live-only rows — no 404."""
 from __future__ import annotations
 
+import contextlib
+import importlib.util
 import sys
 from pathlib import Path
 
-import importlib.util
 import pytest
 from fastapi.testclient import TestClient
 
@@ -43,23 +44,41 @@ if str(BACKEND) in sys.path:
         pass
 admin_app = app_mod.app
 
+def _reset_infra_state():
+    """Reset the service store (and DB handles) of *every* loaded admin infra module.
+
+    app.py resolves its infra sibling with `_load_admin_sibling("infra")`, which
+    reuses whatever module object already occupies `sys.modules["infra"]`. When
+    another test file loaded that name first, it is NOT the module this file holds
+    in `infra_mod`, so clearing only `infra_mod` left rows written by these tests
+    (e.g. the edited `live_outline` host) visible to the app and to later tests.
+    """
+    seen: set[int] = set()
+    for name, mod in list(sys.modules.items()):
+        if mod is None or "infra" not in name or id(mod) in seen:
+            continue
+        if not hasattr(mod, "clear_services"):
+            continue
+        seen.add(id(mod))
+        engine = getattr(mod, "_db_engine", None)
+        if engine is not None:
+            with contextlib.suppress(Exception):
+                engine.dispose()
+        mod._db_engine = None
+        mod._db_session_factory = None
+        with contextlib.suppress(Exception):
+            mod.clear_services()
+
+
 @pytest.fixture(autouse=True)
 def isolate(monkeypatch):
     monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    if infra_mod._db_engine is not None:
-        infra_mod._db_engine.dispose()
-    infra_mod._db_engine = None
-    infra_mod._db_session_factory = None
     auth_mod.clear_users()
-    infra_mod.clear_services()
+    _reset_infra_state()
     yield
-    if infra_mod._db_engine is not None:
-        infra_mod._db_engine.dispose()
-    infra_mod._db_engine = None
-    infra_mod._db_session_factory = None
     auth_mod.clear_users()
-    infra_mod.clear_services()
+    _reset_infra_state()
 
 def _client():
     return TestClient(admin_app)
@@ -108,20 +127,28 @@ def test_live_patch_direct_upsert_when_no_prior_post():
     token = _login()
     c = _client()
     h = _auth(token)
-    payload = {"service": "outline", "host": "127.0.0.2", "port": 3002, "health_path": "/"}
+    # Arbitrary throwaway labels for "value written first" and "value written again".
+    # They are NOT deployed addresses and mean nothing outside this test; they only
+    # let the assertions tell the first write apart from the overwrite.
+    first_host, first_port = "127.0.0.2", 3002
+    second_host, second_port = "127.0.0.3", 3003
+    payload = {"service": "outline", "host": first_host, "port": first_port, "health_path": "/"}
     r = c.patch("/v1/infra/live_outline", json=payload, headers=h)
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["name"] == "outline"
-    assert d["host"] == "127.0.0.2"
+    assert d["host"] == first_host
     assert d["id"].startswith("infra_")
-    r2 = c.patch("/v1/infra/live_outline", json={"host": "127.0.0.3", "port": 3003}, headers=h)
+    # Second PATCH must update the row this test just created, not insert another one.
+    r2 = c.patch("/v1/infra/live_outline", json={"host": second_host, "port": second_port}, headers=h)
     assert r2.status_code == 200, r2.text
-    assert r2.json()["host"] == "127.0.0.3"
+    assert r2.json()["host"] == second_host
+    assert r2.json()["id"] == d["id"], "the second edit must reuse the row, not create a new one"
     r3 = c.get("/v1/infra/registry", headers=h)
     outlines = [x for x in r3.json()["items"] if x["name"] == "outline"]
     assert len(outlines) == 1
     assert outlines[0]["source"] == "both"
+    assert outlines[0]["host"] == second_host
 
 def test_db_row_patch_unchanged():
     """Existing DB rows still PATCH normally via their infra_* id."""
