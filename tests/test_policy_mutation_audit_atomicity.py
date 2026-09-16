@@ -3,23 +3,45 @@
 Regression: `publish()` committed the new version and only then appended the audit
 record. When the ledger was unavailable the request returned 500, but the version
 stayed published and active — a governance change with no audit trail.
+
+Loading the module follows `tests/test_admin_policy.py`: load the backend files by
+path under distinct module names and take the admin-console directory back off
+`sys.path`, so `import auth` keeps resolving to the admin backend module rather than
+`security/auth.py`. Loading it as a top-level `policy` instead makes its
+`from .auth import ...` fall back to `from auth import ...`, which resolves to
+whichever file the path order favours — that made these tests error only in a full
+run while the product code was fine.
 """
-import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-for _p in [
-    ROOT,
-    ROOT / "security",
-    ROOT / "security" / "audit",
-    ROOT / "packages" / "audit-model",
-    ROOT / "admin-console" / "backend",  # the deployed layout: modules import as top-level
-]:
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+BACKEND = ROOT / "admin-console" / "backend"
+
+
+def _load_admin_module(name: str, filename: str, bare_alias: str | None = None):
+    added = False
+    if str(BACKEND) not in sys.path:
+        sys.path.insert(0, str(BACKEND))
+        added = True
+    try:
+        spec = importlib.util.spec_from_file_location(name, str(BACKEND / filename))
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        sys.modules[name] = mod
+        if bare_alias:
+            sys.modules[bare_alias] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        return mod
+    finally:
+        if added and str(BACKEND) in sys.path:
+            sys.path.remove(str(BACKEND))
+
+
+auth_mod = _load_admin_module("admin_auth_atomicity", "auth.py", bare_alias="auth")
+pol = _load_admin_module("admin_policy_atomicity", "policy.py")
 
 RULES = [
     {
@@ -47,17 +69,10 @@ def policy_db(tmp_path, monkeypatch):
     monkeypatch.setenv("OAOS_ENV", "development")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db}")
     monkeypatch.setenv("OAOS_DATABASE_URL", f"sqlite:///{db}")
-    # Re-assert the deployed module layout here: other suites rebuild sys.path.
-    backend = str(ROOT / "admin-console" / "backend")
-    if backend not in sys.path:
-        sys.path.insert(0, backend)
-    import policy as pol
-
-    pol = importlib.reload(pol)
     engine = pol._db_get_sync_engine()
     pol._ensure_policy_tables_sync(engine)
     engine.dispose()
-    yield pol
+    return pol
 
 
 def _draft(pol, tenant="default"):
@@ -99,8 +114,7 @@ def test_rollback_rolls_back_when_the_audit_append_fails(policy_db):
     pol = policy_db
     _draft(pol)
     pol._db_publish("default", "admin@openit.co.kr")
-    published_after_first = [v["version"] for v in pol._db_list_versions("default") if v["status"] == "published"]
-    assert published_after_first == ["1.0.0"]
+    assert [v["version"] for v in pol._db_list_versions("default") if v["status"] == "published"] == ["1.0.0"]
 
     def failing_audit(connection, record):
         raise RuntimeError("audit ledger unavailable")

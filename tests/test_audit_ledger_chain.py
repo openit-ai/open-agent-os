@@ -1,42 +1,28 @@
-"""Hash-chain integrity under concurrency, and atomic audit for policy mutations.
+"""Hash-chain integrity under concurrency.
 
 Two defects are covered:
 
 1. `AuditLedger.append` chained from a per-process in-memory head. An instance
    that was constructed before another appender wrote had a stale head, so both
-   children pointed at the same parent and the chain forked. Production ran with
-   exactly that shape: a long-lived ledger instance next to per-mutation ones.
-2. `policy.publish` committed the state change and only then appended its audit
-   record, so a failing ledger left a published bundle with no audit trail (the
-   publish request returned 500 while the new version stayed active).
+   children pointed at the same parent and the chain forked.
+2. The chain tip is the event nothing links to, so it must be read from stored
+   state rather than assumed from a process-local value.
+
+Path note: `tests/conftest.py` already puts the repo root and the shared packages
+on `sys.path`, which is all this module needs. Do NOT add `security/` here — that
+makes `import auth` resolve to `security/auth.py` (which has none of the admin auth
+symbols) for every later test in the run.
 """
-import importlib
-import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-for _p in [
-    ROOT,
-    ROOT / "security",
-    ROOT / "security" / "audit",
-    ROOT / "packages" / "audit-model",
-    ROOT / "packages" / "policy-model",
-    ROOT / "admin-console",
-]:
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
 from audit_model import AuditEvent, AuditEventType
 
+from security.audit.audit_ledger import ledger as ledger_mod
 
-def _ledger_module():
-    import security.audit.audit_ledger.ledger as mod
-
-    return importlib.reload(mod)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _event(n: int, action: str = "TEST") -> AuditEvent:
@@ -54,15 +40,16 @@ def _event(n: int, action: str = "TEST") -> AuditEvent:
 
 @pytest.fixture()
 def sqlite_ledger(tmp_path, monkeypatch):
-    """A ledger module pointed at a throwaway sqlite database (non-prod)."""
+    """Point the ledger at a throwaway sqlite database (non-prod)."""
     db = tmp_path / "audit.sqlite"
     monkeypatch.setenv("OAOS_ENV", "development")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db}")
     monkeypatch.setenv("OAOS_DATABASE_URL", f"sqlite:///{db}")
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("OAOS_AUDIT_FORCE_DB", "1")
-    mod = _ledger_module()
-    yield mod
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    import security.audit.audit_ledger.ledger as mod
+
+    return mod
 
 
 def test_stale_instance_chains_onto_the_stored_tip(sqlite_ledger):
@@ -107,18 +94,16 @@ def test_concurrent_appends_produce_one_chain(sqlite_ledger):
 
 def test_append_in_caller_transaction_rolls_back_with_it(sqlite_ledger):
     """An append made inside a caller's transaction disappears if it aborts."""
-    from sqlalchemy import create_engine
+    from sqlalchemy import create_engine, text
 
     mod = sqlite_ledger
     mod.AuditLedger(signing_key="k").append(_event(1))  # a committed event
 
-    engine = create_engine(f"sqlite:///{Path(mod._db_sync_url().replace('sqlite:///', ''))}")
+    engine = create_engine(mod._db_sync_url())
     ledger = mod.AuditLedger(signing_key="k")
     with pytest.raises(RuntimeError, match="caller aborts"), engine.begin() as connection:
         ledger.append(_event(2), connection=connection)
-        assert connection.execute(
-            __import__("sqlalchemy").text("SELECT count(*) FROM audit_events")
-        ).scalar() == 2  # visible inside the transaction
+        assert connection.execute(text("SELECT count(*) FROM audit_events")).scalar() == 2
         raise RuntimeError("caller aborts")
 
     fresh = mod.AuditLedger(signing_key="k")
@@ -144,15 +129,19 @@ def test_append_in_caller_transaction_commits_with_it(sqlite_ledger):
 
 
 def test_chain_tip_follows_the_leaf_not_the_newest_row(sqlite_ledger):
-    """The head is the event nothing links to, so an orphan cannot become the tip."""
+    """The head is the event nothing links to."""
     mod = sqlite_ledger
     ledger = mod.AuditLedger(signing_key="k")
     parent = ledger.append(_event(1))
     child = ledger.append(_event(2))
 
-    session, engine = mod._db_get_session()
+    # _chain_tip is the helper that reads the stored tip; looked up here so this
+    # module still collects against the previous implementation and fails on the
+    # behaviour rather than on the import.
+    chain_tip = ledger_mod._chain_tip
+    session, engine = ledger_mod._db_get_session()
     try:
-        assert mod._chain_tip(session) == child.event_hash
-        assert mod._chain_tip(session) != parent.event_hash
+        assert chain_tip(session) == child.event_hash
+        assert chain_tip(session) != parent.event_hash
     finally:
-        mod._db_close(session, engine)
+        ledger_mod._db_close(session, engine)

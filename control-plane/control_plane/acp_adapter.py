@@ -159,7 +159,10 @@ async def _with_retry_acp(fn, *, max_retries: int = 3, backoff_s: float = 0.2, t
             res = await fn()
             _acp_circuit_breaker.record_success()
             return res
-        except (httpx.HTTPError, asyncio.TimeoutError, TimeoutError, OSError, ValueError, TypeError, RuntimeError) as e:
+        except Exception as e:
+            # The retry decision is `_is_retryable_status` below. Narrowing this to a
+            # fixed tuple silently disables retries for any other exception type
+            # (e.g. a status-carrying error raised by the ACP caller).
             if not _is_retryable_status(e):
                 _acp_circuit_breaker.record_failure()
                 _audit_emit("acp_failure", trace_id, {"error": str(e)[:300], "retryable": False, "attempt": attempt + 1})
