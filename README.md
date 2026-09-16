@@ -1,4 +1,4 @@
-# Open Agent OS v0.1.9 — Personal AX Business Platform
+# Open Agent OS v0.1.10 — Personal AX Business Platform
 
 > **Self-Hosted Enterprise Personal Agent OS** — One Personal Agent per Employee, bridging personal and enterprise work securely — Source-Available (BSL 1.1)
 
@@ -13,8 +13,8 @@
 
 - **Brand:** OAOS
 - **Repository:** `openit-ai/open-agent-os`
-- **Product version:** `0.1.9` — single source of truth `admin-console/package.json` `0.1.9` (previous product tag `v0.1.8` → `78c9a29`; the 0.1.9 release content is the audit-ledger integrity fix PR #27 (`351ee4b`) — appends chain from the stored chain tip and are serialized, and policy publish/approve/rollback audit inside the same transaction; preceding product tag `v0.1.7` → `bc648fd`). **Architecture document version `v1.7.4` (`docs/architecture-v1.7.4.md`) is distinct from product version `0.1.9`** — v1.7.4 records the completed Admin Console IA transition (§16.15), not the release number.
-- **Canonical architecture:** [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — v1.7.4 completed Admin Console IA transition (§16.15) + Control-Plane-centric IA aliases (§16.14) + Adaptive Profile Engine design (§16.12)
+- **Product version:** `0.1.10` — single source of truth `admin-console/package.json` `0.1.10` (previous product tag `v0.1.9` → `2079bb8`; the 0.1.10 release content covers test/import/store isolation PR #29 (`569f8a5`), oaos.cloud defaults PR #30 (`ac20c76`), and live-registry isolation PR #31 (`5d7b89e`); preceding product tag `v0.1.8` → `78c9a29`). **Architecture document version `v1.7.5` (`docs/architecture-v1.7.5.md`) is distinct from product version `0.1.10`** — v1.7.5 records the completed post-v1.7.4 merges (§16.16), not the release number.
+- **Canonical architecture:** [`docs/architecture-v1.7.5.md`](docs/architecture-v1.7.5.md) — v1.7.5 post-v1.7.4 completion record (§16.16) + Admin Console IA transition (§16.15) + Control-Plane-centric IA aliases (§16.14)
 - **User registration:** [`OAOS User Registration Guide v1.0`](docs/oaos-user-registration-guide-v1.0.md) — Mattermost identity, greeting, preferences, session isolation, and optional Google Workspace OAuth flow
 
 ---
@@ -381,6 +381,17 @@ pytest tests/test_admin_backend.py -v      # register / login / JWT / bcrypt / R
 
 **Operational note:** `AuditLedger.head`/`events` still prefer in-memory state, so a long-lived process needs a restart to observe history changed on disk.
 
+### 9h. Release v0.1.10 — product `0.1.10` (arch `v1.7.5` distinct)
+
+**Included (over v0.1.9 — deterministic tests, oaos.cloud defaults, and registry isolation):**
+- **Package-safe imports and isolated test state (PR #29)** — the policy atomicity tests import `backend.policy` through its package so path order cannot resolve the wrong `auth` module. Import-time environment mutations are restored between modules, Outline/infra coverage uses the deployed `note.oaos.cloud` and `chat.oaos.cloud` domains, every loaded admin infra store is cleared, and the stray blank line at EOF is removed.
+- **Outline and Mattermost defaults use oaos.cloud (PR #30)** — the backend defaults, UI fixture, Outline test fixtures, and Mattermost bridge default now use `note.oaos.cloud` and `chat.oaos.cloud`. Repository scans measured **0** remaining `note.openit.co.kr` matches and **0** remaining `chat.openit.co.kr` matches.
+- **Live-registry tests no longer retain orphaned module state (PR #31)** — the fixture isolates all live registry state, including the infra module retained by the already-loaded admin app when `sys.modules` aliases are replaced, so an orphan module alias cannot leak a prior row into the next test.
+
+**Measured evidence:** PR #29's final full-suite-order run reported **1551 passed, 32 skipped** with all three affected Outline tests passing; its targeted checks reported **4 passed**, the admin/infra subsystem **42 passed**, and the shortened orphan-alias order reproduction **8 passed**. PR #30's changed-domain tests reported Outline **3 passed** and infrastructure UI **4 passed**, with TypeScript and targeted ESLint at exit 0. PR #31's live-registry suite reported **5 passed** and targeted Ruff passed.
+
+**Residual:** the PR #29 full-suite run still had **8 pre-existing environment-dependent failures** (personal-wiki filesystem, migration timeout, and systemd installer writes). Live external integration and deployment were not performed for this release preparation.
+
 ## 10. Repository Structure
 
 ```text
@@ -396,12 +407,12 @@ config/                    # oaos.env.example — systemd unified env template (
 deploy/                    # docker-compose.dev/prod.yml + k8s (Section 32) + systemd (oaos-*.service) + firewall (hermes-egress.nft)
 scripts/                   # check-production-config.sh — friendly preflight (no secret output)
 tests/                     # see Verification Evidence — run pytest -q for the current count
-docs/architecture-v1.7.4.md  # Canonical implementation architecture — v1.7.4 completed Admin Console IA transition (§16.15)
+docs/architecture-v1.7.5.md  # Canonical implementation architecture — v1.7.5 post-v1.7.4 completion record (§16.16)
 ```
 
 ## 11. Docs
 
-- [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md) — Current canonical implementation architecture; includes the completed Admin Console IA transition (§16.15), v1.7.3 IA aliases (§16.14), and Adaptive Profile Engine design (§16.12). Previous: [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md) and [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) (historical).
+- [`docs/architecture-v1.7.5.md`](docs/architecture-v1.7.5.md) — Current canonical implementation architecture; records the completed post-v1.7.4 merges (§16.16), Admin Console IA transition (§16.15), and v1.7.3 IA aliases (§16.14). Previous: [`docs/architecture-v1.7.4.md`](docs/architecture-v1.7.4.md), [`docs/architecture-v1.7.3.md`](docs/architecture-v1.7.3.md), and [`docs/architecture-v1.7.2.md`](docs/architecture-v1.7.2.md) (historical).
 - [`docs/architecture-v1.7.2-design.md`](docs/architecture-v1.7.2-design.md) — Critical/High hardening design (C1/H1–H8, Personal Wiki JWT, Enterprise Knowledge Index spec, readiness strict, distributed state).
 - [`docs/personal-wiki-design.md`](docs/personal-wiki-design.md) — Personal Wiki Vault / extractor / consolidation / memory_service integration.
 - [`docs/security-model.md`](docs/security-model.md) — Dual runtime, untrusted worker, tool policy, data access, egress allowlist.
