@@ -153,23 +153,38 @@ class TestQuotaRedisLua:
         os.environ.pop("OAOS_ENV", None)
         os.environ.pop("OAOS_QUOTA_REDIS_URL", None)
 
-    def test_prod_allow_fallback_for_tests_only(self):
+    def test_prod_test_flag_does_not_bypass_quota_fail_closed(self):
+        """Production quota enforcement stays fail-closed even with OAOS_ALLOW_TEST_FALLBACK.
+
+        Commit d7f0ef5 replaced the test-flag bypass in `_allow_quota_fallback()`
+        with `return not _is_quota_production()`: an unavailable quota backend in
+        production is an incident, not a test convenience. This test used to assert
+        the pre-hardening fail-open behaviour.
+        """
         import agent_runtime.llm_runtime as rm
+        keys = ("OAOS_ENV", "OAOS_ALLOW_TEST_FALLBACK", "OAOS_QUOTA_REDIS_URL")
+        old = {k: os.environ.get(k) for k in keys}
         os.environ["OAOS_ENV"] = "production"
         os.environ["OAOS_ALLOW_TEST_FALLBACK"] = "1"
         os.environ["OAOS_QUOTA_REDIS_URL"] = "redis://127.0.0.1:59999/0"
         rm._quota_redis_override = None
         rm._llm_quota_clear()
-        # with allow fallback, should not raise 503 but fall through to in-memory (fail-open for tests)
-        # we consider this permitted for test harness only
         try:
-            rm._llm_quota_check("t-fallback-allowed")
-        except Exception as e:
-            pytest.fail(f"should have fallen back with ALLOW_TEST_FALLBACK, got {e}")
+            try:
+                from fastapi import HTTPException as _HTTPExc
+            except ImportError:  # pragma: no cover - fastapi is a hard dependency
+                _HTTPExc = RuntimeError
+            with pytest.raises(_HTTPExc) as ei:
+                rm._llm_quota_check("t-flag-must-not-bypass")
+            assert "QUOTA_BACKEND_UNAVAILABLE" in str(ei.value), str(ei.value)
         finally:
-            os.environ.pop("OAOS_ENV", None)
-            os.environ.pop("OAOS_ALLOW_TEST_FALLBACK", None)
-            os.environ.pop("OAOS_QUOTA_REDIS_URL", None)
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            rm._quota_redis_override = None
+            rm._llm_quota_clear()
 
     def test_admin_llm_providers_redis_quota(self):
         # limit to testing via agent_runtime path already covered above;
@@ -405,23 +420,33 @@ class TestSessionStoreDistributed:
             redis_lib.Redis.from_url = orig
 
     def test_control_plane_session_prod_fail_closed_no_redis(self):
-        # ensure no prior monkeypatch leaking fakeredis
+        # Import the class BEFORE switching to production: importing
+        # control_plane.session while OAOS_ENV=production constructs the module-level
+        # store with fallback=False and raises at import time, so the assertions below
+        # could never run (and the failure was attributed to this line).
+        import importlib
+        import sys
+        os.environ["OAOS_ENV"] = "test"
+        if "control_plane.session" in sys.modules:
+            del sys.modules["control_plane.session"]
+        import control_plane.session as _session_mod
+        _session_mod = importlib.reload(_session_mod)
+        store_cls = _session_mod.RedisSessionStore
         import redis as redis_lib
         orig = redis_lib.Redis.from_url
-        # restore if patched to fakeredis by earlier test (detect by checking if orig is lambda)
+        # ensure no prior monkeypatch leaking fakeredis
         # we just ensure next test uses real connection that will fail
         # force no override client
         os.environ["OAOS_ENV"] = "production"
         os.environ.pop("OAOS_ALLOW_TEST_FALLBACK", None)
-        from control_plane.session import RedisSessionStore
         try:
             # without redis client and with fallback=None, must raise in prod
             with pytest.raises(RuntimeError) as ei:
-                RedisSessionStore(redis_url="redis://127.0.0.1:59999/0", ttl_seconds=60, key_prefix="test:oaos:session:")
+                store_cls(redis_url="redis://127.0.0.1:59999/0", ttl_seconds=60, key_prefix="test:oaos:session:")
             assert "Redis unavailable" in str(ei.value)
             # explicit fallback=True in prod must be rejected even before connection
             with pytest.raises(RuntimeError) as ei2:
-                RedisSessionStore(redis_url="redis://127.0.0.1:59999/0", fallback=True)
+                store_cls(redis_url="redis://127.0.0.1:59999/0", fallback=True)
             assert "fallback not allowed" in str(ei2.value).lower()
         finally:
             os.environ.pop("OAOS_ENV", None)

@@ -87,26 +87,20 @@ def test_outline_db_https_url_and_probe_uses_db_host():
 
     # Also mock TCP to avoid real connections — patch all possible import paths
     targets = ["httpx.AsyncClient", "admin_console.backend.infra.httpx.AsyncClient", "infra.httpx.AsyncClient", "admin_infra.httpx.AsyncClient"]
-    # Use first that works; patch all via nested context
+    # Also mock TCP to avoid real connections — patch all possible import paths.
+    # ExitStack unwinds in reverse order; patching the same underlying attribute
+    # through several aliases and stopping the contexts first-in-first-out restores
+    # a MagicMock (each patch saves the value the previous one installed), which then
+    # leaks into every later test that awaits httpx.AsyncClient.
     import contextlib
-    ctxs = [patch(t, return_value=mock_client) for t in targets]
-    # only keep those that resolve (patch will error if module missing)
-    valid_ctxs = []
-    for ctx in ctxs:
-        try:
-            ctx.__enter__()
-            valid_ctxs.append(ctx)
-        except Exception:
-            pass
-    try:
-        with patch("asyncio.open_connection", new=AsyncMock(side_effect=Exception("tcp skip"))):
-            r2 = c.get("/v1/infra/registry", headers=h)
-    finally:
-        for ctx in valid_ctxs:
+    with contextlib.ExitStack() as stack:
+        for t in targets:
             try:
-                ctx.__exit__(None, None, None)
+                stack.enter_context(patch(t, return_value=mock_client))
             except Exception:
-                pass
+                continue
+        stack.enter_context(patch("asyncio.open_connection", new=AsyncMock(side_effect=Exception("tcp skip"))))
+        r2 = c.get("/v1/infra/registry", headers=h)
     assert r2.status_code == 200, r2.text
     data = r2.json()
     rows = data["items"] if "items" in data else data["registry"]

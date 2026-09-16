@@ -448,7 +448,10 @@ async def _post_with_retry_collect(adapter: Any, channel_id: str, text: str, roo
                     raise RuntimeError("empty post_id from mattermost adapter")
                 success = True
                 break
-            except _OPTIONAL_FAILURES as exc:
+            except Exception as exc:
+                # A chunk is retried up to 3 times. `_OPTIONAL_FAILURES` excludes plain
+                # Exception, so an adapter that raises e.g. Exception("timeout") escaped
+                # the bounded retry entirely and surfaced as a hard delivery failure.
                 log.warning("mattermost response post failed channel=%s root=%s trace=%s session=%s attempt=%d error=%s", channel_id, root_id, trace_id, session_id, attempt, str(exc)[:300], exc_info=attempt == 3)
                 if attempt < 3:
                     await asyncio.sleep(0.5 * attempt)

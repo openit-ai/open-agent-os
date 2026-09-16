@@ -74,11 +74,17 @@ async def test_llm_missing_provider_fail_closed_in_prod():
         import agent_runtime.llm_runtime as mod
         orig = mod._load_litellm
         mod._load_litellm = lambda: None  # type: ignore
+        # The production quota gate is fail-closed and orthogonal to this test
+        # (covered by test_quota_fail_closed_prod_*); without neutralising it the
+        # 503 QUOTA_BACKEND_UNAVAILABLE fires first and the mock guard is never reached.
+        quota_orig = mod._llm_quota_check
+        mod._llm_quota_check = lambda tenant_id: None  # type: ignore
         try:
             with pytest.raises(RuntimeError, match="mock fallback disabled"):
                 await adapter._raw_completion([{"role":"user","content":"hi"}], model="claude-test", trace_id="t1")
         finally:
             mod._load_litellm = orig  # type: ignore
+            mod._llm_quota_check = quota_orig  # type: ignore
     finally:
         _restore(old)
 

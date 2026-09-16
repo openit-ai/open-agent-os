@@ -143,21 +143,19 @@ def test_production_no_fallback_startup_fails_when_redis_unavailable():
 
 def test_production_redis_store_fallback_true_rejected():
     """Explicit fallback=True in production must be rejected."""
-    env = {"OAOS_ENV": "production"}
-    old = {k: os.environ.get(k) for k in env}
-    for k,v in env.items():
-        os.environ[k] = v
+    # Import while NOT in production: importing control_plane.session with
+    # OAOS_ENV=production builds the module-level store with fallback=False and raises
+    # when Redis is unreachable, so the constructor guard below could never be reached.
+    m, old = _reload_session_module({"OAOS_ENV": "test", "OAOS_SESSION_BACKEND": None})
+    store_cls = m.RedisSessionStore
+    os.environ["OAOS_ENV"] = "production"
     try:
-        from control_plane.session import RedisSessionStore
         with pytest.raises(RuntimeError) as ei:
-            RedisSessionStore(redis_url="redis://127.0.0.1:59999/0", fallback=True)
+            store_cls(redis_url="redis://127.0.0.1:59999/0", fallback=True)
         assert "fallback not allowed" in str(ei.value).lower()
     finally:
-        for k,v in old.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+        os.environ["OAOS_ENV"] = "test"
+        _restore_env(old)
 
 # --- Test 3: serialization persistence namespace/model ---
 def test_session_namespace_model_persisted_across_reload():
