@@ -63,12 +63,12 @@ def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 def test_outline_db_https_url_and_probe_uses_db_host():
-    """DB-backed Outline must probe https://note.openit.co.kr:443/_health, not http://127.0.0.1:3000/."""
+    """DB-backed Outline must probe https://note.oaos.cloud:443/_health, not http://127.0.0.1:3000/."""
     token = _login()
     c = _client()
     h = _auth(token)
-    # Create DB row like production: outline note.openit.co.kr:443 /_health
-    payload = {"service": "outline", "host": "note.openit.co.kr", "port": 443, "health_path": "/_health"}
+    # Create DB row like production: outline note.oaos.cloud:443 /_health
+    payload = {"service": "outline", "host": "note.oaos.cloud", "port": 443, "health_path": "/_health"}
     r = c.post("/v1/infra", json=payload, headers=h)
     assert r.status_code == 201, r.text
     # Mock httpx to capture URL and return 200
@@ -113,17 +113,17 @@ def test_outline_db_https_url_and_probe_uses_db_host():
     outline = next((x for x in rows if x["name"] == "outline"), None)
     assert outline is not None, f"outline missing {rows[:2]}"
     # host/port/health_path from DB
-    assert outline["host"] == "note.openit.co.kr"
+    assert outline["host"] == "note.oaos.cloud"
     assert outline["port"] == 443
     assert outline["health_path"] == "/_health"
     # URL must be https, not http, and contain correct host/path
     url = outline.get("url") or ""
     assert url.startswith("https://"), f"Outline URL must be https for port 443, got {url}"
-    assert "note.openit.co.kr:443/_health" in url, f"URL must contain DB host/path, got {url}"
+    assert "note.oaos.cloud:443/_health" in url, f"URL must contain DB host/path, got {url}"
     assert "127.0.0.1" not in url, f"URL must not contain live fallback 127.0.0.1, got {url}"
     # captured probe URL must be https and contain _health if probing happened; otherwise at least URL check suffices
     if captured_urls:
-        assert any("https://note.openit.co.kr:443/_health" in u for u in captured_urls), f"probe must call https URL, captured={captured_urls}"
+        assert any("https://note.oaos.cloud:443/_health" in u for u in captured_urls), f"probe must call https URL, captured={captured_urls}"
     # status should be healthy because mocked 200 == expected 200 (if probe succeeded) else unknown is also acceptable when mock not hit
     assert outline["probe_type"] == "http"
     assert outline["source"] == "both"
@@ -134,7 +134,7 @@ def test_outline_registry_url_without_probe_still_https():
     token = _login()
     c = _client()
     h = _auth(token)
-    c.post("/v1/infra", json={"service": "outline", "host": "note.openit.co.kr", "port": 443, "health_path": "/_health"}, headers=h)
+    c.post("/v1/infra", json={"service": "outline", "host": "note.oaos.cloud", "port": 443, "health_path": "/_health"}, headers=h)
     # call registry with probing mocked but ensure URL generation without network also would be https
     # We directly test _build_unified_rows probe=False path via internal API? fallback: check registry still https even if probe fails
     async_mock = AsyncMock(side_effect=Exception("network fail"))
@@ -144,14 +144,14 @@ def test_outline_registry_url_without_probe_still_https():
             r = c.get("/v1/infra/registry", headers=h)
     outline = next(x for x in r.json()["items"] if x["name"] == "outline")
     assert outline["url"].startswith("https://")
-    assert "note.openit.co.kr" in outline["url"]
+    assert "note.oaos.cloud" in outline["url"]
 
 def test_registry_display_name_is_not_duplicated():
     """The registry preserves Outline's display name as one uncombined value."""
     token = _login()
     c = _client()
     h = _auth(token)
-    r = c.post("/v1/infra", json={"service": "outline", "host": "note.openit.co.kr", "port": 443, "health_path": "/_health"}, headers=h)
+    r = c.post("/v1/infra", json={"service": "outline", "host": "note.oaos.cloud", "port": 443, "health_path": "/_health"}, headers=h)
     assert r.status_code == 201
     with patch("httpx.AsyncClient", return_value=MagicMock(
         __aenter__=AsyncMock(return_value=MagicMock(get=AsyncMock(return_value=MagicMock(status_code=200)))),

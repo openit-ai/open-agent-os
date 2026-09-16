@@ -147,7 +147,7 @@ def _signature(body):
     secret = _load_cp_secret()
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest() if secret else ""
 
-MATTERMOST_URL = os.getenv("MATTERMOST_URL", "https://chat.openit.co.kr")
+MATTERMOST_URL = os.getenv("MATTERMOST_URL", "https://chat.oaos.cloud")
 BOT_TOKEN = os.getenv("MATTERMOST_BOT_TOKEN", "")
 if not BOT_TOKEN or len(BOT_TOKEN) < 20:
     try:

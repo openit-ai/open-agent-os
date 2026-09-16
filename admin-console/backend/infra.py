@@ -559,7 +559,7 @@ async def _probe_one(service: InfraService) -> InfraService:
     # TCP probe for postgres/redis — no HTTP
     if service.name in _TCP_NAMES:
         return await _probe_tcp(service)
-    # Normalize host that may contain scheme/path (e.g. https://chat.openit.co.kr/api)
+    # Normalize host that may contain scheme/path (e.g. https://chat.oaos.cloud/api)
     raw_host = (service.host or "").strip()
     scheme = "http"
     host_clean = raw_host
@@ -882,8 +882,8 @@ def _parse_host_port_from_url(url: str, default_host: str, default_port: int) ->
 
 def _resolve_mattermost_live() -> dict:
     # non-secret: host/port only, no token
-    raw = (os.environ.get("OAOS_CP_MATTERMOST_URL") or os.environ.get("MATTERMOST_URL") or "https://chat.openit.co.kr").strip()
-    host, port = _parse_host_port_from_url(raw, "chat.openit.co.kr", 443)
+    raw = (os.environ.get("OAOS_CP_MATTERMOST_URL") or os.environ.get("MATTERMOST_URL") or "https://chat.oaos.cloud").strip()
+    host, port = _parse_host_port_from_url(raw, "chat.oaos.cloud", 443)
     # Mattermost health via /api/v4/system/ping (returns {"status":"OK"}); port 443 implies https
     return _live_http_entry("live_mattermost", "mattermost", "Mattermost", host, port, health_path="/api/v4/system/ping", extra={"category": "collaboration", "url_hint": raw})
 
@@ -1278,7 +1278,7 @@ async def _build_unified_rows(probe: bool = True) -> list[dict]:
         if db_svc is not None:
             if probe:
                 try:
-                    # Probe DB service directly so https://note.openit.co.kr:443/_health is used, not http://127.0.0.1:3000/
+                    # Probe DB service directly so https://note.oaos.cloud:443/_health is used, not http://127.0.0.1:3000/
                     if probe_type == "tcp":
                         db_probed = await _probe_tcp(db_svc)
                     else:

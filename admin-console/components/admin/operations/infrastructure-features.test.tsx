@@ -36,7 +36,7 @@ describe("OperationsHealthFeature", () => {
       display_name: "outline",
       service: "outline",
       name: "outline",
-      host: "note.openit.co.kr",
+      host: "note.oaos.cloud",
       port: 443,
       status: "healthy",
     };
