@@ -18,7 +18,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from audit_model import AuditCheckpoint, AuditEvent
+from audit_model import AuditCheckpoint, AuditEvent, AuditEventType
 
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,60 @@ _CHAIN_TIP_QUERY = (
     "SELECT a.event_hash FROM audit_events a "
     "WHERE a.event_hash IS NOT NULL "
     "AND NOT EXISTS (SELECT 1 FROM audit_events b WHERE b.previous_hash = a.event_hash) "
-    "ORDER BY a.timestamp DESC LIMIT 1"
+    "ORDER BY a.event_hash LIMIT 1"
 )
+
+_AUDIT_EVENT_FIELDS = (
+    "event_id",
+    "event_type",
+    "timestamp",
+    "tenant_id",
+    "user_id",
+    "agent_id",
+    "session_id",
+    "trace_id",
+    "request_id",
+    "resource",
+    "action",
+    "decision",
+    "policy_version",
+    "delegation_id",
+    "credential_binding_id",
+    "tool_name",
+    "parameters_hash",
+    "result_hash",
+    "previous_hash",
+    "event_hash",
+)
+
+
+def _normalize_timestamp(timestamp):
+    """Use UTC-aware timestamps for hashes and database round-trips.
+
+    SQLite's DateTime type stores a timezone-aware value as a naive value.  A
+    timestamp such as ``12:00+09:00`` would therefore come back as
+    ``12:00+00:00`` and change the canonical payload used by ``compute_hash``.
+    Treat naive values as UTC and normalize aware values before hashing so the
+    persisted representation has one stable form on every supported backend.
+    """
+    if timestamp is None:
+        return None
+    if not isinstance(timestamp, datetime):
+        return timestamp
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
+def _normalize_event_timestamp(event: AuditEvent) -> None:
+    timestamp = _normalize_timestamp(getattr(event, "timestamp", None))
+    if timestamp is not None:
+        event.timestamp = timestamp
+
+
+def _event_sort_key(event: AuditEvent) -> tuple[str, str]:
+    """Stable fallback ordering for rows outside a single linked chain."""
+    return (str(getattr(event, "event_id", "")), str(getattr(event, "event_hash", "")))
 
 try:
     from sqlalchemy.exc import SQLAlchemyError
@@ -193,7 +245,7 @@ def _event_to_orm(event: AuditEvent):
     return AuditEventORM(
         event_id=event.event_id,
         event_type=event.event_type.value if hasattr(event.event_type, "value") else str(event.event_type),
-        timestamp=event.timestamp,
+        timestamp=_normalize_timestamp(event.timestamp),
         tenant_id=event.tenant_id,
         user_id=event.user_id,
         agent_id=event.agent_id,
@@ -255,8 +307,6 @@ def _chain_tip(executor) -> str | None:
 
 
 def _orm_to_event(row) -> AuditEvent:
-    from audit_model import AuditEventType  # type: ignore
-
     evt_type_val = getattr(row, "event_type", "USER_MESSAGE")
     try:
         evt_type = AuditEventType(evt_type_val)
@@ -266,9 +316,7 @@ def _orm_to_event(row) -> AuditEvent:
             evt_type = AuditEventType[evt_type_val]
         except (KeyError, TypeError):
             evt_type = AuditEventType.USER_MESSAGE
-    ts = getattr(row, "timestamp")
-    if ts is not None and ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+    ts = _normalize_timestamp(getattr(row, "timestamp"))
     return AuditEvent(
         event_id=str(row.event_id),
         event_type=evt_type,
@@ -293,6 +341,182 @@ def _orm_to_event(row) -> AuditEvent:
     )
 
 
+def _row_has_valid_shape(row) -> bool:
+    """Return whether a DB row can represent a normal audit event.
+
+    The ORM intentionally leaves the hash columns nullable for compatibility
+    with the existing table.  Null/invalid hashes are therefore reported as
+    integrity failures by the chain reconstruction instead of being filtered
+    out here.
+    """
+    for field in ("event_id", "event_type", "timestamp", "tenant_id"):
+        if getattr(row, field, None) is None:
+            return False
+    timestamp = getattr(row, "timestamp", None)
+    if not isinstance(timestamp, datetime):
+        return False
+    raw_type = getattr(row, "event_type", None)
+    try:
+        AuditEventType(raw_type)
+    except (ValueError, TypeError):
+        try:
+            AuditEventType[raw_type]
+        except (KeyError, TypeError):
+            return False
+    return True
+
+
+def _malformed_event_from_row(row) -> AuditEvent:
+    """Build a lossless-ish model for a row that failed normal validation.
+
+    ``AuditEvent`` is a validated model, while a malformed DB row may not be
+    constructible as one.  Keep the row in the returned collection using
+    Pydantic's construction escape hatch, retaining its hash/link fields so
+    callers can inspect it.  The caller separately marks the snapshot
+    invalid, and ``verify_chain`` consequently fails closed.
+    """
+    values = {field: getattr(row, field, None) for field in _AUDIT_EVENT_FIELDS}
+    event_id = values.get("event_id")
+    values["event_id"] = str(event_id) if event_id is not None else "<malformed-event>"
+    tenant_id = values.get("tenant_id")
+    values["tenant_id"] = str(tenant_id) if tenant_id is not None else ""
+    values["timestamp"] = _normalize_timestamp(values.get("timestamp"))
+    if not isinstance(values["timestamp"], datetime):
+        values["timestamp"] = datetime.fromtimestamp(0, tz=timezone.utc)
+    raw_type = values.get("event_type")
+    try:
+        values["event_type"] = AuditEventType(raw_type)
+    except (ValueError, TypeError):
+        values["event_type"] = AuditEventType.USER_MESSAGE
+    construct = getattr(AuditEvent, "model_construct", None)
+    if construct is not None:
+        return construct(**values)
+    return AuditEvent.construct(**values)  # type: ignore[attr-defined]
+
+
+def _reconstruct_chain(
+    events: list[AuditEvent], *, initial_integrity_error: bool = False
+) -> tuple[list[AuditEvent], str | None, bool]:
+    """Order DB events by their hash links and report structural failures.
+
+    A healthy audit table has one root (``previous_hash is None``), one child
+    for every non-leaf node, and one leaf.  The old hydration path sorted by
+    timestamp, which is not a chain ordering and breaks as soon as clocks are
+    adjusted or timestamps tie.  This routine walks the links instead.  When
+    the graph is malformed it still returns every mapped row in a deterministic
+    order, appending disconnected branches after the traversed roots, and marks
+    the snapshot invalid for ``verify_chain``.
+    """
+    if not events:
+        return [], None, bool(initial_integrity_error)
+
+    integrity_error = bool(initial_integrity_error)
+    by_hash: dict[str, list[AuditEvent]] = {}
+    for event in events:
+        event_hash = getattr(event, "event_hash", None)
+        if not isinstance(event_hash, str) or not event_hash:
+            integrity_error = True
+            continue
+        by_hash.setdefault(event_hash, []).append(event)
+        try:
+            if event.compute_hash() != event_hash:
+                integrity_error = True
+        except (AttributeError, TypeError, UnicodeError, ValueError):
+            integrity_error = True
+
+    if any(len(matches) > 1 for matches in by_hash.values()):
+        integrity_error = True
+
+    roots: list[AuditEvent] = []
+    children: dict[str, list[AuditEvent]] = {}
+    for event in events:
+        previous_hash = getattr(event, "previous_hash", None)
+        if previous_hash is None:
+            roots.append(event)
+            continue
+        if not isinstance(previous_hash, str) or previous_hash not in by_hash:
+            integrity_error = True
+            continue
+        children.setdefault(previous_hash, []).append(event)
+
+    if len(roots) != 1:
+        integrity_error = True
+    if any(len(matches) > 1 for matches in children.values()):
+        integrity_error = True
+
+    ordered: list[AuditEvent] = []
+    visited: set[int] = set()
+
+    # A healthy table has one linear path.  Walk that path directly; malformed
+    # branches/components are appended below so every row remains inspectable.
+    if roots:
+        current = sorted(roots, key=_event_sort_key)[0]
+        while id(current) not in visited:
+            visited.add(id(current))
+            ordered.append(current)
+            event_children = children.get(getattr(current, "event_hash", None), [])
+            if len(event_children) > 1:
+                integrity_error = True
+                break
+            if not event_children:
+                break
+            current = event_children[0]
+        if id(current) in visited and (not ordered or ordered[-1] is not current):
+            integrity_error = True
+
+    # Missing parents, cycles, additional roots, and fork branches have not
+    # been traversed.  Keep them in a deterministic tail instead of dropping
+    # them from a restart snapshot.
+    leftovers = sorted(
+        (event for event in events if id(event) not in visited), key=_event_sort_key
+    )
+    if leftovers:
+        integrity_error = True
+        ordered.extend(leftovers)
+
+    # A malformed graph has no singular head.  A structurally linear graph can
+    # still have a useful leaf even when its payload hash is bad; verification
+    # below will report that cryptographic failure separately.
+    leaves = [
+        event
+        for event in events
+        if isinstance(getattr(event, "event_hash", None), str)
+        and bool(getattr(event, "event_hash", None))
+        and not children.get(getattr(event, "event_hash", None), [])
+    ]
+    head = leaves[0].event_hash if len(leaves) == 1 else None
+    return ordered, head, integrity_error
+
+
+def _events_from_orm_rows(
+    rows: list[object],
+) -> tuple[list[AuditEvent], str | None, bool]:
+    """Map all DB rows and reconstruct their linked order.
+
+    Mapping failures are represented by a model-constructed placeholder and a
+    failed integrity flag.  This keeps row counts and inspection results aligned
+    with the committed table while ensuring verification never treats the bad
+    row as valid.
+    """
+    events: list[AuditEvent] = []
+    integrity_error = False
+    for row in rows:
+        if not _row_has_valid_shape(row):
+            integrity_error = True
+        try:
+            event = _orm_to_event(row)
+        except (ValueError, TypeError, AttributeError, KeyError, UnicodeError) as error:
+            integrity_error = True
+            logger.warning(
+                "AuditLedger malformed audit row retained for verification: %s (%s)",
+                getattr(row, "event_id", "<unknown>"),
+                type(error).__name__,
+            )
+            event = _malformed_event_from_row(row)
+        events.append(event)
+    return _reconstruct_chain(events, initial_integrity_error=integrity_error)
+
+
 class AuditLedger:
     """In-memory hash-chain ledger with optional DB persistence.
 
@@ -306,37 +530,47 @@ class AuditLedger:
     def __init__(self, signing_key: str | None = None) -> None:
         self._head: str | None = None
         self._events: list[AuditEvent] = []
+        self._integrity_error = False
         self._signing_key = signing_key or "default-audit-signing-key"
         if _is_prod():
             _require_db_if_prod()
         # hydrate from DB if available (lazy) — isolated in pytest to avoid leakage
         if _db_should_use():
-            try:
-                session, engine = _db_get_session()
-                if session is None:
-                    error = RuntimeError("AuditLedger hydration failed — audit database unavailable")
-                    logger.warning("AuditLedger hydration unavailable")
-                    if _is_prod():
-                        raise error
-                else:
-                    try:
-                        from security.models.orm import AuditEventORM  # type: ignore
+            self._refresh_db_state("hydration")
 
-                        rows = session.query(AuditEventORM).order_by(AuditEventORM.timestamp).all()  # type: ignore
-                        for r in rows:
-                            try:
-                                evt = _orm_to_event(r)
-                                self._events.append(evt)
-                                self._head = evt.event_hash
-                            except (ValueError, TypeError, AttributeError, KeyError):
-                                # Corrupt row mapping — skip single row, keep the chain verifiable
-                                continue
-                    finally:
-                        _db_close(session, engine)
-            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
-                logger.warning("AuditLedger hydrate failed: %s", type(e).__name__)
-                if _is_prod():
-                    raise RuntimeError("AuditLedger hydration failed — audit database unavailable") from e
+    def _refresh_db_state(self, operation: str) -> tuple[list[AuditEvent], str | None, int] | None:
+        """Refresh the local snapshot from committed DB state.
+
+        A ledger instance may outlive other appenders, and a caller-supplied
+        transaction may later roll back.  Consequently DB-backed properties
+        must not trust ``_events`` or ``_head`` as an authoritative cache.  A
+        fresh session sees only committed rows and replaces the local snapshot
+        on every successful read.  ``None`` means that non-production fallback
+        should use the process-local snapshot because the DB is unavailable.
+        """
+        session, engine = _db_get_session()
+        if session is None:
+            error = RuntimeError(f"AuditLedger {operation} failed — audit database unavailable")
+            logger.warning("AuditLedger %s unavailable", operation)
+            if _is_prod():
+                raise error
+            return None
+        try:
+            from security.models.orm import AuditEventORM  # type: ignore
+
+            rows = session.query(AuditEventORM).all()  # type: ignore
+            events, head, integrity_error = _events_from_orm_rows(rows)
+            self._events = events
+            self._head = head
+            self._integrity_error = integrity_error
+            return list(events), head, len(rows)
+        except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError, UnicodeError) as e:
+            logger.warning("AuditLedger %s failed: %s", operation, type(e).__name__)
+            if _is_prod():
+                raise RuntimeError(f"AuditLedger {operation} failed — audit database unavailable") from e
+            return None
+        finally:
+            _db_close(session, engine)
 
     def append(self, event: AuditEvent, connection=None) -> AuditEvent:
         """Chain and persist one event.
@@ -357,6 +591,7 @@ class AuditLedger:
             return self._append_memory(event)
 
     def _append_memory(self, event: AuditEvent) -> AuditEvent:
+        _normalize_event_timestamp(event)
         event.previous_hash = self._head
         event.event_hash = event.compute_hash()
         self._head = event.event_hash
@@ -369,12 +604,16 @@ class AuditLedger:
             if _is_prod():
                 raise RuntimeError("AuditLedger append failed — audit database unavailable (fail-closed)")
             return self._append_memory(event)
+        original_timestamp = event.timestamp
+        original_previous_hash = event.previous_hash
+        original_event_hash = event.event_hash
         error: Exception | None = None
         try:
             # The head is read inside the lock so no other appender can chain from
             # the same parent while this insert is in flight.
             _lock_chain(session)
             event.previous_hash = _chain_tip(session)
+            _normalize_event_timestamp(event)
             event.event_hash = event.compute_hash()
             session.add(_event_to_orm(event))
             session.commit()
@@ -387,11 +626,18 @@ class AuditLedger:
         finally:
             _db_close(session, engine)
         if error is not None:
+            # A failed DB write is not a successful in-memory append.  Keep the
+            # local snapshot unchanged so a later DB read cannot expose a
+            # phantom event after rollback or a failed commit.
+            event.timestamp = original_timestamp
+            event.previous_hash = original_previous_hash
+            event.event_hash = original_event_hash
             if _is_prod():
-                raise RuntimeError(f"AuditLedger append failed — DB persist required in production but failed: {error}") from error
+                raise RuntimeError(
+                    "AuditLedger append failed — DB persist required in production but failed"
+                ) from None
             logger.warning("AuditLedger append DB persist failed: %s", type(error).__name__)
-            if event.event_hash is None:
-                return self._append_memory(event)
+            raise RuntimeError("AuditLedger append failed — DB persist failed") from None
         self._head = event.event_hash
         self._events.append(event)
         return event
@@ -400,119 +646,52 @@ class AuditLedger:
         """Append inside the caller's transaction; the caller commits or rolls back."""
         _lock_chain(connection)
         event.previous_hash = _chain_tip(connection)
+        _normalize_event_timestamp(event)
         event.event_hash = event.compute_hash()
         orm = _event_to_orm(event)
         table = type(orm).__table__
         connection.execute(
             table.insert().values({column.name: getattr(orm, column.name) for column in table.columns})
         )
-        self._head = event.event_hash
-        self._events.append(event)
         return event
 
     @property
     def head(self) -> str | None:
         if _db_should_use():
-            # prefer in-memory head (already synced), but fallback to DB query if empty
-            if self._head is not None:
-                return self._head
-            try:
-                session, engine = _db_get_session()
-                if session is None:
-                    error = RuntimeError("AuditLedger head lookup failed — audit database unavailable")
-                    logger.warning("AuditLedger head lookup unavailable")
-                    if _is_prod():
-                        raise error
-                else:
-                    try:
-                        from security.models.orm import AuditEventORM  # type: ignore
-
-                        row = session.query(AuditEventORM).order_by(AuditEventORM.timestamp.desc()).first()  # type: ignore
-                        if row is not None:
-                            return getattr(row, "event_hash", None)
-                    finally:
-                        _db_close(session, engine)
-            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
-                logger.warning("AuditLedger head DB lookup failed: %s", type(e).__name__)
-                if _is_prod():
-                    raise RuntimeError("AuditLedger head lookup failed — audit database unavailable") from e
+            snapshot = self._refresh_db_state("head lookup")
+            if snapshot is not None:
+                return snapshot[1]
         return self._head
 
     @property
     def events(self) -> list[AuditEvent]:
         if _db_should_use():
-            # return DB events if we have none in memory (or always prefer DB for consistency)
-            # To avoid missing events appended in same process, return in-memory if non-empty
-            # but also try to ensure DB hydrate on first call
-            if self._events:
-                return list(self._events)
-            try:
-                session, engine = _db_get_session()
-                if session is None:
-                    error = RuntimeError("AuditLedger events lookup failed — audit database unavailable")
-                    logger.warning("AuditLedger events lookup unavailable")
-                    if _is_prod():
-                        raise error
-                else:
-                    try:
-                        from security.models.orm import AuditEventORM  # type: ignore
-
-                        rows = session.query(AuditEventORM).order_by(AuditEventORM.timestamp).all()  # type: ignore
-                        evts = []
-                        for r in rows:
-                            try:
-                                evts.append(_orm_to_event(r))
-                            except (ValueError, TypeError, AttributeError, KeyError):
-                                # Corrupt row mapping — skip single row, keep the chain verifiable
-                                continue
-                        if evts:
-                            self._events = evts
-                            self._head = evts[-1].event_hash if evts else None
-                            return list(evts)
-                    finally:
-                        _db_close(session, engine)
-            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
-                logger.warning("AuditLedger events DB lookup failed: %s", type(e).__name__)
-                if _is_prod():
-                    raise RuntimeError("AuditLedger events lookup failed — audit database unavailable") from e
+            snapshot = self._refresh_db_state("events lookup")
+            if snapshot is not None:
+                return list(snapshot[0])
         return list(self._events)
 
     @property
     def count(self) -> int:
         if _db_should_use():
-            try:
-                session, engine = _db_get_session()
-                if session is None:
-                    error = RuntimeError("AuditLedger count failed — audit database unavailable")
-                    logger.warning("AuditLedger count lookup unavailable")
-                    if _is_prod():
-                        raise error
-                else:
-                    try:
-                        from security.models.orm import AuditEventORM  # type: ignore
-
-                        c = session.query(AuditEventORM).count()  # type: ignore
-                        if isinstance(c, int) and c > 0:
-                            return c
-                    finally:
-                        _db_close(session, engine)
-            except (SQLAlchemyError, ImportError, ModuleNotFoundError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
-                logger.warning("AuditLedger count lookup failed: %s", type(e).__name__)
-                if _is_prod():
-                    raise RuntimeError("AuditLedger count failed — audit database unavailable") from e
-            # fallback to memory count if DB count is 0 but memory has events (race)
-            if self._events:
-                return len(self._events)
+            snapshot = self._refresh_db_state("count lookup")
+            if snapshot is not None:
+                return snapshot[2]
         return len(self._events)
 
     def verify_chain(self) -> bool:
         """전체 체인 무결성 검증 — 하나라도 변조되면 False."""
         evts = self.events  # use DB-aware events
+        if self._integrity_error:
+            return False
         prev: str | None = None
         for e in evts:
-            if e.previous_hash != prev:
-                return False
-            if e.compute_hash() != e.event_hash:
+            try:
+                if e.previous_hash != prev:
+                    return False
+                if e.compute_hash() != e.event_hash:
+                    return False
+            except (AttributeError, TypeError, UnicodeError, ValueError):
                 return False
             prev = e.event_hash
         return True
