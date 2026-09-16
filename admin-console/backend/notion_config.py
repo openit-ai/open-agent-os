@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import time
+import base64
+import hashlib
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,9 +41,12 @@ router = APIRouter(prefix="/v1/notion", tags=["notion"])
 NOTION_KEY = "notion_config"
 DEFAULT_URL = "https://api.notion.com"
 NOTION_VERSION = "2022-06-28"
+_DEV_VAULT_KEY = "dev-notion-config-vault-key-please-change"
+_SECRET_REF = "vault://admin_settings/notion_config/api_key"
 
 _db_engine = None
 _inmem: dict | None = None
+_fernet_cache: dict[str, object] = {}
 
 
 def _db_url() -> str | None:
@@ -155,6 +160,64 @@ def _env_config() -> dict:
     }
 
 
+def _get_raw_vault_key() -> bytes:
+    raw = (os.environ.get("OAOS_VAULT_KEY") or os.environ.get("VAULT_ENCRYPTION_KEY") or "").strip()
+    if not raw:
+        if os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod"):
+            raise RuntimeError("OAOS_VAULT_KEY/VAULT_ENCRYPTION_KEY must be set in production")
+        raw = _DEV_VAULT_KEY
+    return raw.encode("utf-8")
+
+
+def _get_fernet():
+    raw = _get_raw_vault_key()
+    cache_key = raw.hex()
+    if cache_key in _fernet_cache:
+        return _fernet_cache[cache_key]
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError as exc:
+        raise RuntimeError("cryptography is required for Notion secret storage") from exc
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
+    fernet = Fernet(key)
+    _fernet_cache[cache_key] = fernet
+    return fernet
+
+
+def _encrypt_api_key(plain: str) -> str:
+    return _get_fernet().encrypt(plain.encode("utf-8")).decode("utf-8")
+
+
+def _decrypt_api_key(encrypted: str | None) -> str | None:
+    if not encrypted:
+        return None
+    try:
+        return _get_fernet().decrypt(encrypted.encode("utf-8")).decode("utf-8")
+    except Exception as exc:  # noqa: BLE001 - do not leak ciphertext or token details
+        logger.warning("notion secret reference resolution failed: %s", type(exc).__name__)
+        return None
+
+
+def _read_saved_payload() -> dict:
+    raw = _db_get_raw()
+    if raw:
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+    return dict(_inmem or {})
+
+
+def _public_config(data: dict, env: dict) -> dict:
+    encrypted = str(data.get("encrypted_api_key") or "").strip()
+    secret_ref = str(data.get("secret_ref") or "").strip()
+    return {
+        "notion_api_url": str(data.get("notion_api_url") or env["notion_api_url"]),
+        "api_key_set": bool(data.get("api_key_set", False)) or bool(encrypted and secret_ref) or env["api_key_set"],
+    }
+
+
 def _load_config() -> tuple[dict, str]:
     global _inmem
     raw = _db_get_raw()
@@ -162,17 +225,32 @@ def _load_config() -> tuple[dict, str]:
         try:
             data = json.loads(raw)
             env = _env_config()
-            cfg = {
-                "notion_api_url": str(data.get("notion_api_url") or env["notion_api_url"]),
-                "api_key_set": bool(data.get("api_key_set", False)) or env["api_key_set"],
-            }
+            cfg = _public_config(data, env)
             _inmem = cfg
             return cfg, "db"
         except (ValueError, AttributeError, TypeError) as e:
             logger.debug(f"notion parse DB failed: {e}")
     if _inmem is not None:
-        return dict(_inmem), "in-memory"
+        return _public_config(dict(_inmem), _env_config()), "in-memory"
     return _env_config(), "env"
+
+
+def _env_api_key() -> str:
+    return (os.environ.get("NOTION_API_KEY") or os.environ.get("NOTION_TOKEN")
+            or os.environ.get("OAOS_NOTION_TOKEN") or os.environ.get("NOTION_API_TOKEN") or "").strip()
+
+
+def resolve_api_key(override: str | None = None) -> str:
+    """Resolve a Notion API key without logging or returning secret metadata."""
+    if override and override.strip():
+        return override.strip()
+    env_key = _env_api_key()
+    if env_key:
+        return env_key
+    payload = _read_saved_payload()
+    if payload.get("secret_ref") != _SECRET_REF:
+        return ""
+    return _decrypt_api_key(str(payload.get("encrypted_api_key") or "")) or ""
 
 
 class NotionUpdateRequest(BaseModel):
@@ -216,15 +294,19 @@ def notion_get_config(admin: AdminUser = Depends(get_current_admin)) -> dict:
 @router.put("/config")
 def notion_put_config(req: NotionUpdateRequest, admin: AdminUser = Depends(require_l5)) -> dict:
     global _inmem
+    saved = _read_saved_payload()
     cfg, _ = _load_config()
     if req.notion_api_url is not None:
         cfg["notion_api_url"] = req.notion_api_url
     if req.api_key is not None:
         cfg["api_key_set"] = True
-    raw = json.dumps(cfg)
+        saved["encrypted_api_key"] = _encrypt_api_key(req.api_key)
+        saved["secret_ref"] = _SECRET_REF
+    saved.update(cfg)
+    raw = json.dumps(saved)
     ok = _db_set_raw(raw, updated_by=getattr(admin, "email", None))
     if ok:
-        _inmem = dict(cfg)
+        _inmem = dict(saved)
         return config_response(
             "notion", cfg, "db",
             "saved; update NOTION_* env on the host and restart services to apply",
@@ -232,7 +314,7 @@ def notion_put_config(req: NotionUpdateRequest, admin: AdminUser = Depends(requi
         )
     if (os.environ.get("OAOS_ENV", "").strip().lower() in ("production", "prod")):
         raise HTTPException(status_code=503, detail="Notion config DB unavailable in production (fail-closed)")
-    _inmem = dict(cfg)
+    _inmem = dict(saved)
     return config_response(
         "notion", cfg, "in-memory",
         "saved in-memory only (dev); update NOTION_* env and restart to apply",
@@ -247,8 +329,7 @@ def notion_test(body: dict | None = None, admin: AdminUser = Depends(require_l5)
     override = ""
     if isinstance(body, dict):
         override = str(body.get("api_key") or "").strip()
-    key = (override or os.environ.get("NOTION_API_KEY") or os.environ.get("NOTION_TOKEN")
-           or os.environ.get("OAOS_NOTION_TOKEN") or os.environ.get("NOTION_API_TOKEN") or "")
+    key = resolve_api_key(override)
     if not key:
         return {"ok": False, "error": "no API key configured (save one first or pass api_key for a one-shot probe)", "source": source}
     target = cfg["notion_api_url"]

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer, type McpServer } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { Boxes, Loader2, Plus, Trash2 } from "lucide-react";
-import { ConfirmDialog, TestConnectionButton } from "@/components/admin";
+import { ConfirmDialog, Skeleton, TestConnectionButton } from "@/components/admin";
 
 const TRANSPORTS = ["stdio", "sse", "streamable-http"] as const;
 
@@ -103,7 +103,7 @@ export function McpPanel() {
     }
   };
 
-  if (loading) return <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>;
+  if (loading) return <Skeleton variant="table" rows={3} ariaLabel={t("admin.loading.content")} />;
 
   return (
     <div className="space-y-6">

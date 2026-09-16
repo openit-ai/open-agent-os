@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface SkeletonProps {
@@ -10,7 +11,10 @@ export interface SkeletonProps {
 export function Skeleton({ variant, rows = variant === "table" ? 5 : 3, ariaLabel = "Loading content" }: SkeletonProps) {
   return (
     <div role="status" aria-label={ariaLabel} className="animate-pulse space-y-3 motion-reduce:animate-none">
-      <span className="sr-only">{ariaLabel}</span>
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+        <span>{ariaLabel}</span>
+      </div>
       {variant === "card" ? <div className="h-32 rounded-lg bg-muted" /> : null}
       {variant === "form" ? Array.from({ length: rows }, (_, index) => (
         <div key={index} className="space-y-2">

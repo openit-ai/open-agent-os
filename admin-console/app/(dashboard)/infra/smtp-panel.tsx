@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { getSmtpConfig, updateSmtpConfig, type SmtpConfig } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { Mail, Loader2 } from "lucide-react";
-import { ConfigurationApplyState, TestConnectionButton } from "@/components/admin";
+import { ConfigurationApplyState, Skeleton, TestConnectionButton } from "@/components/admin";
 
 export function SmtpPanel() {
   const { t } = useI18n();
@@ -63,7 +63,7 @@ export function SmtpPanel() {
     }
   };
 
-  if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
+  if (loading) return <Skeleton variant="form" rows={4} ariaLabel={t("admin.loading.content")} />;
 
   return (
     <div className="space-y-6">

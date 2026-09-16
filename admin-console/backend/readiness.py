@@ -1014,7 +1014,11 @@ def _run_adapter(
         response = httpx.post(target.rstrip("/") + "/api/collections.list", json={"token": key}, timeout=timeout_seconds)
         return _http_result(response, started, target)
     if base == "notion":
-        key = os.environ.get("NOTION_API_KEY") or os.environ.get("NOTION_TOKEN") or os.environ.get("OAOS_NOTION_TOKEN")
+        key = ""
+        try:
+            key = _domain("notion_config").resolve_api_key()
+        except Exception as exc:  # noqa: BLE001 - normalize via AUTH_REQUIRED below
+            logger.warning("notion readiness secret resolution failed: %s", type(exc).__name__)
         if not key:
             raise _AdapterFailure("AUTH_REQUIRED")
         response = httpx.get(target.rstrip("/") + "/v1/users", headers={"Authorization": f"Bearer {key}", "Notion-Version": "2022-06-28"}, timeout=timeout_seconds)

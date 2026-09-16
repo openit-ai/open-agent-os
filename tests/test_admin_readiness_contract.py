@@ -260,3 +260,42 @@ def test_existing_config_response_has_additive_apply_state(client):
         response = client.get(path)
         assert response.status_code == 200, (path, response.text)
         assert required.issubset(response.json()), path
+
+
+def test_notion_adapter_uses_saved_secret_reference_without_leaking(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeNotionConfig:
+        @staticmethod
+        def resolve_api_key() -> str:
+            return "secret_saved_notion"
+
+    class FakeResponse:
+        status_code = 200
+
+    def fake_domain(name: str):
+        assert name == "notion_config"
+        return FakeNotionConfig
+
+    def fake_get(url, headers, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(readiness_mod, "_domain", fake_domain)
+    monkeypatch.setattr("httpx.get", fake_get)
+
+    result = readiness_mod._run_adapter(
+        "notion",
+        {"config": {}, "target": "https://api.notion.com"},
+        None,
+        2.5,
+        "safe",
+    )
+
+    assert result["status_code"] == 200
+    assert captured["url"] == "https://api.notion.com/v1/users"
+    assert captured["headers"]["Authorization"] == "Bearer secret_saved_notion"
+    assert captured["headers"]["Notion-Version"] == "2022-06-28"
+    assert "secret_saved_notion" not in json.dumps(result)

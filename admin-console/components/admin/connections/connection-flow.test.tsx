@@ -10,6 +10,19 @@ vi.mock("@/lib/admin-api/client", async (importOriginal) => {
 });
 
 describe("ConnectionFlow", () => {
+  it("shows a spinning loading indicator while discovery is pending", () => {
+    vi.mocked(getConnectionDiscovery).mockReturnValue(new Promise(() => undefined));
+
+    const { container } = renderWithProviders(
+      <ConnectionFlow kind="notion" title="Notion" description="Connection" serviceLabel="Notion">
+        <div>Notion settings</div>
+      </ConnectionFlow>,
+    );
+
+    expect(screen.getByRole("status", { name: "Discovering connection candidates" })).toBeVisible();
+    expect(container.querySelector(".animate-spin")).toBeTruthy();
+  });
+
   it("renders masked discovery metadata before closed advanced inputs", async () => {
     vi.mocked(getConnectionDiscovery).mockResolvedValue({
       kind: "mattermost",

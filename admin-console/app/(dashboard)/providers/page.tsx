@@ -234,7 +234,7 @@ function ProvidersPageContent() {
         <CardHeader><CardTitle className="text-base">{t("providers.runtimeTitle")}</CardTitle><CardDescription>{t("providers.runtimeDesc")}</CardDescription></CardHeader>
         <CardContent>
           {runtimeLoading ? (
-            <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
+            <Skeleton variant="form" rows={2} ariaLabel={t("admin.loading.content")} />
           ) : (
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <label className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 flex-1 ${runtimeMode === "hermes" ? "border-primary bg-primary/5" : "hover:bg-accent"}`}>

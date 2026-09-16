@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { getNotionConfig, updateNotionConfig, type NotionConfig } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { StickyNote, Loader2 } from "lucide-react";
-import { ConfigurationApplyState, TestConnectionButton } from "@/components/admin";
+import { ConfigurationApplyState, Skeleton, TestConnectionButton } from "@/components/admin";
 
 export function NotionPanel() {
   const { t } = useI18n();
@@ -54,7 +54,7 @@ export function NotionPanel() {
     }
   };
 
-  if (loading) return <div className="py-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
+  if (loading) return <Skeleton variant="form" rows={3} ariaLabel={t("admin.loading.content")} />;
 
   return (
     <div className="space-y-6">
