@@ -42,38 +42,50 @@ if str(BACKEND) in sys.path:
         pass
 admin_app = app_mod.app
 
-def _clear_infra_stores():
-    """Clear the service store of *every* loaded admin infra module.
+def _reset_infra_state():
+    """Reset the store and DB cache of *every* loaded admin infra module.
 
     `app.py` resolves its infra sibling with `_load_admin_sibling("infra")`, which
     reuses whichever module already occupies `sys.modules["infra"]` instead of the
     one this file loaded under `admin_infra`. In a full-suite run those are two
-    different module objects, so clearing only `infra_mod` left rows created by an
-    earlier test (e.g. an edited `live_outline`) in the store the app actually
-    serves from, and the registry returned a stale host.
+    different module objects. Reset both their in-memory stores and their cached
+    SQLAlchemy engines so rows created by earlier tests cannot leak into this file.
     """
+    modules = [infra_mod, getattr(app_mod, "_infra_mod", None)]
+    modules.extend(
+        mod for name, mod in list(sys.modules.items())
+        if mod is not None and "infra" in name
+    )
     seen: set[int] = set()
-    for name, mod in list(sys.modules.items()):
-        if mod is None or "infra" not in name or id(mod) in seen:
+    for mod in modules:
+        if mod is None or id(mod) in seen:
             continue
         clear = getattr(mod, "clear_services", None)
         if clear is None:
             continue
         seen.add(id(mod))
-        # InfraBackendUnavailable is raised when the DB clear fails; other modules'
-        # stores are still cleared either way.
+        engine = getattr(mod, "_db_engine", None)
+        if engine is not None:
+            with contextlib.suppress(Exception):
+                engine.dispose()
+        if hasattr(mod, "_db_engine"):
+            mod._db_engine = None
+        if hasattr(mod, "_db_session_factory"):
+            mod._db_session_factory = None
         with contextlib.suppress(Exception):
             clear()
 
 
 @pytest.fixture(autouse=True)
-def isolate():
+def isolate(monkeypatch):
+    monkeypatch.delenv("OAOS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     auth_mod.clear_users()
-    _clear_infra_stores()
+    _reset_infra_state()
     # clear LIVE_INVENTORY side-effects? ensure probing mocked
     yield
     auth_mod.clear_users()
-    _clear_infra_stores()
+    _reset_infra_state()
 
 def _client():
     return TestClient(admin_app)
