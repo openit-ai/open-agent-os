@@ -3,7 +3,7 @@
 > **대상**: openit-ai/open-agent-os (제품 v0.1.10 · 기존 아키텍처 v1.7.5 → 본 문서 v2.0)
 > **관계**: 기존 v1.7.x 문서 = 현행 플랫폼 구현 기준서 · 본 문서 = 3-에디션 제품 방향 기준서 (제품 방향은 본 문서가 정본)
 > **목표**: Hermes Agent 설치 후 **저장소 URL 하나를 알려주면** README 설명부터 대부분의 설치, 최종 테스트까지 에이전트가 자동 진행 — 사용자는 **링크 확인·선택·최소 복사/붙여넣기**만 한다.
-> **입력**: 3-에디션 설계 요구(2026-09-25) · 내부 실측 가이드 2종(개인용·프로젝트용, 2026-09-22)
+> **입력**: 3-에디션 설계 요구(2026-09-25) · 구축 실측 가이드 2종(개인용·프로젝트용, 2026-09-22)
 > **버전**: v2.0 (2026-09-25) — 최종 검토본
 > **수치 원칙**: 금액·제품명·경로·구성 값은 공식 출처로 검증해 기재(§0-1, 부록 C)
 
@@ -243,24 +243,23 @@ open-agent-os/
 │   ├── architecture-v2.0.md     # v2 정본 설계서(본 문서)
 │   ├── editions/                # 에디션별 설치·운영 문서(공통 표기 원칙으로 재작성)
 │   └── faq.md                   # 온보딩·설치 오류 FAQ(지속 갱신)
-├── core/…  runtime/…  adapters/…  deploy/…   # 기존 자산 재배치는 P2 검토
-└── (기존: control-plane·admin-console·packages·security·execution-gateway …)
+└── (P2 검토) core/runtime 분해·기존 자산 재배치
 ```
 
 - **P0~P1 원칙**: 기존 디렉터리는 건드리지 않고 **추가만** 한다(README·skills·editions·bootstrap 신설). 대규모 재배치(core/runtime 분해)는 **P2에서 승인 후** 진행.
 - Company 에디션 install.sh는 기존 배포 자산(docker-compose/systemd/k8s)을 그대로 호출한다.
-- 저장소에는 **공유판**(내부 호스트·경로 제거)만 싣는다 — 내부 실측 상세는 내부 위키·로컬에 보관한다.
+- 저장소에는 **공유판**(호스트·경로 등 환경 정보 제거)만 싣는다 — 상세 실측 자료는 공개판에 포함하지 않는다.
 
 ### 5.3 기존 자산 매핑 (요약)
 
 | 기존 | 재설계 후 |
 |---|---|
-| packages/agent-runtime(자체 LLM 런타임) | 삭제·대체 → Hermes 런타임 일원화 |
-| execution-gateway(+mock) | Company 실행 계층으로 축소·정리 |
-| packages/{knowledge-index, personal-wiki, policy-model, audit-model, mcp-resource-model} | 공통 코어(개념 유지, Company가 승계) |
-| adapters/{google,iam,mattermost,outline,slack,notion,hermes} | 유지 — 에디션별 활성화(Slack·Notion은 선택 연동) |
-| control-plane · admin-console | Company 관리 콘솔(경량 개편) |
-| deploy/* · config/* | Company 승계 + editions별 스크립트로 분할 |
+| 자체 LLM 런타임 | 삭제·대체 → Hermes 런타임 일원화 |
+| 실행 계층 | Company 실행 계층으로 축소·정리 |
+| 지식·정책·감사·리소스 모델 | 공통 코어(개념 유지, Company가 승계) |
+| 연동 어댑터(Google·IAM·Mattermost·Outline·Slack·Notion·Hermes) | 유지 — 에디션별 활성화(Slack·Notion은 선택 연동) |
+| 관리 콘솔 | Company 관리 콘솔(경량 개편) |
+| 배포·설정 자산 | Company 승계 + editions별 스크립트로 분할 |
 
 ### 5.4 런타임 비종속 원칙
 
@@ -292,7 +291,7 @@ open-agent-os/
 | **P2 — Company 에디션** | 기존 플랫폼 승계·재배치 · 선택형 연동(Slack·Notion — 사용 조직 한정) · 멀티 LLM 라우팅 · 권한·감사 · 기존 테스트 흡수 | full pytest green + 런타임 read-back + 기존 OAOS 기능 회귀 통과 |
 
 - 모든 단계는 **실측 명령 출력·리드백**으로만 완료 판정(문서·구두 보고 금지).
-- P0 착수 전 승인 필요 항목: 브랜치 분기(`redesign/v2`) — 완료 · 라이선스 방침 — **확정**(§8).
+- P0 착수 전 승인 필요 항목: 리뉴얼 브랜치 분기 — 완료 · 라이선스 방침 — **확정**(§8).
 
 ---
 
@@ -318,7 +317,7 @@ open-agent-os/
 | Vercel AI Gateway | https://vercel.com/docs/ai-gateway/pricing | 무료 크레딧·요금 |
 | Telegram Bot API | https://core.telegram.org/bots/api | Local Bot API 서버 |
 | Hostinger VPS | https://www.hostinger.com/kr/vps-hosting | 서버 예시(가격 변동) |
-| 내부 실측 자료 | 개인용·프로젝트용 구축 가이드(2026-09-22 실측, 내부 보관) | 부록 C 근거 |
+| 실측 자료 | 개인용·프로젝트용 구축 가이드(2026-09-22 실측) | 부록 C 근거 |
 
 ## 부록 B. 용어 최소
 

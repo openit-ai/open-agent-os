@@ -89,7 +89,6 @@ harness/       config file templates (SOUL/USER/MEMORY/AGENTS) + seeding guide
 editions/      Edition landing pages — personal / project / company
 docs/          architecture-v2.0.md · cookbook.md · faq.md
 bootstrap/     install & verify automation (P0 rollout — see roadmap)
-(existing)     control-plane/ · execution-gateway/ · security/ · admin-console/ · packages/ · adapters/ · deploy/
 ```
 
 ## Skills
