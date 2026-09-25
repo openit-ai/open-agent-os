@@ -312,7 +312,7 @@ open-agent-os/
 | 자료 | 위치 | 비고 |
 |---|---|---|
 | Hermes Agent 공식 | https://hermes-agent.nousresearch.com/docs | 설치·문서 |
-| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | v2.0.2 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
+| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | v2.0.3 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
 | OpenCode Go | https://opencode.ai/go | 요금·모델 |
 | Vercel AI Gateway | https://vercel.com/docs/ai-gateway/pricing | 무료 크레딧·요금 |
 | Telegram Bot API | https://core.telegram.org/bots/api | Local Bot API 서버 |
