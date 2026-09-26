@@ -24,13 +24,51 @@ python3 - "$first/.oaos-install/state.json" <<'PY' || fail 'state schema'
 import json,sys
 x=json.load(open(sys.argv[1], encoding='utf-8'))
 assert x['edition']=='project'
-assert list(x['stages'])==['prep','hermes','llm','telegram','gateway','wiki','harness','cron','stack','ingress','mail','team','verify']
+assert list(x['stages'])==['prep','hermes','llm','telegram','wiki','harness','cron','stack','ingress','mail','team','gateway','verify']
 assert x['stages']['wiki']['status']==x['stages']['harness']['status']=='done'
 PY
 HOME="$first" PATH="$mirror" bash "$install" --stage wiki,harness >"$temp_root/second.out" 2>"$temp_root/second.err" || fail 'rerun'
 grep -Fq 'Skipping wiki (done).' "$temp_root/second.out" || fail 'wiki not skipped'
 grep -Fq 'Skipping harness (done).' "$temp_root/second.out" || fail 'harness not skipped'
 printf 'PASS: no-jq state and rerun\n'
+cron_home="$temp_root/cron-home"
+cron_bin="$temp_root/cron-bin"
+mkdir -p "$cron_home" "$cron_bin"
+touch "$temp_root/cron-list"
+cat > "$cron_bin/hermes" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+case "$1 $2" in
+  'cron list') cat "$OAOS_FAKE_CRON_LIST" ;;
+  'cron create') printf 'oaos-daily-backup\n' >> "$OAOS_FAKE_CRON_LIST" ;;
+  *) exit 1 ;;
+esac
+MOCK
+chmod 700 "$cron_bin/hermes"
+HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-list" bash "$install" --stage cron >"$temp_root/cron.out" 2>"$temp_root/cron.err" || fail 'Project cron install'
+[[ $(wc -l < "$temp_root/cron-list") == 1 ]] || fail 'Project cron registered unexpected jobs'
+HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-list" bash "$install" --stage cron >"$temp_root/cron-rerun.out" 2>"$temp_root/cron-rerun.err" || fail 'Project cron rerun'
+[[ $(wc -l < "$temp_root/cron-list") == 1 ]] || fail 'Project cron duplicated the backup job'
+printf 'PASS: Project cron registers one backup job and skips it on rerun\n'
+verify_repo="$temp_root/verify-repo"
+verify_home="$temp_root/verify-home"
+mkdir -p "$verify_repo/editions/project" "$verify_repo/bootstrap/lib" "$verify_repo/bootstrap/verify" "$verify_home"
+cp "$install" "$verify_repo/editions/project/install.sh"
+cp "$repo_root/bootstrap/lib/common.sh" "$verify_repo/bootstrap/lib/common.sh"
+cat > "$verify_repo/bootstrap/verify/project-verify.sh" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf 'Summary: PASS=4 FAIL=0 MANUAL=2 SKIP=1\n'
+MOCK
+HOME="$verify_home" bash "$verify_repo/editions/project/install.sh" --stage verify >"$temp_root/verify.out" 2>"$temp_root/verify.err" || fail 'Project verify stage'
+python3 - "$verify_home/.oaos-install/state.json" <<'PY' || fail 'MANUAL count missing from verify state'
+import json,sys
+x=json.load(open(sys.argv[1], encoding='utf-8'))
+assert x['stages']['verify']['status']=='done'
+assert x['stages']['verify']['detail']=='Completed; MANUAL=2'
+PY
+grep -Fq 'MANUAL=2 item(s)' "$temp_root/verify.out" || fail 'MANUAL count missing from install log'
+printf 'PASS: verify records MANUAL count in log and state\n'
 dry="$temp_root/dry"
 mkdir -p "$dry"
 HOME="$dry" bash "$install" --dry-run >"$temp_root/dry.out" 2>"$temp_root/dry.err" || fail 'dry-run'
@@ -49,7 +87,7 @@ grep -Fq 'not JSON {' "${preserved[0]}" || fail 'corrupt backup changed'
 printf 'PASS: corrupt state preserved and recovered\n'
 python3 - "$first/.oaos" "$first/.oaos-install" <<'PY' || fail 'secret-like values in logs/state'
 import pathlib,re,sys
-p=re.compile(rb'(?:sk-|ghp_|nous_|AIza|xoxb-|AKIA|vck_)[A-Za-z0-9_-]+|[0-9]{8,10}:[A-Za-z0-9_-]{35,}|Bearer[ \t]+[A-Za-z0-9._~+/=-]+',re.I)
+p=re.compile(rb'''(?:sk-|ghp_|nous_|AIza|xoxb-|AKIA|vck_)[A-Za-z0-9_-]+|[0-9]{8,10}:[A-Za-z0-9_-]{35,}|Bearer[ \t]+[A-Za-z0-9._~+/=-]+|(?:api[_-]?key|token|secret|password)["']?[ \t]*[:=][ \t]*["']?(?!\[REDACTED\])[^\s"']+''',re.I)
 for root in map(pathlib.Path,sys.argv[1:]):
  for f in root.rglob('*'):
   if f.is_file(): assert not p.search(f.read_bytes()),f
