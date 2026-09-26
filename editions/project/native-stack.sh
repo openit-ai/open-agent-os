@@ -109,8 +109,13 @@ native_repo_key() {
   rm -rf -- "$tmp"
 }
 
+native_mattermost_dropin() {
+  printf '[Unit]\nAfter=postgresql.service\nRequires=postgresql.service\n'
+}
+
 native_mattermost() {
   local codename arch source expected changed was_active=0
+  local dropin=/etc/systemd/system/mattermost.service.d/oaos.conf
   # shellcheck disable=SC1091
   . /etc/os-release
   [[ ${ID:-} == ubuntu && ${VERSION_ID:-} =~ ^(22\.04|24\.04)$ ]] || {
@@ -164,10 +169,13 @@ PY
   ) || { warn 'Mattermost configuration failed.'; return 3; }
   run_root chown mattermost:mattermost /opt/mattermost/config/config.json &&
     run_root chmod 600 /opt/mattermost/config/config.json || return 3
-  if [[ ! -f /etc/systemd/system/mattermost.service.d/oaos.conf ]]; then
+  if [[ -e $dropin ]]; then
+    if ! native_mattermost_dropin | run_root cmp -s - "$dropin"; then
+      warn 'Existing Mattermost service drop-in differs; preserving it for review.'; return 3
+    fi
+  else
     run_root install -d -m 755 /etc/systemd/system/mattermost.service.d || return 3
-    printf '[Unit]\nAfter=postgresql.service\nRequires=postgresql.service\n' |
-      run_root tee /etc/systemd/system/mattermost.service.d/oaos.conf >/dev/null || return 3
+    native_mattermost_dropin | run_root tee "$dropin" >/dev/null || return 3
     run_root systemctl daemon-reload || return 3
   fi
   systemctl is-active --quiet mattermost && was_active=1
@@ -308,7 +316,7 @@ native_health() {
 }
 
 do_stack() {
-  local dir key domain chat note portal
+  local dir key domain chat note portal mm_version
   if ! have_cmd apt-get || ! have_cmd systemctl || ! have_cmd python3 ||
      ! have_cmd openssl || ! have_cmd ss; then
     warn 'Ubuntu apt, systemd, Python, OpenSSL and iproute2 are required.'; return 3
@@ -329,7 +337,9 @@ do_stack() {
   native_mattermost || return 3
   native_outline || return 3
   native_health || return 3
+  mm_version=$(dpkg-query -W -f='${Version}' mattermost 2>/dev/null) || mm_version=unknown
+  [[ -n $mm_version ]] || mm_version=unknown
   printf 'PostgreSQL: %s\nRedis: %s\nMattermost: %s\nNode.js: %s\nOutline: v1.10.1 (4a5a616)\n' \
-    "$(psql --version)" "$(redis-server --version)" "$(dpkg-query -W -f='${Version}' mattermost)" "$(node --version)" > "$dir/versions.txt"
-  chmod 600 "$dir/versions.txt"
+    "$(psql --version)" "$(redis-server --version)" "$mm_version" "$(node --version)" > "$dir/versions.txt" || return 3
+  chmod 600 "$dir/versions.txt" || return 3
 }
