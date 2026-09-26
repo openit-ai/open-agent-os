@@ -53,6 +53,7 @@ Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
 |---|---|---|---|
 | For | one person | a small team (2–6) | a company (5–50) |
 | Runs on | a mini PC (N100-class, 16 GB) | one VPS (4 vCPU / 16 GB / 200 GB) | Project + governance layer |
+| Install | host packages and systemd | signed apt packages and pinned Outline source under systemd | inherits Project host services |
 | Chat | Telegram | Mattermost + Telegram | + Slack *(optional)* |
 | Knowledge | git wiki + Obsidian | Outline + git wiki | + Notion *(optional)*, permission-aware index |
 | Mail | personal (Himalaya) | dedicated bot mailbox | existing suite integration |
@@ -164,7 +165,7 @@ Full detail: [`docs/architecture-v2.0.md`](docs/architecture-v2.0.md).
 | Phase | Scope | Done when |
 |---|---|---|
 | **P0 — Bootstrap MVP (Personal)** | README/START-HERE, `skills/oaos-bootstrap`, `editions/personal` install, `bootstrap/verify` | Clean machine: one URL → ≤5 gates → all verify checks pass |
-| **P1 — Project** | install/verify for Project, domain/nginx/TLS automation, Personal→Project data migration | End-to-end run on a fresh VPS + migration proof |
+| **P1 — Project** | Project install/verify and Personal→Project migration scripts are available | End-to-end run on a fresh VPS + migration proof pending |
 | **P2 — Company** | absorb existing platform, optional integrations (Slack/Notion), multi-LLM routing, governance | Full test suite green + runtime read-back + regression pass |
 
 ## License
