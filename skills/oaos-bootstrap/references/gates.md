@@ -55,11 +55,12 @@ Enable two-factor authentication for Gmail, then create and copy an app password
 - Sizing target: 4 vCPU / 16 GB RAM / 200 GB disk. Example: Hostinger KVM 4 — ≈ ₩16,095/month on the 24-month promo (verified 2026-09; renewal pricing is higher — check current). Any equivalent VPS works.
 - Steps: user purchases → provides the IP + root/SSH access → agent installs packages and adds OpenSSH/80/443 to existing `ufw` rules → three domain A records (`chat`, `note`, `portal`) → nginx + TLS (certbot). Confirm SSH key login, whether `ufw` is active, and unattended upgrades separately; the installer does not enable or configure those policies.
 - Project installs the bot mailbox (G9), then handles the Mattermost and Outline admin gates (G7/G8), then starts the gateway for the first time.
+- Project runs PostgreSQL, Redis, Mattermost and Outline as host services. Confirm the Outline listener is only on `127.0.0.1:3000` before completing G6.
 - Gate result: IP + domain reachable over HTTPS.
 
 ## G7 — Mattermost admin (Project)
 
-Open the initial Mattermost URL provided by the agent and create the first administrator account in the browser. The agent verifies administrator access before continuing.
+Open the initial Mattermost URL provided by the agent and create the first administrator account in the browser. Create the Hermes bot and token in System Console, then let the agent store and verify the token. The checked `mmctl --local` release cannot create bots or tokens; the agent uses it for administrator and SiteURL checks.
 
 ## G8 — Outline API token (Project)
 

@@ -17,7 +17,8 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 
 **Q. 어떤 하드웨어가 필요한가요?**
 - Personal: N100급 미니PC(16GB 권장)로 충분합니다.
-- Project: 4 vCPU / 16GB / 200GB VPS 1대.
+- Project: Ubuntu 22.04 또는 24.04 LTS, 4 vCPU / 16GB / 200GB VPS 1대.
+- Personal·Project 설치는 호스트 패키지와 systemd 서비스를 사용합니다. Project의 PostgreSQL·Redis는 Ubuntu apt, Mattermost는 공식 서명 APT, Outline은 고정 릴리스 소스 빌드로 설치합니다.
 - Company: Project 구성 + 거버넌스 레이어(동일 서버에서 시작 가능).
 
 **Q. 개발 지식이 필요한가요?**

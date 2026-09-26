@@ -53,6 +53,7 @@ Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
 |---|---|---|---|
 | For | one person | a small team (2–6) | a company (5–50) |
 | Runs on | a mini PC (N100-class, 16 GB) | one VPS (4 vCPU / 16 GB / 200 GB) | Project + governance layer |
+| Install | host packages and systemd | signed apt packages and pinned Outline source under systemd | inherits Project host services |
 | Chat | Telegram | Mattermost + Telegram | + Slack *(optional)* |
 | Knowledge | git wiki + Obsidian | Outline + git wiki | + Notion *(optional)*, permission-aware index |
 | Mail | personal (Himalaya) | dedicated bot mailbox | existing suite integration |

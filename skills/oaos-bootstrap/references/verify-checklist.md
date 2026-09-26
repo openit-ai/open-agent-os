@@ -26,7 +26,7 @@ Run these in addition to the 12 common checks on the Project VPS. A MANUAL resul
 | P1 | DNS | `getent ahostsv4` for chat/note/portal; compare with server public IPv4 | All three A records match |
 | P2 | TLS | `openssl x509 -checkend 604800` for each certificate; certbot timer | >7 days valid; auto-renew enabled |
 | P3 | nginx + HTTPS | `nginx -t`; HTTPS request to each vhost | Config valid; all three respond |
-| P4 | Compose health | `docker compose ps`; `docker inspect` | PostgreSQL, Redis, Mattermost, Outline running and healthy |
+| P4 | Native services | `systemctl is-active` for PostgreSQL, Redis, Mattermost, Outline; `pg_isready`; `redis-cli ping`; `ss -ltn` | Four services active; local dependencies respond; Outline listens only on `127.0.0.1:3000` |
 | P5 | Apps | Mattermost `/api/v4/system/ping`; Outline `/_health` | Both return OK |
 | P6 | Bot mailbox | IMAP login using G9 values, without displaying them | Login succeeds; send/receive confirmed separately |
 | P7 | Team | Allowed and denied Mattermost account interaction | Allowlist enforced; bot replies only to allowed accounts |

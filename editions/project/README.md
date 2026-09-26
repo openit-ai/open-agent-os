@@ -14,7 +14,7 @@
 
 **Personal 기반 + 추가**
 
-- VPS 1대 — 4 vCPU / 16GB / 200GB (예: 프로모션 기준 월 약 ₩16,000대, 2026-09 확인)
+- Ubuntu 22.04 또는 24.04 LTS VPS 1대 — 4 vCPU / 16GB / 200GB (예: 프로모션 기준 월 약 ₩16,000대, 2026-09 확인)
 - Mattermost — 팀 채팅 창구 (+ Telegram 병행)
 - Outline — 팀 문서·지식베이스
 - 봇 전용 메일함 — 팀 메일 확인·초안·전달
@@ -43,6 +43,17 @@ G8  Outline API 토큰     관리자 가입 → API 토큰 붙여넣기
 스테이지 순서는 `prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify`입니다. `team`에서 Mattermost·Outline 자격 증명을 저장한 뒤 처음으로 게이트웨이를 기동합니다. Project 크론은 일일 백업만 등록합니다.
 서버 준비 때 SSH 키 로그인이 되는지와 UFW가 활성화되어 있는지를 별도로 확인합니다. 설치기는 기존 UFW 규칙에 필요한 포트만 추가하며 SSH 키 정책과 자동 보안 업데이트는 설정하지 않습니다.
 
+| 구성 요소 | 설치·운영 방식 | 경로 |
+|---|---|---|
+| PostgreSQL·Redis | Ubuntu apt, systemd | 로컬 서비스; DB와 Redis는 로컬 접속 |
+| Mattermost | 서명된 공식 APT 저장소, systemd | `/opt/mattermost`; `mmctl`은 `/opt/mattermost/bin/mmctl` |
+| Outline | 공식 v1.10.1 태그, Node.js 22·Yarn 소스 빌드, systemd | `/opt/outline`, `/var/lib/outline/data`; 서비스 `oaos-outline` |
+| 환경·시크릿 | 설치 상태와 분리된 600 권한 파일 | `~/oaos/stack/.env`, `/etc/oaos/outline.env`, Mattermost 설정 |
+
+Mattermost의 [서명 APT 방식](https://docs.mattermost.com/deployment-guide/server/linux/deploy-ubuntu)은 보안 업데이트 경로가 단순하여 채택했습니다. [공식 tarball·systemd 방식](https://docs.mattermost.com/deployment-guide/server/linux/deploy-tar)은 대안입니다. Outline 빌드·설정은 [v1.10.1 공식 소스](https://github.com/outline/outline/releases/tag/v1.10.1)를 기준으로 합니다. 설치된 패키지 버전은 `~/oaos/stack/versions.txt`에 남습니다.
+
+Outline 3000 포트는 고정 태그의 `server/main.ts` 한 줄만 수정하여 `127.0.0.1`에 바인딩합니다. 소스·빌드 산출물·실제 리스너 검사를 통과하지 못하면 설치를 중단합니다. 태그를 업데이트할 때는 패치를 다시 적용하고 전부 재검증해야 합니다. upstream이 공식 바인딩 설정을 추가하면 검증 후 패치를 제거합니다. 실제 소스 빌드에서 바인딩 코드는 `build/server/main.js`에 들어가고 `build/server/index.js`가 이를 불러옵니다.
+
 Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`으로 계획을 확인하고, 같은 명령을 `--dry-run` 없이 실행합니다. 시크릿 `.env`는 이전되지 않습니다.
 
 설치 게이트에서 에이전트에게 전달할 환경값:
@@ -50,7 +61,7 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 | 게이트 | 값 | 설명 |
 |---|---|---|
 | G6 | `OAOS_BASE_DOMAIN`, `OAOS_ACME_EMAIL` | 세 A 레코드가 서버 공인 IPv4를 가리켜야 합니다. 다른 도메인을 쓴다면 `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN`을 각각 지정합니다. |
-| G7 | `MATTERMOST_TOKEN` | `mmctl` 자동 생성이 불가능할 때만 Mattermost 관리 화면에서 발급해 `~/oaos/stack/.env`(600)에 보관합니다. |
+| G7 | `MATTERMOST_TOKEN` | Mattermost System Console에서 Hermes 봇과 토큰을 발급해 `~/oaos/stack/.env`(600)에 보관합니다. 확인한 `mmctl --local` 버전은 봇·토큰 생성을 지원하지 않습니다. |
 | G8 | `OAOS_OUTLINE_API_TOKEN` | Outline 관리자가 Settings → API Keys에서 발급합니다. 에이전트의 Outline API 접근을 위해 Hermes `.env`에 저장합니다. |
 | G9 | `OAOS_MAIL_ADDRESS`, `OAOS_MAIL_PASSWORD`, `OAOS_MAIL_IMAP_HOST`, `OAOS_MAIL_SMTP_HOST` | 봇 전용 메일함 값입니다. 비밀번호는 공백을 제거한 앱 비밀번호로 전달합니다. |
 
