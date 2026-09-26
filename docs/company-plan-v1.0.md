@@ -8,7 +8,7 @@ Company는 5~50인 중소기업을 위한 **Project + 거버넌스 레이어**�
 
 **P2 완료 판정(계획):** 이미 확보된 Project 호스트의 분리된 검증 인스턴스에서 Project 선행 조건을 충족한 뒤 Company 설치기가 Docker 없이 systemd 서비스로 재실행·재개 가능하게 설치하고, G10을 거쳐 구성원 두 명 이상을 각각 별도 개인비서·자격 범위로 등록한다. 각 Phase도 실제 설치와 read-back 출력이 있어야 완료된다. 정책 거부·승인, 교차 사용자 자격 및 검색 결과 차단, 감사 기록, 백업·복구와 재부팅 후 서비스를 실제 명령·응답으로 확인한다. 선택한 G11·G12·G13 연동은 각 서비스의 실제 왕복과 해제까지 별도 확인하며, 선택하지 않은 서비스는 `SKIP`으로 기록한다. 자동 검증 실패 또는 필수 수동 확인 미완료는 완료로 보고하지 않는다. 5~50인 규모의 성능·운영 판정은 부하·복구 실측 후에만 확정한다.
 
-**범위 경계:** Google Workspace와 Microsoft 365는 조직이 이미 사용하는 것 중 하나를 선택하는 옵션이다. Slack·Notion도 기존 사용 조직에서만 켠다. 이 계획은 외부 SaaS를 재구축하거나 새 구독을 요구하지 않는다. 기본 배포는 **무Docker·systemd**이며, 서버와 LLM 정액 이외의 Company 신규 구독을 전제하지 않는다. 도메인과 Project 기반 운영은 선행 조건으로 승계한다. 신규 서버 프로비저닝이나 신규 비용이 필요한 검증 환경·서비스는 **승인 필요**이며 임의로 진행하지 않는다. 추가 모델의 사용량 과금 가능성은 G13 도입 전 확인 필요이며, 정액 원칙에 맞지 않으면 기본 제품 범위에서 활성화하지 않는다.
+**범위 경계:** Google Workspace와 Microsoft 365는 조직이 이미 사용하는 것 중 하나를 선택하는 옵션이다. Slack·Notion도 기존 사용 조직에서만 켠다. 이 계획은 외부 SaaS를 재구축하거나 새 구독을 요구하지 않는다. 기본 배포는 **무Docker·systemd**이며, 서버와 LLM 정액 이외의 Company 신규 구독을 전제하지 않는다. 도메인과 Project 기반 운영은 선행 조건으로 승계한다. 신규 서버 프로비저닝이나 신규 비용이 필요한 검증 환경·서비스는 **승인 필요**이며 임의로 진행하지 않는다. 추가 모델의 사용량 과금 경로는 **승인 필요**로 분류하고 G13 도입 전 별도 확인이 필요하며, 정액 원칙에 맞지 않으면 기본 제품 범위에서 활성화하지 않는다.
 
 ## 2. 현행 자산 실측과 흡수 원칙
 
@@ -25,7 +25,7 @@ Company는 5~50인 중소기업을 위한 **Project + 거버넌스 레이어**�
 
 별도 플랫폼의 상태 문서에는 로컬 테스트와 일부 운영 리드백이 기록되지만, Slack·Notion 및 Google Workspace·Microsoft 365의 **다중 사용자 실제 OAuth·권한·회수 왕복**은 완료 증거로 취급하지 않는다. 문서에 있는 과거 테스트 건수나 운영 수치는 이 P2 릴리스의 증거가 아니다. 어댑터·콘솔의 라이선스, 의존성, 공개 적합성도 흡수 전에 확인 필요다.
 
-공개 트리의 재현 출력 요약: `ls editions/company` → `README.md`만 1개; `rg --files bootstrap/verify` → 2개; `rg --files bootstrap/tests` → 2개; `wc -l editions/company/README.md` → 73줄. 별도 플랫폼에서 동일한 `rg --files <구성요소> | wc -l`와 `wc -l <구현 파일>`로 위 표의 수치를 확인했다. 수치는 향후 파일 이동·추가에 따라 달라질 수 있다.
+공개 트리의 재현 출력 요약: `ls editions/company` → `README.md`만 1개; `rg --files bootstrap/verify` → 2개; `rg --files bootstrap/tests` → 2개; `wc -l editions/company/README.md` → 73줄. 별도 플랫폼에서 동일한 `rg --files <구성요소> | wc -l`와 `wc -l <구현 파일>`로 위 표의 수치를 확인했다. 수치는 향후 파일 이동·추가에 따라 달라질 수 있다. 구성요소의 비공개 저장소 내부 경로명은 공개 문서에 기재하지 않는다.
 
 ## 3. 제품 갭과 수용 기준
 
@@ -48,7 +48,7 @@ Company는 5~50인 중소기업을 위한 **Project + 거버넌스 레이어**�
 
 | Phase | 목표 / 산출물 | 실설치 대상 환경 | 실설치 절차·확인 명령과 필수 read-back 게이트 | 선행 의존성 | 예상 소요 |
 |---|---|---|---|---|---|
-| C01 | Project→Company 계약; owner 필수 스키마·설치 가능한 마이그레이션 | E | `bash editions/company/install.sh --stage c01` → `bash bootstrap/verify/company-verify.sh --phase c01 --read-back`; 실제 스키마 버전·owner 제약 조회, 두 사용자 교차 접근 거부 출력 | Project 설치·검증 계약 | 1일 |
+| C01 | Project→Company 계약; owner 필수 스키마·설치 가능한 마이그레이션 | E | `bash editions/company/install.sh --stage c01` → `bash bootstrap/verify/company-verify.sh --phase c01 --read-back`; 실제 스키마 버전·owner 제약 조회, 관리자 계정과 스키마 테스트 계정 간 교차 접근 거부 출력 | Project 설치·검증 계약 | 1일 |
 | C02 | Docker 없는 배포 골격; 단계·체크포인트·systemd 단위 | E | `bash editions/company/install.sh --stage c02` → `systemctl --user is-active oaos-company` → `bash bootstrap/verify/company-verify.sh --phase c02 --read-back`; 재실행·재부팅 후 활성 상태 출력 | C01 | 1일 |
 | C03 | 구성원 식별·매핑; 관리자·외부 계정 매핑 | E | `bash editions/company/install.sh --stage c03` → `bash bootstrap/verify/company-verify.sh --phase c03 --read-back`; 실제 매핑 조회와 중복·미등록·퇴사 계정 거부 응답 | C01·C02 | 1일 |
 | C04 | 개인비서 등록; 구성원별 비서·지식 공간 생성·해제 | E | `bash editions/company/install.sh --stage c04` → `bash bootstrap/verify/company-verify.sh --phase c04 --read-back`; 두 사용자 비서 목록·지식/출력 격리 응답 | C03 | 1일 |
@@ -59,14 +59,14 @@ Company는 5~50인 중소기업을 위한 **Project + 거버넌스 레이어**�
 | C09 | 최소 관리 콘솔; 구성원·정책·감사 상태 화면 | E | `bash editions/company/install.sh --stage c09` → `systemctl --user is-active oaos-company` → `bash bootstrap/verify/company-verify.sh --phase c09 --read-back`; 관리자/일반 사용자 화면 권한·비밀 마스킹 응답 | C03·C07 | 1일 |
 | C10 | G10 설치 연결; 관리자 초기 설정·재개 | E | `bash editions/company/install.sh --stage c10` → 실제 콘솔에서 G10 입력 → `bash bootstrap/verify/company-verify.sh --phase c10 --read-back`; 로그인·매핑 저장·중단 재개 상태 출력 | C02·C09 | 1일 |
 | C11 | Slack 선택 연동; 이벤트 수신·응답·해제 | E+S(Slack) | `bash editions/company/install.sh --stage c11` → 기존 조직의 테스트 이벤트 송신 → `bash bootstrap/verify/company-verify.sh --phase c11 --read-back`; 실제 응답·서명 거부·owner 라우팅·해제 출력 | C04·C06·C07 | 1일 |
-| C12 | Notion 선택 연동; 공유 원본 동기화·삭제·해제 | E+S(Notion) | `bash editions/company/install.sh --stage c12` → 기존 조직의 공유 페이지 변경 → `bash bootstrap/verify/company-verify.sh --phase c12 --read-back`; 실제 원본/색인·ACL 변경·삭제 반영 출력 | C08 | 1일 |
+| C12 | Notion 선택 연동; 공유 원본 동기화·삭제·해제 | E+S(Notion) | `bash editions/company/install.sh --stage c12` → 기존 조직의 공유 페이지 변경 → `bash bootstrap/verify/company-verify.sh --phase c12 --read-back`; 실제 원본/색인·ACL 변경·삭제 반영 출력 | C06·C07·C08 | 1일 |
 | C13 | Google Workspace 선택 연동; 개인 위임·철회 | E+S(Google Workspace) | `bash editions/company/install.sh --stage c13` → 두 사용자가 본인 동의 → `bash bootstrap/verify/company-verify.sh --phase c13 --read-back`; 각자 읽기·타인 차단·토큰 철회 후 실패 출력 | C05·C06 | 1일 |
 | C14 | Microsoft 365 선택 연동; 개인 위임·철회 | E+S(Microsoft 365) | `bash editions/company/install.sh --stage c14` → 두 사용자가 본인 동의 → `bash bootstrap/verify/company-verify.sh --phase c14 --read-back`; 각자 읽기·타인 차단·토큰 철회 후 실패 출력 | C05·C06 | 1일 |
 | C15 | G11·G12 설치 연결; 공식 링크·값 검증·옵션 SKIP | E+선택한 S | `bash editions/company/install.sh --stage c15` → 실제 선택 게이트 완료 또는 미사용 선택 → `bash bootstrap/verify/company-verify.sh --phase c15 --read-back`; 잘못된 값 재요청·선택 서비스 왕복·미선택 무자격 상태 출력 | C10·C11~C14 | 1일 |
 | C16 | G13과 선택 라우팅; 승인된 정액 모델·실패 대체 | E+기존 LLM 플랜 | `bash editions/company/install.sh --stage c16` → `bash bootstrap/verify/company-verify.sh --phase c16 --read-back`; 실제 기본/선택 모델 응답·실패 대체·owner·비용 설정 출력 | C05·C07 | 1일 |
 | C17 | Company 최종 검증·운영 인계; 백업·복구·회수 절차 | E+선택한 S | `bash editions/company/install.sh --stage c17` → `bash bootstrap/verify/company-verify.sh --phase c17 --read-back`; 설치 상태·systemd·백업 복구·재부팅 생존·외부 왕복의 실제 출력 수집 | C10·C15·C16 | 1일 |
 
-Phase별 대상 테스트와 하위 시스템 회귀를 먼저 돌리고, P2 통합 판정에서는 [아키텍처 v2.0 로드맵](architecture-v2.0.md)의 전체 회귀·런타임 리드백 요구를 별도 수행한다. 설치·유지보수는 Project의 apt/시스템 패키지, 단일 서버와 systemd 운영 패턴을 우선 재사용한다. 별도 플랫폼의 Docker·Kubernetes 배포 경로는 흡수하지 않는다. 아키텍처 v2.0 §5.2의 과거 배포 예시 중 Docker 호출 문구는 이번 Company의 **무Docker·systemd** 결정과 다르며, 상세설계 때 정본 문구를 정리해야 한다.
+Phase별 대상 테스트와 하위 시스템 회귀를 먼저 돌리고, P2 통합 판정에서는 [아키텍처 v2.0 로드맵](architecture-v2.0.md)의 전체 회귀·런타임 리드백 요구를 별도 수행한다. 설치·유지보수는 Project의 apt/시스템 패키지, 단일 서버와 systemd 운영 패턴을 우선 재사용한다. 별도 플랫폼의 Docker·Kubernetes 배포 경로는 흡수하지 않는다. 아키텍처 v2.0 §5.2의 과거 배포 예시 중 Docker 호출 문구는 이번 Company의 **무Docker·systemd** 결정과 다르다. **C01 착수 전** 정본 문구를 무Docker·systemd로 정합 수정하는 것을 선행 게이트로 둔다(문서 수정은 별도 작업).
 
 모든 Phase의 완료 기록에는 **대상 환경(E/S), 설치 명령의 종료 코드·상태 출력, 추가 확인 명령의 응답, 실행 시각, 원복 결과**를 남긴다. S가 필요한 Phase에서 실제 서비스 접근이 준비되지 않으면 단위 테스트가 통과해도 `미완료/확인 필요`다. 이미 운영 중인 Project 호스트를 쓰더라도 기존 서비스 중단·데이터 변경이 필요한 경우에는 해당 작업의 영향과 원복을 먼저 검토한다. 새 서버·추가 구독·새 비용이 발생하는 대안은 **승인 필요**다.
 
@@ -76,10 +76,10 @@ Phase별 대상 테스트와 하위 시스템 회귀를 먼저 돌리고, P2 통
 
 | 게이트 | ① 클릭 링크 | ② 왜 필요한지(표시할 한 줄) | ③ 정확히 받을 값·행동 | 검증·재개 |
 |---|---|---|---|---|
-| **G10 필수** | 설치기가 생성한 **실제 관리 콘솔 HTTPS 주소**를 ‘관리 콘솔 열기’ 클릭 링크로 렌더링 | “초기 관리자와 구성원별 비서 소유자를 연결해야 합니다.” | 브라우저에서 관리자 계정 생성 후 **관리자 계정 ID**, 구성원별 **내부 사용자 ID ↔ Project 계정 ID**를 입력·확정 | 관리자 로그인과 각 매핑의 유일성 확인; 미완료면 G10에서 재개 |
+| **G10 제공(필수)** | 설치기가 생성한 **실제 관리 콘솔 HTTPS 주소**를 ‘관리 콘솔 열기’ 클릭 링크로 렌더링 | “초기 관리자와 구성원별 비서 소유자를 연결해야 합니다.” | 브라우저에서 관리자 계정 생성 후 **관리자 계정 ID**, 구성원별 **내부 사용자 ID ↔ Project 계정 ID**를 입력·확정 | 관리자 로그인과 각 매핑의 유일성 확인; 미완료면 G10에서 재개 |
 | **G11 선택** | [Google OAuth 클라이언트 안내](https://developers.google.com/workspace/guides/create-credentials) 또는 [Microsoft Entra 앱 등록](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app); 실행 시 해당 관리 콘솔 직접 링크와 OAOS 콜백 URI도 제시 | “기존 스위트의 메일·문서·일정을 구성원 본인 권한으로 연결합니다.” | **Google Workspace 또는 Microsoft 365 선택**, 조직 앱의 **tenant ID(365만)**·**OAuth client ID**·**client secret**, 설치기가 보여준 **redirect URI 등록 확인**; 이후 각 구성원은 본인 로그인·동의 | OAuth 콜백의 state·owner·범위 및 본인 read-back 확인; 미사용은 SKIP, 실패 시 재동의 |
 | **G12 선택** | [Slack 앱 만들기](https://api.slack.com/apps) 또는 [Notion 연동 만들기](https://www.notion.com/help/create-integrations-with-the-notion-api); 실행 시 선택한 서비스의 실제 앱 설정 링크 제시 | “이미 쓰는 협업·문서 도구만 연결합니다.” | 서비스별 선택: Slack은 **bot token·signing secret·연결 workspace ID**와 이벤트 URL 등록 확인, Notion은 **integration token·연결 workspace ID** 및 공유할 페이지 선택 | Slack 서명·인증 확인/Notion 접근 가능한 페이지 read-back; 미사용은 SKIP, 실패 시 앱 설정 링크 재제공 |
-| **G13 선택** | 선택 모델 공급자의 **공식 키 발급 링크**를 설치기가 제공(예: [OpenAI API 키](https://platform.openai.com/api-keys)) | “추가 모델을 쓸 때만 호출 경로와 비용 상한을 정합니다.” | **공급자 ID·모델 ID·API 키·승인된 정액 플랜/월 상한**을 정확히 요청 | 키 유효성·모델 접근·비용 조건 확인; 미사용은 SKIP하고 기본 모델 유지 |
+| **G13 선택** | 선택 모델 공급자의 **공식 키 발급 링크**를 설치기가 제공(예: [OpenAI API 키](https://platform.openai.com/api-keys)) | “추가 모델을 쓸 때만 호출 경로와 비용 상한을 정합니다.” | **공급자 ID·모델 ID·API 키·승인된 정액 플랜/월 상한**을 정확히 요청 | 키 유효성·모델 접근·비용 조건 확인, 사용량 과금 경로는 **승인 필요**; 미사용은 SKIP하고 기본 모델 유지 |
 
 G11의 `redirect URI`는 설치기가 콘솔에 복사할 **정확한 실제 값**으로 생성한다. G12의 Slack 이벤트 URL도 같은 방식으로 제공한다. G10 링크 표기는 문서상 형식 예시이며 실제 주소는 설치 후에만 알 수 있다. G13의 키가 사용량 과금만 가능하면 비용 원칙에 따라 옵션을 보류하고 “확인 필요”를 남긴다. 각 구성원의 개인 OAuth 동의·철회는 G11 아래의 본인 등록 흐름이며 관리자에게 개인 토큰을 붙여넣게 하지 않는다.
 
@@ -93,21 +93,21 @@ Company 고유 코드·설정·문서는 [LICENSE-COMPANY](../LICENSE-COMPANY)�
 
 | 항목 | 현재 판정 | 다음 확인 |
 |---|---|---|
-| 5~50인 단일 서버 성능·장애 복구 | 확인 필요 | 동시 사용자 부하, 큐 적체, 백업 복구·재부팅 실측 |
+| 5~50인 단일 서버 성능·장애 복구 | 확인 필요 | 상세설계에서 최소 목표치를 먼저 확정: 동시 활성 사용자 5·25·50 구간, 채팅 응답 p95, 큐 적체 한계, 백업 복구 RTO/RPO, 재부팅 생존. 목표치 없이는 통과/미달 판정 불가 |
 | 확보된 Project 호스트의 격리 검증 수용 능력 | 확인 필요 | 자원·권한·백업·원복 확인; 새 서버가 필요하면 승인 필요 |
 | Slack·Notion 실서비스 이벤트·권한 변경 | 확인 필요 | 실제 조직에서 설치·해제·권한 변경 왕복 |
 | Google Workspace·Microsoft 365 두 사용자 위임 | 확인 필요 | 실제 조직/테넌트의 동의 정책, 만료·철회, 교차 사용자 차단 |
 | 외부 OAuth 심사·관리자 권한·앱 배포 정책 | 확인 필요 | 공식 절차와 고객 조직 정책 확인; 대기 기간은 1일 Phase 산정 밖 |
 | 기존 플랫폼 코드 공개·이식 적합성 | 확인 필요 | 라이선스·의존성·테스트·런타임 경계별 검토 |
 | 모델 공급자 정액·월 상한 | 확인 필요 | G13 공급자별 실제 요금·한도 확인 후 활성화 |
-| 운영 보안·감사 보존 기간·삭제 의무 | 확인 필요 | 고객 요구와 법률 검토를 상세설계에서 확정 |
-| 아키텍처 문서의 과거 Docker 배포 문구 | 확인 필요 | Company systemd 단일 경로로 정본·README 문구 정합성 정리 |
+| 운영 보안·감사 보존 기간·삭제 의무 | 확인 필요 | 상세설계 전 초안 확정: 감사 이벤트 최소 보존 기간, 삭제·정지 구성원 데이터 처리, 조회 권한. C07 감사 read-back 판정은 이 정책에 종속 |
+| 아키텍처 문서의 과거 Docker 배포 문구 | 확인 필요 — C01 착수 전 선행 게이트 | Company systemd 단일 경로로 정본·README 문구 정합 수정 완료 확인 |
 
 ## 8. 다음 단계 — 6단계 Company p0 상세설계에서 확정
 
 1. C01 계약: 조직·구성원·개인비서·외부 계정 ID, 등록·정지·퇴사 상태와 owner 불변식.
 2. 단일 서버·systemd 단위, 권한 사용자, 포트·TLS·비밀 저장·백업·복구·업그레이드 경로와 Project 이전 방식.
-3. 정책 기본 묶음, JIT 승인 주체·만료·재사용 방지, 감사 이벤트 스키마·보존·조회 권한.
+3. 정책 기본 묶음, JIT 승인 주체·만료·재사용 방지, 감사 이벤트 스키마·보존 기간·삭제 의무·조회 권한 목표치.
 4. Slack 이벤트와 Notion 페이지 동기화의 최소 권한·삭제·ACL 변경·해제 계약.
 5. Google Workspace/Microsoft 365의 조직 앱 설정과 개인 OAuth 동의 범위, 콜백·토큰 회수·관리자 동의 경계.
 6. G10~G13 화면 문구·실제 링크 생성·정확한 입력 필드·실패 재개, 선택 옵션의 SKIP 판정.
