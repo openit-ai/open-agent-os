@@ -57,14 +57,19 @@ cat > "$gateway_bin/hermes" <<'MOCK'
 set -Eeuo pipefail
 case "$1 $2" in
   'gateway status')
-    if [[ -f $OAOS_FAKE_GATEWAY_MARKER && $OAOS_FAKE_GATEWAY_MODE == starts ]]; then
-      printf '✓ Gateway is running\n'
+    if [[ -f $OAOS_FAKE_GATEWAY_MARKER ]]; then
+      case ${OAOS_FAKE_GATEWAY_MODE:-} in
+        starts) printf '✓ Gateway is running (PID: 4242)\n' ;;
+        starts_service) printf '✓ User gateway service is running\n' ;;
+        *) printf '✗ Gateway is not running\n' ;;
+      esac
     else
       printf '✗ Gateway is not running\n'
     fi ;;
   'gateway install')
     [[ ${3:-} == --start-on-login && ${4:-} == --start-now ]] || exit 1
-    : > "$OAOS_FAKE_GATEWAY_MARKER" ;;
+    : > "$OAOS_FAKE_GATEWAY_MARKER"
+    printf 'install\n' >> "${OAOS_FAKE_GATEWAY_INSTALL_LOG:-/dev/null}" ;;
   *) exit 1 ;;
 esac
 MOCK
@@ -100,7 +105,24 @@ import json,sys
 state=json.load(open(sys.argv[1], encoding='utf-8'))
 assert state['stages']['gateway']['status']=='done'
 PY
-printf 'PASS: new-host gateway install runs; negative status blocks and positive status completes\n'
+gateway_svc="$temp_root/gateway-svc"
+mkdir -p "$gateway_svc"
+HOME="$gateway_svc" PATH="$gateway_bin:$PATH" OAOS_FAKE_GATEWAY_MARKER="$gateway_svc/installed" OAOS_FAKE_GATEWAY_MODE=starts_service \
+  bash "$install" --stage gateway >"$temp_root/gateway-svc.out" 2>"$temp_root/gateway-svc.err" || fail 'service-mode status did not complete the gateway stage'
+python3 - "$gateway_svc/.oaos-install/state.json" <<'PY' || fail 'service-mode gateway state was not done'
+import json,sys
+state=json.load(open(sys.argv[1], encoding='utf-8'))
+assert state['stages']['gateway']['status']=='done'
+PY
+gateway_pre="$temp_root/gateway-pre"
+mkdir -p "$gateway_pre"
+touch "$gateway_pre/installed"
+: > "$temp_root/gateway-install.log"
+HOME="$gateway_pre" PATH="$gateway_bin:$PATH" OAOS_FAKE_GATEWAY_MARKER="$gateway_pre/installed" OAOS_FAKE_GATEWAY_MODE=starts_service \
+  OAOS_FAKE_GATEWAY_INSTALL_LOG="$temp_root/gateway-install.log" \
+  bash "$install" --stage gateway >"$temp_root/gateway-pre.out" 2>"$temp_root/gateway-pre.err" || fail 'already-running service did not complete the gateway stage'
+[[ ! -s $temp_root/gateway-install.log ]] || fail 'gateway install reran although the service was already running'
+printf 'PASS: new-host gateway install runs; negative status blocks; manual and service-mode positives complete and skip install when already running\n'
 verify_repo="$temp_root/verify-repo"
 verify_home="$temp_root/verify-home"
 mkdir -p "$verify_repo/editions/project" "$verify_repo/bootstrap/lib" "$verify_repo/bootstrap/verify" "$verify_home"
@@ -145,7 +167,11 @@ MOCK
 cat > "$verify_perm_bin/hermes" <<'MOCK'
 #!/usr/bin/env bash
 if [[ ${1:-} == gateway && ${2:-} == status ]]; then
-  printf '✗ Gateway is not running\n'
+  if [[ ${OAOS_FAKE_GW_STATE:-} == running_service ]]; then
+    printf '✓ User gateway service is running\n'
+  else
+    printf '✗ Gateway is not running\n'
+  fi
   exit 0
 fi
 exit 1
@@ -163,7 +189,10 @@ grep -Eq 'TLS CHAT_DOMAIN[[:space:]]+PASS' "$temp_root/verify-perm.out" || fail 
 grep -Eq 'nginx config[[:space:]]+PASS' "$temp_root/verify-perm.out" || fail 'non-root nginx check did not use sudo'
 grep -Eq 'Gateway service[[:space:]]+FAIL' "$temp_root/verify-perm.out" || fail 'not-running gateway verified as healthy'
 [[ $(grep -Fc openssl "$temp_root/sudo.log") == 3 && $(grep -Fc nginx "$temp_root/sudo.log") == 1 ]] || fail 'privileged verifier checks were not routed through sudo'
-printf 'PASS: non-root verify uses sudo for TLS/nginx and rejects negative gateway status\n'
+OAOS_FAKE_GW_STATE=running_service HOME="$verify_perm_home" PATH="$verify_perm_bin:$PATH" OAOS_FAKE_SUDO_LOG="$temp_root/sudo.log" \
+  bash "$repo_root/bootstrap/verify/project-verify.sh" --offline >"$temp_root/verify-perm-up.out" 2>"$temp_root/verify-perm-up.err" || true
+grep -Eq 'Gateway service[[:space:]]+PASS' "$temp_root/verify-perm-up.out" || fail 'service-mode gateway was not verified as running'
+printf 'PASS: non-root verify uses sudo for TLS/nginx; gateway negative fails and service-mode positive passes\n'
 dry="$temp_root/dry"
 mkdir -p "$dry"
 HOME="$dry" bash "$install" --dry-run >"$temp_root/dry.out" 2>"$temp_root/dry.err" || fail 'dry-run'

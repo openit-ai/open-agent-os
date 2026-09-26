@@ -39,7 +39,7 @@ else record FAIL 'Model request failed or reply did not contain OK'; fi
 # 3: An absent sandbox service file is definitive; avoid touching host services.
 service="$home/.config/systemd/user/hermes-gateway.service"
 if [[ ! -f $service ]]; then record FAIL 'Gateway user service file absent'
-elif have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running'; then
+elif have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running|gateway service is running'; then
   record PASS 'hermes gateway status reports running'
 else record FAIL 'Gateway status is not running'; fi
 

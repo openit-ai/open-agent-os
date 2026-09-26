@@ -201,7 +201,7 @@ except Exception:
 
 do_gateway() {
   need_hermes || return 3
-  if ! hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running'; then
+  if ! hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running|gateway service is running'; then
     hermes gateway install --start-on-login --start-now >/dev/null || return 1
   fi
   if ! systemctl --user is-enabled hermes-gateway >/dev/null 2>&1; then
@@ -210,7 +210,7 @@ do_gateway() {
   if [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true) != yes ]]; then
     run_root loginctl enable-linger "$(id -un)" || return 3
   fi
-  hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running' || return 3
+  hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running|gateway service is running' || return 3
 }
 
 do_wiki() {
