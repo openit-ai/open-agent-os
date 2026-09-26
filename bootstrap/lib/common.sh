@@ -72,7 +72,10 @@ PY
 }
 
 stage_mark() {
-  local name=$1 status=$2 detail=${3:-} file tmp now
+  local name=$1 status=$2 detail=${3:-} file tmp now edition stages
+  edition=${OAOS_STATE_EDITION:-personal}
+  stages=${OAOS_STAGES:-prep hermes llm telegram gateway wiki harness cron verify}
+  [[ $edition =~ ^[a-z]+$ && $stages =~ ^[a-z]+(\ [a-z]+)*$ ]] || die "Invalid edition stage configuration."
   [[ ${OAOS_DRY_RUN:-0} != 1 ]] || die 'Internal error: state write during dry run.'
   [[ $status == pending || $status == 'done' || $status == blocked || $status == failed ]] || die 'Invalid state status.'
   file=$(oaos_state_file)
@@ -82,23 +85,23 @@ stage_mark() {
   now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   if have_cmd jq; then
     if [[ -f $file ]]; then
-      jq --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
-        '.edition="personal" | .updated_at=$now | .stages=(.stages // {}) | reduce ["prep","hermes","llm","telegram","gateway","wiki","harness","cron","verify"][] as $s (. ; .stages[$s]=(.stages[$s] // {status:"pending",updated_at:$now,detail:""})) | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' "$file" > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
+      jq --arg edition "$edition" --arg stages "$stages" --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
+        '.edition=$edition | .updated_at=$now | .stages=(.stages // {}) | reduce ($stages | split(" "))[] as $s (. ; .stages[$s]=(.stages[$s] // {status:"pending",updated_at:$now,detail:""})) | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' "$file" > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
     else
-      jq -n --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
-        '{edition:"personal",updated_at:$now,stages:(reduce ["prep","hermes","llm","telegram","gateway","wiki","harness","cron","verify"][] as $s ({}; .[$s]={status:"pending",updated_at:$now,detail:""}))} | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
+      jq -n --arg edition "$edition" --arg stages "$stages" --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
+        '{edition:$edition,updated_at:$now,stages:(reduce ($stages | split(" "))[] as $s ({}; .[$s]={status:"pending",updated_at:$now,detail:""}))} | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
     fi
   else
-    oaos_python - "$file" "$tmp" "$name" "$status" "$detail" "$now" <<'PY' || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
+    oaos_python - "$file" "$tmp" "$name" "$status" "$detail" "$now" "$edition" "$stages" <<'PY' || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
 import json, os, sys
-source, target, name, status, detail, now = sys.argv[1:]
+source, target, name, status, detail, now, edition, stage_names = sys.argv[1:]
 state = {}
 if os.path.isfile(source):
     with open(source, encoding="utf-8") as f:
         state = json.load(f)
-state.update(edition="personal", updated_at=now)
+state.update(edition=edition, updated_at=now)
 stages = state.setdefault("stages", {})
-for stage in ("prep", "hermes", "llm", "telegram", "gateway", "wiki", "harness", "cron", "verify"):
+for stage in stage_names.split():
     stages.setdefault(stage, dict(status="pending", updated_at=now, detail=""))
 stages[name] = dict(status=status, updated_at=now, detail=detail)
 with open(target, "w", encoding="utf-8") as f:

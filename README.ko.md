@@ -53,6 +53,7 @@
 |---|---|---|---|
 | 대상 | 1인 | 소규모 팀(2~6인) | 중소기업(5~50인) |
 | 구동 | 미니PC(N100급·16GB) | VPS 1대(4 vCPU·16GB·200GB) | Project + 거버넌스 레이어 |
+| 설치 | 호스트 패키지와 systemd | 서명된 apt 패키지와 고정 Outline 소스 빌드·systemd | Project 호스트 서비스 승계 |
 | 대화 창구 | Telegram | Mattermost + Telegram | + Slack *(옵션)* |
 | 지식 | git 위키 + Obsidian | Outline + git 위키 | + Notion *(옵션)*, 권한 인식 인덱스 |
 | 메일 | 개인(Himalaya) | 봇 전용 메일 | 기존 스위트 연동 |
@@ -164,7 +165,7 @@ flowchart TB
 | 단계 | 범위 | 완료 판정 |
 |---|---|---|
 | **P0 — 부트스트랩 MVP (Personal)** | README/START-HERE, `skills/oaos-bootstrap`, `editions/personal` 설치, `bootstrap/verify` | 클린 머신에서 URL 1개 → 게이트 ≤5회 → verify 전 항목 PASS |
-| **P1 — Project** | Project install/verify, 도메인·nginx·TLS 자동화, Personal→Project 데이터 이전 | 신규 VPS E2E 완주 + 이전 실증 |
+| **P1 — Project** | Project install/verify·Personal→Project 이전 스크립트 제공 | 신규 VPS E2E 완주 + 이전 실증 필요 |
 | **P2 — Company** | 기존 플랫폼 흡수, 선택 연동(Slack/Notion), 멀티 LLM 라우팅, 거버넌스 | 전체 테스트 green + 런타임 read-back + 회귀 통과 |
 
 ## 라이선스

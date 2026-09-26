@@ -11,11 +11,26 @@ Run **every** check below on the target host; record the actual output. Report o
 | 5 | Chat round-trip | User sends a message to the bot from their own account | Agent replies in-chat |
 | 6 | Allowlist enforced | A message from a non-allowed account is ignored | Only allowed users reach the agent |
 | 7 | Wiki repository | `git -C ~/data/wiki log --oneline -1` | Seed commit exists |
-| 8 | Scheduled jobs | Hermes cron list shows the backup + watchdog jobs | Both present and enabled |
+| 8 | Scheduled jobs | Hermes cron list: Personal backup + watchdog; Project daily backup | Applicable job(s) present and enabled |
 | 9 | Config files (SOUL / USER / MEMORY) | `ls ~/.hermes/SOUL.md ~/.hermes/memories/` | Files exist; no secrets inside |
 | 10 | Secret hygiene | `grep -rE '(sk-|ghp_|[0-9]{8,10}:[A-Za-z0-9_-]{35})' ~/.oaos/ 2>/dev/null` | No matches (logs/state contain no raw secrets) |
 | 11 | Backup works | Run the backup job (or `hermes backup`) once | Backup artifact created under `~/.oaos/backups` |
 | 12 | Host capacity | `df -h /`; `swapon --show`; `free -h` | >10% disk free; swap active on <16 GB RAM hosts |
+
+## Project extension
+
+Run these in addition to the 12 common checks on the Project VPS. A MANUAL result needs recorded human evidence before final completion.
+
+| # | Check | Command / method | Pass criteria |
+|---|---|---|---|
+| P1 | DNS | `getent ahostsv4` for chat/note/portal; compare with server public IPv4 | All three A records match |
+| P2 | TLS | `openssl x509 -checkend 604800` for each certificate; certbot timer | >7 days valid; auto-renew enabled |
+| P3 | nginx + HTTPS | `nginx -t`; HTTPS request to each vhost | Config valid; all three respond |
+| P4 | Native services | `systemctl is-active` for PostgreSQL, Redis, Mattermost, Outline; `pg_isready`; `redis-cli ping`; `ss -ltn` | Four services active; local dependencies respond; Outline listens only on `127.0.0.1:3000` |
+| P5 | Apps | Mattermost `/api/v4/system/ping`; Outline `/_health` | Both return OK |
+| P6 | Bot mailbox | IMAP login using G9 values, without displaying them | Login succeeds; send/receive confirmed separately |
+| P7 | Team | Allowed and denied Mattermost account interaction | Allowlist enforced; bot replies only to allowed accounts |
+| P8 | Outline | Admin creates a page and verifies G8 API token | Page and API request succeed |
 
 ## Report template
 
@@ -25,6 +40,7 @@ Bot / address: <bot handle or address>
 Wiki:          ~/data/wiki (commit <short sha>)
 Backups:       ~/.oaos/backups (+ hermes backup)
 Checks:        12/12 passed   (list any exceptions with the raw output)
+Manual:        <items awaiting human evidence and owner>
 First steps:   docs/cookbook.md — try "brief me every morning at 8"
 Gaps / next:   <anything unfinished, or the next phase outline>
 ```

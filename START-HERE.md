@@ -21,7 +21,7 @@ Completion: you can state OS, resources, Hermes presence, and a recommended edit
 ## 2. Edition choice
 
 - Present a condensed README §2 comparison and your recommendation (default: Personal).
-- Wait for the user's choice. Keep it in the session; the Personal installer writes stage status to `~/.oaos-install/state.json`.
+- Wait for the user's choice. Keep it in the session; the selected edition installer writes stage status to `~/.oaos-install/state.json`.
 
 Completion: user picked an edition; state file written.
 
@@ -39,6 +39,8 @@ Completion: `oaos-bootstrap` appears in the skills list, or its SKILL.md content
 ## 4. Run the bootstrap skill
 
 From here the **skill is the procedure of record** (`skills/oaos-bootstrap/SKILL.md`): environment prep → install → gates → verify → report. Its phases, gates, and completion criteria supersede any summary in this file.
+
+For Project, use `bash editions/project/install.sh --dry-run` before the real install and `bash bootstrap/verify/project-verify.sh` afterward. Run the installer and verifier as the same non-root administrator; `sudo -n true` must succeed for host changes and privileged certificate/nginx checks. Project runs PostgreSQL, Redis, Mattermost, and Outline as native systemd services. See `editions/project/README.md` for the domain and mailbox inputs, source patch check, and Personal migration command.
 
 ## 5. Gates — what the human does
 
