@@ -31,7 +31,7 @@ Orchestrates the "one URL" setup of an Open Agent OS edition on a Linux host: re
 ## How to Run
 
 1. Follow the Procedure top to bottom; load `references/gates.md` before Phase 3 and `references/verify-checklist.md` before Phase 5.
-2. Personal installer stage state: `~/.oaos-install/state.json` — on resume, read it and continue from the first incomplete stage. Re-running completed stages must be safe.
+2. Installer stage state: `~/.oaos-install/state.json` — on resume, read it and continue from the first incomplete stage. Re-running completed stages must be safe.
 3. Log: `~/.oaos/logs/install-YYYYMMDD.log` — append command summaries and results. **Never write secrets to the log or state file.**
 
 ## Quick Reference
@@ -62,7 +62,7 @@ Completion: the user has seen a 3–5 line summary; a recommended edition is on 
 
 ### Phase 1 — Edition choice
 
-Present a condensed editions table and your recommendation; wait for the choice. Record the choice in the session; the Personal installer records its edition in stage state.
+Present a condensed editions table and your recommendation; wait for the choice. Record the choice in the session; the selected installer records its edition in stage state.
 
 Completion: edition fixed; the gate list for that edition is prepared (see `references/gates.md`).
 
@@ -135,14 +135,22 @@ Register starter jobs with the Hermes cron system (see Hermes docs → Scheduled
 
 Run the seeding conversation from this repository's `harness/seeding.md`: draft `SOUL.md` and `USER.md` with the user; pre-fill `MEMORY.md` with environment facts (the agent maintains it automatically afterward — the user reviews, not authors). Write to `~/.hermes/SOUL.md` and `~/.hermes/memories/`. Use the templates in `harness/templates/` as starting points; mention `AGENTS.md` only when the user has project workspaces.
 
-#### 3f. Project / Company editions (P1 / P2)
+#### 3f. Project edition (P1)
 
-Project and Company extend Personal. Their runbooks land with those phases — **do not invent commands for them.** Outline to present to the user:
+On the Project VPS, follow `editions/project/README.md` and run `bash editions/project/install.sh --dry-run` first. The 13 stages are `prep hermes llm telegram gateway wiki harness cron stack ingress mail team verify`. Run `bash editions/project/install.sh` to continue; `--stage stack,ingress,mail`, `--status`, `--skip-verify`, and `--timezone Area/City` are available for recovery. Stage state is `~/.oaos-install/state.json` with `edition=project`. A blocked gate exits 3; a failed command exits 1. Keep each stage's evidence and resume only after its prerequisite is satisfied.
 
-- **Project** — a VPS (4 vCPU / 16 GB / 200 GB), domain + nginx + TLS, Mattermost + Outline deployment, a dedicated bot mailbox, team accounts with per-member allowlists.
-- **Company** — Project + the governance layer (admin console, policy, audit, vault, permission-aware knowledge index) from the existing platform, optional Slack / Notion / Google Workspace / Microsoft 365 connectors, multi-LLM routing.
+- **G0**: prepare an Ubuntu LTS VPS (4 vCPU / 16 GB / 200 GB recommended), SSH access and root rights. `prep` installs host packages, Docker Engine and Compose; it adds OpenSSH, 80 and 443 to existing UFW rules without resetting them.
+- **G1–G3**: provide the LLM key, Telegram bot token and allowed user IDs as in Personal. `hermes` through `cron` mirror the Personal setup.
+- **G6**: set `OAOS_BASE_DOMAIN=example.com` (or `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN` separately), and `OAOS_ACME_EMAIL`. Add A records for `chat`, `note`, `portal` pointing to the VPS public IPv4. `stack` starts Mattermost, Outline, PostgreSQL and Redis; `ingress` checks DNS, configures nginx and requests TLS certificates. The stack keeps secrets in `~/oaos/stack/.env` (600); never paste those values into logs or chat.
+- **G7**: create the first Mattermost administrator at `https://chat.<domain>` in the browser. `team` checks the administrator, uses `mmctl` to create a Hermes bot and token when possible, writes `MATTERMOST_URL` and `MATTERMOST_TOKEN` through `hermes config set`, then creates `~/oaos/team-onboarding.md`. If `mmctl` cannot create a token, use the Mattermost System Console and store `MATTERMOST_TOKEN` in the stack `.env` before rerunning. Set `MATTERMOST_ALLOWED_USERS` for team members and test an allowed and a denied account.
+- **G8**: sign in as an Outline administrator at `https://note.<domain>`, issue an API token, and verify it against the Outline API without logging the value. Outline email sign-in requires the G9 SMTP values below.
+- **G9**: supply `OAOS_MAIL_ADDRESS`, `OAOS_MAIL_PASSWORD`, `OAOS_MAIL_IMAP_HOST`, `OAOS_MAIL_SMTP_HOST` from a dedicated bot mailbox. `mail` configures Himalaya 1.x when present and restarts Outline with SMTP. Confirm IMAP login and one real send/receive flow.
 
-If the user picked Project or Company today, complete Personal first, then hand over the phase outline and current status honestly.
+Run `bash bootstrap/verify/project-verify.sh` (or `--json`) after the gates. DNS, certificates, nginx, HTTPS, Compose health, Mattermost, Outline, IMAP and Personal checks are reported separately as PASS/FAIL/MANUAL/SKIP. A real VPS end-to-end run is still required to claim P1 completion. To move a Personal wiki and harness, run `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`, then repeat without `--dry-run`; use `--include-config` only if its `config.yaml` should be copied. `.env` is excluded and credentials must be re-entered.
+
+#### Company edition (P2)
+
+Company extends Project with the governance layer (admin console, policy, audit, vault, permission-aware knowledge index), optional connectors and multi-LLM routing. Its installer belongs to P2; report the current status instead of claiming it is available.
 
 ### Phase 4 — Verify
 
@@ -178,5 +186,5 @@ Report the installer stage state, then point the user to `oaos-ops` for day-2.
 
 ## Verification
 
-- Every item in `references/verify-checklist.md` passes, with command output as evidence.
-- State file at `phase: 5`; report delivered; the user confirms one real interaction (e.g. a bot message gets a reply).
+- Run every applicable item in `references/verify-checklist.md`; record PASS, FAIL, MANUAL and SKIP with command evidence. Do not claim completion while a required check is unresolved.
+- Record the installer stage state; deliver the report and confirm one real bot interaction.

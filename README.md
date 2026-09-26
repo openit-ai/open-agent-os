@@ -164,7 +164,7 @@ Full detail: [`docs/architecture-v2.0.md`](docs/architecture-v2.0.md).
 | Phase | Scope | Done when |
 |---|---|---|
 | **P0 — Bootstrap MVP (Personal)** | README/START-HERE, `skills/oaos-bootstrap`, `editions/personal` install, `bootstrap/verify` | Clean machine: one URL → ≤5 gates → all verify checks pass |
-| **P1 — Project** | install/verify for Project, domain/nginx/TLS automation, Personal→Project data migration | End-to-end run on a fresh VPS + migration proof |
+| **P1 — Project** | Project install/verify and Personal→Project migration scripts are available | End-to-end run on a fresh VPS + migration proof pending |
 | **P2 — Company** | absorb existing platform, optional integrations (Slack/Notion), multi-LLM routing, governance | Full test suite green + runtime read-back + regression pass |
 
 ## License

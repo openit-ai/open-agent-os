@@ -17,6 +17,21 @@ Run **every** check below on the target host; record the actual output. Report o
 | 11 | Backup works | Run the backup job (or `hermes backup`) once | Backup artifact created under `~/.oaos/backups` |
 | 12 | Host capacity | `df -h /`; `swapon --show`; `free -h` | >10% disk free; swap active on <16 GB RAM hosts |
 
+## Project extension
+
+Run these in addition to the 12 common checks on the Project VPS. A MANUAL result needs recorded human evidence before final completion.
+
+| # | Check | Command / method | Pass criteria |
+|---|---|---|---|
+| P1 | DNS | `getent ahostsv4` for chat/note/portal; compare with server public IPv4 | All three A records match |
+| P2 | TLS | `openssl x509 -checkend 604800` for each certificate; certbot timer | >7 days valid; auto-renew enabled |
+| P3 | nginx + HTTPS | `nginx -t`; HTTPS request to each vhost | Config valid; all three respond |
+| P4 | Compose health | `docker compose ps`; `docker inspect` | PostgreSQL, Redis, Mattermost, Outline running and healthy |
+| P5 | Apps | Mattermost `/api/v4/system/ping`; Outline `/_health` | Both return OK |
+| P6 | Bot mailbox | IMAP login using G9 values, without displaying them | Login succeeds; send/receive confirmed separately |
+| P7 | Team | Allowed and denied Mattermost account interaction | Allowlist enforced; bot replies only to allowed accounts |
+| P8 | Outline | Admin creates a page and verifies G8 API token | Page and API request succeed |
+
 ## Report template
 
 ```text

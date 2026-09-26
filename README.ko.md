@@ -164,7 +164,7 @@ flowchart TB
 | 단계 | 범위 | 완료 판정 |
 |---|---|---|
 | **P0 — 부트스트랩 MVP (Personal)** | README/START-HERE, `skills/oaos-bootstrap`, `editions/personal` 설치, `bootstrap/verify` | 클린 머신에서 URL 1개 → 게이트 ≤5회 → verify 전 항목 PASS |
-| **P1 — Project** | Project install/verify, 도메인·nginx·TLS 자동화, Personal→Project 데이터 이전 | 신규 VPS E2E 완주 + 이전 실증 |
+| **P1 — Project** | Project install/verify·Personal→Project 이전 스크립트 제공 | 신규 VPS E2E 완주 + 이전 실증 필요 |
 | **P2 — Company** | 기존 플랫폼 흡수, 선택 연동(Slack/Notion), 멀티 LLM 라우팅, 거버넌스 | 전체 테스트 green + 런타임 read-back + 회귀 통과 |
 
 ## 라이선스

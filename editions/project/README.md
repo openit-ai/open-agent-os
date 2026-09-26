@@ -36,6 +36,23 @@ G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 �
 이후: 설치 → 팀 서비스 셋업 → 멤버 등록 → 검증 → 보고
 ```
 
+에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
+
+에이전트는 Project VPS에서 `bash editions/project/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/project/install.sh`를 실행합니다. 상태는 `~/.oaos-install/state.json`에 저장되며, 미완료 스테이지만 다시 실행할 수 있습니다. 도메인에는 `OAOS_BASE_DOMAIN`, 인증서 이메일에는 `OAOS_ACME_EMAIL`을 전달합니다. 설치 후 `bash bootstrap/verify/project-verify.sh`로 확인합니다.
+
+Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`으로 계획을 확인하고, 같은 명령을 `--dry-run` 없이 실행합니다. 시크릿 `.env`는 이전되지 않습니다.
+
+설치 게이트에서 에이전트에게 전달할 환경값:
+
+| 게이트 | 값 | 설명 |
+|---|---|---|
+| G6 | `OAOS_BASE_DOMAIN`, `OAOS_ACME_EMAIL` | 세 A 레코드가 서버 공인 IPv4를 가리켜야 합니다. 다른 도메인을 쓴다면 `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN`을 각각 지정합니다. |
+| G7 | `MATTERMOST_TOKEN` | `mmctl` 자동 생성이 불가능할 때만 Mattermost 관리 화면에서 발급해 `~/oaos/stack/.env`(600)에 보관합니다. |
+| G8 | `OAOS_OUTLINE_API_TOKEN` | Outline 관리자가 Settings → API Keys에서 발급합니다. |
+| G9 | `OAOS_MAIL_ADDRESS`, `OAOS_MAIL_PASSWORD`, `OAOS_MAIL_IMAP_HOST`, `OAOS_MAIL_SMTP_HOST` | 봇 전용 메일함 값입니다. 비밀번호는 공백을 제거한 앱 비밀번호로 전달합니다. |
+
+`--stage`로 막힌 게이트부터 재시도합니다. 실제 송수신과 허용·비허용 팀 계정 동작은 에이전트와 함께 확인해야 합니다. 신규 VPS 실측 전에는 전체 설치 완료로 보고하지 않습니다.
+
 ## 비용
 
 | 항목 | 비용 |
@@ -43,7 +60,7 @@ G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 �
 | LLM 플랜 | 월 약 $10 수준 (개인과 동일) |
 | VPS | 월 약 ₩16,000대~ (스펙·기간에 따라 상이) |
 | 도메인 | 연 ₩1~2만 수준 |
-| Mattermost·Outline | 오픈소스 (셀프 호스팅, 추가 구독 없음) |
+| Mattermost·Outline | 셀프 호스팅 (각 서비스 라이선스 확인) |
 | 추가 구독 | 없음 |
 
 ## 설치 후 첫걸음
@@ -55,7 +72,7 @@ G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 �
 
 ## 상태
 
-Project 설치는 **P1 로드맵**입니다 — Personal 설치가 먼저 완성된 뒤, 서버·서비스 자동화가 순차 반영됩니다. 현재는 Personal을 먼저 구축하고, P1 완료 시 같은 코어 위에 Project로 확장합니다.
+Project 설치·검증·Personal 이전 스크립트가 제공됩니다. 신규 VPS에서 전체 게이트와 실제 서비스 동작을 검증해야 P1 완료로 판정합니다. Mattermost 관리자 생성(G7), Outline 관리자·API 토큰(G8), 봇 메일함(G9)은 사용자 게이트입니다.
 
 ## 라이선스
 

@@ -116,7 +116,7 @@ Company 에디션에 감사 원장이 있습니다 — 누가·언제·무엇을
 ## 에디션·기타
 
 **Q. 나중에 에디션을 옮길 수 있나요?**
-네 — 같은 코어 위에 있어 데이터 이전이 가능하도록 설계했습니다(Personal→Project 이전은 P1 로드맵).
+네 — 같은 코어 위에 있어 데이터 이전이 가능하도록 설계했습니다(Personal→Project 이전 스크립트가 제공됩니다. Project 서버에서 `bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`으로 계획을 먼저 확인하세요).
 
 **Q. Company는 Project와 뭐가 다른가요?**
 거버넌스가 더해집니다: 정책, 승인 워크플로, 감사 원장, Secret Vault, 권한 인식 지식 인덱스, 관리 콘솔, 멀티 LLM 라우팅, 선택 연동(Slack/Notion 등).
