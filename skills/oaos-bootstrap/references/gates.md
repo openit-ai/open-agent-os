@@ -53,7 +53,8 @@ Enable two-factor authentication for Gmail, then create and copy an app password
 ## G0 · G6 — VPS + domain (Project / Company)
 
 - Sizing target: 4 vCPU / 16 GB RAM / 200 GB disk. Example: Hostinger KVM 4 — ≈ ₩16,095/month on the 24-month promo (verified 2026-09; renewal pricing is higher — check current). Any equivalent VPS works.
-- Steps: user purchases → provides the IP + root/SSH access → agent hardens (SSH keys, `ufw`, unattended upgrades) → three domain A records (`chat`, `note`, `portal`) → nginx + TLS (certbot).
+- Steps: user purchases → provides the IP + root/SSH access → agent installs packages and adds OpenSSH/80/443 to existing `ufw` rules → three domain A records (`chat`, `note`, `portal`) → nginx + TLS (certbot). Confirm SSH key login, whether `ufw` is active, and unattended upgrades separately; the installer does not enable or configure those policies.
+- Project installs the bot mailbox (G9), then handles the Mattermost and Outline admin gates (G7/G8), then starts the gateway for the first time.
 - Gate result: IP + domain reachable over HTTPS.
 
 ## G7 — Mattermost admin (Project)

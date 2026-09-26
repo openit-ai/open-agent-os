@@ -29,9 +29,9 @@ G1  LLM 플랜             가입 링크 → 키 붙여넣기
 G2  Telegram 봇 토큰     @BotFather 토큰 붙여넣기
 G3  Telegram 사용자 ID   숫자 ID 붙여넣기
 G0·G6  VPS + 도메인      구매 → IP·도메인 전달 (서버 셋업은 에이전트가)
+G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 붙여넣기
 G7  Mattermost 관리자    초기 관리자 계정 생성
 G8  Outline API 토큰     관리자 가입 → API 토큰 붙여넣기
-G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 붙여넣기
 ────────────────────────
 이후: 설치 → 팀 서비스 셋업 → 멤버 등록 → 검증 → 보고
 ```
@@ -39,6 +39,9 @@ G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 �
 에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
 
 에이전트는 Project VPS에서 `bash editions/project/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/project/install.sh`를 실행합니다. 상태는 `~/.oaos-install/state.json`에 저장되며, 미완료 스테이지만 다시 실행할 수 있습니다. 도메인에는 `OAOS_BASE_DOMAIN`, 인증서 이메일에는 `OAOS_ACME_EMAIL`을 전달합니다. 설치 후 `bash bootstrap/verify/project-verify.sh`로 확인합니다.
+
+스테이지 순서는 `prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify`입니다. `team`에서 Mattermost·Outline 자격 증명을 저장한 뒤 처음으로 게이트웨이를 기동합니다. Project 크론은 일일 백업만 등록합니다.
+서버 준비 때 SSH 키 로그인이 되는지와 UFW가 활성화되어 있는지를 별도로 확인합니다. 설치기는 기존 UFW 규칙에 필요한 포트만 추가하며 SSH 키 정책과 자동 보안 업데이트는 설정하지 않습니다.
 
 Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`으로 계획을 확인하고, 같은 명령을 `--dry-run` 없이 실행합니다. 시크릿 `.env`는 이전되지 않습니다.
 
@@ -48,10 +51,12 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 |---|---|---|
 | G6 | `OAOS_BASE_DOMAIN`, `OAOS_ACME_EMAIL` | 세 A 레코드가 서버 공인 IPv4를 가리켜야 합니다. 다른 도메인을 쓴다면 `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN`을 각각 지정합니다. |
 | G7 | `MATTERMOST_TOKEN` | `mmctl` 자동 생성이 불가능할 때만 Mattermost 관리 화면에서 발급해 `~/oaos/stack/.env`(600)에 보관합니다. |
-| G8 | `OAOS_OUTLINE_API_TOKEN` | Outline 관리자가 Settings → API Keys에서 발급합니다. |
+| G8 | `OAOS_OUTLINE_API_TOKEN` | Outline 관리자가 Settings → API Keys에서 발급합니다. 에이전트의 Outline API 접근을 위해 Hermes `.env`에 저장합니다. |
 | G9 | `OAOS_MAIL_ADDRESS`, `OAOS_MAIL_PASSWORD`, `OAOS_MAIL_IMAP_HOST`, `OAOS_MAIL_SMTP_HOST` | 봇 전용 메일함 값입니다. 비밀번호는 공백을 제거한 앱 비밀번호로 전달합니다. |
 
 `--stage`로 막힌 게이트부터 재시도합니다. 실제 송수신과 허용·비허용 팀 계정 동작은 에이전트와 함께 확인해야 합니다. 신규 VPS 실측 전에는 전체 설치 완료로 보고하지 않습니다.
+
+이미 게이트웨이가 실행 중일 때 `team` 구성을 다시 적용한 경우에는 관리자(사용자)가 별도 셸에서 게이트웨이 서비스를 재시작해야 반영됩니다.
 
 ## 비용
 

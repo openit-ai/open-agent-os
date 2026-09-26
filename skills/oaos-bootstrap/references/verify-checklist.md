@@ -11,7 +11,7 @@ Run **every** check below on the target host; record the actual output. Report o
 | 5 | Chat round-trip | User sends a message to the bot from their own account | Agent replies in-chat |
 | 6 | Allowlist enforced | A message from a non-allowed account is ignored | Only allowed users reach the agent |
 | 7 | Wiki repository | `git -C ~/data/wiki log --oneline -1` | Seed commit exists |
-| 8 | Scheduled jobs | Hermes cron list shows the backup + watchdog jobs | Both present and enabled |
+| 8 | Scheduled jobs | Hermes cron list: Personal backup + watchdog; Project daily backup | Applicable job(s) present and enabled |
 | 9 | Config files (SOUL / USER / MEMORY) | `ls ~/.hermes/SOUL.md ~/.hermes/memories/` | Files exist; no secrets inside |
 | 10 | Secret hygiene | `grep -rE '(sk-|ghp_|[0-9]{8,10}:[A-Za-z0-9_-]{35})' ~/.oaos/ 2>/dev/null` | No matches (logs/state contain no raw secrets) |
 | 11 | Backup works | Run the backup job (or `hermes backup`) once | Backup artifact created under `~/.oaos/backups` |
@@ -40,6 +40,7 @@ Bot / address: <bot handle or address>
 Wiki:          ~/data/wiki (commit <short sha>)
 Backups:       ~/.oaos/backups (+ hermes backup)
 Checks:        12/12 passed   (list any exceptions with the raw output)
+Manual:        <items awaiting human evidence and owner>
 First steps:   docs/cookbook.md — try "brief me every morning at 8"
 Gaps / next:   <anything unfinished, or the next phase outline>
 ```
