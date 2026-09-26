@@ -201,7 +201,7 @@ except Exception:
 
 do_gateway() {
   need_hermes || return 3
-  if ! hermes gateway status 2>/dev/null | grep -Eiq 'running|active'; then
+  if ! hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running'; then
     hermes gateway install --start-on-login --start-now >/dev/null || return 1
   fi
   if ! systemctl --user is-enabled hermes-gateway >/dev/null 2>&1; then
@@ -210,7 +210,7 @@ do_gateway() {
   if [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true) != yes ]]; then
     run_root loginctl enable-linger "$(id -un)" || return 3
   fi
-  hermes gateway status 2>/dev/null | grep -Eiq 'running|active' || return 3
+  hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running' || return 3
 }
 
 do_wiki() {
@@ -490,6 +490,7 @@ EOF2
 
 do_verify() {
   local output code=0 manual
+  # Preserve the installer user's HOME and Hermes context; the verifier elevates privileged probes.
   output=$(bash "$repo_root/bootstrap/verify/project-verify.sh") || code=$?
   printf '%s\n' "$output"
   if ((code == 0)); then

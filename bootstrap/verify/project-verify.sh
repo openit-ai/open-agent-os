@@ -39,7 +39,7 @@ else record FAIL 'Model request failed or reply did not contain OK'; fi
 # 3: An absent sandbox service file is definitive; avoid touching host services.
 service="$home/.config/systemd/user/hermes-gateway.service"
 if [[ ! -f $service ]]; then record FAIL 'Gateway user service file absent'
-elif have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eiq 'running|active'; then
+elif have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running'; then
   record PASS 'hermes gateway status reports running'
 else record FAIL 'Gateway status is not running'; fi
 
@@ -151,7 +151,7 @@ for item in CHAT_DOMAIN NOTE_DOMAIN PORTAL_DOMAIN; do
     record PASS 'A record resolves to this server public IPv4'
   else record FAIL 'Domain A record or public IPv4 does not match'; fi
   labels+=("TLS $item")
-  if [[ -n $domain ]] && openssl x509 -checkend 604800 -noout -in "/etc/letsencrypt/live/$domain/fullchain.pem" >/dev/null 2>&1; then
+  if [[ -n $domain ]] && run_root openssl x509 -checkend 604800 -noout -in "/etc/letsencrypt/live/$domain/fullchain.pem" >/dev/null 2>&1; then
     record PASS 'Certificate valid for more than seven days'
   else record FAIL 'Certificate absent or expires within seven days'; fi
   labels+=("HTTPS $item")
@@ -164,7 +164,7 @@ if systemctl is-enabled --quiet certbot.timer 2>/dev/null || systemctl is-enable
   record PASS 'Certbot renewal timer enabled'
 else record FAIL 'Certbot renewal timer unavailable or disabled'; fi
 labels+=('nginx config')
-if have_cmd nginx && nginx -t >/dev/null 2>&1; then record PASS 'nginx -t passed'
+if have_cmd nginx && run_root nginx -t >/dev/null 2>&1; then record PASS 'nginx -t passed'
 else record FAIL 'nginx -t failed or nginx absent'; fi
 labels+=('Native services')
 healthy=1

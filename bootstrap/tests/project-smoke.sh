@@ -50,6 +50,57 @@ HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-li
 HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-list" bash "$install" --stage cron >"$temp_root/cron-rerun.out" 2>"$temp_root/cron-rerun.err" || fail 'Project cron rerun'
 [[ $(wc -l < "$temp_root/cron-list") == 1 ]] || fail 'Project cron duplicated the backup job'
 printf 'PASS: Project cron registers one backup job and skips it on rerun\n'
+gateway_bin="$temp_root/gateway-bin"
+mkdir -p "$gateway_bin"
+cat > "$gateway_bin/hermes" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+case "$1 $2" in
+  'gateway status')
+    if [[ -f $OAOS_FAKE_GATEWAY_MARKER && $OAOS_FAKE_GATEWAY_MODE == starts ]]; then
+      printf '✓ Gateway is running\n'
+    else
+      printf '✗ Gateway is not running\n'
+    fi ;;
+  'gateway install')
+    [[ ${3:-} == --start-on-login && ${4:-} == --start-now ]] || exit 1
+    : > "$OAOS_FAKE_GATEWAY_MARKER" ;;
+  *) exit 1 ;;
+esac
+MOCK
+cat > "$gateway_bin/systemctl" <<'MOCK'
+#!/usr/bin/env bash
+[[ $* == '--user is-enabled hermes-gateway' ]]
+MOCK
+cat > "$gateway_bin/loginctl" <<'MOCK'
+#!/usr/bin/env bash
+printf 'yes\n'
+MOCK
+chmod 700 "$gateway_bin/hermes" "$gateway_bin/systemctl" "$gateway_bin/loginctl"
+gateway_down="$temp_root/gateway-down"
+mkdir -p "$gateway_down"
+if HOME="$gateway_down" PATH="$gateway_bin:$PATH" OAOS_FAKE_GATEWAY_MARKER="$gateway_down/installed" OAOS_FAKE_GATEWAY_MODE=stays_down \
+  bash "$install" --stage gateway >"$temp_root/gateway-down.out" 2>"$temp_root/gateway-down.err"; then
+  fail 'not-running gateway was marked done'
+fi
+[[ -f $gateway_down/installed ]] || fail 'gateway install was skipped on a new host'
+python3 - "$gateway_down/.oaos-install/state.json" <<'PY' || fail 'not-running gateway state was not blocked'
+import json,sys
+state=json.load(open(sys.argv[1], encoding='utf-8'))
+assert state['stages']['gateway']['status']=='blocked'
+PY
+grep -Fq 'gateway done.' "$temp_root/gateway-down.out" && fail 'not-running gateway logged success'
+gateway_up="$temp_root/gateway-up"
+mkdir -p "$gateway_up"
+HOME="$gateway_up" PATH="$gateway_bin:$PATH" OAOS_FAKE_GATEWAY_MARKER="$gateway_up/installed" OAOS_FAKE_GATEWAY_MODE=starts \
+  bash "$install" --stage gateway >"$temp_root/gateway-up.out" 2>"$temp_root/gateway-up.err" || fail 'gateway did not complete after install'
+[[ -f $gateway_up/installed ]] || fail 'gateway install command was not called'
+python3 - "$gateway_up/.oaos-install/state.json" <<'PY' || fail 'running gateway state was not done'
+import json,sys
+state=json.load(open(sys.argv[1], encoding='utf-8'))
+assert state['stages']['gateway']['status']=='done'
+PY
+printf 'PASS: new-host gateway install runs; negative status blocks and positive status completes\n'
 verify_repo="$temp_root/verify-repo"
 verify_home="$temp_root/verify-home"
 mkdir -p "$verify_repo/editions/project" "$verify_repo/bootstrap/lib" "$verify_repo/bootstrap/verify" "$verify_home"
@@ -70,6 +121,49 @@ assert x['stages']['verify']['detail']=='Completed; MANUAL=2'
 PY
 grep -Fq 'MANUAL=2 item(s)' "$temp_root/verify.out" || fail 'MANUAL count missing from install log'
 printf 'PASS: verify records MANUAL count in log and state\n'
+verify_perm_home="$temp_root/verify-perm-home"
+verify_perm_bin="$temp_root/verify-perm-bin"
+mkdir -p "$verify_perm_home/oaos/stack" "$verify_perm_home/.config/systemd/user" "$verify_perm_bin"
+touch "$verify_perm_home/.config/systemd/user/hermes-gateway.service"
+printf 'CHAT_DOMAIN=chat.example.invalid\nNOTE_DOMAIN=note.example.invalid\nPORTAL_DOMAIN=portal.example.invalid\n' > "$verify_perm_home/oaos/stack/.env"
+cat > "$verify_perm_bin/sudo" <<'MOCK'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ $1 == -n ]] && shift
+[[ $1 == true ]] && exit 0
+printf '%s\n' "$1" >> "$OAOS_FAKE_SUDO_LOG"
+"$@"
+MOCK
+cat > "$verify_perm_bin/openssl" <<'MOCK'
+#!/usr/bin/env bash
+[[ $1 == x509 ]]
+MOCK
+cat > "$verify_perm_bin/nginx" <<'MOCK'
+#!/usr/bin/env bash
+[[ $1 == -t ]]
+MOCK
+cat > "$verify_perm_bin/hermes" <<'MOCK'
+#!/usr/bin/env bash
+if [[ ${1:-} == gateway && ${2:-} == status ]]; then
+  printf '✗ Gateway is not running\n'
+  exit 0
+fi
+exit 1
+MOCK
+cat > "$verify_perm_bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+chmod 700 "$verify_perm_bin"/*
+if HOME="$verify_perm_home" PATH="$verify_perm_bin:$PATH" OAOS_FAKE_SUDO_LOG="$temp_root/sudo.log" \
+  bash "$repo_root/bootstrap/verify/project-verify.sh" --offline >"$temp_root/verify-perm.out" 2>"$temp_root/verify-perm.err"; then
+  fail 'incomplete Project host verified successfully'
+fi
+grep -Eq 'TLS CHAT_DOMAIN[[:space:]]+PASS' "$temp_root/verify-perm.out" || fail 'non-root TLS check did not use sudo'
+grep -Eq 'nginx config[[:space:]]+PASS' "$temp_root/verify-perm.out" || fail 'non-root nginx check did not use sudo'
+grep -Eq 'Gateway service[[:space:]]+FAIL' "$temp_root/verify-perm.out" || fail 'not-running gateway verified as healthy'
+[[ $(grep -Fc openssl "$temp_root/sudo.log") == 3 && $(grep -Fc nginx "$temp_root/sudo.log") == 1 ]] || fail 'privileged verifier checks were not routed through sudo'
+printf 'PASS: non-root verify uses sudo for TLS/nginx and rejects negative gateway status\n'
 dry="$temp_root/dry"
 mkdir -p "$dry"
 HOME="$dry" bash "$install" --dry-run >"$temp_root/dry.out" 2>"$temp_root/dry.err" || fail 'dry-run'
@@ -108,7 +202,11 @@ assert 'native_outline_config' in install and '/opt/mattermost/bin/mmctl --local
 assert "labels+=('Native services')" in verify and "labels+=('Outline bind')" in verify
 assert '127.0.0.1:8065' in (root/'ingress/chat.conf').read_text()
 assert '127.0.0.1:3000' in (root/'ingress/note.conf').read_text()
-assert 'Upgrade $http_upgrade' in (root/'ingress/chat.conf').read_text()
+chat=(root/'ingress/chat.conf').read_text()
+note=(root/'ingress/note.conf').read_text()
+assert 'client_max_body_size 50M;' in chat and 'client_max_body_size 50M;' in note
+assert 'location ~ /api/v[0-9]+/(users/)?websocket$' in chat
+assert 'Upgrade $http_upgrade' in chat and 'proxy_read_timeout 600s;' in chat
 PY
 printf 'PASS: native service and ingress static validation\n'
 patch_repo="$temp_root/patch-repo"
