@@ -38,7 +38,7 @@ G8  Outline API 토큰     관리자 가입 → API 토큰 붙여넣기
 
 에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
 
-에이전트는 Project VPS에서 `bash editions/project/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/project/install.sh`를 실행합니다. 상태는 `~/.oaos-install/state.json`에 저장되며, 미완료 스테이지만 다시 실행할 수 있습니다. 도메인에는 `OAOS_BASE_DOMAIN`, 인증서 이메일에는 `OAOS_ACME_EMAIL`을 전달합니다. 설치 후 `bash bootstrap/verify/project-verify.sh`로 확인합니다.
+에이전트는 Project VPS에서 `bash editions/project/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/project/install.sh`를 실행합니다. 두 명령과 설치 후 `bash bootstrap/verify/project-verify.sh`는 같은 비루트 관리자 계정에서 실행하며, 실설치·검증 전 `sudo -n true`가 성공해야 합니다. 검증기는 인증서 검사와 `nginx -t`에만 비대화식 sudo를 사용합니다. 상태는 `~/.oaos-install/state.json`에 저장되며, 미완료 스테이지만 다시 실행할 수 있습니다. 도메인에는 `OAOS_BASE_DOMAIN`, 인증서 이메일에는 `OAOS_ACME_EMAIL`을 전달합니다.
 
 스테이지 순서는 `prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify`입니다. `team`에서 Mattermost·Outline 자격 증명을 저장한 뒤 처음으로 게이트웨이를 기동합니다. Project 크론은 일일 백업만 등록합니다.
 서버 준비 때 SSH 키 로그인이 되는지와 UFW가 활성화되어 있는지를 별도로 확인합니다. 설치기는 기존 UFW 규칙에 필요한 포트만 추가하며 SSH 키 정책과 자동 보안 업데이트는 설정하지 않습니다.

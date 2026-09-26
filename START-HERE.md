@@ -40,7 +40,7 @@ Completion: `oaos-bootstrap` appears in the skills list, or its SKILL.md content
 
 From here the **skill is the procedure of record** (`skills/oaos-bootstrap/SKILL.md`): environment prep → install → gates → verify → report. Its phases, gates, and completion criteria supersede any summary in this file.
 
-For Project, use `bash editions/project/install.sh --dry-run` before the real install and `bash bootstrap/verify/project-verify.sh` afterward. Project runs PostgreSQL, Redis, Mattermost, and Outline as native systemd services. See `editions/project/README.md` for the domain and mailbox inputs, source patch check, and Personal migration command.
+For Project, use `bash editions/project/install.sh --dry-run` before the real install and `bash bootstrap/verify/project-verify.sh` afterward. Run the installer and verifier as the same non-root administrator; `sudo -n true` must succeed for host changes and privileged certificate/nginx checks. Project runs PostgreSQL, Redis, Mattermost, and Outline as native systemd services. See `editions/project/README.md` for the domain and mailbox inputs, source patch check, and Personal migration command.
 
 ## 5. Gates — what the human does
 
