@@ -75,34 +75,60 @@ elif grep -Eq '(sk-|ghp_)[A-Za-z0-9_-]+|[0-9]{8,10}:[A-Za-z0-9_-]{35,}' "${confi
   record FAIL 'Secret-like value found in a harness file (content hidden)'
 else record PASS 'SOUL, USER, MEMORY exist; no token-like values found'; fi
 
-# 10: Scan logs and installer state. Report counts only, never matching lines.
-hits=$(oaos_python - "$home/.oaos" "$home/.oaos-install" <<'PY'
+# 10: Keep these patterns in sync with common.sh redact; never print matches.
+if [[ ! -e $home/.oaos && ! -e $home/.oaos-install ]]; then
+  record SKIP 'Scan targets absent; nothing to scan'
+elif ! have_cmd python3; then
+  record FAIL 'python3 unavailable; secret scan not run'
+else
+  hits=$(python3 - "$home/.oaos" "$home/.oaos-install" <<'PY'
 import pathlib, re, sys
-pattern = re.compile(rb'(?:sk-|ghp_)[A-Za-z0-9_-]+|[0-9]{8,10}:[A-Za-z0-9_-]{35,}')
+pattern = re.compile(
+    rb'''(?:sk-|ghp_|nous_|AIza|xoxb-|AKIA|vck_)[A-Za-z0-9_-]+
+       |[0-9]{8,10}:[A-Za-z0-9_-]{35,}
+       |Bearer[ \t]+[A-Za-z0-9._~+/=-]+
+       |(?:api[_-]?key|token|secret|password)["']?[ \t]*[:=][ \t]*["']?(?!\[REDACTED\])[^\s"']+''',
+    re.I | re.X,
+)
 total = 0
 for root in map(pathlib.Path, sys.argv[1:]):
     if not root.exists():
         continue
     for path in root.rglob('*'):
+        if 'backups' in path.relative_to(root).parts and root.name == '.oaos':
+            continue
         if path.is_file():
             try:
                 total += len(pattern.findall(path.read_bytes()))
-            except (OSError, PermissionError):
+            except OSError:
                 total += 1
 print(total)
 PY
-)
-if [[ $hits == 0 ]]; then record PASS '0 secret-like matches in logs and state'
-else record FAIL "$hits secret-like match(es) in logs or state; content hidden"; fi
+  )
+  if [[ $hits == 0 ]]; then record PASS '0 secret-like matches in logs and state (backups excluded)'
+  else record FAIL "$hits secret-like match(es) in logs or state; content hidden"; fi
+fi
 
 # 11: Produce a fresh backup artifact when Hermes is present.
 backup_dir="$home/.oaos/backups"
 if have_cmd hermes && [[ -d $home/.hermes ]]; then
   mkdir -p "$backup_dir"
   backup="$backup_dir/hermes-verify-$(date +%Y%m%d%H%M%S)-$$.zip"
-  if hermes backup --output "$backup" >/dev/null 2>&1 && [[ -s $backup ]]; then
+  backup_code=0
+  hermes backup --output "$backup" >/dev/null 2>&1 || backup_code=$?
+  if [[ ! -s $backup ]]; then
+    record FAIL 'Hermes backup did not create an archive'
+  elif ((backup_code == 0)); then
     record PASS 'Hermes backup created a nonempty archive'
-  else record FAIL 'Hermes backup did not create an archive'; fi
+  else
+    record FAIL "Backup reported incomplete (exit $backup_code); archive exists but may be partial"
+  fi
+  if [[ -s $backup ]]; then
+    find "$backup_dir" -maxdepth 1 -type f -name 'hermes-verify-*.zip' -printf '%T@ %p\0' |
+      sort -zrn | tail -z -n +3 | while IFS= read -r -d '' entry; do
+        rm -f -- "${entry#* }"
+      done
+  fi
 else record FAIL 'Hermes or its data directory is absent; backup not run'; fi
 
 # 12: Disk margin and swap requirement are measurable without modification.
@@ -118,6 +144,10 @@ for status in "${statuses[@]}"; do
   case $status in PASS) ((pass+=1));; FAIL) ((fail+=1));; MANUAL) ((manual+=1));; SKIP) ((skip+=1));; esac
 done
 
+if ((json)) && ! have_cmd python3; then
+  printf 'python3 unavailable; --json output fell back to the table.\n' >&2
+  json=0
+fi
 if ((json)); then
   for i in "${!labels[@]}"; do
     printf '%s\t%s\t%s\t%s\n' "$((i+1))" "${labels[$i]}" "${statuses[$i]}" "${evidence[$i]}"

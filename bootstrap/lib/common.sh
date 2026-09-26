@@ -6,10 +6,13 @@ oaos_state_file() { printf '%s/.oaos-install/state.json' "$(oaos_home)"; }
 oaos_log_file() { printf '%s/.oaos/logs/%s-%s.log' "$(oaos_home)" "${OAOS_LOG_NAME:-install}" "$(date +%Y%m%d)"; }
 
 redact() {
+  # Keep these patterns in sync with personal-verify.sh secret scanning.
   sed -E \
-    -e 's/(sk-|ghp_)[A-Za-z0-9_-]+/[REDACTED]/g' \
+    -e 's/(sk-|ghp_|nous_|AIza|xoxb-|AKIA|vck_)[A-Za-z0-9_-]+/[REDACTED]/g' \
     -e 's/[0-9]{8,10}:[A-Za-z0-9_-]{35,}/[REDACTED]/g' \
-    -e 's/((API_KEY|TOKEN|SECRET|PASSWORD)=)[^[:space:]]+/\1[REDACTED]/Ig'
+    -e 's/Bearer[[:space:]]+[A-Za-z0-9._~+\/=\-]+/Bearer [REDACTED]/Ig' \
+    -e "s/((api[_-]?key|token|secret|password)[\"']?[[:space:]]*[:=][[:space:]]*[\"'])[^\"']*([\"'])/\\1[REDACTED]\\3/Ig" \
+    -e "s/((api[_-]?key|token|secret|password)[\"']?[[:space:]]*[:=][[:space:]]*)[^[:space:]\"']+/\\1[REDACTED]/Ig"
 }
 
 log_line() {
@@ -19,6 +22,8 @@ log_line() {
     printf '%s\n' "$line" | redact
   else
     mkdir -p "$(dirname "$(oaos_log_file)")"
+    (umask 077; touch "$(oaos_log_file)")
+    chmod 600 "$(oaos_log_file)" 2>/dev/null || true
     printf '%s\n' "$line" | redact | tee -a "$(oaos_log_file)"
   fi
 }
@@ -50,6 +55,22 @@ PY
 
 stage_done() { [[ $(stage_status "$1") == 'done' ]]; }
 
+state_valid() {
+  local file
+  file=$(oaos_state_file)
+  [[ -e $file ]] || return 0
+  if have_cmd jq; then jq -e . "$file" >/dev/null 2>&1; return; fi
+  if have_cmd python3; then
+    python3 - "$file" >/dev/null 2>&1 <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    json.load(f)
+PY
+    return
+  fi
+  return 0
+}
+
 stage_mark() {
   local name=$1 status=$2 detail=${3:-} file tmp now
   [[ ${OAOS_DRY_RUN:-0} != 1 ]] || die 'Internal error: state write during dry run.'
@@ -62,17 +83,19 @@ stage_mark() {
   if have_cmd jq; then
     if [[ -f $file ]]; then
       jq --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
-        '.edition="personal" | .updated_at=$now | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' "$file" > "$tmp"
+        '.edition="personal" | .updated_at=$now | .stages=(.stages // {}) | reduce ["prep","hermes","llm","telegram","gateway","wiki","harness","cron","verify"][] as $s (. ; .stages[$s]=(.stages[$s] // {status:"pending",updated_at:$now,detail:""})) | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' "$file" > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
     else
       jq -n --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
-        '{edition:"personal",updated_at:$now,stages:(reduce ["prep","hermes","llm","telegram","gateway","wiki","harness","cron","verify"][] as $s ({}; .[$s]={status:"pending",updated_at:$now,detail:""}))} | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' > "$tmp"
+        '{edition:"personal",updated_at:$now,stages:(reduce ["prep","hermes","llm","telegram","gateway","wiki","harness","cron","verify"][] as $s ({}; .[$s]={status:"pending",updated_at:$now,detail:""}))} | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
     fi
   else
-    oaos_python - "$file" "$tmp" "$name" "$status" "$detail" "$now" <<'PY'
+    oaos_python - "$file" "$tmp" "$name" "$status" "$detail" "$now" <<'PY' || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
 import json, os, sys
 source, target, name, status, detail, now = sys.argv[1:]
-with open(source, encoding="utf-8") as f:
-    state = json.load(f) if os.path.isfile(source) else {}
+state = {}
+if os.path.isfile(source):
+    with open(source, encoding="utf-8") as f:
+        state = json.load(f)
 state.update(edition="personal", updated_at=now)
 stages = state.setdefault("stages", {})
 for stage in ("prep", "hermes", "llm", "telegram", "gateway", "wiki", "harness", "cron", "verify"):

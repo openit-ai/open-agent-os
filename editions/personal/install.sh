@@ -34,6 +34,7 @@ while (($#)); do
     --skip-verify) skip_verify=1; shift ;;
     --stage)
       (($# >= 2)) || { usage >&2; exit 1; }
+      [[ $2 =~ ^[a-z]+(,[a-z]+)*$ ]] || die 'Invalid --stage value; use comma-separated stage names.'
       IFS=, read -r -a requested <<< "$2"
       for s in "${requested[@]}"; do valid_stage "$s" || die "Unknown stage: $s"; selected+=("$s"); done
       shift 2 ;;
@@ -46,13 +47,26 @@ while (($#)); do
   esac
 done
 
+[[ -n ${HOME:-} ]] || { printf 'HOME is not set.\n' >&2; exit 1; }
+if ((OAOS_DRY_RUN)); then export OAOS_NO_LOG_FILE=1; fi
+
 show_table() {
   local s
   printf '%-12s %-10s\n' STAGE STATUS
   for s in "${stages[@]}"; do printf '%-12s %-10s\n' "$s" "$(stage_status "$s")"; done
 }
 
-if ((show_status)); then show_table; exit 0; fi
+if ((show_status)); then
+  if ! state_valid; then printf 'Install state file is invalid JSON: %s\n' "$(oaos_state_file)" >&2; exit 1; fi
+  show_table
+  exit 0
+fi
+if (( ! OAOS_DRY_RUN )) && ! state_valid; then
+  corrupt="$(oaos_state_file).corrupt-$(date +%s)"
+  [[ ! -e $corrupt ]] || die 'Corrupt state backup already exists; retry later.'
+  mv -- "$(oaos_state_file)" "$corrupt" || die 'Failed to preserve corrupt state file.'
+  warn "Invalid state file preserved at $corrupt; starting fresh."
+fi
 info 'Personal installation started.'
 check_os
 
@@ -106,17 +120,24 @@ do_prep() {
 }
 
 do_hermes() {
-  local installer cache answer
+  local installer cache answer actual_sha
   if have_cmd hermes && hermes --version >/dev/null 2>&1; then return 0; fi
   have_cmd curl || { warn 'curl is required to download Hermes.'; return 3; }
   cache="$(oaos_home)/.oaos/cache"
   mkdir -p "$cache"
   installer="$cache/hermes-install.sh"
   if [[ ! -e $installer ]]; then
-    curl -fsSL 'https://hermes-agent.nousresearch.com/install.sh' -o "$installer" || return 1
+    curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.sh' -o "$installer" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
   fi
-  bash -n "$installer" || { warn 'Downloaded installer failed syntax validation.'; return 1; }
-  sha256sum "$installer"
+  if [[ ! -s $installer ]]; then rm -f -- "$installer"; warn 'Hermes installer is empty.'; return 1; fi
+  bash -n "$installer" || { rm -f -- "$installer"; warn 'Downloaded installer failed syntax validation.'; return 1; }
+  actual_sha=$(sha256sum "$installer" | awk '{print $1}') || return 1
+  printf '%s  %s\n' "$actual_sha" "$installer"
+  if [[ -n ${OAOS_HERMES_INSTALLER_SHA256:-} && $actual_sha != "$OAOS_HERMES_INSTALLER_SHA256" ]]; then
+    rm -f -- "$installer"
+    warn 'Hermes installer checksum mismatch.'
+    return 1
+  fi
   if ((yes == 0)); then
     if [[ -t 0 ]]; then
       printf 'Run the saved Hermes installer? [y/N] ' >&2
@@ -249,6 +270,7 @@ tmp=$(mktemp "$target.tmp.XXXXXX")
 trap 'rm -f -- "$tmp"' EXIT
 tar -czf "$tmp" -C "$HOME" .hermes data/wiki
 mv -- "$tmp" "$target"
+ls -1t "$HOME/.oaos/backups"/oaos-*.tar.gz 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f -- "$old"; done
 EOF
       chmod 700 "$script"
       hermes cron create --name "$name" --script "$script" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
