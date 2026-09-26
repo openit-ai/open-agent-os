@@ -68,6 +68,16 @@ Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
 - **Project** — a team assistant in Mattermost, meeting notes that become wiki pages, weekly reports, shared document search, a dedicated bot mailbox.
 - **Company** — a governed personal agent for every member, permission-aware company knowledge search, policy and audit across the fleet, optional Slack / Notion / Workspace / 365 integration.
 
+## Computer use — the agent's hands
+
+The agent doesn't just answer — it can operate the browser and applications on the machine where it runs. It drafts documents, enters data into work portals, and gets official paperwork issued for you — while risky actions like payments, sending, and deletions always pass through your approval first.
+
+- **Hangul (HWP) documents** — drafts form-based HWPX documents (grant applications, proposals, bids, official letters); you do the final polish in Hancom Docs (web) or your own Hancom Office.
+- **Work portals** — automates login and repeated entry on accounting, tax, and ERP sites. Korean public certificates (공동인증서) stay in your local vault; signing and submission run only after approval.
+- **Government paperwork** — from application through payment, issuance, saving, and a wiki record. Payment steps pause for your approval.
+
+Setup (the browser-automation environment) is guided by the agent. Step-by-step recipes: [Cookbook §6](docs/cookbook.md). On the Company edition, computer use is governed by the same policy, approvals, and audit.
+
 ## Quick start — "One URL"
 
 ```text
@@ -128,7 +138,7 @@ Settings (`config.yaml`), secrets (`.env`), skills, and schedules complete the s
 
 ## Cookbook & FAQ
 
-- **[`docs/cookbook.md`](docs/cookbook.md)** — what to actually do, day one and beyond: briefings, knowledge filing, mail, schedules, team reports, governance flows, backups.
+- **[`docs/cookbook.md`](docs/cookbook.md)** — what to actually do, day one and beyond: briefings, knowledge filing, mail, schedules, team reports, governance flows, computer use, backups.
 - **[`docs/faq.md`](docs/faq.md)** — setup, gates, operations, security, costs, editions.
 
 ## Company edition base
