@@ -18,10 +18,10 @@
 
 Completion: you can state OS, resources, Hermes presence, and a recommended edition.
 
-## 2. Edition choice — Gate G0
+## 2. Edition choice
 
 - Present a condensed README §2 comparison and your recommendation (default: Personal).
-- Wait for the user's choice. Record it in `~/.oaos/bootstrap-state.json`.
+- Wait for the user's choice. Keep it in the session; the Personal installer writes stage status to `~/.oaos-install/state.json`.
 
 Completion: user picked an edition; state file written.
 
@@ -59,7 +59,7 @@ Completion: gate result verified; state file updated.
 
 ## 7. Resume, failure, rollback
 
-- **Resume:** read `~/.oaos/bootstrap-state.json`; continue from the last incomplete phase. Re-running completed phases must be safe (idempotent) — check before re-applying.
+- **Resume:** read `~/.oaos-install/state.json`; continue from the last incomplete stage. Re-running completed stages must be safe (idempotent) — check before re-applying.
 - **Failure:** fix forward when safe; if a step is destructive, irreversible, or externally blocked, stop and report — never guess a workaround on production data.
 - **Rollback:** for everything you change, know the undo (package remove, service disable, file restore). Take backups before destructive steps.
 

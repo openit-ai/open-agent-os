@@ -2,7 +2,7 @@
 
 Expands each gate referenced by the bootstrap procedure. Apply the gate policy from SKILL.md at all times: one gate at a time, never echo secrets, verify every value before moving on.
 
-## G0 — Edition choice
+## Edition choice (before the gates)
 
 Present a condensed table and your recommendation:
 
@@ -32,43 +32,53 @@ Steps:
 
 Common failures: `401` → key wrong or truncated (ask for a re-paste, never re-display); `model not found` → run the `hermes model` wizard.
 
-## G2 — Telegram bot token + user ID
+## G2 — Telegram bot token
 
-1. **Token:** open `t.me/BotFather` → send `/newbot` → choose a display name → choose a username ending in `bot` → copy the token (format `123456789:ABC...`).
-2. **User ID:** open `t.me/userinfobot` → it replies with a numeric ID (not the username).
-3. Configure (values never echoed):
-   ```bash
-   hermes config set TELEGRAM_BOT_TOKEN <token>
-   hermes config set TELEGRAM_ALLOWED_USERS <numeric-id>
-   ```
-4. Install + start the gateway and check:
-   ```bash
-   hermes gateway install      # or, boot-time system service: hermes gateway install --system (as root)
-   hermes gateway status
-   ```
-5. Verify: ask the user to message the bot — a reply confirms the round-trip.
-6. If the token leaks: revoke it in BotFather (`/revoke`) and redo the gate.
+Open `t.me/BotFather` → send `/newbot` → choose a display name and a username ending in `bot` → copy the token (format `123456789:ABC...`). Store it with `hermes config set TELEGRAM_BOT_TOKEN <token>`; never echo the value. If it leaks, revoke it in BotFather (`/revoke`) and repeat this gate.
+
+## G3 — Telegram user ID
+
+Open `t.me/userinfobot` → copy the numeric user ID (not the username). Store it with `hermes config set TELEGRAM_ALLOWED_USERS <numeric-id>`; never echo the value. Install and check the gateway with `hermes gateway install` and `hermes gateway status`. Ask the user to message the bot and confirm a reply.
 
 Groups: bots only see `/commands` and replies by default. To let the bot read group messages, disable privacy mode in BotFather (`/mybots` → Bot Settings → Group Privacy → Turn off) **and re-add the bot to the group**, or promote it to group admin.
 
-## G3 — VPS + domain (Project / Company)
+## G4 — (Optional) Large files
+
+Open `https://my.telegram.org` to obtain `api_id` and `api_hash` for optional large-file support. Copy both values only into the agent's secret configuration; never put them in logs or the wiki.
+
+## G5 — (Optional) Email
+
+Enable two-factor authentication for Gmail, then create and copy an app password for optional email access. Store it in the secret configuration and do not display it again.
+
+## G0 · G6 — VPS + domain (Project / Company)
 
 - Sizing target: 4 vCPU / 16 GB RAM / 200 GB disk. Example: Hostinger KVM 4 — ≈ ₩16,095/month on the 24-month promo (verified 2026-09; renewal pricing is higher — check current). Any equivalent VPS works.
-- Steps: user purchases → provides the IP + root/SSH access → agent hardens (SSH keys, `ufw`, unattended upgrades) → domain A record → nginx + TLS (certbot).
+- Steps: user purchases → provides the IP + root/SSH access → agent hardens (SSH keys, `ufw`, unattended upgrades) → three domain A records (`chat`, `note`, `portal`) → nginx + TLS (certbot).
 - Gate result: IP + domain reachable over HTTPS.
 
-## G4 — Bot mailbox (Project / Company)
+## G7 — Mattermost admin (Project)
 
-- Create a dedicated mailbox for the bot (any provider; app password if 2FA).
+Open the initial Mattermost URL provided by the agent and create the first administrator account in the browser. The agent verifies administrator access before continuing.
+
+## G8 — Outline API token (Project)
+
+Sign in as the Outline administrator, issue an API token, and paste it to the agent. The agent stores it as a secret and verifies it without echoing it.
+
+## G9 — Bot mailbox (Project / Company)
+
+- Create a dedicated mailbox for the bot (any provider; app password if 2FA). Keep it separate from personal mail so the bot cannot access a person's inbox.
 - Configure mail access (e.g. Himalaya for IMAP/SMTP) with the app password stored in `.env`.
 - Verify: send + receive one test message through the agent.
 
-## G5 — Optional integrations (Company)
+## G11 · G12 — Optional integrations (Company)
 
 Choice gate — connect now or later; never wire one the user did not choose:
 
-- **Slack** · **Notion** · **Google Workspace** · **Microsoft 365** — each has its own OAuth/app setup.
+- **G11, productivity suite:** Google Workspace or Microsoft 365 — connect the suite the organization already uses.
+- **G12, collaboration tools:** Slack or Notion — connect only tools the organization already uses.
 - Reminder for framing: these are subscriptions the company already pays for; connecting adds no new cost.
+
+Company expansion gates G10 (admin console) and G13 (optional multi-LLM) belong to the Company bootstrap.
 
 ## Safety reminders (all gates)
 

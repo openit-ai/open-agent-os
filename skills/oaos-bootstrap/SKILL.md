@@ -31,17 +31,17 @@ Orchestrates the "one URL" setup of an Open Agent OS edition on a Linux host: re
 ## How to Run
 
 1. Follow the Procedure top to bottom; load `references/gates.md` before Phase 3 and `references/verify-checklist.md` before Phase 5.
-2. State file: `~/.oaos/bootstrap-state.json` — write it after every phase; on resume, read it and continue from the first incomplete phase. Re-running completed phases must be safe.
-3. Log: `~/.oaos/logs/bootstrap-YYYYMMDD.log` — append command summaries and results. **Never write secrets to the log or state file.**
+2. Personal installer stage state: `~/.oaos-install/state.json` — on resume, read it and continue from the first incomplete stage. Re-running completed stages must be safe.
+3. Log: `~/.oaos/logs/install-YYYYMMDD.log` — append command summaries and results. **Never write secrets to the log or state file.**
 
 ## Quick Reference
 
 | Phase | What happens | Gate |
 |---|---|---|
 | 0 — Recon | OS, resources, existing install; recommend an edition | — |
-| 1 — Edition | User picks Personal / Project / Company | G0 |
+| 1 — Edition | User picks Personal / Project / Company | Choice |
 | 2 — Prep | Packages, timezone, swap, directories | — |
-| 3 — Install | Hermes check/install → LLM plan → chat platform → gateway → wiki → cron → harness seed | G1–G4 |
+| 3 — Install | Hermes check/install → LLM plan → chat platform → gateway → wiki → cron → harness seed | G1–G5 |
 | 4 — Verify | The full verify checklist — every check must run | — |
 | 5 — Report | What was built, addresses, first things to try | — |
 
@@ -56,13 +56,13 @@ uname -a; cat /etc/os-release; nproc; free -h; df -h /; swapon --show
 ls ~/.hermes 2>/dev/null; hermes --version 2>/dev/null; hermes doctor 2>/dev/null | head -20
 ```
 
-Recommend an edition from the README table (default: Personal). Write state: `{"phase": 0, "edition": null, "recommend": "personal"}`.
+Recommend an edition from the README table (default: Personal). Keep the recon summary in the session; the Personal installer creates stage state when it runs.
 
 Completion: the user has seen a 3–5 line summary; a recommended edition is on the table.
 
-### Phase 1 — Edition choice (Gate G0)
+### Phase 1 — Edition choice
 
-Present a condensed editions table and your recommendation; wait for the choice. Record `edition` in state.
+Present a condensed editions table and your recommendation; wait for the choice. Record the choice in the session; the Personal installer records its edition in stage state.
 
 Completion: edition fixed; the gate list for that edition is prepared (see `references/gates.md`).
 
@@ -87,6 +87,8 @@ Completion: packages installed; swap active (or a recorded reason why not); dire
 
 ### Phase 3 — Install
 
+For Personal, the agent can run the repository's `editions/personal/install.sh` to perform these steps idempotently; stage state is `~/.oaos-install/state.json`.
+
 #### 3a. Hermes Agent (all editions)
 
 - If not installed: download the official installer, inspect it, then run it:
@@ -103,7 +105,7 @@ Completion: packages installed; swap active (or a recorded reason why not); dire
 
 #### 3b. Chat platform (Personal default: Telegram)
 
-- **Gate G2 — bot token + user ID.** Guide: open `t.me/BotFather` → `/newbot` → copy the token. Then `t.me/userinfobot` → copy the numeric user ID.
+- **Gates G2–G3 — bot token + user ID.** Guide: open `t.me/BotFather` → `/newbot` → copy the token. Then `t.me/userinfobot` → copy the numeric user ID.
 - Configure:
   ```bash
   hermes config set TELEGRAM_BOT_TOKEN <token>
@@ -155,7 +157,7 @@ Report format (keep it tight):
 - Backup location (`~/.oaos/backups`; `hermes backup` for full state)
 - Known gaps / next phase
 
-Update state (`phase: 5`), then point the user to `oaos-ops` for day-2.
+Report the installer stage state, then point the user to `oaos-ops` for day-2.
 
 ## Gate Policy (applies to every gate)
 
