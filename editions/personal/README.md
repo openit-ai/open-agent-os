@@ -59,6 +59,48 @@ G2·G3  Telegram          @BotFather 봇 토큰 + 내 사용자 ID 붙여넣기
 3. "이번 주에 뭐 했는지 정리해줘"
 4. 더 많은 레시피 → [쿡북](../../docs/cookbook.md)
 
+## 옵션 — Hermes 데스크탑 앱으로 쓰기
+
+서버는 그대로 두고 쓰는 PC에 **Hermes 데스크탑 앱**만 설치하면, 같은 에이전트를 그래픽 화면에서 쓸 수 있습니다. 텔레그램과 동시에 연결돼도 되고, 채팅·산출물·봇·설정을 한 창에서 다룹니다. 앱 내려받기: [Hermes 데스크탑](https://hermes-agent.nousresearch.com/desktop) (Windows·macOS·Linux)
+
+**1. 서버 준비 — 대시보드에 로그인을 설정하고 내부망에 열기**
+
+`~/.hermes/.env`에 계정을 설정합니다.
+
+```text
+HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<강한 비밀번호>
+HERMES_DASHBOARD_BASIC_AUTH_SECRET=<openssl rand -base64 32 결과>
+```
+
+대시보드를 내부망에 열어 상시 구동합니다(systemd 서비스 권장).
+
+```text
+hermes dashboard --host 0.0.0.0 --port 9119 --no-open
+```
+
+> 대시보드를 루프백 밖에 열면 로그인이 강제됩니다(미설정 시 시작 거부) — 내부망 전용 사용을 권장합니다.
+
+**2. 앱에서 연결 — Settings → Gateways → Add connection → Remote gateway**
+
+- Remote URL에 `http://<서버 IP>:9119` 입력 → **Sign in**에서 위 사용자 이름·비밀번호로 로그인
+- **Test**로 연결을 확인합니다 — 로그인은 한 번만 하면 세션이 유지됩니다
+
+**3. 인터넷에서도 쓰려면 (선택)**
+
+대시보드를 HTTPS 리버스 프록시(예: `https://<도메인>/hermes`) 뒤에 두고, 같은 방식으로 Remote URL에 그 주소를 입력합니다.
+
+**이렇게 활용합니다**
+
+- **세션** — 어디서 나눈 대화든 이어서: 실시간 스트리밍·검색·Artifacts(산출물 갤러리)
+- **봇 탭(봇 모드)** — 전용 봇 로스터·그룹 협업 (데스크탑에 기본 탑재)
+- **화면(Screen)** — 서버의 가상 화면(컴퓨터 사용)을 열어 보고, 필요하면 사람이 직접 이어받기
+- **설정·운영** — Config·API 키·스킬·예약 작업·채널을 GUI에서 관리
+
+이 준비도 에이전트에게 그대로 요청하면 됩니다 — "데스크탑 앱에서도 쓸 수 있게 열어줘".
+
+자세히: [데스크탑 가이드](https://hermes-agent.nousresearch.com/docs/user-guide/desktop) · [원격 백엔드 연결](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) · [멀티 연결 가이드](https://hermes-agent.nousresearch.com/docs/user-guide/multi-connection-desktop)
+
 ## 라이선스
 
 **Apache License 2.0** — 오픈소스. 자유롭게 사용·수정·배포할 수 있습니다(상업적 사용 포함). [`LICENSE`](../../LICENSE) 참조.
