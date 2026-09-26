@@ -86,21 +86,13 @@ do_prep() {
   local blocked=0 pkg ram_kb
   local missing=()
   mkdir -p "$(oaos_home)/.oaos/logs" "$(oaos_home)/.oaos/backups" "$(oaos_home)/.oaos-install"
-  for pkg in git curl xz-utils ca-certificates nginx certbot python3-certbot-nginx ufw rsync; do
+  for pkg in git curl xz-utils ca-certificates nginx certbot python3-certbot-nginx ufw rsync iproute2 openssl; do
     if ! have_cmd dpkg-query || ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then missing+=("$pkg"); fi
   done
   if ((${#missing[@]})); then
     if have_cmd apt-get; then
       run_root apt-get update && run_root apt-get install -y "${missing[@]}" || blocked=1
     else warn 'Package manager unavailable; required packages need manual installation.'; blocked=1; fi
-  fi
-  if ! have_cmd docker || ! docker compose version >/dev/null 2>&1; then
-    if have_cmd apt-get; then
-      if ! run_root apt-get update || ! run_root apt-get install -y docker.io docker-compose-v2; then
-        warn 'Docker apt installation failed; install Engine and Compose manually: https://docs.docker.com/engine/install/ubuntu/'
-        blocked=1
-      fi
-    else warn 'Docker Engine and Compose plugin need manual installation: https://docs.docker.com/engine/install/ubuntu/'; blocked=1; fi
   fi
   if have_cmd ufw; then
     for pkg in OpenSSH 80/tcp 443/tcp; do run_root ufw allow "$pkg" >/dev/null || blocked=1; done
@@ -337,84 +329,8 @@ project_domain() {
   [[ $value =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$ ]] || return 3
   printf '%s' "$value"
 }
-compose() { (cd "$(stack_dir)" && run_root docker compose -f compose.yaml "$@"); }
-stack_healthy() {
-  local service id
-  for service in postgres redis mattermost outline; do
-    id=$(compose ps -q "$service" 2>/dev/null) || return 1
-    [[ -n $id ]] || return 1
-    [[ $(run_root docker inspect -f '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id" 2>/dev/null || true) == running/healthy ]] || return 1
-  done
-}
-
-do_stack() {
-  local dir key domain value service id chat note portal deadline remaining
-  if ! have_cmd docker || ! docker compose version >/dev/null 2>&1; then
-    warn 'Docker Engine + Compose plugin required; run prep or install via https://docs.docker.com/engine/install/ubuntu/'
-    return 3
-  fi
-  dir=$(stack_dir)
-  for key in OAOS_CHAT_DOMAIN OAOS_NOTE_DOMAIN OAOS_PORTAL_DOMAIN; do
-    domain=$(project_domain "$key") || { warn 'G6: set OAOS_BASE_DOMAIN or all three OAOS_*_DOMAIN values before stack.'; return 3; }
-    case $key in OAOS_CHAT_DOMAIN) chat=$domain;; OAOS_NOTE_DOMAIN) note=$domain;; OAOS_PORTAL_DOMAIN) portal=$domain;; esac
-  done
-  mkdir -p "$dir"
-  chmod 700 "$dir"
-  if [[ -f $dir/.env ]]; then
-    for key in CHAT_DOMAIN NOTE_DOMAIN PORTAL_DOMAIN; do
-      case $key in CHAT_DOMAIN) value=$chat;; NOTE_DOMAIN) value=$note;; PORTAL_DOMAIN) value=$portal;; esac
-      [[ $(stack_get "$key") == "$value" ]] || { warn "Existing stack domain $key differs; preserving stack."; return 3; }
-    done
-  else
-    OAOS_CHAT_DOMAIN=$chat OAOS_NOTE_DOMAIN=$note OAOS_PORTAL_DOMAIN=$portal oaos_python - "$dir/.env" <<'PYENV' || return 1
-import os, pathlib, secrets, tempfile, sys
-path = pathlib.Path(sys.argv[1])
-values = {
-    'CHAT_DOMAIN': os.environ['OAOS_CHAT_DOMAIN'],
-    'NOTE_DOMAIN': os.environ['OAOS_NOTE_DOMAIN'],
-    'PORTAL_DOMAIN': os.environ['OAOS_PORTAL_DOMAIN'],
-}
-for key in ('POSTGRES_PASSWORD', 'MM_DB_PASSWORD', 'OUTLINE_DB_PASSWORD', 'OUTLINE_SECRET_KEY', 'OUTLINE_UTILS_SECRET'):
-    values[key] = secrets.token_hex(32)
-with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, prefix='.env.tmp-', delete=False) as tmp:
-    os.chmod(tmp.name, 0o600)
-    tmp.write(''.join(f'{key}={value}\n' for key, value in values.items()))
-    temp_name = tmp.name
-os.replace(temp_name, path)
-PYENV
-  fi
-  for key in compose.yaml init-databases.sh; do
-    if [[ -e $dir/$key ]] && ! cmp -s "$repo_root/editions/project/$key" "$dir/$key"; then
-      warn "Existing stack file $key differs; preserving it for manual review."; return 3
-    fi
-    cp -n -- "$repo_root/editions/project/$key" "$dir/$key"
-  done
-  chmod 600 "$dir/.env"
-  if compose ps --status running --services 2>/dev/null | grep -Fqx outline &&
-     compose ps --status running --services 2>/dev/null | grep -Fqx mattermost; then
-    info 'Compose services already running; checking health.'
-  else
-    compose up -d >/dev/null 2>&1 || { warn 'Compose start failed; inspect docker compose ps and logs.'; return 3; }
-  fi
-  deadline=$((SECONDS + 360))
-  while ((SECONDS < deadline)); do
-    if curl -fsS --max-time 3 http://127.0.0.1:8065/api/v4/system/ping >/dev/null 2>&1 &&
-       curl -fsS --max-time 3 http://127.0.0.1:3000/_health >/dev/null 2>&1 && stack_healthy; then return 0; fi
-    remaining=$((deadline - SECONDS))
-    ((remaining > 0)) || break
-    if ((remaining >= 2)); then sleep 2; else sleep "$remaining"; fi
-  done
-  for service in postgres redis mattermost outline; do
-    id=$(compose ps -q "$service" 2>/dev/null || true)
-    if [[ -z $id ]]; then
-      warn "$service: no container."
-    else
-      warn "$service: $(run_root docker inspect -f '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$id" 2>/dev/null || printf 'inspect-unavailable')."
-    fi
-  done
-  warn 'Stack health timeout. Inspect docker compose ps and service logs (avoid printing secrets).'
-  return 3
-}
+# shellcheck source=editions/project/native-stack.sh
+. "$repo_root/editions/project/native-stack.sh"
 
 public_ip() { curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true; }
 dns_ok() {
@@ -517,34 +433,32 @@ EOF2
   if ! timeout 20s himalaya envelope list -a oaos-bot >/dev/null 2>&1; then
     warn 'G9: Himalaya IMAP login failed; review mailbox host, app password, and config.'; return 3
   fi
-  compose up -d outline >/dev/null 2>&1 || { warn 'Outline restart after mail setup failed.'; return 3; }
+  native_outline_config || { warn 'Outline mail configuration failed.'; return 3; }
+  if [[ $native_outline_changed == changed ]]; then
+    run_root systemctl restart oaos-outline || { warn 'Outline mail configuration reload failed.'; return 3; }
+  fi
   warn 'G9: confirm one real send/receive flow through the agent.'
 }
 
 do_team() {
-  local chat note output token candidate outline_token admin=0
+  local chat note output token outline_token admin=0
+  need_hermes || return 3
   chat=$(stack_get CHAT_DOMAIN)
   [[ -n $chat ]] || { warn 'Stack domain absent; run stack first.'; return 3; }
   note=$(stack_get NOTE_DOMAIN)
-  output=$(compose exec -T mattermost mmctl --local user list --role system_admin --json 2>/dev/null) || output=''
+  [[ -x /opt/mattermost/bin/mmctl ]] || { warn 'Mattermost mmctl is absent from /opt/mattermost/bin.'; return 3; }
+  output=$(run_root runuser -u mattermost -- /opt/mattermost/bin/mmctl --local user list --role system_admin --json 2>/dev/null) || output=''
   if [[ -z $output ]]; then
     warn 'mmctl local mode unavailable; confirm the administrator and create the Hermes bot/token in Mattermost System Console manually.'
   else
     if printf '%s' "$output" | oaos_python -c 'import json,sys; x=json.load(sys.stdin); sys.exit(0 if len(x)>0 else 1)' 2>/dev/null; then admin=1; fi
     ((admin)) || { warn "G7: create the first Mattermost administrator at https://$chat, then rerun team."; return 3; }
-    compose exec -T mattermost mmctl --local config set ServiceSettings.SiteURL "https://$chat" >/dev/null 2>&1 || warn 'mmctl SiteURL update unavailable; review Mattermost console.'
-    if [[ -z $(stack_get MATTERMOST_TOKEN) ]]; then
-      compose exec -T mattermost mmctl --local bot create hermes --display-name Hermes >/dev/null 2>&1 || true
-      output=$(compose exec -T mattermost mmctl --local token generate hermes 'OAOS Hermes' 2>/dev/null) || output=''
-      token=''
-      while IFS= read -r candidate; do
-        if curl -fsS --max-time 5 -H "Authorization: Bearer $candidate" http://127.0.0.1:8065/api/v4/users/me >/dev/null 2>&1; then token=$candidate; break; fi
-      done < <(printf '%s\n' "$output" | grep -oE '[A-Za-z0-9]{26,}' || true)
-      if [[ -n $token ]]; then stack_put MATTERMOST_TOKEN "$token" || return 1
-      else warn 'mmctl bot token generation unavailable; create a bot token in System Console and store it as MATTERMOST_TOKEN in stack/.env.'; fi
-    fi
+    run_root runuser -u mattermost -- /opt/mattermost/bin/mmctl --local config set ServiceSettings.SiteURL "https://$chat" >/dev/null 2>&1 || warn 'mmctl SiteURL update unavailable; review Mattermost console.'
   fi
   token=$(stack_get MATTERMOST_TOKEN)
+  [[ -n $token ]] || {
+    warn 'G7: create the Hermes bot and token in Mattermost System Console, store MATTERMOST_TOKEN in stack/.env, then rerun team.'; return 3;
+  }
   if [[ -n $token ]]; then
     if ! curl -fsS --max-time 5 -H "Authorization: Bearer $token" http://127.0.0.1:8065/api/v4/users/me >/dev/null 2>&1; then
       warn 'G7: stored Mattermost bot token was rejected; replace it before retrying.'; return 3
@@ -562,7 +476,6 @@ do_team() {
 4. 허용 계정과 비허용 계정의 채팅 동작을 각각 확인합니다.
 5. 봇 메일함의 송신·수신을 확인합니다.
 EOF2
-  [[ -n $token ]] || warn 'Mattermost bot token remains a manual action; add it to stack/.env and rerun team.'
   if [[ -n ${OAOS_MATTERMOST_ALLOWED_USERS:-} && -n $token ]]; then
     hermes config set MATTERMOST_ALLOWED_USERS "$OAOS_MATTERMOST_ALLOWED_USERS" >/dev/null 2>&1 || return 3
   fi
