@@ -88,7 +88,7 @@ skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oao
 harness/       설정 파일 템플릿(SOUL/USER/MEMORY/AGENTS) + 시딩 가이드
 editions/      에디션별 안내 페이지 — personal / project / company
 docs/          architecture-v2.0.md · cookbook.md · faq.md
-bootstrap/     설치·검증 자동화 (P0 반영 — 로드맵 참조)
+bootstrap/     설치·검증 자동화 — 공용 라이브러리 + 에디션별 검증
 ```
 
 ## 스킬

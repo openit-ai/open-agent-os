@@ -31,7 +31,7 @@ Orchestrates the "one URL" setup of an Open Agent OS edition on a Linux host: re
 ## How to Run
 
 1. Follow the Procedure top to bottom; load `references/gates.md` before Phase 3 and `references/verify-checklist.md` before Phase 5.
-2. State file: `~/.oaos/bootstrap-state.json` — write it after every phase; on resume, read it and continue from the first incomplete phase. Re-running completed phases must be safe.
+2. Personal installer stage state: `~/.oaos-install/state.json` — on resume, read it and continue from the first incomplete stage. Re-running completed stages must be safe.
 3. Log: `~/.oaos/logs/bootstrap-YYYYMMDD.log` — append command summaries and results. **Never write secrets to the log or state file.**
 
 ## Quick Reference
@@ -86,6 +86,8 @@ echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 Completion: packages installed; swap active (or a recorded reason why not); directories exist.
 
 ### Phase 3 — Install
+
+For Personal, the agent can run the repository's `editions/personal/install.sh` to perform these steps idempotently; stage state is `~/.oaos-install/state.json`.
 
 #### 3a. Hermes Agent (all editions)
 
