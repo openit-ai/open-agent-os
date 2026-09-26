@@ -184,6 +184,11 @@ labels+=('Outline health')
 if curl -fsS --max-time 5 http://127.0.0.1:3000/_health >/dev/null 2>&1; then
   record PASS 'Outline health endpoint OK'
 else record FAIL 'Outline health endpoint failed'; fi
+labels+=('Mattermost bot token')
+mm_token=$(stack_get MATTERMOST_TOKEN)
+if [[ -n $mm_token ]] && curl -fsS --max-time 5 -H "Authorization: Bearer $mm_token" http://127.0.0.1:8065/api/v4/users/me >/dev/null 2>&1; then
+  record PASS 'Mattermost bot token authenticated'
+else record FAIL 'Mattermost bot token absent or rejected'; fi
 labels+=('Outline API token')
 outline_token=$(stack_get OUTLINE_API_TOKEN)
 if [[ -n $outline_token ]] && curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $outline_token" -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/api/auth.info >/dev/null 2>&1; then

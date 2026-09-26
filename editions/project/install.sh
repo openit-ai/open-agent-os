@@ -306,7 +306,7 @@ stack_get() { [[ -f $(stack_dir)/.env ]] && sed -n "s/^$1=//p" "$(stack_dir)/.en
 stack_put() {
   local key=$1 value=$2 file
   file="$(stack_dir)/.env"
-  [[ $key =~ ^[A-Z_]+$ && $value != *$'\n'* && $value != *$'\r'* ]] || return 1
+  [[ $key =~ ^[A-Z_]+$ && $value =~ ^[A-Za-z0-9@._/+:=-]+$ ]] || return 1
   OAOS_ENV_VALUE=$value oaos_python - "$file" "$key" <<'PY'
 import os, pathlib, sys
 path, key = pathlib.Path(sys.argv[1]), sys.argv[2]
@@ -525,10 +525,12 @@ do_team() {
   fi
   token=$(stack_get MATTERMOST_TOKEN)
   if [[ -n $token ]]; then
+    if ! curl -fsS --max-time 5 -H "Authorization: Bearer $token" http://127.0.0.1:8065/api/v4/users/me >/dev/null 2>&1; then
+      warn 'G7: stored Mattermost bot token was rejected; replace it before retrying.'; return 3
+    fi
     need_hermes || return 3
     hermes config set MATTERMOST_URL "https://$chat" >/dev/null 2>&1 || return 3
     hermes config set MATTERMOST_TOKEN "$token" >/dev/null 2>&1 || return 3
-    systemctl --user restart hermes-gateway >/dev/null 2>&1 || { warn 'Restart Hermes gateway to activate Mattermost configuration.'; return 3; }
   fi
   cat > "$(oaos_home)/oaos/team-onboarding.md" <<EOF2
 # OAOS Project 팀 온보딩
@@ -549,6 +551,7 @@ EOF2
     stack_put OUTLINE_API_TOKEN "$outline_token" || return 1
     hermes config set OUTLINE_API_TOKEN "$outline_token" >/dev/null 2>&1 || return 3
   else warn 'G8: Outline API token validation failed; issue a new token and retry.'; return 3; fi
+  systemctl --user restart hermes-gateway >/dev/null 2>&1 || { warn 'Restart Hermes gateway to activate Project configuration.'; return 3; }
 }
 
 do_verify() { bash "$repo_root/bootstrap/verify/project-verify.sh"; }
