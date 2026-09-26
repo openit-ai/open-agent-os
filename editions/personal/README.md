@@ -31,14 +31,17 @@
 ## 설치 흐름 — 게이트 3개
 
 ```text
-G0  에디션 선택          "Personal로 진행할까요?"
+선택  에디션 선택          "Personal로 진행할까요?"
 G1  LLM 플랜             가입 링크 → 키 붙여넣기 (즉시 검증)
-G2  Telegram             @BotFather 봇 토큰 + 내 사용자 ID 붙여넣기
+G2·G3  Telegram          @BotFather 봇 토큰 + 내 사용자 ID 붙여넣기
 ────────────────────────
 이후: 설치 → 위키 시딩 → 하네스 시딩 → 검증 12항목 → 보고
 ```
 
 에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
+
+에이전트는 저장소에서 `bash editions/personal/install.sh`를 실행합니다 (`--dry-run`으로 계획 확인).
+최종 확인은 `bash bootstrap/verify/personal-verify.sh`로 실행하며, 결과에는 사람 확인 항목도 구분됩니다.
 
 ## 비용
 
