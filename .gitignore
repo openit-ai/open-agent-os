@@ -44,3 +44,4 @@ deploy/nginx/certs/tls.key
 deploy/nginx/certs/*.key
 
 .release-*/
+.test-home/

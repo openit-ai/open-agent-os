@@ -26,15 +26,20 @@
 
 - Slack · Notion · Google Workspace · Microsoft 365
 
-## 설치 흐름 — 게이트 5개 + 선택
+## 설치 흐름 — 필수 게이트 9개 + 선택
 
 ```text
-G0  에디션 선택          "Company로 진행할까요?"
+선택  에디션 선택          "Company로 진행할까요?"
 G1  LLM 플랜             가입 링크 → 키 붙여넣기
-G2  Telegram             봇 토큰 + 사용자 ID
-G3  VPS + 도메인          구매 → IP·도메인 전달
-G4  봇 메일함            메일 계정 → 앱 비밀번호
-G5  (선택) 연동 선택      Slack/Notion/Workspace/365 중 연결할 것만
+G2  Telegram 봇 토큰     @BotFather 토큰 붙여넣기
+G3  Telegram 사용자 ID   숫자 ID 붙여넣기
+G0·G6  VPS + 도메인      구매 → IP·도메인 전달
+G7  Mattermost 관리자    초기 관리자 계정 생성
+G8  Outline API 토큰     관리자 가입 → API 토큰 붙여넣기
+G9  봇 메일함            전용 메일 계정 → 앱 비밀번호
+G10 관리 콘솔            초기 관리자·구성원 매핑
+G11·G12 (선택) 연동      Workspace/365 또는 Slack/Notion
+G13 (선택) 멀티 LLM     추가 모델 API 키
 ────────────────────────
 이후: 설치 → 거버넌스 셋업 → 구성원 등록 → 검증 → 보고
 ```
