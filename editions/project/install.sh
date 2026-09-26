@@ -94,6 +94,11 @@ do_prep() {
       run_root apt-get update && run_root apt-get install -y "${missing[@]}" || blocked=1
     else warn 'Package manager unavailable; required packages need manual installation.'; blocked=1; fi
   fi
+  if ! have_cmd docker || ! docker compose version >/dev/null 2>&1; then
+    if have_cmd apt-get; then
+      run_root apt-get update && run_root apt-get install -y docker.io docker-compose-v2 || blocked=1
+    else warn 'Docker Engine and Compose plugin need manual installation: https://docs.docker.com/engine/install/ubuntu/'; blocked=1; fi
+  fi
   if have_cmd ufw; then
     for pkg in OpenSSH 80/tcp 443/tcp; do run_root ufw allow "$pkg" >/dev/null || blocked=1; done
   fi
