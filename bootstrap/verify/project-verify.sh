@@ -166,16 +166,20 @@ else record FAIL 'Certbot renewal timer unavailable or disabled'; fi
 labels+=('nginx config')
 if have_cmd nginx && nginx -t >/dev/null 2>&1; then record PASS 'nginx -t passed'
 else record FAIL 'nginx -t failed or nginx absent'; fi
-labels+=('Compose health')
+labels+=('Native services')
 healthy=1
-if have_cmd docker && [[ -f $stack/compose.yaml ]]; then
-  for service in postgres redis mattermost outline; do
-    id=$(cd "$stack" && docker compose -f compose.yaml ps -q "$service" 2>/dev/null || true)
-    if [[ -z $id || $(docker inspect -f '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id" 2>/dev/null || true) != running/healthy ]]; then healthy=0; fi
-  done
-else healthy=0; fi
-if ((healthy)); then record PASS 'Four Compose services are running and healthy'
-else record FAIL 'One or more Compose services are not healthy'; fi
+for service in postgresql redis-server mattermost oaos-outline; do
+  systemctl is-active --quiet "$service" 2>/dev/null || healthy=0
+done
+if ((healthy)) && pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1 &&
+   [[ $(redis-cli -h 127.0.0.1 ping 2>/dev/null) == PONG ]]; then
+  record PASS 'PostgreSQL, Redis, Mattermost and Outline systemd services are active'
+else record FAIL 'One or more native services or local dependencies are unavailable'; fi
+labels+=('Outline bind')
+listeners=$(ss -H -ltn '( sport = :3000 )' 2>/dev/null | awk '{print $4}')
+if [[ $listeners == '127.0.0.1:3000' ]]; then
+  record PASS 'Outline listens only on 127.0.0.1:3000'
+else record FAIL 'Outline port 3000 has no loopback-only listener'; fi
 labels+=('Mattermost ping')
 if curl -fsS --max-time 5 http://127.0.0.1:8065/api/v4/system/ping 2>/dev/null | grep -Fq '"status":"OK"'; then
   record PASS 'Mattermost system ping OK'

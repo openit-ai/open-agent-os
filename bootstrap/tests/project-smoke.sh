@@ -54,6 +54,7 @@ verify_repo="$temp_root/verify-repo"
 verify_home="$temp_root/verify-home"
 mkdir -p "$verify_repo/editions/project" "$verify_repo/bootstrap/lib" "$verify_repo/bootstrap/verify" "$verify_home"
 cp "$install" "$verify_repo/editions/project/install.sh"
+cp "$repo_root/editions/project/native-stack.sh" "$verify_repo/editions/project/native-stack.sh"
 cp "$repo_root/bootstrap/lib/common.sh" "$verify_repo/bootstrap/lib/common.sh"
 cat > "$verify_repo/bootstrap/verify/project-verify.sh" <<'MOCK'
 #!/usr/bin/env bash
@@ -93,21 +94,34 @@ for root in map(pathlib.Path,sys.argv[1:]):
   if f.is_file(): assert not p.search(f.read_bytes()),f
 PY
 printf 'PASS: log and state secret scan\n'
-python3 - "$repo_root/editions/project" <<'PY' || fail 'compose or ingress static validation'
-import pathlib,sys,yaml
-root=pathlib.Path(sys.argv[1]); data=yaml.safe_load((root/'compose.yaml').read_text())
-assert set(data['services'])=={'postgres','redis','mattermost','outline'}
-for name in ('mattermost','outline'):
- assert all(str(p).startswith('127.0.0.1:') for p in data['services'][name]['ports'])
-for name in ('postgres','redis','mattermost','outline'):
- assert data['services'][name]['restart']=='unless-stopped'
- assert 'healthcheck' in data['services'][name]
-assert data['services']['mattermost']['image'].endswith(':11.10.2')
-assert data['services']['outline']['image'].endswith(':1.10.1')
-assert 'ports' not in data['services']['postgres'] and 'ports' not in data['services']['redis']
-assert 'mattermost' in (root/'init-databases.sh').read_text() and 'outline' in (root/'init-databases.sh').read_text()
+python3 - "$repo_root/editions/project" "$repo_root/bootstrap/verify/project-verify.sh" <<'PY' || fail 'native service or ingress static validation'
+import pathlib,sys
+root=pathlib.Path(sys.argv[1]); verify=pathlib.Path(sys.argv[2]).read_text()
+native=(root/'native-stack.sh').read_text()
+unit=(root/'systemd/oaos-outline.service').read_text()
+install=(root/'install.sh').read_text()
+for term in ('native_postgres', 'native_redis', 'native_mattermost', 'native_outline', 'CREATE DATABASE mattermost', 'CREATE DATABASE outline', 'bind 127.0.0.1', 'v1.10.1', 'patch-outline-bind.py', 'build/server/main.js'):
+ assert term in native,term
+for term in ('User=outline', 'EnvironmentFile=/etc/oaos/outline.env', 'ExecStart=/usr/bin/node /opt/outline/build/server/index.js', 'Restart=on-failure'):
+ assert term in unit,term
+assert 'native_outline_config' in install and '/opt/mattermost/bin/mmctl --local' in install
+assert "labels+=('Native services')" in verify and "labels+=('Outline bind')" in verify
 assert '127.0.0.1:8065' in (root/'ingress/chat.conf').read_text()
 assert '127.0.0.1:3000' in (root/'ingress/note.conf').read_text()
 assert 'Upgrade $http_upgrade' in (root/'ingress/chat.conf').read_text()
 PY
-printf 'PASS: static Compose and ingress validation\n'
+printf 'PASS: native service and ingress static validation\n'
+patch_repo="$temp_root/patch-repo"
+mkdir -p "$patch_repo/server"
+printf 'export function start() {\n  server.listen(normalizedPort);\n}\n' > "$patch_repo/server/main.ts"
+git -C "$patch_repo" init -q -b main
+git -C "$patch_repo" add server/main.ts
+git -C "$patch_repo" -c user.name='OAOS Test' -c user.email='test@localhost' commit -qm 'seed'
+python3 "$repo_root/editions/project/patch-outline-bind.py" "$patch_repo" >"$temp_root/patch.out" || fail 'Outline bind patch'
+python3 "$repo_root/editions/project/patch-outline-bind.py" "$patch_repo" >"$temp_root/patch-rerun.out" || fail 'Outline bind patch rerun'
+[[ $(git -C "$patch_repo" diff --numstat -- server/main.ts) == $'1\t1\tserver/main.ts' ]] || fail 'Outline patch changed more than one line'
+grep -Fq 'server.listen(normalizedPort, "127.0.0.1");' "$patch_repo/server/main.ts" || fail 'Outline patch missed loopback'
+printf 'export function start() {\n  server.listen(normalizedPort, "0.0.0.0");\n}\n' > "$patch_repo/server/main.ts"
+if python3 "$repo_root/editions/project/patch-outline-bind.py" "$patch_repo" >"$temp_root/patch-bad.out" 2>"$temp_root/patch-bad.err"; then fail 'Outline patch accepted unexpected source'; fi
+grep -Fq 'server.listen(normalizedPort, "0.0.0.0");' "$patch_repo/server/main.ts" || fail 'Outline patch changed unexpected source'
+printf 'PASS: pinned Outline bind patch is one line, repeatable, and rejects drift\n'
