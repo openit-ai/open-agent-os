@@ -5,7 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=bootstrap/lib/common.sh
 . "$repo_root/bootstrap/lib/common.sh"
 
-stages=(prep hermes llm telegram gateway wiki harness cron stack ingress mail team verify)
+stages=(prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify)
 export OAOS_STATE_EDITION=project
 export OAOS_STAGES="${stages[*]}"
 selected=()
@@ -19,7 +19,7 @@ usage() {
   cat <<'EOF'
 Usage: bash editions/project/install.sh [--dry-run] [--stage name[,name...]] [--status] [--yes] [--timezone Area/City] [--skip-verify] [--help]
 
-Stages: prep, hermes, llm, telegram, gateway, wiki, harness, cron, stack, ingress, mail, team, verify.
+Stages: prep, hermes, llm, telegram, wiki, harness, cron, stack, ingress, mail, team, gateway, verify.
 The default runs all stages in order. Completed stages are skipped on rerun.
 --dry-run prints a plan without writing state or changing the system.
 --yes approves running a downloaded official Hermes installer.
@@ -96,7 +96,10 @@ do_prep() {
   fi
   if ! have_cmd docker || ! docker compose version >/dev/null 2>&1; then
     if have_cmd apt-get; then
-      run_root apt-get update && run_root apt-get install -y docker.io docker-compose-v2 || blocked=1
+      if ! run_root apt-get update || ! run_root apt-get install -y docker.io docker-compose-v2; then
+        warn 'Docker apt installation failed; install Engine and Compose manually: https://docs.docker.com/engine/install/ubuntu/'
+        blocked=1
+      fi
     else warn 'Docker Engine and Compose plugin need manual installation: https://docs.docker.com/engine/install/ubuntu/'; blocked=1; fi
   fi
   if have_cmd ufw; then
@@ -260,17 +263,15 @@ do_harness() {
 }
 
 do_cron() {
-  local scripts jobs name script
+  local scripts jobs name=oaos-daily-backup script
   scripts="$(oaos_home)/.hermes/scripts"
   need_hermes || return 3
   mkdir -p "$scripts"
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
-  for name in oaos-daily-backup oaos-gateway-watchdog; do
-    if grep -Fq "$name" <<< "$jobs"; then continue; fi
+  if ! grep -Fq "$name" <<< "$jobs"; then
     script="$scripts/$name.sh"
     if [[ -e $script ]]; then warn "Existing script for $name needs review; preserving it."; return 3; fi
-    if [[ $name == oaos-daily-backup ]]; then
-      cat > "$script" <<'EOF'
+    cat > "$script" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
@@ -282,22 +283,11 @@ tar -czf "$tmp" -C "$HOME" .hermes data/wiki
 mv -- "$tmp" "$target"
 ls -1t "$HOME/.oaos/backups"/oaos-*.tar.gz 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f -- "$old"; done
 EOF
-      chmod 700 "$script"
-      hermes cron create --name "$name" --script "$script" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
-    else
-      cat > "$script" <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-if ! systemctl --user is-active --quiet hermes-gateway; then
-  systemctl --user start hermes-gateway
-fi
-EOF
-      chmod 700 "$script"
-      hermes cron create --name "$name" --script "$script" --no-agent --deliver local '*/5 * * * *' >/dev/null || return 1
-    fi
-  done
+    chmod 700 "$script"
+    hermes cron create --name "$name" --script "$script" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
+  fi
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
-  grep -Fq 'oaos-daily-backup' <<< "$jobs" && grep -Fq 'oaos-gateway-watchdog' <<< "$jobs" || return 3
+  grep -Fq "$name" <<< "$jobs" || return 3
 }
 
 # Values in the stack environment are simple one-line literals; never source this file.
@@ -314,6 +304,23 @@ lines = path.read_text().splitlines() if path.exists() else []
 lines = [line for line in lines if not line.startswith(key + '=')]
 lines.append(key + '=' + os.environ['OAOS_ENV_VALUE'])
 import tempfile
+with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, prefix='.env.tmp-', delete=False) as tmp:
+    os.chmod(tmp.name, 0o600)
+    tmp.write('\n'.join(lines) + '\n')
+    temp_name = tmp.name
+os.replace(temp_name, path)
+PY
+}
+stack_remove() {
+  local key=$1 file
+  file="$(stack_dir)/.env"
+  [[ $key =~ ^[A-Z_]+$ ]] || return 1
+  [[ -f $file ]] || return 0
+  grep -q "^$key=" "$file" || return 0
+  oaos_python - "$file" "$key" <<'PY'
+import os, pathlib, sys, tempfile
+path, key = pathlib.Path(sys.argv[1]), sys.argv[2]
+lines = [line for line in path.read_text().splitlines() if not line.startswith(key + '=')]
 with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, prefix='.env.tmp-', delete=False) as tmp:
     os.chmod(tmp.name, 0o600)
     tmp.write('\n'.join(lines) + '\n')
@@ -341,7 +348,7 @@ stack_healthy() {
 }
 
 do_stack() {
-  local dir key domain value ready=0 service chat note portal
+  local dir key domain value service id chat note portal deadline remaining
   if ! have_cmd docker || ! docker compose version >/dev/null 2>&1; then
     warn 'Docker Engine + Compose plugin required; run prep or install via https://docs.docker.com/engine/install/ubuntu/'
     return 3
@@ -389,13 +396,21 @@ PYENV
   else
     compose up -d >/dev/null 2>&1 || { warn 'Compose start failed; inspect docker compose ps and logs.'; return 3; }
   fi
-  for ((ready=0; ready<60; ready++)); do
+  deadline=$((SECONDS + 360))
+  while ((SECONDS < deadline)); do
     if curl -fsS --max-time 3 http://127.0.0.1:8065/api/v4/system/ping >/dev/null 2>&1 &&
        curl -fsS --max-time 3 http://127.0.0.1:3000/_health >/dev/null 2>&1 && stack_healthy; then return 0; fi
-    sleep 2
+    remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || break
+    if ((remaining >= 2)); then sleep 2; else sleep "$remaining"; fi
   done
   for service in postgres redis mattermost outline; do
-    warn "$service: $(compose ps --status running --services 2>/dev/null | grep -Fxc "$service" || true) running instance(s)."
+    id=$(compose ps -q "$service" 2>/dev/null || true)
+    if [[ -z $id ]]; then
+      warn "$service: no container."
+    else
+      warn "$service: $(run_root docker inspect -f '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$id" 2>/dev/null || printf 'inspect-unavailable')."
+    fi
   done
   warn 'Stack health timeout. Inspect docker compose ps and service logs (avoid printing secrets).'
   return 3
@@ -415,7 +430,10 @@ do_ingress() {
   [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { warn 'Public IPv4 lookup failed; check network and retry.'; return 3; }
   for key in CHAT_DOMAIN NOTE_DOMAIN PORTAL_DOMAIN; do
     domain=$(stack_get "$key")
-    if [[ -z $domain ]] || ! dns_ok "$domain" "$ip"; then
+    if [[ -z $domain ]]; then
+      warn "G6: $key is missing from the stack environment; run stack with the domain values first."; return 3
+    fi
+    if ! dns_ok "$domain" "$ip"; then
       warn "G6: $key A record must resolve to this server public IPv4 ($ip)."; return 3
     fi
   done
@@ -458,8 +476,11 @@ do_mail() {
   password=${OAOS_MAIL_PASSWORD:-$(stack_get OAOS_MAIL_PASSWORD)}
   imap=${OAOS_MAIL_IMAP_HOST:-$(stack_get OAOS_MAIL_IMAP_HOST)}
   smtp=${OAOS_MAIL_SMTP_HOST:-$(stack_get OAOS_MAIL_SMTP_HOST)}
-  [[ $address =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ && -n $password && $imap =~ ^[A-Za-z0-9.-]+$ && $smtp =~ ^[A-Za-z0-9.-]+$ ]] || {
+  [[ -n $address && -n $password && -n $imap && -n $smtp ]] || {
     warn 'G9: set OAOS_MAIL_ADDRESS, OAOS_MAIL_PASSWORD, OAOS_MAIL_IMAP_HOST, OAOS_MAIL_SMTP_HOST in the environment and rerun mail.'; return 3; }
+  [[ $address =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || {
+    warn 'G9: mail address contains characters unsupported by the stack environment; use a standard address with letters, digits, dot, underscore, plus, or hyphen.'; return 3; }
+  [[ $imap =~ ^[A-Za-z0-9.-]+$ && $smtp =~ ^[A-Za-z0-9.-]+$ ]] || { warn 'G9: invalid IMAP or SMTP host name.'; return 3; }
   [[ $password =~ ^[A-Za-z0-9_-]+$ ]] || { warn 'Mail password must be a one-line app password without spaces; remove presentation spaces.'; return 3; }
   have_cmd himalaya || { warn 'Install Himalaya from https://pimalaya.org/himalaya/ after verifying its release integrity, then rerun mail.'; return 3; }
   [[ $(himalaya --version 2>/dev/null) =~ [[:space:]]1\. ]] || { warn 'Himalaya configuration requires a verified 1.x CLI; configure this version manually.'; return 3; }
@@ -545,24 +566,36 @@ EOF2
   if [[ -n ${OAOS_MATTERMOST_ALLOWED_USERS:-} && -n $token ]]; then
     hermes config set MATTERMOST_ALLOWED_USERS "$OAOS_MATTERMOST_ALLOWED_USERS" >/dev/null 2>&1 || return 3
   fi
-  outline_token=${OAOS_OUTLINE_API_TOKEN:-$(stack_get OUTLINE_API_TOKEN)}
+  outline_token=${OAOS_OUTLINE_API_TOKEN:-$(config_value OUTLINE_API_TOKEN)}
+  [[ -n $outline_token && $outline_token != null ]] || outline_token=$(stack_get OUTLINE_API_TOKEN)
   [[ -n $outline_token ]] || { warn "G8: create an Outline admin at https://$note and provide OAOS_OUTLINE_API_TOKEN."; return 3; }
   if curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $outline_token" -H 'Content-Type: application/json' --data '{}' "http://127.0.0.1:3000/api/auth.info" >/dev/null 2>&1; then
-    stack_put OUTLINE_API_TOKEN "$outline_token" || return 1
     hermes config set OUTLINE_API_TOKEN "$outline_token" >/dev/null 2>&1 || return 3
+    stack_remove OUTLINE_API_TOKEN || return 1
   else warn 'G8: Outline API token validation failed; issue a new token and retry.'; return 3; fi
-  systemctl --user restart hermes-gateway >/dev/null 2>&1 || { warn 'Restart Hermes gateway to activate Project configuration.'; return 3; }
 }
 
-do_verify() { bash "$repo_root/bootstrap/verify/project-verify.sh"; }
+do_verify() {
+  local output code=0 manual
+  output=$(bash "$repo_root/bootstrap/verify/project-verify.sh") || code=$?
+  printf '%s\n' "$output"
+  if ((code == 0)); then
+    manual=$(sed -nE 's/^Summary: PASS=[0-9]+ FAIL=[0-9]+ MANUAL=([0-9]+) SKIP=[0-9]+$/\1/p' <<< "$output" | tail -n 1)
+    [[ $manual =~ ^[0-9]+$ ]] || { warn 'Verify summary is missing; review the verification output.'; return 1; }
+    stage_detail="Completed; MANUAL=$manual"
+    info "Verify automated checks passed; MANUAL=$manual item(s) require human evidence."
+  fi
+  return "$code"
+}
 
 # Stage dispatch is deliberately explicit: no user-controlled command name is evaluated.
 run_stage() {
   case $1 in
     prep) do_prep ;; hermes) do_hermes ;; llm) do_llm ;;
-    telegram) do_telegram ;; gateway) do_gateway ;; wiki) do_wiki ;;
+    telegram) do_telegram ;; wiki) do_wiki ;;
     harness) do_harness ;; cron) do_cron ;; stack) do_stack ;;
-    ingress) do_ingress ;; mail) do_mail ;; team) do_team ;; verify) do_verify ;;
+    ingress) do_ingress ;; mail) do_mail ;; team) do_team ;;
+    gateway) do_gateway ;; verify) do_verify ;;
   esac
 }
 
@@ -574,9 +607,10 @@ for stage in "${stages[@]}"; do
   if ((OAOS_DRY_RUN)); then info "Would run $stage (current: $(stage_status "$stage"))."; continue; fi
   info "Running $stage."
   code=0
+  stage_detail=Completed
   run_stage "$stage" || code=$?
   case $code in
-    0) stage_mark "$stage" 'done' 'Completed'; info "$stage done." ;;
+    0) stage_mark "$stage" 'done' "$stage_detail"; info "$stage done." ;;
     3) stage_mark "$stage" blocked 'Needs a gate, prerequisite, or permission'; warn "$stage blocked."; ((result == 1)) || result=3 ;;
     *) stage_mark "$stage" failed 'Command failed; review the install log'; warn "$stage failed."; result=1 ;;
   esac

@@ -62,9 +62,9 @@ else record FAIL 'Wiki git repository or seed commit absent'; fi
 if have_cmd hermes; then
   jobs=$(hermes cron list 2>/dev/null || true)
 else jobs=''; fi
-if grep -Fq 'oaos-daily-backup' <<< "$jobs" && grep -Fq 'oaos-gateway-watchdog' <<< "$jobs"; then
-  record PASS 'Both named jobs appear in the enabled cron list'
-else record FAIL 'One or both enabled cron jobs are absent'; fi
+if grep -Fq 'oaos-daily-backup' <<< "$jobs"; then
+  record PASS 'Daily backup appears in the enabled cron list'
+else record FAIL 'Daily backup cron job is absent'; fi
 
 # 9: Config files must exist and contain no token-like values.
 config_files=("$home/.hermes/SOUL.md" "$home/.hermes/memories/USER.md" "$home/.hermes/memories/MEMORY.md")
@@ -190,8 +190,9 @@ if [[ -n $mm_token ]] && curl -fsS --max-time 5 -H "Authorization: Bearer $mm_to
   record PASS 'Mattermost bot token authenticated'
 else record FAIL 'Mattermost bot token absent or rejected'; fi
 labels+=('Outline API token')
-outline_token=$(stack_get OUTLINE_API_TOKEN)
-if [[ -n $outline_token ]] && curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $outline_token" -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/api/auth.info >/dev/null 2>&1; then
+outline_token=''
+if have_cmd hermes; then outline_token=$(hermes config get --raw OUTLINE_API_TOKEN 2>/dev/null || true); fi
+if [[ -n $outline_token && $outline_token != null ]] && curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $outline_token" -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/api/auth.info >/dev/null 2>&1; then
   record PASS 'Outline API token authenticated'
 else record FAIL 'Outline API token absent or rejected'; fi
 labels+=('Bot mailbox IMAP')
