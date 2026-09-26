@@ -509,6 +509,7 @@ EOF2
     hermes config set OUTLINE_API_TOKEN "$outline_token" >/dev/null 2>&1 || return 3
     stack_remove OUTLINE_API_TOKEN || return 1
   else warn 'G8: Outline API token validation failed; issue a new token and retry.'; return 3; fi
+  systemctl --user restart hermes-gateway >/dev/null 2>&1 || { warn 'Restart Hermes gateway to activate Project configuration.'; return 3; }
 }
 
 do_verify() {
