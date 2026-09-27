@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2329 # Mock functions are called through the platform dispatcher.
 set -Eeuo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -23,6 +24,8 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
   fake_kernel=MINGW64_NT fake_arch=x86_64 MSYSTEM=MINGW64
   export MSYSTEM
   [[ $(os_detect) == windows-gitbash ]] || fail 'Git Bash detection'
+  unset BASH_VERSION
+  if os_detect >/dev/null 2>&1; then fail 'ash/BusyBox-shaped shell accepted'; fi
   unset MSYSTEM
   if os_detect >/dev/null 2>&1; then fail 'Windows without Git Bash accepted'; fi
   fake_kernel=FreeBSD fake_arch=x86_64
@@ -40,16 +43,156 @@ OAOS_TEST_MODE=1; export OAOS_TEST_MODE
 for OAOS_TEST_PLATFORM in macos windows-gitbash; do
   export OAOS_TEST_PLATFORM
   os_detect >/dev/null || fail 'test override rejected'
-  code=0
-  platform_memory_kib >"$temp_root/stub.out" 2>"$temp_root/stub.err" || code=$?
-  if [[ $code != 3 ]] || ! grep -Fq BLOCKED "$temp_root/stub.err"; then fail 'stub did not BLOCK'; fi
-  code=0
   HOME="$HOME" OAOS_TEST_MODE=1 OAOS_TEST_PLATFORM="$OAOS_TEST_PLATFORM" \
     bash "$repo_root/editions/personal/install.sh" --dry-run --stage prep >"$temp_root/entry.out" 2>"$temp_root/entry.err" || code=$?
-  if [[ $code != 3 ]] || ! grep -Fq BLOCKED "$temp_root/entry.err"; then fail 'entry did not BLOCK before prep'; fi
+  if [[ ${code:-0} != 0 ]] || ! grep -Fq 'Would run prep' "$temp_root/entry.out"; then fail 'cross-platform dry-run failed'; fi
 done
-[[ ! -e $HOME/.oaos && ! -e $HOME/.oaos-install ]] || fail 'stub entry changed HOME'
-printf 'PASS: test-only overrides and P2/P3 BLOCKED without side effects\n'
+[[ ! -e $HOME/.oaos && ! -e $HOME/.oaos-install ]] || fail 'dry-run entry changed HOME'
+printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects\n'
+
+(
+  OAOS_PLATFORM=macos
+  export OAOS_PLATFORM
+  HERMES_HOME="$HOME/custom hermes"; export HERMES_HOME
+  sysctl() {
+    case $* in '-n hw.memsize') printf '17179869184\n' ;; 'vm.swapusage') printf 'vm.swapusage: total = 1024.00M  used = 0.00M  free = 1024.00M\n' ;; *) return 1 ;; esac
+  }
+  shasum() { [[ $1 == -a && $2 == 256 ]] || return 1; sha256sum "$3"; }
+  stat() {
+    if [[ $1 == -f && $2 == %Lp ]]; then command stat -c %a "$3"
+    elif [[ $1 == -f && $2 == %u ]]; then command stat -c %u "$3"
+    else command stat "$@"; fi
+  }
+  systemsetup() { [[ $1 == -gettimezone ]] && printf 'Time Zone: Asia/Seoul\n'; }
+  readlink() { [[ $1 == /etc/localtime ]] && printf '/var/db/timezone/zoneinfo/Asia/Seoul\n'; }
+  launchctl() { printf '123 0 com.hermes.gateway\n'; }
+  hermes() { [[ $1 == gateway && $2 == status ]] && printf 'Status: running\n'; }
+  [[ $(platform_memory_kib) == 16777216 && $(platform_swap_state) == 1 ]] || fail 'macOS resource units'
+  [[ $(platform_timezone_get) == Asia/Seoul ]] || fail 'macOS timezone read'
+  [[ $(platform_path scripts) == "$HERMES_HOME/scripts" ]] || fail 'macOS Hermes path override'
+  OAOS_DRY_RUN=1; export OAOS_DRY_RUN
+  printf 'secret\n' > "$HOME/mac-secret"
+  chmod 644 "$HOME/mac-secret"
+  platform_secret_protect "$HOME/mac-secret" >/dev/null
+  [[ $(platform_file_mode "$HOME/mac-secret") == 644 ]] || fail 'macOS dry-run changed secret'
+  OAOS_DRY_RUN=0; export OAOS_DRY_RUN
+  platform_secret_protect "$HOME/mac-secret" || fail 'macOS secret protection'
+  platform_secret_check "$HOME/mac-secret" || fail 'macOS secret read-back'
+  [[ $(platform_sha256 "$HOME/mac-secret") == $(sha256sum "$HOME/mac-secret" | awk '{print $1}') ]] || fail 'macOS shasum'
+  platform_gateway_autostart check || fail 'macOS launchd diagnostic'
+  code=0
+  platform_timezone_set Asia/Tokyo 2>"$temp_root/mac-block.err" || code=$?
+  if [[ $code != 3 ]] || ! grep -Fq BLOCKED "$temp_root/mac-block.err"; then fail 'macOS timezone was not blocked'; fi
+  git() { return 1; }
+  code=0
+  platform_require_tools >/dev/null 2>"$temp_root/mac-prereq.err" || code=$?
+  if [[ $code != 3 ]] || ! grep -Fq 'install git manually' "$temp_root/mac-prereq.err"; then fail 'macOS missing git was not blocked'; fi
+)
+printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd, and timezone BLOCKED\n'
+
+(
+  OAOS_PLATFORM=windows-gitbash
+  export OAOS_PLATFORM
+  LOCALAPPDATA='C:\Users\Test\AppData\Local'; APPDATA='C:\Users\Test\AppData\Roaming'
+  export LOCALAPPDATA APPDATA
+  cygpath() {
+    case $1 in
+      -u) if [[ $2 == 'D:\Data\Hermes' ]]; then printf '%s/other-hermes\n' "$HOME"; else printf '%s/local/hermes\n' "$HOME"; fi ;;
+      -w) printf 'C:\\mock\\%s\n' "${2##*/}" ;;
+      *) return 1 ;;
+    esac
+  }
+  powershell.exe() {
+    if [[ $* == *' -File '* ]]; then printf '%s\n' "$*" > "$temp_root/ps-installer.args"; return 0; fi
+    case $* in
+      *TotalPhysicalMemory*) printf '16777216\r\n' ;;
+      *Win32_PageFileUsage*) printf '4096\r\n' ;;
+      *Get-TimeZone*) printf 'Korea Standard Time\r\n' ;;
+      *Get-Acl*) [[ ${mock_acl_fail:-0} == 0 ]] ;;
+      *WindowsIdentity*User.Value*) printf 'S-1-5-21-1000\r\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  schtasks.exe() { [[ $* == *'/XML'* ]] && printf '<Task><Triggers><LogonTrigger></LogonTrigger></Triggers></Task>\n'; }
+  icacls.exe() { printf '%s\n' "$*" > "$temp_root/icacls.args"; }
+  hermes() {
+    [[ $1 == gateway ]] || return 1
+    case $2 in status) printf 'Hermes_Gateway Status: running\n' ;; install) printf 'install\n' > "$temp_root/gateway-install" ;; esac
+  }
+  [[ $(platform_hermes_home) == "$HOME/local/hermes" ]] || fail 'Windows LOCALAPPDATA conversion'
+  [[ $(platform_path scripts) == "$HOME/local/hermes/scripts" && $(platform_path state) == "$HOME/.oaos-install/state.json" ]] || fail 'Windows platform paths'
+  HERMES_HOME='D:\Data\Hermes'; export HERMES_HOME
+  [[ $(platform_hermes_home) == "$HOME/other-hermes" ]] || fail 'Windows HERMES_HOME override conversion'
+  unset HERMES_HOME
+  [[ $(platform_memory_kib) == 16777216 && $(platform_swap_state) == 1 ]] || fail 'Windows CIM units'
+  [[ $(platform_timezone_get) == 'Korea Standard Time' ]] || fail 'Windows timezone ID'
+  printf 'installer\n' > "$HOME/install.ps1"
+  [[ $(platform_sha256 "$HOME/install.ps1") == $(sha256sum "$HOME/install.ps1" | awk '{print $1}') ]] || fail 'Windows SHA-256 tool selection'
+  expected_sha=$(sha256sum "$HOME/install.ps1" | awk '{print $1}')
+  (
+    sha256sum() { return 1; }
+    shasum() { return 1; }
+    certutil.exe() { printf 'SHA256 hash of file:\r\n%s\r\nCertUtil: command completed successfully.\r\n' "$expected_sha"; }
+    [[ $(platform_sha256 "$HOME/install.ps1") == "$expected_sha" ]] || fail 'Windows certutil SHA-256 fallback'
+  )
+  platform_install_hermes "$HOME/install.ps1" || fail 'Windows PowerShell installer invocation'
+  grep -Fq -- '-ExecutionPolicy Bypass -File C:\mock\install.ps1' "$temp_root/ps-installer.args" || fail 'Windows installer path or invocation'
+  platform_gateway_autostart check || fail 'Windows ONLOGON registration'
+  OAOS_DRY_RUN=1; export OAOS_DRY_RUN
+  platform_gateway_install >/dev/null
+  [[ ! -e $temp_root/gateway-install ]] || fail 'Windows dry-run installed gateway'
+  OAOS_DRY_RUN=0; export OAOS_DRY_RUN
+  platform_gateway_install || fail 'Windows Hermes gateway install'
+  [[ -e $temp_root/gateway-install ]] || fail 'Windows gateway install not called'
+  printf 'secret\n' > "$HOME/win-secret"
+  platform_secret_protect "$HOME/win-secret" || fail 'Windows ACL protection'
+  grep -Fq '/inheritance:r' "$temp_root/icacls.args" || fail 'Windows icacls not invoked'
+  printf 'replacement\n' | platform_atomic_write "$HOME/win-secret" || fail 'Windows atomic ACL write'
+  [[ $(cat "$HOME/win-secret") == replacement ]] || fail 'Windows atomic content'
+  mock_acl_fail=1
+  if platform_secret_check "$HOME/win-secret"; then fail 'Windows ACL failure accepted'; fi
+  code=0
+  platform_timezone_set Asia/Seoul 2>"$temp_root/win-block.err" || code=$?
+  if [[ $code != 3 ]] || ! grep -Fq BLOCKED "$temp_root/win-block.err"; then fail 'Windows unmapped timezone was not blocked'; fi
+  python3() { return 1; }
+  python() { return 1; }
+  code=0
+  platform_python >/dev/null 2>"$temp_root/python-block.err" || code=$?
+  [[ $code == 3 ]] || fail 'Windows missing Python was not blocked'
+  git() { return 1; }
+  code=0
+  platform_require_tools >/dev/null 2>"$temp_root/git-block.err" || code=$?
+  if [[ $code != 3 ]] || ! grep -Fq 'missing git' "$temp_root/git-block.err"; then fail 'Windows missing git was not blocked'; fi
+)
+printf 'PASS: mocked Windows CIM, timezone, path, SHA, PowerShell install, ONLOGON, ACL, and BLOCKED paths\n'
+
+# Generate macOS cron scripts through the real entrypoint; Hermes is a local mock.
+mkdir -p "$temp_root/cron-bin" "$temp_root/cron-home"
+cat > "$temp_root/cron-bin/hermes" <<'SH'
+#!/usr/bin/env bash
+[[ $1 == cron ]] || exit 1
+case $2 in
+  list) [[ ! -f $HERMES_MOCK_JOBS ]] || cat "$HERMES_MOCK_JOBS" ;;
+  create)
+    shift 2
+    while (($#)); do
+      if [[ $1 == --name ]]; then printf '%s\n' "$2" >> "$HERMES_MOCK_JOBS"; exit 0; fi
+      shift
+    done
+    exit 1 ;;
+esac
+SH
+chmod 700 "$temp_root/cron-bin/hermes"
+HOME="$temp_root/cron-home" HERMES_HOME="$temp_root/custom hermes" HERMES_MOCK_JOBS="$temp_root/jobs" \
+  PATH="$temp_root/cron-bin:$PATH" OAOS_TEST_MODE=1 OAOS_TEST_PLATFORM=macos \
+  bash "$repo_root/editions/personal/install.sh" --stage cron >"$temp_root/cron.out" 2>"$temp_root/cron.err" || fail 'macOS cron generation'
+backup_script="$temp_root/custom hermes/scripts/oaos-daily-backup.sh"
+watchdog_script="$temp_root/custom hermes/scripts/oaos-gateway-watchdog.sh"
+[[ -f $backup_script && -f $watchdog_script ]] || fail 'macOS cron scripts absent'
+grep -Fq 'custom\ hermes' "$backup_script" || fail 'backup script ignored custom Hermes path'
+grep -Fq 'hermes gateway start' "$watchdog_script" || fail 'watchdog start missing'
+bash -n "$backup_script" "$watchdog_script" || fail 'generated scripts syntax'
+printf 'PASS: generated macOS backup and watchdog scripts honor HERMES_HOME in isolated HOME\n'
 
 OAOS_TEST_PLATFORM=linux; export OAOS_TEST_PLATFORM
 os_detect >/dev/null
