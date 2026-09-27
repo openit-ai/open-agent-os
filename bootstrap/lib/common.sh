@@ -18,12 +18,16 @@ redact() {
 log_line() {
   local level=$1 message=$2 line
   line="$(date '+%Y-%m-%dT%H:%M:%S%z') [$level] $message"
-  if [[ ${OAOS_NO_LOG_FILE:-0} == 1 ]]; then
+  if [[ ${OAOS_NO_LOG_FILE:-0} == 1 || ${OAOS_DRY_RUN:-0} == 1 ]]; then
     printf '%s\n' "$line" | redact
   else
     mkdir -p "$(dirname "$(oaos_log_file)")"
     (umask 077; touch "$(oaos_log_file)")
-    chmod 600 "$(oaos_log_file)" 2>/dev/null || true
+    if [[ ${OAOS_PLATFORM:-} == windows-gitbash ]] && declare -F platform_secret_protect >/dev/null; then
+      platform_secret_protect "$(oaos_log_file)" || { printf 'BLOCKED: Cannot restrict install log ACL.\n' >&2; return 3; }
+    else
+      chmod 600 "$(oaos_log_file)" 2>/dev/null || true
+    fi
     printf '%s\n' "$line" | redact | tee -a "$(oaos_log_file)"
   fi
 }
@@ -33,8 +37,13 @@ die() { log_line ERROR "$*" >&2; exit 1; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 oaos_python() {
-  have_cmd python3 || die 'python3 is required for JSON and HTTP checks.'
-  python3 "$@"
+  local executable=python3
+  if declare -F platform_python >/dev/null; then
+    executable=$(platform_python) || return 3
+  elif ! have_cmd python3; then
+    die 'python3 is required for JSON and HTTP checks.'
+  fi
+  "$executable" "$@"
 }
 
 stage_status() {
@@ -60,8 +69,8 @@ state_valid() {
   file=$(oaos_state_file)
   [[ -e $file ]] || return 0
   if have_cmd jq; then jq -e . "$file" >/dev/null 2>&1; return; fi
-  if have_cmd python3; then
-    python3 - "$file" >/dev/null 2>&1 <<'PY'
+  if have_cmd python3 || { declare -F platform_python >/dev/null && platform_python >/dev/null 2>&1; }; then
+    oaos_python - "$file" >/dev/null 2>&1 <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as f:
     json.load(f)
@@ -88,7 +97,9 @@ stage_mark() {
   file=$(oaos_state_file)
   mkdir -p "$(dirname "$file")"
   tmp=$(mktemp "${file}.tmp.XXXXXX")
-  chmod 600 "$tmp"
+  if [[ ${OAOS_PLATFORM:-} == windows-gitbash ]] && declare -F platform_secret_protect >/dev/null; then
+    platform_secret_protect "$tmp" || { rm -f -- "$tmp"; return 3; }
+  else chmod 600 "$tmp"; fi
   now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   if have_cmd jq; then
     if [[ -f $file ]]; then
@@ -117,6 +128,9 @@ with open(target, "w", encoding="utf-8") as f:
 PY
   fi
   mv -f -- "$tmp" "$file"
+  if [[ ${OAOS_PLATFORM:-} == windows-gitbash ]] && declare -F platform_secret_check >/dev/null; then
+    platform_secret_check "$file" || return 3
+  fi
 }
 
 run_root() {

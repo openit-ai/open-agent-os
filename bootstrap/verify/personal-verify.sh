@@ -21,7 +21,6 @@ while (($#)); do
   shift
 done
 os_detect >/dev/null || exit 3
-platform_linux Personal || exit 3
 
 home=$(platform_oaos_home)
 hermes_home=$(platform_hermes_home)
@@ -42,15 +41,16 @@ elif have_cmd hermes && platform_chat_probe; then
 else record FAIL 'Model request failed or reply did not contain OK'; fi
 
 # 3: An absent sandbox service file is definitive; avoid touching host services.
-if ! platform_gateway_service_present; then record FAIL 'Gateway user service file absent'
+if ! platform_gateway_service_present; then record FAIL 'Gateway registration absent'
 elif have_cmd hermes && platform_gateway_status; then
   record PASS 'hermes gateway status reports running'
 else record FAIL 'Gateway status is not running'; fi
 
 # 4: Verify the user's service enablement and lingering without changing either.
 if platform_gateway_autostart check; then
-  record PASS 'Gateway is enabled and user lingering is yes'
-else record FAIL 'Gateway enablement or user lingering is absent'; fi
+  if [[ $OAOS_PLATFORM == linux ]]; then record PASS 'Gateway is enabled and user lingering is yes'
+  else record MANUAL 'Gateway registration and running state read back; confirm logout/login persistence'; fi
+else record FAIL 'Gateway autostart registration or running state absent'; fi
 
 # 5–6: These need messages from real accounts.
 record MANUAL 'Send a message from the allowed account and confirm a reply'
@@ -81,10 +81,10 @@ else record PASS 'SOUL, USER, MEMORY exist; no token-like values found'; fi
 # 10: Keep these patterns in sync with common.sh redact; never print matches.
 if [[ ! -e $home/.oaos && ! -e $home/.oaos-install ]]; then
   record SKIP 'Scan targets absent; nothing to scan'
-elif ! have_cmd python3; then
-  record FAIL 'python3 unavailable; secret scan not run'
+elif ! platform_python >/dev/null 2>&1; then
+  record FAIL 'Python 3 unavailable; secret scan not run'
 else
-  hits=$(python3 - "$home/.oaos" "$home/.oaos-install" <<'PY'
+  hits=$(oaos_python - "$home/.oaos" "$home/.oaos-install" <<'PY'
 import pathlib, re, sys
 pattern = re.compile(
     rb'''(?:sk-|ghp_|nous_|AIza|xoxb-|AKIA|vck_)[A-Za-z0-9_-]+
@@ -127,15 +127,17 @@ if have_cmd hermes && [[ -d $hermes_home ]]; then
     record FAIL "Backup reported incomplete (exit $backup_code); archive exists but may be partial"
   fi
   if [[ -s $backup ]]; then
-    platform_backup_prune "$backup_dir"
+    platform_backup_prune "$backup_dir" || record FAIL 'Backup pruning blocked; Python 3 unavailable'
   fi
 else record FAIL 'Hermes or its data directory is absent; backup not run'; fi
 
 # 12: Disk margin and swap requirement are measurable without modification.
-read -r capacity available < <(platform_disk_kib /)
-ram_kb=$(platform_memory_kib)
-swap_count=$(platform_swap_state)
-if ((available * 100 > capacity * 10)) && { ((ram_kb >= 16777216)) || ((swap_count > 0)); }; then
+capacity='' available='' ram_kb='' swap_count=''
+read -r capacity available < <(platform_disk_kib "$(platform_oaos_home)" || true)
+ram_kb=$(platform_memory_kib || true)
+swap_count=$(platform_swap_state || true)
+if [[ $capacity =~ ^[0-9]+$ && $available =~ ^[0-9]+$ && $ram_kb =~ ^[0-9]+$ && $swap_count =~ ^[0-9]+$ ]] &&
+   ((available * 100 > capacity * 10)) && { ((ram_kb >= 16777216)) || ((swap_count > 0)); }; then
   record PASS 'Disk free >10%; swap requirement met'
 else record FAIL 'Disk free <=10% or swap absent on host with <16 GB RAM'; fi
 
@@ -144,8 +146,8 @@ for status in "${statuses[@]}"; do
   case $status in PASS) ((pass+=1));; FAIL) ((fail+=1));; MANUAL) ((manual+=1));; SKIP) ((skip+=1));; esac
 done
 
-if ((json)) && ! have_cmd python3; then
-  printf 'python3 unavailable; --json output fell back to the table.\n' >&2
+if ((json)) && ! platform_python >/dev/null 2>&1; then
+  printf 'Python 3 unavailable; --json output fell back to the table.\n' >&2
   json=0
 fi
 if ((json)); then

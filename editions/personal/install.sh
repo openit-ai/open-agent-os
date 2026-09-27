@@ -52,7 +52,9 @@ done
 [[ -n ${HOME:-} ]] || { printf 'HOME is not set.\n' >&2; exit 1; }
 if ((OAOS_DRY_RUN)); then export OAOS_NO_LOG_FILE=1; fi
 os_detect >/dev/null || exit 3
-platform_linux Personal || exit 3
+if [[ $OAOS_PLATFORM != linux && $OAOS_DRY_RUN != 1 ]]; then
+  platform_python >/dev/null || exit 3
+fi
 
 show_table() {
   local s
@@ -104,18 +106,30 @@ do_prep() {
 }
 
 do_hermes() {
-  local installer cache answer actual_sha
+  local installer cache answer actual_sha native
   if have_cmd hermes && hermes --version >/dev/null 2>&1; then return 0; fi
   have_cmd curl || { warn 'curl is required to download Hermes.'; return 3; }
   cache=$(platform_path cache)
   mkdir -p "$cache"
-  installer="$cache/hermes-install.sh"
+  if [[ $OAOS_PLATFORM == windows-gitbash ]]; then installer="$cache/hermes-install.ps1"
+  else installer="$cache/hermes-install.sh"; fi
   if [[ ! -e $installer ]]; then
-    curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.sh' -o "$installer" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
+    if [[ $OAOS_PLATFORM == windows-gitbash ]]; then
+      curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.ps1' -o "$installer" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
+    else
+      curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.sh' -o "$installer" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
+    fi
   fi
   if [[ ! -s $installer ]]; then rm -f -- "$installer"; warn 'Hermes installer is empty.'; return 1; fi
-  bash -n "$installer" || { rm -f -- "$installer"; warn 'Downloaded installer failed syntax validation.'; return 1; }
+  if [[ $OAOS_PLATFORM == windows-gitbash ]]; then
+    native=$(platform_windows_convert_path to-native "$installer") || return 3
+    # shellcheck disable=SC2016 # PowerShell variables are intentionally literal.
+    OAOS_INSTALLER_NATIVE_PATH=$native platform_windows_ps '$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:OAOS_INSTALLER_NATIVE_PATH,[ref]$tokens,[ref]$errors); if ($errors.Count -gt 0) { exit 1 }' >/dev/null || { rm -f -- "$installer"; warn 'Downloaded PowerShell installer failed syntax validation.'; return 1; }
+  else
+    bash -n "$installer" || { rm -f -- "$installer"; warn 'Downloaded installer failed syntax validation.'; return 1; }
+  fi
   actual_sha=$(platform_sha256 "$installer") || return 1
+  [[ $actual_sha =~ ^[[:xdigit:]]{64}$ ]] || { warn 'Hermes installer SHA-256 could not be verified.'; return 3; }
   printf '%s  %s\n' "$actual_sha" "$installer"
   if [[ -n ${OAOS_HERMES_INSTALLER_SHA256:-} && $actual_sha != "$OAOS_HERMES_INSTALLER_SHA256" ]]; then
     rm -f -- "$installer"
@@ -129,7 +143,7 @@ do_hermes() {
       [[ $answer == y || $answer == Y ]] || { warn 'Hermes installer awaits approval (--yes).'; return 3; }
     else warn 'Hermes installer awaits approval (--yes).'; return 3; fi
   fi
-  platform_install_hermes "$installer" || return 1
+  platform_install_hermes "$installer" || return $?
   hash -r
   if ! have_cmd hermes || ! hermes --version >/dev/null 2>&1; then
     warn 'Hermes is not on PATH after installation; open a new shell.'
@@ -181,7 +195,7 @@ except Exception:
 do_gateway() {
   need_hermes || return 3
   if ! platform_gateway_status || ! platform_gateway_autostart registered; then
-    platform_gateway_install || return 1
+    platform_gateway_install || return $?
   fi
   platform_gateway_autostart ensure || return 3
   platform_gateway_status || return 3
@@ -229,7 +243,7 @@ do_harness() {
 }
 
 do_cron() {
-  local scripts jobs name script
+  local scripts jobs name script hermes_home hermes_parent hermes_leaf python
   scripts=$(platform_path scripts)
   need_hermes || return 3
   mkdir -p "$scripts"
@@ -239,7 +253,8 @@ do_cron() {
     script="$scripts/$name.sh"
     if [[ -e $script ]]; then warn "Existing script for $name needs review; preserving it."; return 3; fi
     if [[ $name == oaos-daily-backup ]]; then
-      cat > "$script" <<'EOF'
+      if [[ $OAOS_PLATFORM == linux ]]; then
+        cat > "$script" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
@@ -251,6 +266,31 @@ tar -czf "$tmp" -C "$HOME" .hermes data/wiki
 mv -- "$tmp" "$target"
 ls -1t "$HOME/.oaos/backups"/oaos-*.tar.gz 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f -- "$old"; done
 EOF
+      else
+        hermes_home=$(platform_hermes_home) || return 3
+        hermes_parent=$(dirname "$hermes_home")
+        hermes_leaf=$(basename "$hermes_home")
+        python=$(platform_python) || return 3
+        {
+          printf '#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\n'
+          printf 'hermes_parent=%q\nhermes_leaf=%q\npython=%q\n' "$hermes_parent" "$hermes_leaf" "$python"
+          cat <<'EOF'
+mkdir -p "$HOME/.oaos/backups"
+target="$HOME/.oaos/backups/oaos-$(date +%Y%m%d-%H%M%S).tar.gz"
+tmp=$(mktemp "$target.tmp.XXXXXX")
+trap 'rm -f -- "$tmp"' EXIT
+tar -czf "$tmp" -C "$hermes_parent" "$hermes_leaf" -C "$HOME/data" wiki
+mv -- "$tmp" "$target"
+"$python" - "$HOME/.oaos/backups" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+files = sorted(root.glob('oaos-*.tar.gz'), key=lambda p: p.stat().st_mtime, reverse=True)
+for path in files[7:]:
+    path.unlink()
+PY
+EOF
+        } > "$script"
+      fi
       chmod 700 "$script"
       hermes cron create --name "$name" --script "$script" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
     else
