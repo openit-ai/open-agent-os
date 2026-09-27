@@ -17,7 +17,7 @@ HOME="$temp_root/home" bash "$install" --status > "$temp_root/status"
 HOME="$temp_root/home" bash "$verify" --help | grep -Fq -- '--read-back' || fail 'verify help'
 env -u HOME bash "$verify" --help > /dev/null || fail 'verify help without HOME'
 code=0
-HOME="$temp_root/home" bash "$install" --stage c02 > /dev/null 2>&1 || code=$?
+HOME="$temp_root/home" bash "$install" --stage c03 > /dev/null 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'unimplemented stage exit code'
 code=0
 HOME="$temp_root/home" bash "$install" --stage c01 > /dev/null 2>&1 || code=$?
@@ -108,3 +108,18 @@ assert sql.count('FOREIGN KEY (org_id,') >= 8
 assert sql.count('FORCE ROW LEVEL SECURITY') == 10
 PY
 printf 'PASS: SQL table, partial index, FK, owner trigger and RLS structure\n'
+
+# A shared origin host can return 200 from another machine, so the Company HTTPS
+# evidence must be anchored to this instance's loopback and check the payload.
+resolve_helper="--resolve \"\$host:443:127.0.0.1\""
+resolve_backup="--resolve \"\$health_host:443:127.0.0.1\""
+for file in "$repo_root"/editions/company/c02.sh "$repo_root"/editions/company/c02-verify.sh; do
+  if ! grep -Fq -- "$resolve_helper" "$file" && ! grep -Fq -- "$resolve_backup" "$file"; then
+    fail "Company HTTPS check in ${file##*/} is not anchored to loopback"
+  fi
+  grep -Fq 'OAOS_COMPANY_HTTPS_ORIGIN/company/health' "$file" || fail "Company HTTPS check missing in ${file##*/}"
+done
+if grep -nE '%\{http_code\}' "$repo_root/editions/company/c02.sh" "$repo_root/editions/company/c02-verify.sh" | grep -F 'company/health' >/dev/null; then
+  fail 'Company HTTPS check must not rely on a bare status code'
+fi
+printf 'PASS: Company HTTPS evidence is anchored to this instance\n'
