@@ -95,7 +95,7 @@ The agent does the reading, the file edits, and the commands. You only handle th
 ## Repository map
 
 ```text
-skills/        Hermes skills shipped with OAOS — oaos-bootstrap, oaos-ops (+ optional: promo-video-generation, higgsfield-media-generation, figma-design-generation)
+skills/        Hermes skills shipped with OAOS — oaos-bootstrap, oaos-ops (+ optional: promo-video-generation, higgsfield-media-generation, figma-design-generation, sketchup-design-generation)
 harness/       config file templates (SOUL/USER/MEMORY/AGENTS) + seeding guide
 editions/      Edition landing pages — personal / project / company
 docs/          architecture-v2.0.md · cookbook.md · faq.md
@@ -119,11 +119,13 @@ Optional extension skills — bring your own API keys:
 - **[`skills/promo-video-generation`](skills/promo-video-generation/SKILL.md)** — 20-second live-action promo videos for a place: chat interview → live-action images → shot script → generation (Higgsfield Seedance 2.5 / Kling 3.0). Quote-and-approve before every run.
 - **[`skills/higgsfield-media-generation`](skills/higgsfield-media-generation/SKILL.md)** — the generation helper: images and videos via the Higgsfield API (submit → poll → download), with cost estimates built in.
 - **[`skills/figma-design-generation`](skills/figma-design-generation/SKILL.md)** — design inside Figma from chat through the official Figma MCP server: screens, components, diagrams, and design-to-code handoffs — screenshot-reviewed before delivery. Works with a free Figma account; one browser login connects it.
+- **[`skills/sketchup-design-generation`](skills/sketchup-design-generation/SKILL.md)** — 3D models from chat with SketchUp: exact-dimension builds (dimensions are typed, not dragged) and SKP/PNG/STL exports through a headless SketchUp for Web session — or bridge desktop SketchUp via the open SketchUp-MCP server.
 
 ```bash
 hermes skills install openit-ai/open-agent-os/skills/promo-video-generation
 hermes skills install openit-ai/open-agent-os/skills/higgsfield-media-generation
 hermes skills install openit-ai/open-agent-os/skills/figma-design-generation
+hermes skills install openit-ai/open-agent-os/skills/sketchup-design-generation
 ```
 
 Skills are how OAOS grows: add MCP servers and skills, and the agent gains capabilities without changing the core.
