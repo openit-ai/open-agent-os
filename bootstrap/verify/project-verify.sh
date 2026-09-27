@@ -47,9 +47,13 @@ else
 fi
 
 # 2: A real model request is not an offline check.
+# Capture first: under pipefail a grep pipeline fails when grep exits early.
 if ((offline)); then record SKIP 'Offline mode: model request not sent'
-elif have_cmd hermes && timeout 30s hermes chat -q 'Reply with exactly: OK' 2>/dev/null | grep -Fq OK; then
-  record PASS 'Model reply contained OK'
+elif have_cmd hermes; then
+  model_reply=$(timeout 30s hermes chat -q 'Reply with exactly: OK' 2>/dev/null || true)
+  if grep -Fq OK <<<"$model_reply"; then
+    record PASS 'Model reply contained OK'
+  else record FAIL 'Model request failed or reply did not contain OK'; fi
 else record FAIL 'Model request failed or reply did not contain OK'; fi
 
 # 3: An absent sandbox service file is definitive; avoid touching host services.
@@ -59,7 +63,9 @@ else
   # A just-installed gateway can still be starting; retry before failing.
   gateway_ok=0
   for _attempt in 1 2 3; do
-    if have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running|gateway service is running'; then
+    # Capture first: under pipefail a grep pipeline fails when grep exits early.
+    gateway_status=$(hermes gateway status 2>/dev/null || true)
+    if have_cmd hermes && grep -Eq 'Gateway is running|gateway service is running' <<<"$gateway_status"; then
       gateway_ok=1
       break
     fi
@@ -172,8 +178,12 @@ public_ip=$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)
 for item in CHAT_DOMAIN NOTE_DOMAIN PORTAL_DOMAIN; do
   domain=$(stack_get "$item")
   labels+=("DNS $item")
+  dns_answer=""
+  if [[ -n $domain ]]; then
+    dns_answer=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' || true)
+  fi
   if [[ -n $domain && $public_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
-    getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | grep -Fqx "$public_ip"; then
+    grep -Fqx "$public_ip" <<<"$dns_answer"; then
     record PASS 'A record resolves to this server public IPv4'
   else record FAIL 'Domain A record or public IPv4 does not match'; fi
   labels+=("TLS $item")
@@ -207,7 +217,8 @@ if [[ $listeners == '127.0.0.1:3000' ]]; then
   record PASS 'Outline listens only on 127.0.0.1:3000'
 else record FAIL 'Outline port 3000 has no loopback-only listener'; fi
 labels+=('Mattermost ping')
-if curl -fsS --max-time 5 http://127.0.0.1:8065/api/v4/system/ping 2>/dev/null | grep -Fq '"status":"OK"'; then
+ping_body=$(curl -fsS --max-time 5 http://127.0.0.1:8065/api/v4/system/ping 2>/dev/null || true)
+if grep -Fq '"status":"OK"' <<<"$ping_body"; then
   record PASS 'Mattermost system ping OK'
 else record FAIL 'Mattermost system ping failed'; fi
 labels+=('Outline health')
