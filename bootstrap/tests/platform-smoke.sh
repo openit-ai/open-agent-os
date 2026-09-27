@@ -283,6 +283,7 @@ if [[ $(uname -s) == Linux ]]; then
   platform_secret_check "$HOME/private" || fail 'private parent rejected'
   [[ $(platform_sha256 "$HOME/private") == $(test_sha256 "$HOME/private") ]] || fail 'SHA-256 value'
   [[ $(platform_hermes_home) == "$HOME/.hermes" && $(platform_path state) == "$HOME/.oaos-install/state.json" ]] || fail 'Linux paths'
+  export OAOS_STAGES='prep hermes llm telegram gateway wiki harness cron verify optional'
   stage_mark wiki applied 'test'
   if [[ $(stage_status wiki) != applied ]] || stage_done wiki; then fail 'applied status'; fi
   stage_mark wiki verified 'test'
@@ -290,6 +291,7 @@ if [[ $(uname -s) == Linux ]]; then
   stage_mark optional SKIP 'explicit optional item'
   if [[ $(stage_status optional) != SKIP ]] || stage_done optional; then fail 'SKIP status'; fi
   if (stage_mark wiki SKIP 'forbidden') >/dev/null 2>&1; then fail 'required stage accepted SKIP'; fi
+  if (OAOS_STAGES='prep hermes' stage_mark undeclared applied 'x') >/dev/null 2>&1; then fail 'undeclared stage name accepted'; fi
   stage_mark wiki 'done' 'legacy'
   stage_done wiki || fail 'legacy done resume'
   printf 'PASS: Linux hash, atomic mode, paths, and legacy/new status read-back\n'
