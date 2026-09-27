@@ -153,15 +153,28 @@ do_hermes() {
 }
 
 do_llm() {
-  local key value model
+  local key value model provider provider_key
+  local keys=(NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY)
   need_hermes || return 3
   model=$(config_value model)
-  for key in NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY; do
-    value=$(config_value "$key")
-    if [[ -n $value && $value != 'null' ]]; then
-      if [[ -n $model && $model != 'null' ]]; then return 0; fi
+  if [[ -n $model && $model != null ]]; then
+    provider=$(hermes config get model 2>/dev/null | awk -F: '
+      tolower($1) ~ /^[[:space:]]*provider[[:space:]]*$/ {
+        name = $2
+        gsub(/\r/, "", name)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+        if (name ~ /^[A-Za-z0-9][A-Za-z0-9_-]*$/) { print name; exit }
+      }
+    ' || true)
+    if [[ -n $provider ]]; then
+      provider_key=$(printf '%s' "${provider//-/_}" | tr '[:lower:]' '[:upper:]')_API_KEY
+      keys=("$provider_key" "${keys[@]}")
     fi
-  done
+    for key in "${keys[@]}"; do
+      value=$(config_value "$key")
+      if [[ -n $value && $value != null ]]; then return 0; fi
+    done
+  fi
   warn 'G1: Choose a provider at https://opencode.ai/go or https://hermes-agent.nousresearch.com/docs. Store its key with hermes config set <PROVIDER>_API_KEY, then select a model with hermes model. Never paste a key into logs.'
   return 3
 }
@@ -244,8 +257,23 @@ do_harness() {
   done
 }
 
+install_personal_cron_script() {
+  local candidate=$1 script=$2 name=$3
+  if [[ -e $script || -L $script ]]; then
+    if cmp -s "$candidate" "$script"; then
+      rm -f -- "$candidate"
+      return 0
+    fi
+    rm -f -- "$candidate"
+    warn "Existing script for $name needs review; preserving it."
+    return 3
+  fi
+  chmod 700 "$candidate" || { rm -f -- "$candidate"; return 1; }
+  mv -- "$candidate" "$script" || { rm -f -- "$candidate"; return 1; }
+}
+
 do_cron() {
-  local scripts jobs name script script_native hermes_home hermes_parent hermes_leaf python
+  local scripts jobs name script script_tmp schedule hermes_home hermes_parent hermes_leaf python
   scripts=$(platform_path scripts)
   need_hermes || return 3
   mkdir -p "$scripts"
@@ -253,10 +281,11 @@ do_cron() {
   for name in oaos-daily-backup oaos-gateway-watchdog; do
     if grep -Fq "$name" <<< "$jobs"; then continue; fi
     script="$scripts/$name.sh"
-    if [[ -e $script ]]; then warn "Existing script for $name needs review; preserving it."; return 3; fi
+    script_tmp=$(mktemp "$script.tmp.XXXXXX") || return 1
     if [[ $name == oaos-daily-backup ]]; then
+      schedule='0 3 * * *'
       if [[ $OAOS_PLATFORM == linux ]]; then
-        cat > "$script" <<'EOF'
+        cat > "$script_tmp" <<'EOF' || { rm -f -- "$script_tmp"; return 1; }
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
@@ -269,10 +298,10 @@ mv -- "$tmp" "$target"
 ls -1t "$HOME/.oaos/backups"/oaos-*.tar.gz 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f -- "$old"; done
 EOF
       else
-        hermes_home=$(platform_hermes_home) || return 3
+        hermes_home=$(platform_hermes_home) || { rm -f -- "$script_tmp"; return 3; }
         hermes_parent=$(dirname "$hermes_home")
         hermes_leaf=$(basename "$hermes_home")
-        python=$(platform_python) || return 3
+        python=$(platform_python) || { rm -f -- "$script_tmp"; return 3; }
         {
           printf '#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\n'
           printf 'hermes_parent=%q\nhermes_leaf=%q\npython=%q\n' "$hermes_parent" "$hermes_leaf" "$python"
@@ -293,23 +322,20 @@ for path in files[7:]:
     path.unlink()
 PY
 EOF
-        } > "$script"
+        } > "$script_tmp" || { rm -f -- "$script_tmp"; return 1; }
       fi
-      chmod 700 "$script"
-      script_native=$(oaos_native_path "$script") || return 3
-      hermes cron create --name "$name" --script "$script_native" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
     else
-      cat > "$script" <<'EOF'
+      schedule='*/5 * * * *'
+      cat > "$script_tmp" <<'EOF' || { rm -f -- "$script_tmp"; return 1; }
 #!/usr/bin/env bash
 set -Eeuo pipefail
 if ! hermes gateway status 2>/dev/null | grep -Eiq 'running|active'; then
   hermes gateway start
 fi
 EOF
-      chmod 700 "$script"
-      script_native=$(oaos_native_path "$script") || return 3
-      hermes cron create --name "$name" --script "$script_native" --no-agent --deliver local '*/5 * * * *' >/dev/null || return 1
     fi
+    install_personal_cron_script "$script_tmp" "$script" "$name" || return $?
+    hermes cron create --name "$name" --script "$(basename "$script")" --no-agent --deliver local "$schedule" >/dev/null || return 1
   done
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
   grep -Fq 'oaos-daily-backup' <<< "$jobs" && grep -Fq 'oaos-gateway-watchdog' <<< "$jobs" || return 3

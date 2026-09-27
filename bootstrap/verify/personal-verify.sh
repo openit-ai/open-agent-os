@@ -28,13 +28,17 @@ labels=('Hermes health' 'Model responds' 'Gateway service' 'Boot survival' 'Chat
 statuses=()
 evidence=()
 record() { statuses+=("$1"); evidence+=("$2"); }
+cleanup_verify_temp() {
+  [[ -z ${doctor_dir:-} ]] || rm -rf -- "$doctor_dir"
+  [[ -z ${backup_output:-} ]] || rm -f -- "$backup_output"
+}
+trap cleanup_verify_temp EXIT
 
 # 1: Never print doctor output; it may contain configuration details.
 if ! have_cmd hermes; then
   record FAIL 'Hermes is unavailable'
 else
   doctor_dir=$(mktemp -d) || exit 3
-  trap 'rm -rf -- "$doctor_dir"' EXIT
   doctor_code=0
   hermes doctor > "$doctor_dir/raw" 2>&1 || doctor_code=$?
   awk '{ gsub(sprintf("%c", 27) "\\[[0-9;]*[A-Za-z]", ""); print }' "$doctor_dir/raw" > "$doctor_dir/clean"
@@ -136,14 +140,32 @@ if have_cmd hermes && [[ -d $hermes_home ]]; then
   backup="$backup_dir/hermes-verify-$(date +%Y%m%d%H%M%S)-$$.zip"
   backup_code=0
   backup_native=$(oaos_native_path "$backup") || exit 3
-  hermes backup --output "$backup_native" >/dev/null 2>&1 || backup_code=$?
+  backup_output=$(mktemp) || exit 3
+  hermes backup --output "$backup_native" > "$backup_output" 2>&1 || backup_code=$?
   if [[ ! -s $backup ]]; then
     record FAIL 'Hermes backup did not create an archive'
   elif ((backup_code == 0)); then
     record PASS 'Hermes backup created a nonempty archive'
   else
-    record FAIL "Backup reported incomplete (exit $backup_code); archive exists but may be partial"
+    skipped_count=$(awk '
+      {
+        gsub(sprintf("%c", 27) "\\[[0-9;]*[A-Za-z]", "")
+        if (index(tolower($0), "could not be added") == 0) next
+        for (i = 1; i < NF; i++) {
+          if ($i ~ /^[0-9]+$/ && tolower($(i + 1)) ~ /^file(\(s\)|s)?$/) {
+            if ($i > 0) print $i
+            exit
+          }
+        }
+      }
+    ' "$backup_output")
+    if [[ -n $skipped_count ]]; then
+      record PASS "Hermes backup archive nonempty; $skipped_count unreadable file(s) skipped (permissions)"
+    else
+      record FAIL "Backup exited $backup_code without a counted skipped-file report; archive may be partial"
+    fi
   fi
+  rm -f -- "$backup_output"
   if [[ -s $backup ]]; then
     platform_backup_prune "$backup_dir" || record FAIL 'Backup pruning blocked; Python 3 unavailable'
   fi

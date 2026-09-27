@@ -36,8 +36,20 @@ case $1 in
     printf '%s\n' "$3" >> "$MOCK_BACKUP_ARGS"
     target=$3
     if [[ $target == C:\\* ]]; then target=${target#C:\\}; target=/${target//\\//}; fi
-    printf 'mock archive\n' > "$target"
-    exit 0
+    case ${MOCK_BACKUP_CASE:-success} in
+      success) printf 'mock archive\n' > "$target"; exit 0 ;;
+      skipped)
+        printf 'mock archive\n' > "$target"
+        printf 'Archive kept, but 1 FILE(S) COULD NOT BE ADDED:\nPRIVATE_BACKUP_PATH_MARKER: Permission denied\n' >&2
+        exit 1 ;;
+      missing)
+        printf 'Archive kept, but 1 file(s) could not be added:\nPRIVATE_BACKUP_PATH_MARKER\n' >&2
+        exit 1 ;;
+      unreported)
+        printf 'mock archive\n' > "$target"
+        printf 'PRIVATE_BACKUP_PATH_MARKER: unexpected error\n' >&2
+        exit 1 ;;
+    esac
   } ;;
   chat) printf 'OK\n'; exit 0 ;;
 esac
@@ -72,6 +84,33 @@ backups=("$HOME"/.oaos/backups/hermes-verify-*.zip)
 [[ -s ${backups[0]} ]] || { printf 'FAIL: mock backup absent\n' >&2; exit 1; }
 [[ $(head -n 1 "$MOCK_BACKUP_ARGS") == "$HOME"/* ]] || { printf 'FAIL: Linux backup path was not POSIX\n' >&2; exit 1; }
 printf 'PASS: Personal verifier kept 12 JSON checks, offline SKIP, gateway read-back, and backup\n'
+
+mkdir -p "$temp_root/verify-tmp"
+for backup_case in success skipped missing unreported; do
+  code=0
+  MOCK_BACKUP_CASE=$backup_case TMPDIR="$temp_root/verify-tmp" \
+    bash "$repo_root/bootstrap/verify/personal-verify.sh" --json --offline > "$temp_root/backup-$backup_case.json" 2> "$temp_root/backup-$backup_case.err" || code=$?
+  "$real_python" - "$temp_root/backup-$backup_case.json" "$backup_case" "$code" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    result = json.load(f)
+row = result['checks'][10]
+case, code = sys.argv[2], int(sys.argv[3])
+assert code == (0 if result['summary']['FAIL'] == 0 else 1)
+if case == 'success':
+    assert row['status'] == 'PASS' and 'nonempty archive' in row['evidence'], row
+elif case == 'skipped':
+    assert row['status'] == 'PASS' and '1 unreadable file(s) skipped' in row['evidence'], row
+elif case == 'missing':
+    assert row['status'] == 'FAIL' and 'did not create an archive' in row['evidence'], row
+else:
+    assert row['status'] == 'FAIL' and 'without a counted skipped-file report' in row['evidence'], row
+PY
+  [[ ! -s $temp_root/backup-$backup_case.err ]] || { printf 'FAIL: backup output reached stderr\n' >&2; exit 1; }
+  ! grep -Fq PRIVATE_BACKUP_PATH_MARKER "$temp_root/backup-$backup_case.json" || { printf 'FAIL: backup path reached status\n' >&2; exit 1; }
+  [[ -z $(find "$temp_root/verify-tmp" -mindepth 1 -print -quit) ]] || { printf 'FAIL: verifier left temporary output\n' >&2; exit 1; }
+done
+printf 'PASS: backup exit/skip evidence branches conceal raw output and clean temporary files\n'
 
 for doctor_case in advisory failed no_summary; do
   code=0
@@ -204,7 +243,7 @@ case $2 in
       case $1 in --name) name=$2; shift ;; --script) script=$2; shift ;; esac
       shift
     done
-    [[ $script == C:\\* ]] || exit 91
+    [[ $script == "$name.sh" ]] || exit 91
     printf '%s\n' "$script" >> "$MOCK_CRON_ARGS"
     printf '%s\n' "$name" >> "$MOCK_CRON_JOBS" ;;
   *) exit 1 ;;
@@ -215,8 +254,41 @@ SH
   unset OAOS_STATE_FILE
   bash "$repo_root/editions/personal/install.sh" --stage cron > "$temp_root/cron.out" 2> "$temp_root/cron.err" || { cat "$temp_root/cron.err" >&2; printf 'FAIL: Windows cron stage\n' >&2; exit 1; }
   [[ $(wc -l < "$MOCK_CRON_ARGS") == 2 ]] || { printf 'FAIL: Windows cron script argv count\n' >&2; exit 1; }
+  if ! { grep -Fxq 'oaos-daily-backup.sh' "$MOCK_CRON_ARGS" && grep -Fxq 'oaos-gateway-watchdog.sh' "$MOCK_CRON_ARGS"; }; then
+    printf 'FAIL: Windows cron script argv was not a filename\n' >&2; exit 1
+  fi
   bash "$HOME/.hermes/scripts/oaos-daily-backup.sh" || { printf 'FAIL: generated Windows backup script\n' >&2; exit 1; }
   [[ -n $(find "$HOME/.oaos/backups" -maxdepth 1 -name 'oaos-*.tar.gz' -print -quit) ]] || { printf 'FAIL: generated Windows backup archive absent\n' >&2; exit 1; }
+
+  backup_script="$HOME/.hermes/scripts/oaos-daily-backup.sh"
+  watchdog_script="$HOME/.hermes/scripts/oaos-gateway-watchdog.sh"
+  cp "$backup_script" "$temp_root/original-backup.sh"
+  cp "$watchdog_script" "$temp_root/original-watchdog.sh"
+  : > "$MOCK_CRON_JOBS"
+  export OAOS_STATE_FILE="$temp_root/cron-identical-state.json"
+  bash "$repo_root/editions/personal/install.sh" --stage cron > "$temp_root/cron-identical.out" 2> "$temp_root/cron-identical.err" || { cat "$temp_root/cron-identical.err" >&2; printf 'FAIL: identical Windows cron scripts blocked rerun\n' >&2; exit 1; }
+  [[ $(wc -l < "$MOCK_CRON_ARGS") == 4 ]] || { printf 'FAIL: identical Windows cron scripts were not registered\n' >&2; exit 1; }
+  if ! { cmp -s "$backup_script" "$temp_root/original-backup.sh" && cmp -s "$watchdog_script" "$temp_root/original-watchdog.sh"; }; then
+    printf 'FAIL: identical Windows cron scripts changed\n' >&2; exit 1
+  fi
+
+  printf 'user-edited backup\n' > "$backup_script"
+  : > "$MOCK_CRON_JOBS"
+  export OAOS_STATE_FILE="$temp_root/cron-different-backup-state.json"
+  code=0
+  bash "$repo_root/editions/personal/install.sh" --stage cron > "$temp_root/cron-different-backup.out" 2> "$temp_root/cron-different-backup.err" || code=$?
+  [[ $code == 3 && $(cat "$backup_script") == 'user-edited backup' ]] || { printf 'FAIL: changed Windows backup script was not preserved\n' >&2; exit 1; }
+  [[ -z $(find "$HOME/.hermes/scripts" -name '*.tmp.*' -print -quit) ]] || { printf 'FAIL: cron left a temporary script\n' >&2; exit 1; }
+
+  cp "$temp_root/original-backup.sh" "$backup_script"
+  printf 'user-edited watchdog\n' > "$watchdog_script"
+  : > "$MOCK_CRON_JOBS"
+  export OAOS_STATE_FILE="$temp_root/cron-different-watchdog-state.json"
+  code=0
+  bash "$repo_root/editions/personal/install.sh" --stage cron > "$temp_root/cron-different-watchdog.out" 2> "$temp_root/cron-different-watchdog.err" || code=$?
+  [[ $code == 3 && $(cat "$watchdog_script") == 'user-edited watchdog' ]] || { printf 'FAIL: changed Windows watchdog script was not preserved\n' >&2; exit 1; }
+  [[ -z $(find "$HOME/.hermes/scripts" -name '*.tmp.*' -print -quit) ]] || { printf 'FAIL: cron left a temporary script\n' >&2; exit 1; }
+  unset OAOS_STATE_FILE
 
   rm -rf -- "$HOME/data/wiki"
   bash "$repo_root/editions/personal/install.sh" --stage wiki > "$temp_root/wiki.out" 2> "$temp_root/wiki.err" || { cat "$temp_root/wiki.err" >&2; printf 'FAIL: Windows wiki stage\n' >&2; exit 1; }
@@ -241,7 +313,7 @@ SH
   [[ -f $MOCK_HERMES_INSTALLED ]] || { printf 'FAIL: Windows Hermes installer not invoked\n' >&2; exit 1; }
   grep -Eq '^C:\\.*\\hermes-install.ps1$' "$MOCK_CURL_ARGV" || { printf 'FAIL: Windows curl output path was not native\n' >&2; exit 1; }
 )
-printf 'PASS: Windows verifier, state writer, cron, wiki Git, curl, and backup script use native paths\n'
+printf 'PASS: Windows verifier, state writer, cron filenames and idempotence, wiki Git, curl, and backup script\n'
 
 # The model probe uses a bounded subprocess and accepts only the expected reply.
 # shellcheck source=bootstrap/lib/platform.sh
