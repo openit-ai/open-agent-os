@@ -5,8 +5,6 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=bootstrap/lib/common.sh
 . "$repo_root/bootstrap/lib/common.sh"
 export OAOS_STATE_EDITION=company
-OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
-export OAOS_STATE_FILE
 stages=()
 for n in $(seq -w 1 17); do stages+=("c$n"); done
 export OAOS_STAGES="${stages[*]}"
@@ -28,6 +26,9 @@ while (($#)); do
   esac
 done
 [[ -n $phase && $read_back == 1 ]] || { usage >&2; exit 1; }
+[[ -n ${HOME:-} ]] || { printf 'HOME is required.\n' >&2; exit 1; }
+OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
+export OAOS_STATE_FILE
 if [[ $phase != c01 ]]; then warn "$phase read-back is not implemented."; exit 3; fi
 if ! state_valid; then die 'Company state file is invalid JSON.'; fi
 status=$(stage_status c01)

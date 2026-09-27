@@ -8,8 +8,6 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 stages=()
 for n in $(seq -w 1 17); do stages+=("c$n"); done
 export OAOS_STATE_EDITION=company OAOS_STAGES="${stages[*]}"
-OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
-export OAOS_STATE_FILE
 
 usage() {
   cat <<'EOF'
@@ -34,6 +32,9 @@ while (($#)); do
     *) usage >&2; exit 1 ;;
   esac
 done
+[[ -n ${HOME:-} ]] || { printf 'HOME is required.\n' >&2; exit 1; }
+OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
+export OAOS_STATE_FILE
 
 show_table() {
   local stage status time

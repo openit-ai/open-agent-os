@@ -145,7 +145,10 @@ BEGIN
   IF TG_TABLE_NAME = 'assistants' AND NEW.owner_id IS DISTINCT FROM OLD.owner_id THEN
     RAISE EXCEPTION 'assistant owner is immutable';
   END IF;
-  IF TG_TABLE_NAME IN ('secrets', 'documents') AND OLD.owner_id IS NOT NULL
+  IF TG_TABLE_NAME = 'secrets' AND NEW.owner_id IS DISTINCT FROM OLD.owner_id THEN
+    RAISE EXCEPTION 'secret owner is immutable';
+  END IF;
+  IF TG_TABLE_NAME = 'documents' AND OLD.owner_id IS NOT NULL
      AND NEW.owner_id IS DISTINCT FROM OLD.owner_id THEN
     RAISE EXCEPTION 'personal owner is immutable';
   END IF;

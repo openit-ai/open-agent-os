@@ -10,10 +10,12 @@ runner="$repo_root/editions/company/migrate.sh"
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/bin"
 
 HOME="$temp_root/home" bash "$install" --help | grep -Fq 'c01 through c17' || fail 'install help'
+env -u HOME bash "$install" --help > /dev/null || fail 'install help without HOME'
 HOME="$temp_root/home" bash "$install" --status > "$temp_root/status"
 [[ $(grep -Ec '^c[0-9][0-9] +pending ' "$temp_root/status") == 17 ]] || fail 'empty status'
 [[ ! -e $temp_root/home/.oaos-install/company-state.json ]] || fail 'status changed state'
 HOME="$temp_root/home" bash "$verify" --help | grep -Fq -- '--read-back' || fail 'verify help'
+env -u HOME bash "$verify" --help > /dev/null || fail 'verify help without HOME'
 code=0
 HOME="$temp_root/home" bash "$install" --stage c02 > /dev/null 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'unimplemented stage exit code'
