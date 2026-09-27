@@ -41,7 +41,7 @@
 에이전트  설치 중… ✓ Hermes  ✓ 게이트웨이  ✓ Telegram 연결
          게이트 2개만 부탁드릴게요: 봇 토큰 붙여넣기, 사용자 ID 붙여넣기.
          ✓ LLM 플랜 연결  ✓ 위키 시딩  ✓ 예약 작업 등록
-         ✓ 재부팅 생존 확인
+         ✓ 재부팅 생존은 Ubuntu에서 검증 (macOS·Windows는 실기기 확인 대기)
 
 에이전트  완료 — 전 과정 검증됐습니다. 이걸 시도해보세요:
          "매일 아침 8시에 브리핑해줘". 전체 레시피: docs/cookbook.md
@@ -49,13 +49,13 @@
 
 ## 에디션
 
-**Personal 에디션은 Ubuntu(Linux)·macOS·Windows 11을 지원합니다.** Hermes Agent 네이티브 설치가 가능한 운영체제와 동일합니다.
+**Personal 대상은 Ubuntu(Linux)·Apple Silicon macOS·Windows 11 Git Bash입니다.** 설치기·검증기 3개 레인 스크립트가 구현됐고 Linux 스모크와 macOS·Windows 모의 검증을 로컬에서 통과했습니다. 3개 러너 CI 매트릭스(ubuntu/macOS/Windows)도 통과했습니다(2026-09-27). 실기기 설치·로그인 검증은 아직 대기 중입니다. Project·Company는 Ubuntu LTS 서버 경로를 유지합니다.
 
 | | **Personal** | **Project** | **Company** |
 |---|---|---|---|
 | 대상 | 1인 | 소규모 팀(2~6인) | 중소기업(5~50인) |
 | 구동 | 미니PC(N100급·16GB) | VPS 1대(4 vCPU·16GB·200GB) | Project + 거버넌스 레이어 |
-| 설치 | 호스트 패키지와 systemd(Linux) | 서명된 apt 패키지와 고정 Outline 소스 빌드·systemd | Project 호스트 서비스 승계 |
+| 설치 | Linux: 호스트 패키지·systemd; macOS: Hermes 공식 `install.sh`·launchd; Windows 11 Git Bash: 공식 `install.ps1`·ONLOGON 태스크/Startup 폴백 | 서명된 apt 패키지와 고정 Outline 소스 빌드·systemd | Project 호스트 서비스 승계 |
 | 대화 창구 | Telegram | Mattermost + Telegram | + Slack *(옵션)* |
 | 지식 | git 위키 + Obsidian | Outline + git 위키 | + Notion *(옵션)*, 권한 인식 인덱스 |
 | 메일 | 개인(Himalaya) | 봇 전용 메일 | 기존 스위트 연동 |
@@ -89,7 +89,7 @@
 3. 에이전트 안내 따라가기    → README → START-HERE → skills/oaos-bootstrap 설치
 4. 에디션 선택              → Personal / Project / Company
 5. 게이트(3~6개)            → 링크 클릭·선택·키/토큰 붙여넣기 (즉시 검증)
-6. 최종 테스트·보고          → 서비스·응답·파일·위키·크론·재부팅 생존
+6. 최종 테스트·보고          → 서비스·응답·파일·위키·크론 확인, 실제 재부팅·로그인은 실기기 확인
 ```
 
 읽기·파일 편집·명령은 에이전트가 합니다. 사용자는 게이트만 처리합니다. [`START-HERE.md`](START-HERE.md)(에이전트용)와 [`skills/oaos-bootstrap/SKILL.md`](skills/oaos-bootstrap/SKILL.md)를 참조하세요.
