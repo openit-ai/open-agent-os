@@ -1,6 +1,8 @@
 # OAOS Company(P2) 제품화 계획 v1.0
 
 > 상태: 계획. 이 문서의 Phase와 게이트는 구현·실설치 완료 증거가 아니다. 제품 방향의 정본은 [아키텍처 v2.0](architecture-v2.0.md), 현재 공개 안내는 [Company README](../editions/company/README.md)다.
+>
+> **표기**: OAOS = Open Agent OS · `E` = 실설치 대상 환경(Company 검증 인스턴스) · `S` = 검증용 연동 계정(Slack·Notion·Workspace·365).
 
 ## 1. 목표와 완료 상태
 
