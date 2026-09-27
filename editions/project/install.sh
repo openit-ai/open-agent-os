@@ -159,10 +159,18 @@ do_hermes() {
 }
 
 do_llm() {
-  local key value model
+  local key value model provider provider_key keys
   need_hermes || return 3
   model=$(config_value model)
-  for key in NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY; do
+  # The selected provider decides the key name; a fixed allowlist misses
+  # valid providers such as opencode-go (OPENCODE_GO_API_KEY).
+  provider=$(printf '%s\n' "$model" | sed -n 's/^provider:[[:space:]]*//p' | head -n 1)
+  keys=(NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY)
+  if [[ -n $provider ]]; then
+    provider_key=$(printf '%s' "$provider" | tr '[:lower:]-' '[:upper:]_')_API_KEY
+    keys=("$provider_key" "${keys[@]}")
+  fi
+  for key in "${keys[@]}"; do
     value=$(config_value "$key")
     if [[ -n $value && $value != 'null' ]]; then
       if [[ -n $model && $model != 'null' ]]; then return 0; fi
