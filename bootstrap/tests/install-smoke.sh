@@ -4,6 +4,8 @@ set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temp_root=$(mktemp -d)
 trap 'rm -rf -- "$temp_root"' EXIT
+for name in ${!OAOS_@}; do unset "$name"; done
+unset HERMES_HOME MSYSTEM LOCALAPPDATA APPDATA
 install="$repo_root/editions/personal/install.sh"
 
 fail() {

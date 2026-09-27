@@ -30,9 +30,25 @@ evidence=()
 record() { statuses+=("$1"); evidence+=("$2"); }
 
 # 1: Never print doctor output; it may contain configuration details.
-if have_cmd hermes && hermes doctor >/dev/null 2>&1; then
-  record PASS 'hermes doctor exited successfully'
-else record FAIL 'Hermes is unavailable or doctor reported an error'; fi
+if ! have_cmd hermes; then
+  record FAIL 'Hermes is unavailable'
+else
+  doctor_dir=$(mktemp -d) || exit 3
+  trap 'rm -rf -- "$doctor_dir"' EXIT
+  doctor_code=0
+  hermes doctor > "$doctor_dir/raw" 2>&1 || doctor_code=$?
+  awk '{ gsub(sprintf("%c", 27) "\\[[0-9;]*[A-Za-z]", ""); print }' "$doctor_dir/raw" > "$doctor_dir/clean"
+  if ((doctor_code == 0)); then
+    record PASS 'doctor reported no issues'
+  elif ! grep -Eq 'All checks passed|issue\(s\) to address' "$doctor_dir/clean"; then
+    record FAIL 'doctor exited with an error and no summary block'
+  elif grep -Fq '✗' "$doctor_dir/clean"; then
+    record FAIL 'doctor summary contains a failed check (✗)'
+  else
+    record PASS 'doctor reported advisory findings only (summary present; no ✗ checks)'
+  fi
+  rm -rf -- "$doctor_dir"
+fi
 
 # 2: A real model request is not an offline check.
 if ((offline)); then record SKIP 'Offline mode: model request not sent'
@@ -57,7 +73,8 @@ record MANUAL 'Send a message from the allowed account and confirm a reply'
 record MANUAL 'Send from a disallowed account and confirm no reply'
 
 # 7: A seed commit proves a usable repository, without exposing its contents.
-if [[ -d $home/data/wiki/.git ]] && git -C "$home/data/wiki" log -1 --format=%h >/dev/null 2>&1; then
+wiki_native=$(oaos_native_path "$home/data/wiki") || exit 3
+if [[ -d $home/data/wiki/.git ]] && git -C "$wiki_native" log -1 --format=%h >/dev/null 2>&1; then
   record PASS 'Wiki git history contains a commit'
 else record FAIL 'Wiki git repository or seed commit absent'; fi
 
@@ -84,7 +101,7 @@ if [[ ! -e $home/.oaos && ! -e $home/.oaos-install ]]; then
 elif ! platform_python >/dev/null 2>&1; then
   record FAIL 'Python 3 unavailable; secret scan not run'
 else
-  hits=$(oaos_python - "$home/.oaos" "$home/.oaos-install" <<'PY'
+  hits=$(oaos_python - "$(oaos_native_path "$home/.oaos")" "$(oaos_native_path "$home/.oaos-install")" <<'PY'
 import pathlib, re, sys
 pattern = re.compile(
     rb'''(?:sk-|ghp_|nous_|AIza|xoxb-|AKIA|vck_)[A-Za-z0-9_-]+
@@ -118,7 +135,8 @@ if have_cmd hermes && [[ -d $hermes_home ]]; then
   mkdir -p "$backup_dir"
   backup="$backup_dir/hermes-verify-$(date +%Y%m%d%H%M%S)-$$.zip"
   backup_code=0
-  hermes backup --output "$backup" >/dev/null 2>&1 || backup_code=$?
+  backup_native=$(oaos_native_path "$backup") || exit 3
+  hermes backup --output "$backup_native" >/dev/null 2>&1 || backup_code=$?
   if [[ ! -s $backup ]]; then
     record FAIL 'Hermes backup did not create an archive'
   elif ((backup_code == 0)); then

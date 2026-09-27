@@ -540,7 +540,7 @@ platform_portable_backup_prune() {
   local python
   [[ ${OAOS_DRY_RUN:-0} != 1 ]] || { info 'Would prune old verify backups.'; return 0; }
   python=$(platform_python) || return 3
-  "$python" - "$1" <<'PY'
+  "$python" - "$(oaos_native_path "$1")" <<'PY'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
 files = sorted((p for p in root.glob('hermes-verify-*.zip') if p.is_file()),
