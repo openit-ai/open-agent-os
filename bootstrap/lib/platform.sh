@@ -21,9 +21,7 @@ os_detect() {
   case $kernel in
     Linux) lane=linux ;;
     Darwin) lane=macos ;;
-    MINGW*|MSYS*)
-      case ${MSYSTEM:-} in MINGW*|MSYS*|UCRT*) lane=windows-gitbash ;;
-        *) printf 'BLOCKED: Windows requires Git Bash.\n' >&2; return 3 ;; esac ;;
+    MINGW*|MSYS*|CYGWIN*) lane=windows-gitbash ;;
     *) printf 'BLOCKED: unsupported OS: %s.\n' "$kernel" >&2; return 3 ;;
   esac
   if [[ $lane == macos && $arch != arm64 ]]; then

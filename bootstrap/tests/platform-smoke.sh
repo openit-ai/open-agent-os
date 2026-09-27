@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329 # Mock functions are called through the platform dispatcher.
 set -Eeuo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -24,6 +23,7 @@ unset OAOS_DRY_RUN OAOS_NO_LOG_FILE OAOS_STATE_EDITION OAOS_STAGES
 
 # uname is mocked only inside this subshell; no host service or package is touched.
 (
+  # shellcheck disable=SC2317
   uname() { case $1 in -s) printf '%s\n' "$fake_kernel" ;; -m) printf '%s\n' "$fake_arch" ;; esac; }
   fake_kernel=Linux fake_arch=x86_64
   [[ $(os_detect) == linux ]] || fail 'Linux detection'
@@ -31,13 +31,19 @@ unset OAOS_DRY_RUN OAOS_NO_LOG_FILE OAOS_STATE_EDITION OAOS_STAGES
   [[ $(os_detect) == macos ]] || fail 'Apple Silicon detection'
   fake_arch=x86_64
   if os_detect >/dev/null 2>&1; then fail 'Intel Mac accepted'; fi
-  fake_kernel=MINGW64_NT fake_arch=x86_64 MSYSTEM=MINGW64
-  export MSYSTEM
-  [[ $(os_detect) == windows-gitbash ]] || fail 'Git Bash detection'
+  fake_kernel=MINGW64_NT fake_arch=x86_64
+  unset MSYSTEM
+  [[ $(os_detect) == windows-gitbash ]] || fail 'direct Git Bash detection without MSYSTEM'
+  MSYSTEM=MINGW64; export MSYSTEM
+  [[ $(os_detect) == windows-gitbash ]] || fail 'Git Bash detection with MSYSTEM'
+  MSYSTEM=OTHER
+  [[ $(os_detect) == windows-gitbash ]] || fail 'Git Bash detection with unrelated MSYSTEM'
+  unset MSYSTEM
+  fake_kernel=CYGWIN_NT
+  [[ $(os_detect) == windows-gitbash ]] || fail 'CYGWIN kernel detection'
+  fake_kernel=MINGW64_NT
   unset BASH_VERSION
   if os_detect >/dev/null 2>&1; then fail 'ash/BusyBox-shaped shell accepted'; fi
-  unset MSYSTEM
-  if os_detect >/dev/null 2>&1; then fail 'Windows without Git Bash accepted'; fi
   fake_kernel=FreeBSD fake_arch=x86_64
   if os_detect >/dev/null 2>&1; then fail 'unsupported kernel accepted'; fi
 )
@@ -69,15 +75,19 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
   [[ $(platform_hermes_home) == "$HOME/.hermes" ]] || fail 'macOS default Hermes path'
   HERMES_HOME="$HOME/custom hermes"; export HERMES_HOME
   [[ $(platform_hermes_home) == "$HERMES_HOME" ]] || fail 'macOS HERMES_HOME precedence'
+  # shellcheck disable=SC2317,SC2329 # Called through the platform dispatcher.
   sysctl() {
     case $* in '-n hw.memsize') printf '17179869184\n' ;; 'vm.swapusage') printf 'vm.swapusage: total = 1024.00M  used = 0.00M  free = 1024.00M\n' ;; *) return 1 ;; esac
   }
+  # shellcheck disable=SC2317,SC2329
   shasum() { [[ $1 == -a && $2 == 256 ]] || return 1; printf '%s  %s\n' "$(test_sha256 "$3")" "$3"; }
   mock_mac_mode=644
+  # shellcheck disable=SC2317
   chmod() {
     if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then mock_mac_mode=$2; fi
     command chmod "$@"
   }
+  # shellcheck disable=SC2317,SC2329
   stat() {
     if [[ $1 == -f && $2 == %Lp ]]; then
       if [[ $(uname -s) == Darwin ]]; then command stat -f '%Lp' "$3"
@@ -86,9 +96,13 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
     elif [[ $1 == -f && $2 == %u ]]; then id -u
     else command stat "$@"; fi
   }
+  # shellcheck disable=SC2317,SC2329
   systemsetup() { [[ $1 == -gettimezone ]] && printf 'Time Zone: Asia/Seoul\n'; }
+  # shellcheck disable=SC2317,SC2329
   readlink() { [[ $1 == /etc/localtime ]] && printf '/var/db/timezone/zoneinfo/Asia/Seoul\n'; }
+  # shellcheck disable=SC2317,SC2329
   launchctl() { printf '123 0 com.hermes.gateway\n'; }
+  # shellcheck disable=SC2317,SC2329
   hermes() { [[ $1 == gateway && $2 == status ]] && printf 'Status: running\n'; }
   [[ $(platform_memory_kib) == 16777216 && $(platform_swap_state) == 1 ]] || fail 'macOS resource units'
   [[ $(platform_timezone_get) == Asia/Seoul ]] || fail 'macOS timezone read'
@@ -106,6 +120,7 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
   code=0
   platform_timezone_set Asia/Tokyo 2>"$temp_root/mac-block.err" || code=$?
   if [[ $code != 3 ]] || ! grep -Fq BLOCKED "$temp_root/mac-block.err"; then fail 'macOS timezone was not blocked'; fi
+  # shellcheck disable=SC2317,SC2329
   git() { return 1; }
   code=0
   platform_require_tools >/dev/null 2>"$temp_root/mac-prereq.err" || code=$?
@@ -120,6 +135,7 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
   MSYSTEM=MINGW64; export MSYSTEM
   LOCALAPPDATA='C:\Users\Test\AppData\Local'; APPDATA='C:\Users\Test\AppData\Roaming'
   export LOCALAPPDATA APPDATA
+  # shellcheck disable=SC2317
   cygpath() {
     case $1 in
       -u) if [[ $2 == 'D:\Data\Hermes' ]]; then printf '%s/other-hermes\n' "$HOME"; else printf '%s/local/hermes\n' "$HOME"; fi ;;
@@ -127,6 +143,7 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
       *) return 1 ;;
     esac
   }
+  # shellcheck disable=SC2317,SC2329
   powershell.exe() {
     if [[ $* == *' -File '* ]]; then printf '%s\n' "$*" > "$temp_root/ps-installer.args"; return 0; fi
     case $* in
@@ -138,9 +155,13 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
       *) return 1 ;;
     esac
   }
+  # shellcheck disable=SC2317,SC2329
   schtasks.exe() { [[ $* == *'/XML'* ]] && printf '<Task><Triggers><LogonTrigger></LogonTrigger></Triggers></Task>\n'; }
+  # shellcheck disable=SC2317,SC2329
   icacls.exe() { printf '%s\n' "$*" > "$temp_root/icacls.args"; }
+  # shellcheck disable=SC2317,SC2329
   sha256sum() { printf '%s  %s\n' "$(test_sha256 "$1")" "$1"; }
+  # shellcheck disable=SC2317,SC2329
   hermes() {
     [[ $1 == gateway ]] || return 1
     case $2 in status) printf 'Hermes_Gateway Status: running\n' ;; install) printf 'install\n' > "$temp_root/gateway-install" ;; esac
@@ -156,8 +177,11 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
   [[ $(platform_sha256 "$HOME/install.ps1") == $(test_sha256 "$HOME/install.ps1") ]] || fail 'Windows SHA-256 tool selection'
   expected_sha=$(test_sha256 "$HOME/install.ps1")
   (
+    # shellcheck disable=SC2317,SC2329
     sha256sum() { return 1; }
+    # shellcheck disable=SC2317,SC2329
     shasum() { return 1; }
+    # shellcheck disable=SC2317,SC2329
     certutil.exe() { printf 'SHA256 hash of file:\r\n%s\r\nCertUtil: command completed successfully.\r\n' "$expected_sha"; }
     [[ $(platform_sha256 "$HOME/install.ps1") == "$expected_sha" ]] || fail 'Windows certutil SHA-256 fallback'
   )
@@ -180,11 +204,14 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
   code=0
   platform_timezone_set Asia/Seoul 2>"$temp_root/win-block.err" || code=$?
   if [[ $code != 3 ]] || ! grep -Fq BLOCKED "$temp_root/win-block.err"; then fail 'Windows unmapped timezone was not blocked'; fi
+  # shellcheck disable=SC2317,SC2329
   python3() { return 1; }
+  # shellcheck disable=SC2317,SC2329
   python() { return 1; }
   code=0
   platform_python >/dev/null 2>"$temp_root/python-block.err" || code=$?
   [[ $code == 3 ]] || fail 'Windows missing Python was not blocked'
+  # shellcheck disable=SC2317,SC2329
   git() { return 1; }
   code=0
   platform_require_tools >/dev/null 2>"$temp_root/git-block.err" || code=$?
