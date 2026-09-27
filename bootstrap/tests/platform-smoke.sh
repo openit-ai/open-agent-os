@@ -12,6 +12,10 @@ trap 'rm -rf -- "$temp_root"' EXIT
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
+# Every mocked lane starts from an explicit environment, even inside Hermes.
+unset HERMES_HOME OAOS_PLATFORM OAOS_TEST_PLATFORM OAOS_TEST_MODE MSYSTEM LOCALAPPDATA APPDATA
+unset OAOS_DRY_RUN OAOS_NO_LOG_FILE OAOS_STATE_EDITION OAOS_STAGES
+
 # uname is mocked only inside this subshell; no host service or package is touched.
 (
   uname() { case $1 in -s) printf '%s\n' "$fake_kernel" ;; -m) printf '%s\n' "$fake_arch" ;; esac; }
@@ -38,22 +42,27 @@ mkdir -p "$HOME"
 chmod 700 "$HOME"
 OAOS_TEST_PLATFORM=macos
 export OAOS_TEST_PLATFORM
+unset OAOS_TEST_MODE
 if os_detect >/dev/null 2>&1; then fail 'override accepted without test mode'; fi
 OAOS_TEST_MODE=1; export OAOS_TEST_MODE
 for OAOS_TEST_PLATFORM in macos windows-gitbash; do
   export OAOS_TEST_PLATFORM
   os_detect >/dev/null || fail 'test override rejected'
+  code=0
   HOME="$HOME" OAOS_TEST_MODE=1 OAOS_TEST_PLATFORM="$OAOS_TEST_PLATFORM" \
     bash "$repo_root/editions/personal/install.sh" --dry-run --stage prep >"$temp_root/entry.out" 2>"$temp_root/entry.err" || code=$?
-  if [[ ${code:-0} != 0 ]] || ! grep -Fq 'Would run prep' "$temp_root/entry.out"; then fail 'cross-platform dry-run failed'; fi
+  if [[ $code != 0 ]] || ! grep -Fq 'Would run prep' "$temp_root/entry.out"; then fail 'cross-platform dry-run failed'; fi
 done
 [[ ! -e $HOME/.oaos && ! -e $HOME/.oaos-install ]] || fail 'dry-run entry changed HOME'
 printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects\n'
 
 (
+  unset HERMES_HOME OAOS_TEST_PLATFORM OAOS_TEST_MODE MSYSTEM LOCALAPPDATA APPDATA
   OAOS_PLATFORM=macos
   export OAOS_PLATFORM
+  [[ $(platform_hermes_home) == "$HOME/.hermes" ]] || fail 'macOS default Hermes path'
   HERMES_HOME="$HOME/custom hermes"; export HERMES_HOME
+  [[ $(platform_hermes_home) == "$HERMES_HOME" ]] || fail 'macOS HERMES_HOME precedence'
   sysctl() {
     case $* in '-n hw.memsize') printf '17179869184\n' ;; 'vm.swapusage') printf 'vm.swapusage: total = 1024.00M  used = 0.00M  free = 1024.00M\n' ;; *) return 1 ;; esac
   }
@@ -91,8 +100,10 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
 printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd, and timezone BLOCKED\n'
 
 (
+  unset HERMES_HOME OAOS_TEST_PLATFORM OAOS_TEST_MODE
   OAOS_PLATFORM=windows-gitbash
   export OAOS_PLATFORM
+  MSYSTEM=MINGW64; export MSYSTEM
   LOCALAPPDATA='C:\Users\Test\AppData\Local'; APPDATA='C:\Users\Test\AppData\Roaming'
   export LOCALAPPDATA APPDATA
   cygpath() {
@@ -195,6 +206,7 @@ bash -n "$backup_script" "$watchdog_script" || fail 'generated scripts syntax'
 printf 'PASS: generated macOS backup and watchdog scripts honor HERMES_HOME in isolated HOME\n'
 
 OAOS_TEST_PLATFORM=linux; export OAOS_TEST_PLATFORM
+unset HERMES_HOME MSYSTEM LOCALAPPDATA APPDATA
 os_detect >/dev/null
 OAOS_DRY_RUN=1 OAOS_NO_LOG_FILE=1
 export OAOS_DRY_RUN OAOS_NO_LOG_FILE
