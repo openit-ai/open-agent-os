@@ -81,18 +81,24 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
   }
   # shellcheck disable=SC2317,SC2329
   shasum() { [[ $1 == -a && $2 == 256 ]] || return 1; printf '%s  %s\n' "$(test_sha256 "$3")" "$3"; }
-  mock_mac_mode=644
+  mock_mac_mode='unset'
   # shellcheck disable=SC2317
   chmod() {
-    if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then mock_mac_mode=$2; fi
-    command chmod "$@"
+    local mode
+    for mode in "$@"; do
+      case $mode in --|-*) continue ;; esac
+      break
+    done
+    command chmod "$@" || return
+    if [[ $mode =~ ^0*[0-7]{3,4}$ ]]; then
+      while [[ $mode == 0* && ${#mode} -gt 3 ]]; do mode=${mode#0}; done
+      mock_mac_mode=$mode
+    fi
   }
   # shellcheck disable=SC2317,SC2329
   stat() {
     if [[ $1 == -f && $2 == %Lp ]]; then
-      if [[ $(uname -s) == Darwin ]]; then command stat -f '%Lp' "$3"
-      elif [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then printf '%s\n' "$mock_mac_mode"
-      else command stat -c '%a' "$3"; fi
+      printf '%s\n' "$mock_mac_mode"
     elif [[ $1 == -f && $2 == %u ]]; then id -u
     else command stat "$@"; fi
   }
@@ -109,9 +115,9 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
   [[ $(platform_path scripts) == "$HERMES_HOME/scripts" ]] || fail 'macOS Hermes path override'
   OAOS_DRY_RUN=1; export OAOS_DRY_RUN
   printf 'secret\n' > "$HOME/mac-secret"
-  chmod 644 "$HOME/mac-secret"
+  chmod 0644 "$HOME/mac-secret"
   platform_secret_protect "$HOME/mac-secret" >/dev/null
-  [[ $(platform_file_mode "$HOME/mac-secret") == 644 ]] || fail 'macOS dry-run changed secret'
+  [[ $(cat "$HOME/mac-secret") == secret && $(platform_file_mode "$HOME/mac-secret") == 644 ]] || fail 'macOS dry-run changed secret'
   OAOS_DRY_RUN=0; export OAOS_DRY_RUN
   platform_secret_protect "$HOME/mac-secret" || fail 'macOS secret protection'
   platform_secret_check "$HOME/mac-secret" || fail 'macOS secret read-back'
@@ -293,14 +299,16 @@ fi
 
 backup_dir="$HOME/backups with spaces"
 mkdir -p "$backup_dir"
-python3 - "$backup_dir" <<'PY'
+backup_middle=$'hermes-verify-\nline.zip'
+case $(uname -s) in MINGW*|MSYS*|CYGWIN*) backup_middle=hermes-verify-b.zip ;; esac
+python3 - "$backup_dir" "$backup_middle" <<'PY'
 import os, pathlib, sys
 root = pathlib.Path(sys.argv[1])
-for i, name in enumerate(('hermes-verify-a.zip', 'hermes-verify-\nline.zip', 'hermes-verify-c.zip')):
+for i, name in enumerate(('hermes-verify-a.zip', sys.argv[2], 'hermes-verify-c.zip')):
     path = root / name
     path.write_bytes(b'x')
     os.utime(path, (100 + i, 100 + i))
 PY
 platform_backup_prune "$backup_dir"
-[[ ! -e $backup_dir/hermes-verify-a.zip && -e $backup_dir/hermes-verify-c.zip && -e $backup_dir/$'hermes-verify-\nline.zip' ]] || fail 'portable backup pruning'
-printf 'PASS: backup pruning handles spaces and newlines\n'
+[[ ! -e $backup_dir/hermes-verify-a.zip && -e $backup_dir/hermes-verify-c.zip && -e $backup_dir/$backup_middle ]] || fail 'portable backup pruning'
+printf 'PASS: backup pruning handles spaces and supported filenames\n'
