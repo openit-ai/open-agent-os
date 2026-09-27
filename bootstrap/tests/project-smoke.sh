@@ -252,3 +252,9 @@ printf 'export function start() {\n  server.listen(normalizedPort, "0.0.0.0");\n
 if python3 "$repo_root/editions/project/patch-outline-bind.py" "$patch_repo" >"$temp_root/patch-bad.out" 2>"$temp_root/patch-bad.err"; then fail 'Outline patch accepted unexpected source'; fi
 grep -Fq 'server.listen(normalizedPort, "0.0.0.0");' "$patch_repo/server/main.ts" || fail 'Outline patch changed unexpected source'
 printf 'PASS: pinned Outline bind patch is one line, repeatable, and rejects drift\n'
+
+# Service accounts cannot traverse a 0750 home directory, so no service user
+# may be handed a path from the repository or the invoking home directory.
+# shellcheck disable=SC2016  # the literal $repo_root/$HOME text is the pattern being searched for
+grep -nE 'runuser -u [a-z-]+ --[^|]*\$(repo_root|HOME)\b' "$repo_root"/editions/project/*.sh >"$temp_root/service-user-paths.out" 2>/dev/null && fail 'service user invoked with a repository or home path'
+printf 'PASS: service users never receive repository or home paths\n'

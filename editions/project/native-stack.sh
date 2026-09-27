@@ -247,7 +247,7 @@ PY
 }
 
 native_outline() {
-  local path=/opt/outline unit=/etc/systemd/system/oaos-outline.service was_active=0
+  local path=/opt/outline unit=/etc/systemd/system/oaos-outline.service was_active=0 patch_copy=
   native_node || return 3
   native_package cmake build-essential git || return 3
   if ! id outline >/dev/null 2>&1; then
@@ -261,7 +261,21 @@ native_outline() {
   [[ $(run_root runuser -u outline -- git -C "$path" rev-parse --short=7 HEAD 2>/dev/null) == 4a5a616 ]] || {
     warn 'Outline checkout does not match the pinned v1.10.1 release commit.'; return 3;
   }
-  run_root runuser -u outline -- python3 "$repo_root/editions/project/patch-outline-bind.py" "$path" >/dev/null || return 3
+  # A system service user cannot traverse a 0750 home directory, so stage the
+  # patch script in a world-readable location before running it as outline.
+  patch_copy=$(run_root mktemp /var/tmp/oaos-outline-bind.XXXXXX.py) || return 3
+  if ! run_root cp -- "$repo_root/editions/project/patch-outline-bind.py" "$patch_copy" ||
+     ! run_root chmod 0644 "$patch_copy"; then
+    run_root rm -f -- "$patch_copy"
+    warn 'Could not stage the Outline bind patch script.'
+    return 3
+  fi
+  if ! run_root runuser -u outline -- python3 "$patch_copy" "$path" >/dev/null; then
+    run_root rm -f -- "$patch_copy"
+    warn 'Outline bind patch failed.'
+    return 3
+  fi
+  run_root rm -f -- "$patch_copy"
   if [[ ! -f $path/build/server/index.js || ! -f $path/build/server/main.js ]] ||
      ! grep -Eq 'listen\([^)]{0,100}127\.0\.0\.1' "$path/build/server/main.js"; then
     run_root runuser -u outline -- env NODE_OPTIONS=--max-old-space-size=8192 sh -c 'cd /opt/outline && corepack yarn install --immutable && corepack yarn build && corepack yarn workspaces focus --production' >/dev/null || {
