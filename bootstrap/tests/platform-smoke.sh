@@ -11,6 +11,12 @@ trap 'rm -rf -- "$temp_root"' EXIT
 . "$repo_root/bootstrap/lib/platform.sh"
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+test_sha256() {
+  python3 - "$1" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+}
 
 # Every mocked lane starts from an explicit environment, even inside Hermes.
 unset HERMES_HOME OAOS_PLATFORM OAOS_TEST_PLATFORM OAOS_TEST_MODE MSYSTEM LOCALAPPDATA APPDATA
@@ -66,10 +72,18 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
   sysctl() {
     case $* in '-n hw.memsize') printf '17179869184\n' ;; 'vm.swapusage') printf 'vm.swapusage: total = 1024.00M  used = 0.00M  free = 1024.00M\n' ;; *) return 1 ;; esac
   }
-  shasum() { [[ $1 == -a && $2 == 256 ]] || return 1; sha256sum "$3"; }
+  shasum() { [[ $1 == -a && $2 == 256 ]] || return 1; printf '%s  %s\n' "$(test_sha256 "$3")" "$3"; }
+  mock_mac_mode=644
+  chmod() {
+    if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then mock_mac_mode=$2; fi
+    command chmod "$@"
+  }
   stat() {
-    if [[ $1 == -f && $2 == %Lp ]]; then command stat -c %a "$3"
-    elif [[ $1 == -f && $2 == %u ]]; then command stat -c %u "$3"
+    if [[ $1 == -f && $2 == %Lp ]]; then
+      if [[ $(uname -s) == Darwin ]]; then command stat -f '%Lp' "$3"
+      elif [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then printf '%s\n' "$mock_mac_mode"
+      else command stat -c '%a' "$3"; fi
+    elif [[ $1 == -f && $2 == %u ]]; then id -u
     else command stat "$@"; fi
   }
   systemsetup() { [[ $1 == -gettimezone ]] && printf 'Time Zone: Asia/Seoul\n'; }
@@ -87,7 +101,7 @@ printf 'PASS: test-only overrides and macOS/Windows dry-run without side effects
   OAOS_DRY_RUN=0; export OAOS_DRY_RUN
   platform_secret_protect "$HOME/mac-secret" || fail 'macOS secret protection'
   platform_secret_check "$HOME/mac-secret" || fail 'macOS secret read-back'
-  [[ $(platform_sha256 "$HOME/mac-secret") == $(sha256sum "$HOME/mac-secret" | awk '{print $1}') ]] || fail 'macOS shasum'
+  [[ $(platform_sha256 "$HOME/mac-secret") == $(test_sha256 "$HOME/mac-secret") ]] || fail 'macOS shasum'
   platform_gateway_autostart check || fail 'macOS launchd diagnostic'
   code=0
   platform_timezone_set Asia/Tokyo 2>"$temp_root/mac-block.err" || code=$?
@@ -126,6 +140,7 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
   }
   schtasks.exe() { [[ $* == *'/XML'* ]] && printf '<Task><Triggers><LogonTrigger></LogonTrigger></Triggers></Task>\n'; }
   icacls.exe() { printf '%s\n' "$*" > "$temp_root/icacls.args"; }
+  sha256sum() { printf '%s  %s\n' "$(test_sha256 "$1")" "$1"; }
   hermes() {
     [[ $1 == gateway ]] || return 1
     case $2 in status) printf 'Hermes_Gateway Status: running\n' ;; install) printf 'install\n' > "$temp_root/gateway-install" ;; esac
@@ -138,8 +153,8 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
   [[ $(platform_memory_kib) == 16777216 && $(platform_swap_state) == 1 ]] || fail 'Windows CIM units'
   [[ $(platform_timezone_get) == 'Korea Standard Time' ]] || fail 'Windows timezone ID'
   printf 'installer\n' > "$HOME/install.ps1"
-  [[ $(platform_sha256 "$HOME/install.ps1") == $(sha256sum "$HOME/install.ps1" | awk '{print $1}') ]] || fail 'Windows SHA-256 tool selection'
-  expected_sha=$(sha256sum "$HOME/install.ps1" | awk '{print $1}')
+  [[ $(platform_sha256 "$HOME/install.ps1") == $(test_sha256 "$HOME/install.ps1") ]] || fail 'Windows SHA-256 tool selection'
+  expected_sha=$(test_sha256 "$HOME/install.ps1")
   (
     sha256sum() { return 1; }
     shasum() { return 1; }
@@ -218,29 +233,36 @@ platform_timezone_set UTC >/dev/null
 platform_sleep_policy >/dev/null
 platform_gateway_install >/dev/null
 platform_install_hermes "$HOME/missing-installer" >/dev/null
-[[ $(cat "$HOME/private") == original && $(platform_file_mode "$HOME/private") == 644 ]] || fail 'dry-run changed file'
+[[ $(cat "$HOME/private") == original ]] || fail 'dry-run changed file'
+if [[ $(uname -s) == Linux ]]; then
+  [[ $(platform_file_mode "$HOME/private") == 644 ]] || fail 'dry-run changed file mode'
+fi
 [[ ! -e $HOME/private.tmp && ! -e $HOME/.oaos ]] || fail 'dry-run created files'
 printf 'PASS: platform mutators honor dry-run without file or service changes\n'
 
 OAOS_DRY_RUN=0; export OAOS_DRY_RUN
-printf 'replacement\n' | platform_atomic_write "$HOME/private"
-if [[ $(cat "$HOME/private") != replacement ]] || ! platform_secret_check "$HOME/private"; then fail 'atomic write or secret mode'; fi
-chmod 777 "$HOME"
-if platform_secret_check "$HOME/private"; then fail 'writable secret parent accepted'; fi
-chmod 700 "$HOME"
-platform_secret_check "$HOME/private" || fail 'private parent rejected'
-[[ $(platform_sha256 "$HOME/private") == $(sha256sum "$HOME/private" | awk '{print $1}') ]] || fail 'SHA-256 value'
-[[ $(platform_hermes_home) == "$HOME/.hermes" && $(platform_path state) == "$HOME/.oaos-install/state.json" ]] || fail 'Linux paths'
-stage_mark wiki applied 'test'
-if [[ $(stage_status wiki) != applied ]] || stage_done wiki; then fail 'applied status'; fi
-stage_mark wiki verified 'test'
-if [[ $(stage_status wiki) != verified ]] || stage_done wiki; then fail 'verified status'; fi
-stage_mark optional SKIP 'explicit optional item'
-if [[ $(stage_status optional) != SKIP ]] || stage_done optional; then fail 'SKIP status'; fi
-if (stage_mark wiki SKIP 'forbidden') >/dev/null 2>&1; then fail 'required stage accepted SKIP'; fi
-stage_mark wiki 'done' 'legacy'
-stage_done wiki || fail 'legacy done resume'
-printf 'PASS: Linux hash, atomic mode, paths, and legacy/new status read-back\n'
+if [[ $(uname -s) == Linux ]]; then
+  printf 'replacement\n' | platform_atomic_write "$HOME/private"
+  if [[ $(cat "$HOME/private") != replacement ]] || ! platform_secret_check "$HOME/private"; then fail 'atomic write or secret mode'; fi
+  chmod 777 "$HOME"
+  if platform_secret_check "$HOME/private"; then fail 'writable secret parent accepted'; fi
+  chmod 700 "$HOME"
+  platform_secret_check "$HOME/private" || fail 'private parent rejected'
+  [[ $(platform_sha256 "$HOME/private") == $(test_sha256 "$HOME/private") ]] || fail 'SHA-256 value'
+  [[ $(platform_hermes_home) == "$HOME/.hermes" && $(platform_path state) == "$HOME/.oaos-install/state.json" ]] || fail 'Linux paths'
+  stage_mark wiki applied 'test'
+  if [[ $(stage_status wiki) != applied ]] || stage_done wiki; then fail 'applied status'; fi
+  stage_mark wiki verified 'test'
+  if [[ $(stage_status wiki) != verified ]] || stage_done wiki; then fail 'verified status'; fi
+  stage_mark optional SKIP 'explicit optional item'
+  if [[ $(stage_status optional) != SKIP ]] || stage_done optional; then fail 'SKIP status'; fi
+  if (stage_mark wiki SKIP 'forbidden') >/dev/null 2>&1; then fail 'required stage accepted SKIP'; fi
+  stage_mark wiki 'done' 'legacy'
+  stage_done wiki || fail 'legacy done resume'
+  printf 'PASS: Linux hash, atomic mode, paths, and legacy/new status read-back\n'
+else
+  printf 'SKIP: Linux native hash/mode/state checks require Linux host primitives\n'
+fi
 
 backup_dir="$HOME/backups with spaces"
 mkdir -p "$backup_dir"
