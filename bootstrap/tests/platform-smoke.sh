@@ -4,6 +4,9 @@ set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temp_root=$(mktemp -d)
 trap 'rm -rf -- "$temp_root"' EXIT
+# Every mocked lane starts from an explicit environment, even inside Hermes.
+for name in ${!OAOS_@}; do unset "$name"; done
+unset HERMES_HOME MSYSTEM LOCALAPPDATA APPDATA
 # shellcheck source=bootstrap/lib/common.sh
 . "$repo_root/bootstrap/lib/common.sh"
 # shellcheck source=bootstrap/lib/platform.sh
@@ -16,10 +19,6 @@ import hashlib, pathlib, sys
 print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 }
-
-# Every mocked lane starts from an explicit environment, even inside Hermes.
-unset HERMES_HOME OAOS_PLATFORM OAOS_TEST_PLATFORM OAOS_TEST_MODE MSYSTEM LOCALAPPDATA APPDATA
-unset OAOS_DRY_RUN OAOS_NO_LOG_FILE OAOS_STATE_EDITION OAOS_STAGES
 
 # uname is mocked only inside this subshell; no host service or package is touched.
 (

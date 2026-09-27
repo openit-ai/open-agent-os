@@ -106,18 +106,19 @@ do_prep() {
 }
 
 do_hermes() {
-  local installer cache answer actual_sha native
+  local installer installer_native cache answer actual_sha native
   if have_cmd hermes && hermes --version >/dev/null 2>&1; then return 0; fi
   have_cmd curl || { warn 'curl is required to download Hermes.'; return 3; }
   cache=$(platform_path cache)
   mkdir -p "$cache"
   if [[ $OAOS_PLATFORM == windows-gitbash ]]; then installer="$cache/hermes-install.ps1"
   else installer="$cache/hermes-install.sh"; fi
+  installer_native=$(oaos_native_path "$installer") || return 3
   if [[ ! -e $installer ]]; then
     if [[ $OAOS_PLATFORM == windows-gitbash ]]; then
-      curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.ps1' -o "$installer" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
+      curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.ps1' -o "$installer_native" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
     else
-      curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.sh' -o "$installer" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
+      curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --retry 2 'https://hermes-agent.nousresearch.com/install.sh' -o "$installer_native" || { rm -f -- "$installer"; warn 'Hermes installer download failed.'; return 1; }
     fi
   fi
   if [[ ! -s $installer ]]; then rm -f -- "$installer"; warn 'Hermes installer is empty.'; return 1; fi
@@ -152,15 +153,28 @@ do_hermes() {
 }
 
 do_llm() {
-  local key value model
+  local key value model provider provider_key
+  local keys=(NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY)
   need_hermes || return 3
   model=$(config_value model)
-  for key in NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY; do
-    value=$(config_value "$key")
-    if [[ -n $value && $value != 'null' ]]; then
-      if [[ -n $model && $model != 'null' ]]; then return 0; fi
+  if [[ -n $model && $model != null ]]; then
+    provider=$(hermes config get model 2>/dev/null | awk -F: '
+      tolower($1) ~ /^[[:space:]]*provider[[:space:]]*$/ {
+        name = $2
+        gsub(/\r/, "", name)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+        if (name ~ /^[A-Za-z0-9][A-Za-z0-9_-]*$/) { print name; exit }
+      }
+    ' || true)
+    if [[ -n $provider ]]; then
+      provider_key=$(printf '%s' "${provider//-/_}" | tr '[:lower:]' '[:upper:]')_API_KEY
+      keys=("$provider_key" "${keys[@]}")
     fi
-  done
+    for key in "${keys[@]}"; do
+      value=$(config_value "$key")
+      if [[ -n $value && $value != null ]]; then return 0; fi
+    done
+  fi
   warn 'G1: Choose a provider at https://opencode.ai/go or https://hermes-agent.nousresearch.com/docs. Store its key with hermes config set <PROVIDER>_API_KEY, then select a model with hermes model. Never paste a key into logs.'
   return 3
 }
@@ -202,15 +216,16 @@ do_gateway() {
 }
 
 do_wiki() {
-  local wiki
+  local wiki wiki_native
   wiki=$(platform_path wiki)
+  wiki_native=$(oaos_native_path "$wiki") || return 3
   if [[ -e $wiki ]]; then
     [[ -d $wiki/.git ]] || { warn 'Wiki path already exists but is not a git repository; preserving it.'; return 3; }
-    git -C "$wiki" log -1 --format=%h >/dev/null 2>&1 || { warn 'Existing wiki has no commit; preserving it.'; return 3; }
+    git -C "$wiki_native" log -1 --format=%h >/dev/null 2>&1 || { warn 'Existing wiki has no commit; preserving it.'; return 3; }
     return 0
   fi
   mkdir -p "$(dirname "$wiki")"
-  git init -q -b main "$wiki" || return 1
+  git init -q -b main "$wiki_native" || return 1
   cat > "$wiki/index.md" <<'EOF'
 # Personal Wiki
 
@@ -226,8 +241,8 @@ Purpose: keep personal knowledge in a local, versioned workspace.
 EOF
   printf '# Personal Wiki\n\nStart at [index.md](index.md). Keep private information out of public remotes.\n' > "$wiki/README.md"
   printf '.DS_Store\n*.swp\n' > "$wiki/.gitignore"
-  git -C "$wiki" add index.md README.md .gitignore
-  git -C "$wiki" -c user.name='OAOS Bootstrap' -c user.email='bootstrap@localhost' commit -qm 'wiki: seed personal index' || return 1
+  git -C "$wiki_native" add index.md README.md .gitignore
+  git -C "$wiki_native" -c user.name='OAOS Bootstrap' -c user.email='bootstrap@localhost' commit -qm 'wiki: seed personal index' || return 1
 }
 
 do_harness() {
@@ -242,8 +257,23 @@ do_harness() {
   done
 }
 
+install_personal_cron_script() {
+  local candidate=$1 script=$2 name=$3
+  if [[ -e $script || -L $script ]]; then
+    if cmp -s "$candidate" "$script"; then
+      rm -f -- "$candidate"
+      return 0
+    fi
+    rm -f -- "$candidate"
+    warn "Existing script for $name needs review; preserving it."
+    return 3
+  fi
+  chmod 700 "$candidate" || { rm -f -- "$candidate"; return 1; }
+  mv -- "$candidate" "$script" || { rm -f -- "$candidate"; return 1; }
+}
+
 do_cron() {
-  local scripts jobs name script hermes_home hermes_parent hermes_leaf python
+  local scripts jobs name script script_tmp schedule hermes_home hermes_parent hermes_leaf python
   scripts=$(platform_path scripts)
   need_hermes || return 3
   mkdir -p "$scripts"
@@ -251,10 +281,11 @@ do_cron() {
   for name in oaos-daily-backup oaos-gateway-watchdog; do
     if grep -Fq "$name" <<< "$jobs"; then continue; fi
     script="$scripts/$name.sh"
-    if [[ -e $script ]]; then warn "Existing script for $name needs review; preserving it."; return 3; fi
+    script_tmp=$(mktemp "$script.tmp.XXXXXX") || return 1
     if [[ $name == oaos-daily-backup ]]; then
+      schedule='0 3 * * *'
       if [[ $OAOS_PLATFORM == linux ]]; then
-        cat > "$script" <<'EOF'
+        cat > "$script_tmp" <<'EOF' || { rm -f -- "$script_tmp"; return 1; }
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
@@ -267,10 +298,10 @@ mv -- "$tmp" "$target"
 ls -1t "$HOME/.oaos/backups"/oaos-*.tar.gz 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f -- "$old"; done
 EOF
       else
-        hermes_home=$(platform_hermes_home) || return 3
+        hermes_home=$(platform_hermes_home) || { rm -f -- "$script_tmp"; return 3; }
         hermes_parent=$(dirname "$hermes_home")
         hermes_leaf=$(basename "$hermes_home")
-        python=$(platform_python) || return 3
+        python=$(platform_python) || { rm -f -- "$script_tmp"; return 3; }
         {
           printf '#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\n'
           printf 'hermes_parent=%q\nhermes_leaf=%q\npython=%q\n' "$hermes_parent" "$hermes_leaf" "$python"
@@ -281,7 +312,9 @@ tmp=$(mktemp "$target.tmp.XXXXXX")
 trap 'rm -f -- "$tmp"' EXIT
 tar -czf "$tmp" -C "$hermes_parent" "$hermes_leaf" -C "$HOME/data" wiki
 mv -- "$tmp" "$target"
-"$python" - "$HOME/.oaos/backups" <<'PY'
+backup_dir="$HOME/.oaos/backups"
+case $(uname -s) in MINGW*|MSYS*|CYGWIN*) backup_dir=$(cygpath -w "$backup_dir") ;; esac
+"$python" - "$backup_dir" <<'PY'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
 files = sorted(root.glob('oaos-*.tar.gz'), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -289,21 +322,20 @@ for path in files[7:]:
     path.unlink()
 PY
 EOF
-        } > "$script"
+        } > "$script_tmp" || { rm -f -- "$script_tmp"; return 1; }
       fi
-      chmod 700 "$script"
-      hermes cron create --name "$name" --script "$script" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
     else
-      cat > "$script" <<'EOF'
+      schedule='*/5 * * * *'
+      cat > "$script_tmp" <<'EOF' || { rm -f -- "$script_tmp"; return 1; }
 #!/usr/bin/env bash
 set -Eeuo pipefail
 if ! hermes gateway status 2>/dev/null | grep -Eiq 'running|active'; then
   hermes gateway start
 fi
 EOF
-      chmod 700 "$script"
-      hermes cron create --name "$name" --script "$script" --no-agent --deliver local '*/5 * * * *' >/dev/null || return 1
     fi
+    install_personal_cron_script "$script_tmp" "$script" "$name" || return $?
+    hermes cron create --name "$name" --script "$(basename "$script")" --no-agent --deliver local "$schedule" >/dev/null || return 1
   done
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
   grep -Fq 'oaos-daily-backup' <<< "$jobs" && grep -Fq 'oaos-gateway-watchdog' <<< "$jobs" || return 3

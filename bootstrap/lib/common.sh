@@ -36,6 +36,17 @@ warn() { log_line WARN "$*" >&2; }
 die() { log_line ERROR "$*" >&2; exit 1; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# Called after platform.sh is loaded by Personal entrypoints. Other editions
+# keep their POSIX paths and do not need the platform boundary.
+oaos_native_path() {
+  if [[ ${OAOS_PLATFORM:-} == windows-gitbash ]]; then
+    declare -F platform_windows_convert_path >/dev/null || return 3
+    platform_windows_convert_path to-native "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 oaos_python() {
   local executable=python3
   if declare -F platform_python >/dev/null; then
@@ -53,7 +64,7 @@ stage_status() {
   if have_cmd jq; then
     jq -r --arg name "$1" '.stages[$name].status // "pending"' "$file"
   else
-    oaos_python - "$file" "$1" <<'PY'
+    oaos_python - "$(oaos_native_path "$file")" "$1" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as f:
     state = json.load(f)
@@ -75,7 +86,7 @@ state_valid() {
   [[ -e $file ]] || return 0
   if have_cmd jq; then jq -e . "$file" >/dev/null 2>&1; return; fi
   if have_cmd python3 || { declare -F platform_python >/dev/null && platform_python >/dev/null 2>&1; }; then
-    oaos_python - "$file" >/dev/null 2>&1 <<'PY'
+    oaos_python - "$(oaos_native_path "$file")" >/dev/null 2>&1 <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as f:
     json.load(f)
@@ -116,7 +127,7 @@ stage_mark() {
         '{edition:$edition,updated_at:$now,stages:(reduce ($stages | split(" "))[] as $s ({}; .[$s]={status:"pending",updated_at:$now,detail:""}))} | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
     fi
   else
-    oaos_python - "$file" "$tmp" "$name" "$status" "$detail" "$now" "$edition" "$stages" <<'PY' || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
+    oaos_python - "$(oaos_native_path "$file")" "$(oaos_native_path "$tmp")" "$name" "$status" "$detail" "$now" "$edition" "$stages" <<'PY' || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
 import json, os, sys
 source, target, name, status, detail, now, edition, stage_names = sys.argv[1:]
 state = {}
