@@ -49,6 +49,8 @@
 
 ## 에디션
 
+**Personal 에디션은 Ubuntu(Linux)·macOS·Windows 11을 지원합니다.** Hermes Agent 네이티브 설치가 가능한 운영체제와 동일합니다.
+
 | | **Personal** | **Project** | **Company** |
 |---|---|---|---|
 | 대상 | 1인 | 소규모 팀(2~6인) | 중소기업(5~50인) |

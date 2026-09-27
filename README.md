@@ -49,6 +49,8 @@ Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
 
 ## Editions
 
+**The Personal edition supports Ubuntu (Linux), macOS, and Windows 11.** These are the same operating systems where Hermes Agent can be installed natively.
+
 | | **Personal** | **Project** | **Company** |
 |---|---|---|---|
 | For | one person | a small team (2–6) | a company (5–50) |
