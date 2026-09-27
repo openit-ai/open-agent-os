@@ -41,7 +41,7 @@ You    yes
 Agent  Installing… ✓ Hermes  ✓ gateway  ✓ Telegram connected
        Two quick gates: paste your bot token, paste your user ID.
        ✓ LLM plan connected  ✓ wiki seeded  ✓ scheduled jobs on
-       ◯ reboot/login survival awaits a safe device check
+       ✓ reboot survival verified on Ubuntu (macOS/Windows: device check pending)
 
 Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
        Full recipe list: docs/cookbook.md
