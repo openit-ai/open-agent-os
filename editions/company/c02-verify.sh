@@ -52,8 +52,15 @@ company_c02_private_ports() {
   ! awk '$1 == "LISTEN" && $4 ~ /:(5432|6379|8765)$/ && $4 !~ /^(127\.0\.0\.1|\[::1\]|::1):/ {bad=1} END {exit !bad}' <<< "$sockets"
 }
 company_c02_https() {
+  # The origin host may be served by a different machine (shared domain), so a
+  # bare 200 is not evidence. Anchor the request to this instance's loopback and
+  # require the Company health payload itself.
+  local host body
   [[ ${OAOS_COMPANY_HTTPS_ORIGIN:-} =~ ^https://[A-Za-z0-9.-]+$ ]] || return 1
-  [[ $(curl --silent --show-error --noproxy '*' --max-time 8 --output /dev/null --write-out '%{http_code}' "$OAOS_COMPANY_HTTPS_ORIGIN/company/health" 2>/dev/null) == 200 ]]
+  host=${OAOS_COMPANY_HTTPS_ORIGIN#https://}
+  body=$(curl --silent --show-error --noproxy '*' --max-time 8 --resolve "$host:443:127.0.0.1" \
+    "$OAOS_COMPANY_HTTPS_ORIGIN/company/health" 2>/dev/null) || return 1
+  [[ ${body//[$'\r\n']/} == ok ]]
 }
 company_c02_rebooted() {
   local before now

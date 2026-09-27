@@ -170,7 +170,13 @@ EOF
     fi
   fi
   rm -f -- "$patched"
-  if [[ $(curl --silent --show-error --noproxy '*' --max-time 8 --output /dev/null --write-out '%{http_code}' "$OAOS_COMPANY_HTTPS_ORIGIN/company/health" 2>/dev/null) != 200 ]]; then
+  # The origin host may be served by another machine, so require this instance's
+  # own Company health payload through the local nginx, not a bare 200.
+  local health_host health_body
+  health_host=${OAOS_COMPANY_HTTPS_ORIGIN#https://}
+  health_body=$(curl --silent --show-error --noproxy '*' --max-time 8 \
+    --resolve "$health_host:443:127.0.0.1" "$OAOS_COMPANY_HTTPS_ORIGIN/company/health" 2>/dev/null || true)
+  if [[ ${health_body//[$'\r\n']/} != ok ]]; then
     company_c02_write_vhost "$OAOS_COMPANY_NGINX_VHOST" "$snapshot/nginx.conf" || true
     run_root systemctl reload nginx >/dev/null 2>&1 || true
     warn 'Company HTTPS health failed; original vhost restored.'
