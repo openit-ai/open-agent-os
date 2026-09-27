@@ -487,9 +487,12 @@ do_team() {
 
 1. Mattermost 관리자: https://$chat 에서 팀을 만들고 멤버를 초대합니다.
 2. Hermes 봇을 팀에 추가하고 MATTERMOST_ALLOWED_USERS에 허용할 계정을 설정합니다.
-3. Outline 관리자 가입 후 G8 API 토큰을 발급받고 연결을 검증합니다.
-4. 허용 계정과 비허용 계정의 채팅 동작을 각각 확인합니다.
-5. 봇 메일함의 송신·수신을 확인합니다.
+3. Outline 최초 로그인(운영자 수동 단계): 신원 제공자(Slack/Google/OIDC)를 .env에 설정하거나, 검증 목적이면 무인증 설치 엔드포인트로 최초 관리자를 만든 뒤 https://$note 에 로그인합니다.
+4. Settings → API Keys에서 G8 API 토큰을 발급받아 Hermes .env의 OUTLINE_API_TOKEN에 저장하고 연결을 검증합니다.
+5. 허용 계정과 비허용 계정의 채팅 동작을 각각 확인합니다.
+6. 봇 메일함의 송신·수신을 확인합니다.
+
+자세한 절차는 editions/project/README.md의 "Outline 최초 로그인 — 운영자 수동 단계 (G8)"를 따릅니다.
 EOF2
   if [[ -n ${OAOS_MATTERMOST_ALLOWED_USERS:-} && -n $token ]]; then
     hermes config set MATTERMOST_ALLOWED_USERS "$OAOS_MATTERMOST_ALLOWED_USERS" >/dev/null 2>&1 || return 3
