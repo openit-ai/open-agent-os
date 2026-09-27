@@ -273,6 +273,21 @@ install_personal_cron_script() {
   mv -- "$candidate" "$script" || { rm -f -- "$candidate"; return 1; }
 }
 
+install_personal_cron_script() {
+  local candidate=$1 script=$2 name=$3
+  if [[ -e $script || -L $script ]]; then
+    if cmp -s "$candidate" "$script"; then
+      rm -f -- "$candidate"
+      return 0
+    fi
+    rm -f -- "$candidate"
+    warn "Existing script for $name needs review; preserving it."
+    return 3
+  fi
+  chmod 700 "$candidate" || { rm -f -- "$candidate"; return 1; }
+  mv -- "$candidate" "$script" || { rm -f -- "$candidate"; return 1; }
+}
+
 do_cron() {
   local scripts jobs name script script_tmp schedule hermes_home hermes_parent hermes_leaf python
   scripts=$(platform_path scripts)
