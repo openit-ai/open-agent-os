@@ -159,10 +159,18 @@ do_hermes() {
 }
 
 do_llm() {
-  local key value model
+  local key value model provider provider_key keys
   need_hermes || return 3
   model=$(config_value model)
-  for key in NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY; do
+  # The selected provider decides the key name; a fixed allowlist misses
+  # valid providers such as opencode-go (OPENCODE_GO_API_KEY).
+  provider=$(printf '%s\n' "$model" | sed -n 's/^provider:[[:space:]]*//p' | head -n 1)
+  keys=(NOUS_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY VERCEL_AI_GATEWAY_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY)
+  if [[ -n $provider ]]; then
+    provider_key=$(printf '%s' "$provider" | tr '[:lower:]-' '[:upper:]_')_API_KEY
+    keys=("$provider_key" "${keys[@]}")
+  fi
+  for key in "${keys[@]}"; do
     value=$(config_value "$key")
     if [[ -n $value && $value != 'null' ]]; then
       if [[ -n $model && $model != 'null' ]]; then return 0; fi
@@ -255,15 +263,15 @@ do_harness() {
 }
 
 do_cron() {
-  local scripts jobs name=oaos-daily-backup script
+  local scripts jobs name=oaos-daily-backup script staged
   scripts="$(oaos_home)/.hermes/scripts"
   need_hermes || return 3
   mkdir -p "$scripts"
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
   if ! grep -Fq "$name" <<< "$jobs"; then
     script="$scripts/$name.sh"
-    if [[ -e $script ]]; then warn "Existing script for $name needs review; preserving it."; return 3; fi
-    cat > "$script" <<'EOF'
+    staged="$scripts/.$name.sh.new.$$"
+    cat > "$staged" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
@@ -275,8 +283,15 @@ tar -czf "$tmp" -C "$HOME" .hermes data/wiki
 mv -- "$tmp" "$target"
 ls -1t "$HOME/.oaos/backups"/oaos-*.tar.gz 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f -- "$old"; done
 EOF
-    chmod 700 "$script"
-    hermes cron create --name "$name" --script "$script" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
+    if [[ -e $script ]] && ! cmp -s "$staged" "$script"; then
+      rm -f -- "$staged"
+      warn "Existing script for $name needs review; preserving it."
+      return 3
+    fi
+    chmod 700 "$staged"
+    mv -- "$staged" "$script"
+    # The cron CLI resolves --script relative to the Hermes scripts directory.
+    hermes cron create --name "$name" --script "$(basename "$script")" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
   fi
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
   grep -Fq "$name" <<< "$jobs" || return 3
