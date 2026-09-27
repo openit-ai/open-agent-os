@@ -95,7 +95,7 @@
 ## 저장소 구조
 
 ```text
-skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oaos-ops (+ 옵션: promo-video-generation, higgsfield-media-generation)
+skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oaos-ops (+ 옵션: promo-video-generation, higgsfield-media-generation, figma-design-generation)
 harness/       설정 파일 템플릿(SOUL/USER/MEMORY/AGENTS) + 시딩 가이드
 editions/      에디션별 안내 페이지 — personal / project / company
 docs/          architecture-v2.0.md · cookbook.md · faq.md
@@ -118,10 +118,12 @@ hermes skills install https://raw.githubusercontent.com/openit-ai/open-agent-os/
 
 - **[`skills/promo-video-generation`](skills/promo-video-generation/SKILL.md)** — 장소 하나로 20초 실사 홍보영상: 문답 → 실사 이미지 → 컷 문안 → 생성(Higgsfield Seedance 2.5 / Kling 3.0). 생성 전 견적·승인 절차 내장.
 - **[`skills/higgsfield-media-generation`](skills/higgsfield-media-generation/SKILL.md)** — 생성 헬퍼: Higgsfield API로 이미지·영상 생성(제출 → 폴링 → 다운로드), 비용 사전 견적 내장.
+- **[`skills/figma-design-generation`](skills/figma-design-generation/SKILL.md)** — 채팅으로 Figma 디자인 제작: 공식 Figma MCP 서버로 화면·컴포넌트·다이어그램·디자인→코드 핸드오프를 만들고 전달 전 스크린샷으로 검수합니다. 무료 Figma 계정으로 시작(브라우저 로그인 1회).
 
 ```bash
 hermes skills install openit-ai/open-agent-os/skills/promo-video-generation
 hermes skills install openit-ai/open-agent-os/skills/higgsfield-media-generation
+hermes skills install openit-ai/open-agent-os/skills/figma-design-generation
 ```
 
 스킬은 OAOS가 성장하는 방식입니다 — MCP 서버와 스킬을 추가하면 코어 변경 없이 에이전트의 능력이 늘어납니다.
