@@ -26,9 +26,25 @@ evidence=()
 record() { statuses+=("$1"); evidence+=("$2"); }
 
 # 1: Never print doctor output; it may contain configuration details.
-if have_cmd hermes && hermes doctor >/dev/null 2>&1; then
-  record PASS 'hermes doctor exited successfully'
-else record FAIL 'Hermes is unavailable or doctor reported an error'; fi
+# doctor exits non-zero for advisory findings too, so the summary is inspected.
+if ! have_cmd hermes; then
+  record FAIL 'Hermes is unavailable'
+else
+  doctor_dir=$(mktemp -d) || exit 3
+  doctor_code=0
+  hermes doctor > "$doctor_dir/raw" 2>&1 || doctor_code=$?
+  awk '{ gsub(sprintf("%c", 27) "\\[[0-9;]*[A-Za-z]", ""); print }' "$doctor_dir/raw" > "$doctor_dir/clean"
+  if ((doctor_code == 0)); then
+    record PASS 'doctor reported no issues'
+  elif ! grep -Eq 'All checks passed|issue\(s\) to address' "$doctor_dir/clean"; then
+    record FAIL 'doctor exited with an error and no summary block'
+  elif grep -Fq '✗' "$doctor_dir/clean"; then
+    record FAIL 'doctor summary contains a failed check (✗)'
+  else
+    record PASS 'doctor reported advisory findings only (summary present; no ✗ checks)'
+  fi
+  rm -rf -- "$doctor_dir"
+fi
 
 # 2: A real model request is not an offline check.
 if ((offline)); then record SKIP 'Offline mode: model request not sent'
@@ -39,9 +55,19 @@ else record FAIL 'Model request failed or reply did not contain OK'; fi
 # 3: An absent sandbox service file is definitive; avoid touching host services.
 service="$home/.config/systemd/user/hermes-gateway.service"
 if [[ ! -f $service ]]; then record FAIL 'Gateway user service file absent'
-elif have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running|gateway service is running'; then
-  record PASS 'hermes gateway status reports running'
-else record FAIL 'Gateway status is not running'; fi
+else
+  # A just-installed gateway can still be starting; retry before failing.
+  gateway_ok=0
+  for _attempt in 1 2 3; do
+    if have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eq 'Gateway is running|gateway service is running'; then
+      gateway_ok=1
+      break
+    fi
+    sleep 5
+  done
+  if ((gateway_ok)); then record PASS 'hermes gateway status reports running'
+  else record FAIL 'Gateway status is not running'; fi
+fi
 
 # 4: Verify the user's service enablement and lingering without changing either.
 if [[ -L $home/.config/systemd/user/default.target.wants/hermes-gateway.service ]] &&
