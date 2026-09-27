@@ -1,6 +1,6 @@
 # Open Agent OS 아키텍처 및 구현 설계서 v2.0 — 3-에디션 · "URL 하나로 구축"
 
-> **대상**: openit-ai/open-agent-os (제품 v0.1.10 · 기존 아키텍처 v1.7.5 → 본 문서 v2.0)
+> **대상**: openit-ai/open-agent-os (제품 버전 v0.1.10 · 기존 아키텍처 v1.7.5 → 본 문서 v2.0)
 > **관계**: 기존 v1.7.x 문서 = 현행 플랫폼 구현 기준서 · 본 문서 = 3-에디션 제품 방향 기준서 (제품 방향은 본 문서가 정본)
 > **목표**: Hermes Agent 설치 후 **저장소 URL 하나를 알려주면** README 설명부터 대부분의 설치, 최종 테스트까지 에이전트가 자동 진행 — 사용자는 **링크 확인·선택·최소 복사/붙여넣기**만 한다.
 > **입력**: 3-에디션 설계 요구(2026-09-25) · 구축 실측 가이드 2종(개인용·프로젝트용, 2026-09-22)
@@ -15,7 +15,7 @@
 |---|---|
 | 제품 | **Open Agent OS (OAOS)** — 3-에디션: **Personal / Project / Company** |
 | 핵심 경험 | Hermes Agent 설치(공식) → **GitHub URL 1개 전달** → README 해석·환경 설명 → 부트스트랩 스킬로 설치 자동 진행 → 최종 테스트까지 완료 |
-| 사용자 개입 | 게이트당 **링크 + 선택 + 최소 복붙** (에디션별 3~6개소) |
+| 사용자 개입 | 게이트당 **링크 + 선택 + 최소 복붙** (선택 포함 Personal 5·Project 10·Company 14개소) |
 | 적층 구조 | Personal ⊂ Project ⊂ Company — Company는 **5~50인 중소기업용 확장 에디션**(멀티 LLM 라우팅·권한·감사 + 선택형 연동) |
 | 기준 실측 | Personal: 미니PC(N100급·16GB)·월 $10 API(OpenCode Go 정액, 2026-09-25 확인) / Project: VPS 1대(4 vCPU·16GB·200GB급) |
 | 비용 원칙 | 본 솔루션으로 **새로 드는 비용은 서버·LLM 정액 등 솔루션 자체 항목뿐** — Google Workspace·Microsoft 365·Slack·Notion 등은 **기업이 기존에 사용 중인 서비스에 연동**(추가 비용 없음) |
@@ -87,7 +87,7 @@ flowchart TD
 1. 모든 게이트는 **① 클릭 가능한 링크 ② 왜 필요한지 1줄 ③ 붙여넣을 값의 정확한 지정** 순서로 안내한다.
 2. 붙여넣은 값은 **즉시 검증**(API 200·토큰 getMe 등)하고, 실패 시 원인과 재시도 링크를 다시 제공한다.
 3. 값은 `.env`(600)에만 저장 — 스킬은 값을 **재출력하지 않는다**. 로그·문서·위키에 남기지 않는다.
-4. 게이트는 "선택"과 "제공" 두 종류만 존재한다. 그 외(설정 파일 편집·명령 타이핑)는 전부 에이전트 몫이다.
+4. 게이트는 "선택"과 "제공(필수)" 두 종류만 존재한다. 그 외(설정 파일 편집·명령 타이핑)는 전부 에이전트 몫이다.
 5. 게이트가 발생하기 전까지는 **무인 진행**을 원칙으로 하고, 진행 상황은 시작·게이트·검증·완료 시점에만 보고한다.
 
 ### 2.4 개입 지점 (에디션별)
@@ -102,7 +102,7 @@ flowchart TD
 | G4 | (선택) 대용량 파일 | my.telegram.org → api_id/hash 복붙 | 링크·절차·보안 경고 |
 | G5 | (선택) 이메일 | Gmail 앱 비밀번호 16자 복붙 | 2단계 인증·발급 링크 |
 
-**Project — Personal 게이트 + 4**
+**Project — Personal 게이트 + 5**
 
 | # | 게이트 | 사용자 액션(최소) | 에이전트 제공 |
 |---|---|---|---|
@@ -112,14 +112,14 @@ flowchart TD
 | G8 | Outline API 토큰 | 관리자 가입 → API 토큰 발급·복붙 | 링크·발급 경로 안내 |
 | G9 | 봇 전용 메일 | 전용 Gmail 생성 + 앱 비밀번호 복붙 | 이유(개인계정 정보보안 분리)·링크 |
 
-**Company — Project 게이트 + 확장 게이트(선택형)**
+**Company — Project 게이트 + 확장 게이트(제공 1 + 선택 3)**
 
 | # | 구분 | 게이트 | 사용자 액션(최소) | 에이전트 제공 |
 |---|---|---|---|---|
-| G10 | 필수 | 관리자 콘솔 초기 설정 | 관리자 계정·구성원 매핑 입력(브라우저) | 콘솔 안내·기존 OAOS 자산 연결 |
+| G10 | 제공(필수) | 관리자 콘솔 초기 설정 | 관리자 계정·구성원 매핑 입력(브라우저) | 콘솔 안내·기존 OAOS 자산 연결 |
 | G11 | 선택 | 생산성 스위트 연동 | Google Workspace **또는** Microsoft 365 — OAuth 클라이언트 등록·복붙 | 콘솔 링크·리다이렉트 URI 제공 |
 | G12 | 선택 | 협업 도구 연동 | Slack·Notion 사용 조직: 앱 생성·토큰 복붙 | 매니페스트·콘솔 링크·권한 안내 |
-| G13 | 선택 | 멀티 LLM 확장 | 프리미엄 모델(Codex·Claude 등)·추가 모델 API 도입 시 키 복붙 | 요금 비교·라우팅 자동 구성 |
+| G13 | 선택 | 멀티 LLM 확장 | 프리미엄 모델(Codex·Claude 등)·추가 모델 API 도입 시 키 복붙 | 요금 비교·라우팅 자동 구성; 사용량 과금 경로는 승인 필요 |
 
 ### 2.5 자동화 범위 (Personal 기준 예시)
 
@@ -181,13 +181,13 @@ flowchart TD
 
 - **기반**: Project 에디션 구성 + 중소기업 요구 기능 확장
 - **핵심 확장**:
-  - **멀티 LLM/API 라우팅**: 기본 저가 모델 + 프리미엄 모델(Codex·Claude 등)·추가 모델 API를 작업별 라우팅(도입 선택)
+  - **멀티 LLM/API 라우팅**: 기본 저가 모델 + 프리미엄 모델(Codex·Claude 등)·추가 모델 API를 작업별 라우팅(도입 선택, 사용량 과금 경로는 승인 필요)
   - **개인별 독립 AI 비서**: 구성원별 개인 계정 연동 시 권한 제어 — `owner == credential == provider == output` 격리
   - **거버넌스**: 정책 엔진 + JIT 승인 + 감사 + Secret Vault + ACL 지식 인덱스 + 관리 콘솔
 - **선택형 연동(옵션)** — 조직이 **이미 도입·사용 중인** 서비스에 연동한다(본 솔루션 도입으로 인한 추가 구독 비용 없음):
   - 생산성 스위트: **Google Workspace 또는 Microsoft 365** — 조직 표준에 맞춰 선택 연동(메일·문서·일정)
   - 협업·지식 도구: **Slack**·**Notion** 등 — 이미 사용 중인 조직에 한해 어댑터 활성화
-- **기존 OAOS 자산 흡수**: Logical Personal Agent, Policy+JIT, ACL RAG, Personal Wiki, 관리 콘솔 — 기존 코드·테스트를 Company 레이어로 승계
+- **기존 OAOS 자산 흡수**: 개인별 비서, 정책·승인, 권한 인식 검색, 개인 위키, 관리 콘솔 — 공개·이식 적합성을 확인해 필요한 코드·테스트만 Company 레이어로 선별 흡수
 - **대상**: 5~50인 중소기업 — 요구에 맞춘 변경 수용 모델
 
 ### 4.4 비교와 확장 경로
@@ -223,7 +223,7 @@ flowchart TB
     CORE --> RT["런타임 계층 / Hermes Agent / 어댑터로 표면 연결"]
 ```
 
-- **런타임 계층 = Hermes 네이티브**. 기존 `agent-runtime`(자체 LLM 런타임)·`mock` 실행부는 삭제·대체하고 Hermes로 일원화한다.
+- **런타임 계층 = Hermes 네이티브**. 기존 자체 LLM 런타임·모의 실행부는 삭제·대체하고 Hermes로 일원화한다.
 - **코어**는 플랫폼 무관 자산(지식·위키·정책·컨텍스트 모델)을 담고, 에디션이 필요한 만큼 가져다 쓴다.
 
 ### 5.2 저장소 구조(안) — 부트스트랩 자산 포함
@@ -237,7 +237,7 @@ open-agent-os/
 ├── editions/
 │   ├── personal/  install.sh · skills/ · README
 │   ├── project/   install.sh · skills/ · README
-│   └── company/   install.sh · skills/ · README   # 기존 플랫폼 연결
+│   └── company/   install.sh · skills/ · README   # Company 확장·systemd 설치
 ├── bootstrap/
 │   ├── lib/                     # 점검·시크릿·로그·체크포인트 공통
 │   └── verify/                  # personal·project·company 최종 테스트
@@ -249,7 +249,7 @@ open-agent-os/
 ```
 
 - **P0~P1 원칙**: 기존 디렉터리는 건드리지 않고 **추가만** 한다(README·skills·editions·bootstrap 신설). 대규모 재배치(core/runtime 분해)는 **P2에서 승인 후** 진행.
-- Company 에디션 install.sh는 **무Docker·systemd** 단일 배포 경로를 호출한다 — Docker·Kubernetes 배포 경로는 흡수하지 않는다(P2 결정).
+- Company 에디션 install.sh는 Project의 apt/시스템 패키지·단일 서버·systemd 운영 패턴을 승계해 무Docker·systemd 단일 경로로 설치한다. 별도 플랫폼의 Docker·Kubernetes 배포 경로는 흡수하지 않는다.
 - 저장소에는 **공유판**(호스트·경로 등 환경 정보 제거)만 싣는다 — 상세 실측 자료는 공개판에 포함하지 않는다.
 
 ### 5.3 기존 자산 매핑 (요약)
@@ -261,7 +261,7 @@ open-agent-os/
 | 지식·정책·감사·리소스 모델 | 공통 코어(개념 유지, Company가 승계) |
 | 연동 어댑터(Google·IAM·Mattermost·Outline·Slack·Notion·Hermes) | 유지 — 에디션별 활성화(Slack·Notion은 선택 연동) |
 | 관리 콘솔 | Company 관리 콘솔(경량 개편) |
-| 배포·설정 자산 | Company 승계 + editions별 스크립트로 분할 |
+| 배포·설정 자산 | Project 운영 패턴을 Company systemd 경로로 승계 + editions별 스크립트로 분할 |
 
 ### 5.4 런타임 비종속 원칙
 
@@ -290,7 +290,7 @@ open-agent-os/
 |---|---|---|
 | **P0 — 부트스트랩 MVP (Personal)** | README/START-HERE 재작성 · `skills/oaos-bootstrap` · `editions/personal/install.sh` · `bootstrap/verify/personal` | 클린 환경(미니PC/VM)에서 URL 1개로 착수→개입 게이트 ≤5회→verify 전 항목 PASS 실증 |
 | **P1 — Project 적층** | install/verify(project) · 도메인·nginx·TLS 자동화 · Personal→Project 이전 스크립트 · Project 설치·운영 문서 등재 | 신규 VPS에서 E2E 완주 + 확장 경로 실증 |
-| **P2 — Company 에디션** | 기존 플랫폼 승계·재배치 · 선택형 연동(Slack·Notion — 사용 조직 한정) · 멀티 LLM 라우팅 · 권한·감사 · 기존 테스트 흡수 | full pytest green + 런타임 read-back + 기존 OAOS 기능 회귀 통과 |
+| **P2 — Company 에디션** | 필요한 기존 자산 선별 흡수 · 선택형 연동(Slack·Notion — 사용 조직 한정) · 멀티 LLM 라우팅 · 권한·감사 · 대상 테스트 이식 | Phase별 대상 테스트·하위 시스템 회귀 통과 + 별도 전체 회귀(대상 범위는 P2 착수 시 확정) 통과 + 런타임 read-back |
 
 - 모든 단계는 **실측 명령 출력·리드백**으로만 완료 판정(문서·구두 보고 금지).
 - P0 착수 전 승인 필요 항목: 리뉴얼 브랜치 분기 — 완료 · 라이선스 방침 — **확정**(§8).
@@ -314,7 +314,7 @@ open-agent-os/
 | 자료 | 위치 | 비고 |
 |---|---|---|
 | Hermes Agent 공식 | https://hermes-agent.nousresearch.com/docs | 설치·문서 |
-| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | v2.1.0 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
+| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | 저장소 태그 v2.1.0 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
 | OpenCode Go | https://opencode.ai/go | 요금·모델 |
 | Vercel AI Gateway | https://vercel.com/docs/ai-gateway/pricing | 무료 크레딧·요금 |
 | Telegram Bot API | https://core.telegram.org/bots/api | Local Bot API 서버 |
