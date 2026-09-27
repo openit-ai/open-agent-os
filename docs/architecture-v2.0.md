@@ -19,7 +19,7 @@
 | 적층 구조 | Personal ⊂ Project ⊂ Company — Company는 **5~50인 중소기업용 확장 에디션**(멀티 LLM 라우팅·권한·감사 + 선택형 연동) |
 | 기준 실측 | Personal: 미니PC(N100급·16GB)·월 $10 API(OpenCode Go 정액, 2026-09-25 확인) / Project: VPS 1대(4 vCPU·16GB·200GB급) |
 | 비용 원칙 | 본 솔루션으로 **새로 드는 비용은 서버·LLM 정액 등 솔루션 자체 항목뿐** — Google Workspace·Microsoft 365·Slack·Notion 등은 **기업이 기존에 사용 중인 서비스에 연동**(추가 비용 없음) |
-| 지원 환경 | Ubuntu LTS · 사전 요건: Hermes Agent 설치(공식) · 표면: TUI/Web 콘솔/메신저 |
+| 지원 환경 | Personal: Ubuntu(Linux)·macOS·Windows 11(Hermes Agent 네이티브 설치와 동일) · Project·Company: Ubuntu LTS 서버 · 사전 요건: Hermes Agent 설치(공식) · 표면: TUI/Web 콘솔/메신저 |
 | 배포 | GitHub(openit-ai/open-agent-os) + Hermes 스킬(URL 설치) |
 | 최종 산출 | 동일 절차로 **누구나** 자기 환경(Personal~Company)을 구축·운영 |
 
@@ -68,7 +68,7 @@ flowchart TD
 
 ### 2.2 부트스트랩 구성요소 (저장소 자산)
 
-**지원 환경(설계 기준)**: Ubuntu LTS · 사전 요건 — Hermes Agent 설치(공식) · 표면 — TUI/Web 콘솔/메신저.
+**지원 환경(설계 기준)**: Personal은 Ubuntu(Linux)·macOS·Windows 11(Hermes Agent 네이티브 설치와 동일), Project·Company는 Ubuntu LTS 서버 · 사전 요건 — Hermes Agent 설치(공식) · 표면 — TUI/Web 콘솔/메신저. 현재 저장소의 부트스트랩·설치·검증 스크립트는 Linux 호스트 기준이다.
 
 | 자산 | 역할 | 읽는 주체 |
 |---|---|---|

@@ -5,6 +5,8 @@
 
 ## 0. Preconditions
 
+The Personal edition supports Ubuntu (Linux), macOS, and Windows 11, where Hermes Agent can be installed natively. This bootstrap procedure currently targets a Linux host (Ubuntu LTS recommended); its OS package, systemd, and host inspection commands are Linux-specific.
+
 - Hermes Agent installed and tool-capable (`terminal`, `read_file`, `write_file` available).
 - You are on the machine that will host the agent (confirm with the user).
 - Network reachable: GitHub, OS packages, and the LLM provider endpoint.

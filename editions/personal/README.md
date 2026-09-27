@@ -75,7 +75,7 @@ HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<강한 비밀번호>
 HERMES_DASHBOARD_BASIC_AUTH_SECRET=<openssl rand -base64 32 결과>
 ```
 
-대시보드를 내부망에 열어 상시 구동합니다(systemd 서비스 권장).
+대시보드를 내부망에 열어 상시 구동합니다(Linux 호스트에서는 systemd 서비스 권장).
 
 ```text
 hermes dashboard --host 0.0.0.0 --port 9119 --no-open

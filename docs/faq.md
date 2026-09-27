@@ -16,9 +16,9 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 세 가지가 다릅니다: ① 내 하드웨어에서 돌아 데이터가 내 통제 아래 있고, ② 대화·문서·결정이 내 위키에 쌓여 "세컨드 브레인"이 되며, ③ 기존 도구(메일·캘린더·팀 채팅)에 연결해 일을 대신합니다. 상태를 기억하지 못하는 일회성 챗봇과 달리, 쓸수록 내 맥락이 자산이 됩니다.
 
 **Q. 어떤 하드웨어가 필요한가요?**
-- Personal: N100급 미니PC(16GB 권장)로 충분합니다.
+- Personal: N100급 미니PC(16GB 권장)가 권장 환경입니다. 지원 OS는 Ubuntu(Linux)·macOS·Windows 11이며, Hermes Agent 네이티브 설치가 가능한 운영체제와 동일합니다.
 - Project: Ubuntu 22.04 또는 24.04 LTS, 4 vCPU / 16GB / 200GB VPS 1대.
-- Personal·Project 설치는 호스트 패키지와 systemd 서비스를 사용합니다. Project의 PostgreSQL·Redis는 Ubuntu apt, Mattermost는 공식 서명 APT, Outline은 고정 릴리스 소스 빌드로 설치합니다.
+- 현재 제공되는 Personal·Project 설치 스크립트는 Linux 호스트 기준으로 호스트 패키지와 systemd 서비스를 사용합니다. Project의 PostgreSQL·Redis는 Ubuntu apt, Mattermost는 공식 서명 APT, Outline은 고정 릴리스 소스 빌드로 설치합니다.
 - Company: Project 구성 + 거버넌스 레이어(동일 서버에서 시작 가능).
 
 **Q. 개발 지식이 필요한가요?**
