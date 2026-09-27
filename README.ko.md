@@ -55,7 +55,7 @@
 |---|---|---|---|
 | 대상 | 1인 | 소규모 팀(2~6인) | 중소기업(5~50인) |
 | 구동 | 미니PC(N100급·16GB) | VPS 1대(4 vCPU·16GB·200GB) | Project + 거버넌스 레이어 |
-| 설치 | 호스트 패키지와 systemd | 서명된 apt 패키지와 고정 Outline 소스 빌드·systemd | Project 호스트 서비스 승계 |
+| 설치 | 호스트 패키지와 systemd(Linux) | 서명된 apt 패키지와 고정 Outline 소스 빌드·systemd | Project 호스트 서비스 승계 |
 | 대화 창구 | Telegram | Mattermost + Telegram | + Slack *(옵션)* |
 | 지식 | git 위키 + Obsidian | Outline + git 위키 | + Notion *(옵션)*, 권한 인식 인덱스 |
 | 메일 | 개인(Himalaya) | 봇 전용 메일 | 기존 스위트 연동 |
