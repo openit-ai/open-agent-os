@@ -77,7 +77,14 @@ stage_mark() {
   stages=${OAOS_STAGES:-prep hermes llm telegram gateway wiki harness cron verify}
   [[ $edition =~ ^[a-z]+$ && $stages =~ ^[a-z]+(\ [a-z]+)*$ ]] || die "Invalid edition stage configuration."
   [[ ${OAOS_DRY_RUN:-0} != 1 ]] || die 'Internal error: state write during dry run.'
-  [[ $status == pending || $status == 'done' || $status == blocked || $status == failed ]] || die 'Invalid state status.'
+  [[ $status == pending || $status == 'done' || $status == applied || $status == verified || $status == SKIP || $status == blocked || $status == failed ]] || die 'Invalid state status.'
+  if [[ $edition == personal && $status == SKIP ]]; then
+    case $name in
+      prep|hermes|llm|telegram|gateway|wiki|harness|cron|verify)
+        die 'Required Personal stages cannot be marked SKIP.' ;;
+    esac
+    [[ -n $detail ]] || die 'SKIP requires a reason.'
+  fi
   file=$(oaos_state_file)
   mkdir -p "$(dirname "$file")"
   tmp=$(mktemp "${file}.tmp.XXXXXX")

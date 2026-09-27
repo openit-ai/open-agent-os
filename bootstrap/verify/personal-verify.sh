@@ -4,6 +4,8 @@ set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=bootstrap/lib/common.sh
 . "$repo_root/bootstrap/lib/common.sh"
+# shellcheck source=bootstrap/lib/platform.sh
+. "$repo_root/bootstrap/lib/platform.sh"
 
 json=0
 offline=0
@@ -18,8 +20,11 @@ while (($#)); do
   esac
   shift
 done
+os_detect >/dev/null || exit 3
+platform_linux Personal || exit 3
 
-home=$(oaos_home)
+home=$(platform_oaos_home)
+hermes_home=$(platform_hermes_home)
 labels=('Hermes health' 'Model responds' 'Gateway service' 'Boot survival' 'Chat round-trip' 'Allowlist enforced' 'Wiki repository' 'Scheduled jobs' 'Config files' 'Secret hygiene' 'Backup works' 'Host capacity')
 statuses=()
 evidence=()
@@ -32,20 +37,18 @@ else record FAIL 'Hermes is unavailable or doctor reported an error'; fi
 
 # 2: A real model request is not an offline check.
 if ((offline)); then record SKIP 'Offline mode: model request not sent'
-elif have_cmd hermes && timeout 30s hermes chat -q 'Reply with exactly: OK' 2>/dev/null | grep -Fq OK; then
+elif have_cmd hermes && platform_chat_probe; then
   record PASS 'Model reply contained OK'
 else record FAIL 'Model request failed or reply did not contain OK'; fi
 
 # 3: An absent sandbox service file is definitive; avoid touching host services.
-service="$home/.config/systemd/user/hermes-gateway.service"
-if [[ ! -f $service ]]; then record FAIL 'Gateway user service file absent'
-elif have_cmd hermes && hermes gateway status 2>/dev/null | grep -Eiq 'running|active'; then
+if ! platform_gateway_service_present; then record FAIL 'Gateway user service file absent'
+elif have_cmd hermes && platform_gateway_status; then
   record PASS 'hermes gateway status reports running'
 else record FAIL 'Gateway status is not running'; fi
 
 # 4: Verify the user's service enablement and lingering without changing either.
-if [[ -L $home/.config/systemd/user/default.target.wants/hermes-gateway.service ]] &&
-   [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true) == yes ]]; then
+if platform_gateway_autostart check; then
   record PASS 'Gateway is enabled and user lingering is yes'
 else record FAIL 'Gateway enablement or user lingering is absent'; fi
 
@@ -67,7 +70,7 @@ if grep -Fq 'oaos-daily-backup' <<< "$jobs" && grep -Fq 'oaos-gateway-watchdog' 
 else record FAIL 'One or both enabled cron jobs are absent'; fi
 
 # 9: Config files must exist and contain no token-like values.
-config_files=("$home/.hermes/SOUL.md" "$home/.hermes/memories/USER.md" "$home/.hermes/memories/MEMORY.md")
+config_files=("$hermes_home/SOUL.md" "$hermes_home/memories/USER.md" "$hermes_home/memories/MEMORY.md")
 missing=0
 for file in "${config_files[@]}"; do [[ -f $file ]] || missing=1; done
 if ((missing)); then record FAIL 'SOUL, USER, or MEMORY file absent'
@@ -110,8 +113,8 @@ PY
 fi
 
 # 11: Produce a fresh backup artifact when Hermes is present.
-backup_dir="$home/.oaos/backups"
-if have_cmd hermes && [[ -d $home/.hermes ]]; then
+backup_dir=$(platform_path backups)
+if have_cmd hermes && [[ -d $hermes_home ]]; then
   mkdir -p "$backup_dir"
   backup="$backup_dir/hermes-verify-$(date +%Y%m%d%H%M%S)-$$.zip"
   backup_code=0
@@ -124,17 +127,14 @@ if have_cmd hermes && [[ -d $home/.hermes ]]; then
     record FAIL "Backup reported incomplete (exit $backup_code); archive exists but may be partial"
   fi
   if [[ -s $backup ]]; then
-    find "$backup_dir" -maxdepth 1 -type f -name 'hermes-verify-*.zip' -printf '%T@ %p\0' |
-      sort -zrn | tail -z -n +3 | while IFS= read -r -d '' entry; do
-        rm -f -- "${entry#* }"
-      done
+    platform_backup_prune "$backup_dir"
   fi
 else record FAIL 'Hermes or its data directory is absent; backup not run'; fi
 
 # 12: Disk margin and swap requirement are measurable without modification.
-read -r capacity available < <(df -Pk / | awk 'NR==2 {print $2, $4}')
-ram_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
-swap_count=$(awk 'END {print NR-1}' /proc/swaps)
+read -r capacity available < <(platform_disk_kib /)
+ram_kb=$(platform_memory_kib)
+swap_count=$(platform_swap_state)
 if ((available * 100 > capacity * 10)) && { ((ram_kb >= 16777216)) || ((swap_count > 0)); }; then
   record PASS 'Disk free >10%; swap requirement met'
 else record FAIL 'Disk free <=10% or swap absent on host with <16 GB RAM'; fi

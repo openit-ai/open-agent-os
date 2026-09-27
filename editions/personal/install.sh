@@ -4,6 +4,8 @@ set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=bootstrap/lib/common.sh
 . "$repo_root/bootstrap/lib/common.sh"
+# shellcheck source=bootstrap/lib/platform.sh
+. "$repo_root/bootstrap/lib/platform.sh"
 
 stages=(prep hermes llm telegram gateway wiki harness cron verify)
 selected=()
@@ -49,6 +51,8 @@ done
 
 [[ -n ${HOME:-} ]] || { printf 'HOME is not set.\n' >&2; exit 1; }
 if ((OAOS_DRY_RUN)); then export OAOS_NO_LOG_FILE=1; fi
+os_detect >/dev/null || exit 3
+platform_linux Personal || exit 3
 
 show_table() {
   local s
@@ -68,7 +72,7 @@ if (( ! OAOS_DRY_RUN )) && ! state_valid; then
   warn "Invalid state file preserved at $corrupt; starting fresh."
 fi
 info 'Personal installation started.'
-check_os
+platform_check_os
 
 selected_stage() {
   local item
@@ -81,41 +85,21 @@ need_hermes() { have_cmd hermes || { warn 'Hermes is unavailable; complete the h
 config_value() { hermes config get --raw "$1" 2>/dev/null || true; }
 
 do_prep() {
-  local blocked=0 pkg ram_kb
+  local blocked=0 pkg
   local missing=()
-  mkdir -p "$(oaos_home)/.oaos/logs" "$(oaos_home)/.oaos/backups" "$(oaos_home)/.oaos-install"
-  for pkg in git curl xz-utils ca-certificates; do
-    if ! have_cmd dpkg-query || ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then missing+=("$pkg"); fi
-  done
+  platform_require_tools || return 3
+  mkdir -p "$(platform_path logs)" "$(platform_path backups)" "$(dirname "$(platform_path state)")"
+  while IFS= read -r pkg; do [[ -n $pkg ]] && missing+=("$pkg"); done < <(platform_package_prereqs)
   if ((${#missing[@]})); then
-    if have_cmd apt-get; then
-      run_root apt-get update && run_root apt-get install -y "${missing[@]}" || blocked=1
-    else warn 'Package manager unavailable; required packages need manual installation.'; blocked=1; fi
+    platform_package_install "${missing[@]}" || blocked=1
   fi
-  ram_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
-  if ((ram_kb < 16777216)) && [[ $(awk 'END {print NR-1}' /proc/swaps) == 0 ]]; then
-    if [[ -e /swapfile ]]; then
-      warn 'An inactive /swapfile exists; preserving it for manual review.'; blocked=1
-    else
-      run_root fallocate -l 8G /swapfile && run_root chmod 600 /swapfile && run_root mkswap /swapfile && run_root swapon /swapfile || blocked=1
-      if ((blocked == 0)); then
-        run_root bash -c 'grep -qE "^/swapfile[[:space:]]" /etc/fstab || printf "%s\n" "/swapfile none swap sw 0 0" >> /etc/fstab' || blocked=1
-      fi
-    fi
-  fi
+  platform_swap_prepare || blocked=1
   if [[ -n $timezone ]]; then
-    if [[ $(timedatectl show -p Timezone --value 2>/dev/null || true) != "$timezone" ]]; then
-      run_root timedatectl set-timezone "$timezone" || blocked=1
+    if [[ $(platform_timezone_get 2>/dev/null || true) != "$timezone" ]]; then
+      platform_timezone_set "$timezone" || blocked=1
     fi
   fi
-  if [[ ! -f /etc/systemd/logind.conf.d/oaos-personal.conf ]]; then
-    if run_root install -d -m 755 /etc/systemd/logind.conf.d; then
-      printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nIdleAction=ignore\n' |
-        run_root tee /etc/systemd/logind.conf.d/oaos-personal.conf >/dev/null || blocked=1
-      warn 'The logind drop-in takes effect after a safe logind restart or reboot.'
-    else blocked=1; fi
-  fi
-  run_root systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target || blocked=1
+  platform_sleep_policy || blocked=1
   ((blocked == 0)) || return 3
 }
 
@@ -123,7 +107,7 @@ do_hermes() {
   local installer cache answer actual_sha
   if have_cmd hermes && hermes --version >/dev/null 2>&1; then return 0; fi
   have_cmd curl || { warn 'curl is required to download Hermes.'; return 3; }
-  cache="$(oaos_home)/.oaos/cache"
+  cache=$(platform_path cache)
   mkdir -p "$cache"
   installer="$cache/hermes-install.sh"
   if [[ ! -e $installer ]]; then
@@ -131,7 +115,7 @@ do_hermes() {
   fi
   if [[ ! -s $installer ]]; then rm -f -- "$installer"; warn 'Hermes installer is empty.'; return 1; fi
   bash -n "$installer" || { rm -f -- "$installer"; warn 'Downloaded installer failed syntax validation.'; return 1; }
-  actual_sha=$(sha256sum "$installer" | awk '{print $1}') || return 1
+  actual_sha=$(platform_sha256 "$installer") || return 1
   printf '%s  %s\n' "$actual_sha" "$installer"
   if [[ -n ${OAOS_HERMES_INSTALLER_SHA256:-} && $actual_sha != "$OAOS_HERMES_INSTALLER_SHA256" ]]; then
     rm -f -- "$installer"
@@ -145,7 +129,7 @@ do_hermes() {
       [[ $answer == y || $answer == Y ]] || { warn 'Hermes installer awaits approval (--yes).'; return 3; }
     else warn 'Hermes installer awaits approval (--yes).'; return 3; fi
   fi
-  bash "$installer" || return 1
+  platform_install_hermes "$installer" || return 1
   hash -r
   if ! have_cmd hermes || ! hermes --version >/dev/null 2>&1; then
     warn 'Hermes is not on PATH after installation; open a new shell.'
@@ -196,21 +180,16 @@ except Exception:
 
 do_gateway() {
   need_hermes || return 3
-  if ! hermes gateway status 2>/dev/null | grep -Eiq 'running|active'; then
-    hermes gateway install --start-on-login --start-now >/dev/null || return 1
+  if ! platform_gateway_status || ! platform_gateway_autostart registered; then
+    platform_gateway_install || return 1
   fi
-  if ! systemctl --user is-enabled hermes-gateway >/dev/null 2>&1; then
-    warn 'Gateway user service is not enabled.'; return 3
-  fi
-  if [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true) != yes ]]; then
-    run_root loginctl enable-linger "$(id -un)" || return 3
-  fi
-  hermes gateway status 2>/dev/null | grep -Eiq 'running|active' || return 3
+  platform_gateway_autostart ensure || return 3
+  platform_gateway_status || return 3
 }
 
 do_wiki() {
   local wiki
-  wiki="$(oaos_home)/data/wiki"
+  wiki=$(platform_path wiki)
   if [[ -e $wiki ]]; then
     [[ -d $wiki/.git ]] || { warn 'Wiki path already exists but is not a git repository; preserving it.'; return 3; }
     git -C "$wiki" log -1 --format=%h >/dev/null 2>&1 || { warn 'Existing wiki has no commit; preserving it.'; return 3; }
@@ -239,7 +218,7 @@ EOF
 
 do_harness() {
   local home name target
-  home="$(oaos_home)/.hermes"
+  home=$(platform_hermes_home)
   mkdir -p "$home/memories"
   for name in SOUL USER MEMORY; do
     if [[ $name == SOUL ]]; then target="$home/SOUL.md"; else target="$home/memories/$name.md"; fi
@@ -251,7 +230,7 @@ do_harness() {
 
 do_cron() {
   local scripts jobs name script
-  scripts="$(oaos_home)/.hermes/scripts"
+  scripts=$(platform_path scripts)
   need_hermes || return 3
   mkdir -p "$scripts"
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
@@ -278,8 +257,8 @@ EOF
       cat > "$script" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-if ! systemctl --user is-active --quiet hermes-gateway; then
-  systemctl --user start hermes-gateway
+if ! hermes gateway status 2>/dev/null | grep -Eiq 'running|active'; then
+  hermes gateway start
 fi
 EOF
       chmod 700 "$script"
