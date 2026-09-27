@@ -1,7 +1,7 @@
 ---
 name: oaos-bootstrap
 description: "Bootstrap an Open Agent OS edition: install, gates, verify."
-version: 0.1.1
+version: 0.1.2
 author: OpenIT (openit-ai), Hermes Agent
 license: Apache-2.0
 platforms: [linux]
@@ -13,7 +13,7 @@ metadata:
 
 # OAOS Bootstrap Skill
 
-Orchestrates the "one URL" setup of an Open Agent OS edition on a Linux host: recon → edition choice → install → gates → verify → report. The human handles only the gates; you (the agent) handle everything else — reading, file edits, commands, and checks.
+The Personal edition supports Ubuntu (Linux), macOS, and Windows 11, matching the operating systems where Hermes Agent can be installed natively. This skill currently orchestrates the "one URL" bootstrap workflow on a Linux host: recon → edition choice → install → gates → verify → report. The human handles only the gates; you (the agent) handle everything else — reading, file edits, commands, and checks.
 
 ## When to Use
 
@@ -23,7 +23,7 @@ Orchestrates the "one URL" setup of an Open Agent OS edition on a Linux host: re
 
 ## Prerequisites
 
-- Linux host (Ubuntu LTS recommended), a user account with admin rights (root access for the host-prep steps), internet access.
+- For this bootstrap workflow: a Linux host (Ubuntu LTS recommended), a user account with admin rights (root access for the host-prep steps), and internet access.
 - Hermes Agent installed and working (`hermes --version`; `hermes doctor`).
 - The user is present — this skill runs in their chat and needs them at the gates.
 - Access to this repository's files: a local clone, or fetch raw files (`raw.githubusercontent.com/openit-ai/open-agent-os/main/...`) as needed.
