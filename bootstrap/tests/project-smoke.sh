@@ -283,3 +283,11 @@ printf 'PASS: pinned Outline bind patch is one line, repeatable, and rejects dri
 # shellcheck disable=SC2016  # the literal $repo_root/$HOME text is the pattern being searched for
 grep -nE 'runuser -u [a-z-]+ --[^|]*\$(repo_root|HOME)\b' "$repo_root"/editions/project/*.sh >"$temp_root/service-user-paths.out" 2>/dev/null && fail 'service user invoked with a repository or home path'
 printf 'PASS: service users never receive repository or home paths\n'
+
+# The verifiers run with pipefail, so "| grep -q" reports failure whenever grep
+# exits before the producer is done. Capture the output first, then search it.
+if grep -nE '\|[[:space:]]*grep -[a-zA-Z]*q' "$repo_root"/bootstrap/verify/*.sh >"$temp_root/pipefail-grep.out" 2>/dev/null; then
+  cat "$temp_root/pipefail-grep.out" >&2
+  fail 'verify scripts must capture output before grepping'
+fi
+printf 'PASS: verifiers never pipe into grep under pipefail\n'
