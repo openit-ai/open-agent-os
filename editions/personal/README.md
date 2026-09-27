@@ -26,7 +26,9 @@
 - 메일 연동 (Himalaya) — 메일 확인·초안
 - 예약 작업 — 아침 브리핑, 백업, 감시
 
-**구동 환경:** N100급 미니PC · 16GB RAM 권장 · Ubuntu LTS
+**권장 구동 환경:** N100급 미니PC · 16GB RAM · Ubuntu LTS
+
+**지원 OS:** Ubuntu(Linux)·macOS·Windows 11 — Hermes Agent 네이티브 설치가 가능한 운영체제와 동일합니다.
 
 ## 설치 흐름 — 게이트 3개
 
