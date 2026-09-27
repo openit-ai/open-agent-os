@@ -233,9 +233,13 @@ else record FAIL 'Mattermost bot token absent or rejected'; fi
 labels+=('Outline API token')
 outline_token=''
 if have_cmd hermes; then outline_token=$(hermes config get --raw OUTLINE_API_TOKEN 2>/dev/null || true); fi
-if [[ -n $outline_token && $outline_token != null ]] && curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $outline_token" -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/api/auth.info >/dev/null 2>&1; then
+if [[ -z $outline_token || $outline_token == null ]]; then
+  # G8 is an operator step: the token is created in the Outline UI after the
+  # first administrator signs in, so its absence is not a host failure.
+  record MANUAL 'G8 operator step: create an Outline API token (Settings then API Keys) and store it as OUTLINE_API_TOKEN'
+elif curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $outline_token" -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/api/auth.info >/dev/null 2>&1; then
   record PASS 'Outline API token authenticated'
-else record FAIL 'Outline API token absent or rejected'; fi
+else record FAIL 'Outline API token present but rejected'; fi
 labels+=('Bot mailbox IMAP')
 if [[ -n $(stack_get OAOS_MAIL_ADDRESS) && -n $(stack_get OAOS_MAIL_PASSWORD) && -n $(stack_get OAOS_MAIL_IMAP_HOST) ]]; then
   if OAOS_MAIL_ADDRESS=$(stack_get OAOS_MAIL_ADDRESS) OAOS_MAIL_PASSWORD=$(stack_get OAOS_MAIL_PASSWORD) OAOS_MAIL_IMAP_HOST=$(stack_get OAOS_MAIL_IMAP_HOST) python3 - <<'PYMAIL' >/dev/null 2>&1

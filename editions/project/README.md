@@ -62,12 +62,23 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 |---|---|---|
 | G6 | `OAOS_BASE_DOMAIN`, `OAOS_ACME_EMAIL` | 세 A 레코드가 서버 공인 IPv4를 가리켜야 합니다. 다른 도메인을 쓴다면 `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN`을 각각 지정합니다. |
 | G7 | `MATTERMOST_TOKEN` | Mattermost System Console에서 Hermes 봇과 토큰을 발급해 `~/oaos/stack/.env`(600)에 보관합니다. 확인한 `mmctl --local` 버전은 봇·토큰 생성을 지원하지 않습니다. |
-| G8 | `OAOS_OUTLINE_API_TOKEN` | Outline 관리자가 Settings → API Keys에서 발급합니다. 에이전트의 Outline API 접근을 위해 Hermes `.env`에 저장합니다. |
+| G8 | `OAOS_OUTLINE_API_TOKEN` | **운영자 수동 단계**입니다. Outline 관리자가 브라우저로 로그인한 뒤 Settings → API Keys에서 토큰을 발급해 Hermes `.env`에 `OUTLINE_API_TOKEN`으로 저장합니다. 설치기는 토큰이 없으면 게이트를 `MANUAL`로 표시하고, 값이 있는데 인증이 거부될 때만 실패로 기록합니다. |
 | G9 | `OAOS_MAIL_ADDRESS`, `OAOS_MAIL_PASSWORD`, `OAOS_MAIL_IMAP_HOST`, `OAOS_MAIL_SMTP_HOST` | 봇 전용 메일함 값입니다. 비밀번호는 공백을 제거한 앱 비밀번호로 전달합니다. |
 
 `--stage`로 막힌 게이트부터 재시도합니다. 실제 송수신과 허용·비허용 팀 계정 동작은 에이전트와 함께 확인해야 합니다. 신규 VPS 실측 전에는 전체 설치 완료로 보고하지 않습니다.
 
 이미 게이트웨이가 실행 중일 때 `team` 구성을 다시 적용한 경우에는 관리자(사용자)가 별도 셸에서 게이트웨이 서비스를 재시작해야 반영됩니다.
+
+### Outline 최초 로그인 — 운영자 수동 단계 (G8)
+
+설치기는 Outline을 127.0.0.1:3000에 바인딩하고 `.env`를 준비하지만, **최초 관리자 로그인과 API 토큰 발급은 브라우저에서 운영자가 수행합니다.** 실측한 v1.10.1에서는 이메일 매직링크 로그인 제공자가 활성화되지 않으므로(설치기는 SMTP만 설정하며 `/api/auth.config`가 빈 목록을 반환), 다음 중 하나로 최초 계정을 만듭니다.
+
+1. **권장**: Outline `.env`에 조직에서 쓰는 신원 제공자(Slack/Google/OIDC)를 설정하고 재시작한 뒤 그 계정으로 로그인합니다.
+2. 신원 제공자를 붙일 수 없고 검증·테스트 목적이라면, 무인증 설치 엔드포인트 `POST /api/installation.create`(`{"teamName","userName","userEmail"}`)로 최초 팀·사용자만 만든 뒤, 로컬에서 세션을 얻어 API 키를 발급합니다(운영 환경에서는 사용하지 않습니다).
+
+로그인 후 **Settings → API Keys → Create**로 토큰(`ol_api_` + 38자)을 만들고, Hermes `.env`에 `OUTLINE_API_TOKEN=<토큰>`으로 저장합니다. 토큰은 Hermes 설정 조회(`hermes config get --raw OUTLINE_API_TOKEN`)로 읽히며, 검증기는 이 값으로 `POST /api/auth.info` 인증을 확인합니다. 토큰이 아직 없으면 검증 결과는 `MANUAL`(운영자 게이트)이고, 값이 있는데 거부되면 `FAIL`입니다.
+
+`api/auth.info`는 `Authorization: Bearer <토큰>`을 요구하며, 토큰 문자열은 모델 정규식이 `ol_api_` 뒤 `\w` 38자만 허용하므로 하이픈 등 다른 문자를 쓰면 `Unable to decode token`(401)으로 떨어집니다.
 
 ## 비용
 
