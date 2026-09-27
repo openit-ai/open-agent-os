@@ -11,9 +11,10 @@ export OAOS_STATE_EDITION=company OAOS_STAGES="${stages[*]}"
 
 usage() {
   cat <<'EOF'
-Usage: bash editions/company/install.sh --stage cNN [--status] [--help]
-Stages: c01 through c17. c02-c17 are recognized but not implemented.
+Usage: bash editions/company/install.sh --stage cNN [--dry-run] [--status] [--help]
+Stages: c01 through c17. c01-c02 are implemented; c03-c17 are recognized.
 --status reads Company checkpoints without changing the system.
+--dry-run prints the selected stage plan without changing state or the system.
 Exit: 0 = selected stage applied; 3 = prerequisite/gate blocked; 1 = error.
 Database: set PGDATABASE and libpq PG* variables or PGSERVICE in the environment.
 EOF
@@ -21,6 +22,7 @@ EOF
 
 selected=''
 show_status=0
+OAOS_DRY_RUN=0
 while (($#)); do
   case $1 in
     --stage)
@@ -28,6 +30,7 @@ while (($#)); do
       [[ -z $selected && $2 =~ ^c(0[1-9]|1[0-7])$ ]] || { usage >&2; exit 1; }
       selected=$2; shift 2 ;;
     --status) show_status=1; shift ;;
+    --dry-run) OAOS_DRY_RUN=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) usage >&2; exit 1 ;;
   esac
@@ -35,6 +38,7 @@ done
 [[ -n ${HOME:-} ]] || { printf 'HOME is required.\n' >&2; exit 1; }
 OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
 export OAOS_STATE_FILE
+if ((OAOS_DRY_RUN)); then export OAOS_NO_LOG_FILE=1; fi
 
 show_table() {
   local stage status time
@@ -62,6 +66,27 @@ PY
 if ! state_valid; then die 'Company state file is invalid JSON; preserve and repair it before retrying.'; fi
 if ((show_status)); then show_table; exit 0; fi
 [[ -n $selected ]] || { usage >&2; exit 1; }
+if ((OAOS_DRY_RUN)); then
+  if [[ $selected == c02 ]]; then
+    printf '%s\n' 'C02 plan: check E isolation, C01 verified, Ubuntu/systemd user manager, backup and rollback paths; create restricted environment and user units; add two nginx TLS paths; test/reload; read back linger, certificate and renewal timer. No changes made.'
+  else
+    printf 'Stage %s plan only; no changes made.\n' "$selected"
+  fi
+  exit 0
+fi
+if [[ $selected == c02 ]]; then
+  # shellcheck source=editions/company/c02.sh
+  . "$repo_root/editions/company/c02.sh"
+  code=0
+  company_c02_apply || code=$?
+  case $code in
+    0) if [[ $(stage_status c02) != verified ]]; then stage_mark c02 applied 'C02 deployment resources applied; E read-back pending'; fi ;;
+    3) stage_mark c02 blocked 'C02 prerequisite or safety gate pending' ;;
+    *) stage_mark c02 failed 'C02 deployment failed; inspect rollback snapshot'; code=1 ;;
+  esac
+  show_table
+  exit "$code"
+fi
 if [[ $selected != c01 ]]; then
   warn "$selected is recognized but not implemented."
   exit 3

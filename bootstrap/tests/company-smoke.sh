@@ -17,7 +17,7 @@ HOME="$temp_root/home" bash "$install" --status > "$temp_root/status"
 HOME="$temp_root/home" bash "$verify" --help | grep -Fq -- '--read-back' || fail 'verify help'
 env -u HOME bash "$verify" --help > /dev/null || fail 'verify help without HOME'
 code=0
-HOME="$temp_root/home" bash "$install" --stage c02 > /dev/null 2>&1 || code=$?
+HOME="$temp_root/home" bash "$install" --stage c03 > /dev/null 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'unimplemented stage exit code'
 code=0
 HOME="$temp_root/home" bash "$install" --stage c01 > /dev/null 2>&1 || code=$?

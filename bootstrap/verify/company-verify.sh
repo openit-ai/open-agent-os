@@ -10,7 +10,7 @@ for n in $(seq -w 1 17); do stages+=("c$n"); done
 export OAOS_STAGES="${stages[*]}"
 
 usage() {
-  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase c01 --read-back\nExit: 0 = read-back passed; 3 = prerequisite pending; 1 = check failed.\n'
+  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 and C02 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
 }
 phase=''
 read_back=0
@@ -29,8 +29,14 @@ done
 [[ -n ${HOME:-} ]] || { printf 'HOME is required.\n' >&2; exit 1; }
 OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
 export OAOS_STATE_FILE
-if [[ $phase != c01 ]]; then warn "$phase read-back is not implemented."; exit 3; fi
 if ! state_valid; then die 'Company state file is invalid JSON.'; fi
+if [[ $phase == c02 ]]; then
+  # shellcheck source=editions/company/c02-verify.sh
+  . "$repo_root/editions/company/c02-verify.sh"
+  company_c02_verify
+  exit $?
+fi
+if [[ $phase != c01 ]]; then warn "$phase read-back is not implemented."; exit 3; fi
 status=$(stage_status c01)
 if [[ $status != applied && $status != verified ]]; then warn 'c01 has not been applied.'; exit 3; fi
 if [[ -z ${PGDATABASE:-} ]] || ! have_cmd psql; then warn 'PGDATABASE and psql are required.'; exit 3; fi
