@@ -95,7 +95,7 @@
 ## 저장소 구조
 
 ```text
-skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oaos-ops (+ 옵션: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation)
+skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oaos-ops (+ 옵션: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
 harness/       설정 파일 템플릿(SOUL/USER/MEMORY/AGENTS) + 시딩 가이드
 editions/      에디션별 안내 페이지 — personal / project / company
 docs/          architecture-v2.0.md · cookbook.md · faq.md
@@ -122,6 +122,7 @@ hermes skills install https://raw.githubusercontent.com/openit-ai/open-agent-os/
 - **[`skills/naver-cafe-manager`](skills/naver-cafe-manager/SKILL.md)** — 채팅으로 네이버 카페 운영: 키워드 신규글 감시·알림, 글 작성(초안 우선), 댓글 확인·응답, 본문·사진 수집 — 쿠키 인증 Playwright로 감시·수집·댓글 조회 실측 검증(쓰기는 초안 우선 설계).
 - **[`skills/naver-blog-manager`](skills/naver-blog-manager/SKILL.md)** — 채팅으로 네이버 블로그 운영: 신규 글 감시, 글 작성(초안 우선), 댓글 확인·응답, 본문 md + 원본 화질 이미지 수집(zip 지원) 파이프라인 — 실측 검증.
 - **[`skills/sketchup-design-generation`](skills/sketchup-design-generation/SKILL.md)** — 채팅으로 스케치업 3D 모델 제작: 드래그 대신 치수를 입력하는 정확 치수 모델링과 SKP/PNG/STL 내보내기를 헤드리스 스케치업 웹 세션에서 수행하고, 데스크톱 스케치업은 오픈소스 SketchUp-MCP 서버로 연결합니다.
+- **[`skills/vps-youtube-content`](skills/vps-youtube-content/SKILL.md)** — VPS에서 YouTube IP·봇 차단으로 기본 자막 경로가 막힐 때 복구합니다: 차단 유형을 진단하고 최저비용 순 사다리(플레이어 클라이언트 회전 → PO Token 공급자 → 자격증명 없는 리더 프록시 → 사용자 승인 경로)를 적용합니다.
 
 ```bash
 hermes skills install openit-ai/open-agent-os/skills/promo-video-generation
@@ -130,6 +131,7 @@ hermes skills install openit-ai/open-agent-os/skills/figma-design-generation
 hermes skills install openit-ai/open-agent-os/skills/naver-cafe-manager
 hermes skills install openit-ai/open-agent-os/skills/naver-blog-manager
 hermes skills install openit-ai/open-agent-os/skills/sketchup-design-generation
+hermes skills install openit-ai/open-agent-os/skills/vps-youtube-content
 ```
 
 스킬은 OAOS가 성장하는 방식입니다 — MCP 서버와 스킬을 추가하면 코어 변경 없이 에이전트의 능력이 늘어납니다.
@@ -191,5 +193,5 @@ Copyright (c) 2026 OpenIT Co., Ltd.
 - [`START-HERE.md`](START-HERE.md) — 에이전트용 부트스트랩 절차
 - [`docs/cookbook.md`](docs/cookbook.md) · [`docs/faq.md`](docs/faq.md)
 - [`harness/README.md`](harness/README.md) — 하네스·설정 파일 구성
-- [`skills/oaos-bootstrap/SKILL.md`](skills/oaos-bootstrap/SKILL.md) · [`skills/oaos-ops/SKILL.md`](skills/oaos-ops/SKILL.md) · [`skills/promo-video-generation/SKILL.md`](skills/promo-video-generation/SKILL.md) · [`skills/higgsfield-media-generation/SKILL.md`](skills/higgsfield-media-generation/SKILL.md) · [`skills/naver-cafe-manager/SKILL.md`](skills/naver-cafe-manager/SKILL.md) · [`skills/naver-blog-manager/SKILL.md`](skills/naver-blog-manager/SKILL.md)
+- [`skills/oaos-bootstrap/SKILL.md`](skills/oaos-bootstrap/SKILL.md) · [`skills/oaos-ops/SKILL.md`](skills/oaos-ops/SKILL.md) · [`skills/promo-video-generation/SKILL.md`](skills/promo-video-generation/SKILL.md) · [`skills/higgsfield-media-generation/SKILL.md`](skills/higgsfield-media-generation/SKILL.md) · [`skills/naver-cafe-manager/SKILL.md`](skills/naver-cafe-manager/SKILL.md) · [`skills/naver-blog-manager/SKILL.md`](skills/naver-blog-manager/SKILL.md) · [`skills/vps-youtube-content/SKILL.md`](skills/vps-youtube-content/SKILL.md)
 - [`editions/personal`](editions/personal/README.md) · [`editions/project`](editions/project/README.md) · [`editions/company`](editions/company/README.md)

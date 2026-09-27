@@ -95,7 +95,7 @@ The agent does the reading, the file edits, and the commands. You only handle th
 ## Repository map
 
 ```text
-skills/        Hermes skills shipped with OAOS — oaos-bootstrap, oaos-ops (+ optional: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation)
+skills/        Hermes skills shipped with OAOS — oaos-bootstrap, oaos-ops (+ optional: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
 harness/       config file templates (SOUL/USER/MEMORY/AGENTS) + seeding guide
 editions/      Edition landing pages — personal / project / company
 docs/          architecture-v2.0.md · cookbook.md · faq.md
@@ -122,6 +122,7 @@ Optional extension skills — bring your own API keys:
 - **[`skills/naver-cafe-manager`](skills/naver-cafe-manager/SKILL.md)** — run a Naver cafe from chat: keyword monitoring with new-post alerts, draft-first post writing, comment review & replies, and article text + photo collection — cookie-authenticated Playwright, verified live (writes stay draft-first by design).
 - **[`skills/naver-blog-manager`](skills/naver-blog-manager/SKILL.md)** — run Naver blogs from chat: new-post watching, draft-first writing, comment review & replies, and a collection pipeline that saves articles as markdown with original-resolution images (zip output supported) — verified live.
 - **[`skills/sketchup-design-generation`](skills/sketchup-design-generation/SKILL.md)** — 3D models from chat with SketchUp: exact-dimension builds (dimensions are typed, not dragged) and SKP/PNG/STL exports through a headless SketchUp for Web session — or bridge desktop SketchUp via the open SketchUp-MCP server.
+- **[`skills/vps-youtube-content`](skills/vps-youtube-content/SKILL.md)** — fetch YouTube transcripts on a VPS when YouTube's IP / bot wall blocks the default path: diagnose the block, then work a cheapest-first recovery ladder — yt-dlp player-client rotation → PO Token provider → credential-free reader proxy → user-approved routes only.
 
 ```bash
 hermes skills install openit-ai/open-agent-os/skills/promo-video-generation
@@ -130,6 +131,7 @@ hermes skills install openit-ai/open-agent-os/skills/figma-design-generation
 hermes skills install openit-ai/open-agent-os/skills/naver-cafe-manager
 hermes skills install openit-ai/open-agent-os/skills/naver-blog-manager
 hermes skills install openit-ai/open-agent-os/skills/sketchup-design-generation
+hermes skills install openit-ai/open-agent-os/skills/vps-youtube-content
 ```
 
 Skills are how OAOS grows: add MCP servers and skills, and the agent gains capabilities without changing the core.
@@ -191,5 +193,5 @@ Copyright (c) 2026 OpenIT Co., Ltd.
 - [`START-HERE.md`](START-HERE.md) — the agent-facing bootstrap procedure
 - [`docs/cookbook.md`](docs/cookbook.md) · [`docs/faq.md`](docs/faq.md)
 - [`harness/README.md`](harness/README.md) — agent configuration files
-- [`skills/oaos-bootstrap/SKILL.md`](skills/oaos-bootstrap/SKILL.md) · [`skills/oaos-ops/SKILL.md`](skills/oaos-ops/SKILL.md) · [`skills/promo-video-generation/SKILL.md`](skills/promo-video-generation/SKILL.md) · [`skills/higgsfield-media-generation/SKILL.md`](skills/higgsfield-media-generation/SKILL.md) · [`skills/naver-cafe-manager/SKILL.md`](skills/naver-cafe-manager/SKILL.md) · [`skills/naver-blog-manager/SKILL.md`](skills/naver-blog-manager/SKILL.md)
+- [`skills/oaos-bootstrap/SKILL.md`](skills/oaos-bootstrap/SKILL.md) · [`skills/oaos-ops/SKILL.md`](skills/oaos-ops/SKILL.md) · [`skills/promo-video-generation/SKILL.md`](skills/promo-video-generation/SKILL.md) · [`skills/higgsfield-media-generation/SKILL.md`](skills/higgsfield-media-generation/SKILL.md) · [`skills/naver-cafe-manager/SKILL.md`](skills/naver-cafe-manager/SKILL.md) · [`skills/naver-blog-manager/SKILL.md`](skills/naver-blog-manager/SKILL.md) · [`skills/vps-youtube-content/SKILL.md`](skills/vps-youtube-content/SKILL.md)
 - [`editions/personal`](editions/personal/README.md) · [`editions/project`](editions/project/README.md) · [`editions/company`](editions/company/README.md)
