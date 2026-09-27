@@ -32,6 +32,8 @@
 5. **구성 값**(포트·사양·버전): 기본값과 변경 가능성을 함께 표기 — 예: "기본 포트 8065(변경 가능)".
 6. **미확인 정보**: "미검증/확인 필요"로 명시 — 추정값을 확정 표현으로 쓰지 않는다.
 7. **출처 등급**: 공식 문서·공식 사이트를 확정 근거로, 비공식 자료는 참고용으로 구분 표기.
+8. **약어·기호**: 처음 등장할 때 뜻을 함께 밝힌다 — 예: OAOS(Open Agent OS), E(실설치 대상 환경). 문서 안에서 한 번 정의한 약어는 이후 설명 없이 사용한다.
+9. **지칭**: 대상은 구체 명칭으로 쓴다 — "해당 서버"·"① 환경" 대신 "Project 호스트"·"Company 검증 인스턴스"처럼 문서에서 정의한 명칭을 반복해 쓴다.
 
 ---
 
@@ -312,7 +314,7 @@ open-agent-os/
 | 자료 | 위치 | 비고 |
 |---|---|---|
 | Hermes Agent 공식 | https://hermes-agent.nousresearch.com/docs | 설치·문서 |
-| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | 저장소 태그 v2.0.3 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
+| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | 저장소 태그 v2.1.0 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
 | OpenCode Go | https://opencode.ai/go | 요금·모델 |
 | Vercel AI Gateway | https://vercel.com/docs/ai-gateway/pricing | 무료 크레딧·요금 |
 | Telegram Bot API | https://core.telegram.org/bots/api | Local Bot API 서버 |

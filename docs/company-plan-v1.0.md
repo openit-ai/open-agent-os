@@ -1,6 +1,8 @@
 # OAOS Company(P2) 제품화 계획 v1.0
 
 > 상태: 계획. 이 문서의 Phase와 게이트는 구현·실설치 완료 증거가 아니다. 제품 방향의 정본은 [아키텍처 v2.0](architecture-v2.0.md), 현재 공개 안내는 [Company README](../editions/company/README.md)다.
+>
+> **표기**: OAOS = Open Agent OS · `E` = 실설치 대상 환경(Company 검증 인스턴스) · `S` = 검증용 연동 계정(Slack·Notion·Workspace·365).
 
 ## 1. 목표와 완료 상태
 
@@ -101,7 +103,7 @@ Company 고유 코드·설정·문서는 [LICENSE-COMPANY](../LICENSE-COMPANY)�
 | 기존 플랫폼 코드 공개·이식 적합성 | 확인 필요 | 라이선스·의존성·테스트·런타임 경계별 검토 |
 | 모델 공급자 정액·월 상한 | 확인 필요 | G13 공급자별 실제 요금·한도 확인 후 활성화 |
 | 운영 보안·감사 보존 기간·삭제 의무 | 확인 필요 | 상세설계 전 초안 확정: 감사 이벤트 최소 보존 기간, 삭제·정지 구성원 데이터 처리, 조회 권한. C07 감사 read-back 판정은 이 정책에 종속 |
-| 아키텍처 문서의 과거 Docker 배포 문구 | 확인 필요 — C01 착수 전 선행 게이트 | Company systemd 단일 경로로 정본·README 문구 정합 수정 완료 확인 |
+| 아키텍처 문서의 과거 Docker 배포 문구 | **완료(2026-09-27)** — 설계서 §5.2를 무Docker·systemd 단일 경로로 정합 수정 | — |
 
 ## 8. 다음 단계 — 6단계 Company p0 상세설계에서 확정
 
