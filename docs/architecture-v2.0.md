@@ -249,7 +249,7 @@ open-agent-os/
 ```
 
 - **P0~P1 원칙**: 기존 디렉터리는 건드리지 않고 **추가만** 한다(README·skills·editions·bootstrap 신설). 대규모 재배치(core/runtime 분해)는 **P2에서 승인 후** 진행.
-- Company 에디션 install.sh는 기존 배포 자산(docker-compose/systemd/k8s)을 그대로 호출한다.
+- Company 에디션 install.sh는 **무Docker·systemd** 단일 배포 경로를 호출한다 — Docker·Kubernetes 배포 경로는 흡수하지 않는다(P2 결정).
 - 저장소에는 **공유판**(호스트·경로 등 환경 정보 제거)만 싣는다 — 상세 실측 자료는 공개판에 포함하지 않는다.
 
 ### 5.3 기존 자산 매핑 (요약)
