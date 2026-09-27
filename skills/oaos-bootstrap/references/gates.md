@@ -9,7 +9,7 @@ Present a condensed table and your recommendation:
 | | Personal | Project | Company |
 |---|---|---|---|
 | For | 1 person | team (2–6) | company (5–50) |
-| Runs on | mini PC (N100-class) | one VPS | Project + governance |
+| Runs on | Ubuntu mini PC, Apple Silicon Mac, or Windows 11 PC (Git Bash) | Ubuntu LTS VPS | Ubuntu LTS Project + governance |
 | Chat | Telegram | Mattermost + Telegram | + Slack (optional) |
 
 Recommendation logic: one person on a mini PC → **Personal**; team chat and shared docs → **Project**; policy/audit/permissions needed → **Company**. No external links needed.
@@ -27,18 +27,18 @@ Goal: a model provider the agent can call.
 Steps:
 
 1. Give the user the signup link; ask them to create an API key.
-2. They paste the key in chat. Write it with `hermes config set <PROVIDER>_API_KEY <value>` (UPPER_SNAKE → `.env`, mode 600). Do not echo it back.
+2. They provide the key through the gate. Write it with `hermes config set <PROVIDER>_API_KEY <value>` (UPPER_SNAKE → `.env` under the resolved `HERMES_HOME`). Do not echo it back or put it in logs/state. Linux/macOS: owner-only mode 600; Windows: protected NTFS ACL read-back, not a `chmod 600` assumption.
 3. Verify immediately: `hermes chat -q "Reply with exactly: OK"` must return OK. If not, run `hermes model` to check provider/model selection.
 
 Common failures: `401` → key wrong or truncated (ask for a re-paste, never re-display); `model not found` → run the `hermes model` wizard.
 
 ## G2 — Telegram bot token
 
-Open `t.me/BotFather` → send `/newbot` → choose a display name and a username ending in `bot` → copy the token (format `123456789:ABC...`). Store it with `hermes config set TELEGRAM_BOT_TOKEN <token>`; never echo the value. If it leaks, revoke it in BotFather (`/revoke`) and repeat this gate.
+Open `t.me/BotFather` → send `/newbot` → choose a display name and a username ending in `bot` → copy the token (format `123456789:ABC...`). Store it with `hermes config set TELEGRAM_BOT_TOKEN <token>` in the resolved Hermes `.env`; never echo the value. Check mode/owner on Linux/macOS or protected NTFS ACL on Windows. If it leaks, revoke it in BotFather (`/revoke`) and repeat this gate.
 
 ## G3 — Telegram user ID
 
-Open `t.me/userinfobot` → copy the numeric user ID (not the username). Store it with `hermes config set TELEGRAM_ALLOWED_USERS <numeric-id>`; never echo the value. Install and check the gateway with `hermes gateway install` and `hermes gateway status`. Ask the user to message the bot and confirm a reply.
+Open `t.me/userinfobot` → copy the numeric user ID (not the username). Store it with `hermes config set TELEGRAM_ALLOWED_USERS <numeric-id>`; never echo the value. Install and check the gateway with `hermes gateway install` and `hermes gateway status`. On Linux, read back the systemd user unit and linger; on macOS, launchd registration and status; on Windows, the ONLOGON task or Hermes Startup fallback and status. A macOS/Windows logout/login check still needs real device evidence. Ask the user to message the bot and confirm a reply.
 
 Groups: bots only see `/commands` and replies by default. To let the bot read group messages, disable privacy mode in BotFather (`/mybots` → Bot Settings → Group Privacy → Turn off) **and re-add the bot to the group**, or promote it to group admin.
 
@@ -84,6 +84,6 @@ Company expansion gates G10 (admin console) and G13 (optional multi-LLM) belong 
 
 ## Safety reminders (all gates)
 
-- Secrets go into `.env` (mode 600) via `hermes config set` — never into chat replies, logs, state files, or docs.
+- Secrets go into the resolved Hermes `.env` via `hermes config set` — owner-only mode 600 on Linux/macOS; protected NTFS ACL on Windows. Never put raw values into chat replies, logs, state files, or docs.
 - Verify every pasted value immediately; a gate is not done until the check passes.
 - When a gate cannot pass (e.g. user cannot create an account right now), record it in state as blocked and continue with what can proceed — do not fake success.
