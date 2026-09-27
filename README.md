@@ -41,7 +41,7 @@ You    yes
 Agent  Installing… ✓ Hermes  ✓ gateway  ✓ Telegram connected
        Two quick gates: paste your bot token, paste your user ID.
        ✓ LLM plan connected  ✓ wiki seeded  ✓ scheduled jobs on
-       ✓ survived a reboot
+       ◯ reboot/login survival awaits a safe device check
 
 Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
        Full recipe list: docs/cookbook.md
@@ -49,13 +49,13 @@ Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
 
 ## Editions
 
-**The Personal edition supports Ubuntu (Linux), macOS, and Windows 11.** These are the same operating systems where Hermes Agent can be installed natively.
+**Personal targets Ubuntu (Linux), Apple Silicon macOS, and Windows 11 with Git Bash.** Installer and verifier scripts now have all three lanes. Linux smoke and macOS/Windows mocks passed locally; the three-runner CI workflow is added, with hosted-runner results and real-device installation/login checks still pending. Project and Company remain Ubuntu LTS server paths.
 
 | | **Personal** | **Project** | **Company** |
 |---|---|---|---|
 | For | one person | a small team (2–6) | a company (5–50) |
 | Runs on | a mini PC (N100-class, 16 GB) | one VPS (4 vCPU / 16 GB / 200 GB) | Project + governance layer |
-| Install | host packages and systemd | signed apt packages and pinned Outline source under systemd | inherits Project host services |
+| Install | Linux: host packages + systemd; macOS: official Hermes `install.sh` + launchd; Windows 11 Git Bash: official `install.ps1` + ONLOGON task/Startup fallback | signed apt packages and pinned Outline source under systemd | inherits Project host services |
 | Chat | Telegram | Mattermost + Telegram | + Slack *(optional)* |
 | Knowledge | git wiki + Obsidian | Outline + git wiki | + Notion *(optional)*, permission-aware index |
 | Mail | personal (Himalaya) | dedicated bot mailbox | existing suite integration |
@@ -89,7 +89,7 @@ Setup (the browser-automation environment) is guided by the agent. Step-by-step 
 3. Follow the agent            → README → START-HERE → installs skills/oaos-bootstrap
 4. Pick an edition             → Personal / Project / Company
 5. Gates (3–6)                 → click links, choose options, paste keys/tokens (each verified on the spot)
-6. Verify & report             → services, responses, files, wiki, cron, reboot survival
+6. Verify & report             → services, responses, files, wiki, cron; real reboot/login needs a device check
 ```
 
 The agent does the reading, the file edits, and the commands. You only handle the gates. See [`START-HERE.md`](START-HERE.md) (agent-facing) and [`skills/oaos-bootstrap/SKILL.md`](skills/oaos-bootstrap/SKILL.md).

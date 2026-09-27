@@ -26,9 +26,9 @@
 - 메일 연동 (Himalaya) — 메일 확인·초안
 - 예약 작업 — 아침 브리핑, 백업, 감시
 
-**권장 구동 환경:** N100급 미니PC · 16GB RAM · Ubuntu LTS
+**기존 Ubuntu 구동 예시:** N100급 미니PC · 16GB RAM · Ubuntu LTS. macOS·Windows의 자원·절전 조건은 실기기 확인이 필요합니다.
 
-**지원 OS:** Ubuntu(Linux)·macOS·Windows 11 — Hermes Agent 네이티브 설치가 가능한 운영체제와 동일합니다.
+**Personal 설치 스크립트 대상:** Ubuntu(Linux)·Apple Silicon macOS·Windows 11 Git Bash. 3개 레인 구현 및 Linux 스모크/macOS·Windows 모의 검증 완료; CI 러너 결과와 실기기 설치·로그인·백업 검증은 아직 대기 중입니다. Project·Company는 Ubuntu LTS 서버 경로입니다.
 
 ## 설치 흐름 — 게이트 3개
 
@@ -42,8 +42,8 @@ G2·G3  Telegram          @BotFather 봇 토큰 + 내 사용자 ID 붙여넣기
 
 에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
 
-에이전트는 저장소에서 `bash editions/personal/install.sh`를 실행합니다 (`--dry-run`으로 계획 확인).
-최종 확인은 `bash bootstrap/verify/personal-verify.sh`로 실행하며, 결과에는 사람 확인 항목도 구분됩니다.
+에이전트는 저장소에서 `bash editions/personal/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/personal/install.sh`를 실행합니다(Windows는 **Git Bash에서 실행**). Ubuntu는 공식 Hermes `install.sh`·systemd, macOS는 공식 `install.sh`·launchd, Windows는 공식 `install.ps1`·ONLOGON 태스크/Startup 폴백을 사용하도록 구현했습니다. apt·swapfile·systemd·`/proc` 명령은 Ubuntu 경로에만 적용됩니다. macOS·Windows 시간대와 절전/로그인 정책은 필요 시 수동 확인합니다.
+최종 확인은 `bash bootstrap/verify/personal-verify.sh`로 실행하며, 실제 메시지 왕복과 재부팅 또는 로그아웃·로그인 생존은 별도의 사람/실기기 증거가 필요합니다.
 
 ## 비용
 
@@ -63,7 +63,7 @@ G2·G3  Telegram          @BotFather 봇 토큰 + 내 사용자 ID 붙여넣기
 
 ## 옵션 — Hermes 데스크탑 앱으로 쓰기
 
-서버는 그대로 두고 쓰는 PC에 **Hermes 데스크탑 앱**만 설치하면, 같은 에이전트를 그래픽 화면에서 쓸 수 있습니다. 텔레그램과 동시에 연결돼도 되고, 채팅·산출물·봇·설정을 한 창에서 다룹니다. 앱 내려받기: [Hermes 데스크탑](https://hermes-agent.nousresearch.com/desktop) (Windows·macOS·Linux)
+다음 원격 대시보드 예시는 **Ubuntu/systemd 서버 구성**입니다. Personal을 macOS·Windows에 네이티브 설치한 경우의 대시보드 자동 시작·원격 연결은 별도 실기기 확인이 필요합니다. 쓰는 PC에 Hermes 데스크탑 앱을 설치하면 그래픽 화면에서 연결할 수 있습니다. 앱 내려받기: [Hermes 데스크탑](https://hermes-agent.nousresearch.com/desktop) (Windows·macOS·Linux)
 
 **1. 서버 준비 — 대시보드에 로그인을 설정하고 내부망에 열기**
 
@@ -75,7 +75,7 @@ HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<강한 비밀번호>
 HERMES_DASHBOARD_BASIC_AUTH_SECRET=<openssl rand -base64 32 결과>
 ```
 
-대시보드를 내부망에 열어 상시 구동합니다(systemd 서비스 권장).
+Ubuntu 서버의 대시보드를 내부망에 열어 상시 구동합니다(systemd 서비스 권장).
 
 ```text
 hermes dashboard --host 0.0.0.0 --port 9119 --no-open

@@ -16,9 +16,9 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 세 가지가 다릅니다: ① 내 하드웨어에서 돌아 데이터가 내 통제 아래 있고, ② 대화·문서·결정이 내 위키에 쌓여 "세컨드 브레인"이 되며, ③ 기존 도구(메일·캘린더·팀 채팅)에 연결해 일을 대신합니다. 상태를 기억하지 못하는 일회성 챗봇과 달리, 쓸수록 내 맥락이 자산이 됩니다.
 
 **Q. 어떤 하드웨어가 필요한가요?**
-- Personal: N100급 미니PC(16GB 권장)로 충분합니다.
+- Personal: Ubuntu 미니PC(N100급·16GB 권장)가 한 예시입니다. Apple Silicon Mac·Windows 11 PC(Git Bash)도 설치 스크립트 대상이며, OS별 실기기 적정 자원은 아직 확인 중입니다.
 - Project: Ubuntu 22.04 또는 24.04 LTS, 4 vCPU / 16GB / 200GB VPS 1대.
-- Personal·Project 설치는 호스트 패키지와 systemd 서비스를 사용합니다. Project의 PostgreSQL·Redis는 Ubuntu apt, Mattermost는 공식 서명 APT, Outline은 고정 릴리스 소스 빌드로 설치합니다.
+- Personal의 apt·`/proc`·systemd·swapfile 설정은 Ubuntu 경로에만 적용됩니다. macOS는 공식 Hermes `install.sh`와 launchd, Windows 11은 Git Bash에서 공식 `install.ps1`을 호출하고 ONLOGON 태스크/Startup 폴백을 확인하도록 구현했습니다. Project·Company는 Ubuntu LTS 서버 경로이며, Project의 PostgreSQL·Redis는 Ubuntu apt, Mattermost는 공식 서명 APT, Outline은 고정 릴리스 소스 빌드로 설치합니다.
 - Company: Project 구성 + 거버넌스 레이어(동일 서버에서 시작 가능).
 
 **Q. 개발 지식이 필요한가요?**
@@ -41,7 +41,7 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 진행 상태가 `~/.oaos-install/state.json`에 기록되어 이어서 재개할 수 있습니다. 완료된 단계는 다시 실행해도 안전하도록 설계되어 있습니다.
 
 **Q. 재부팅 후에도 살아있나요?**
-네 — 게이트웨이가 서비스로 등록되고, 검증 체크리스트에 "재부팅 생존" 항목이 포함됩니다.
+게이트웨이 등록·현재 실행 상태는 자동으로 검사합니다. Ubuntu는 systemd 사용자 서비스와 linger를, macOS는 launchd를, Windows 11은 ONLOGON 태스크 또는 Hermes Startup 폴백을 확인합니다. 실제 재부팅 또는 로그아웃·로그인 후 생존은 별도 실기기 확인이 필요하며 아직 세 OS 전체의 통과 증거는 없습니다.
 
 **Q. 기존 서버에 같이 설치할 수 있나요?**
 가능하지만 전용 머신/VPS를 권장합니다. 포트·자원 충돌을 에이전트가 점검합니다.
@@ -57,7 +57,7 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 텔레그램에서 @BotFather → `/newbot` → 이름/아이디 지정 → 토큰 복사. 내 사용자 ID는 @userinfobot에게 말 걸면 숫자로 알려줍니다. 에이전트가 이 과정을 안내합니다.
 
 **Q. 키·토큰이 채팅 기록에 남나요?**
-남지 않게 설계되어 있습니다. 값은 `.env`(권한 600)에만 기록되고, 에이전트는 채팅·로그·문서 어디에도 재출력하지 않습니다. 노출이 의심되면 즉시 교체(로테이션)하세요.
+재출력되지 않게 설계되어 있습니다. 값은 Hermes 홈의 `.env`에 저장하며 Linux·macOS에서는 소유자/모드 600, Windows에서는 NTFS ACL을 확인하도록 구현했습니다. 채팅·로그·문서에는 값을 재출력하지 않습니다. Windows ACL의 실기기 효과는 아직 검증 중입니다. 노출이 의심되면 즉시 교체(로테이션)하세요.
 
 **Q. 회사 계정(Google Workspace/Microsoft 365)이 있어야 하나요?**
 아니요, 선택입니다. 이미 쓰고 있다면 연동해서 메일·일정·문서 작업을 연결할 수 있습니다.

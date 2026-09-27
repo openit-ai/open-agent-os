@@ -17,9 +17,9 @@
 | 핵심 경험 | Hermes Agent 설치(공식) → **GitHub URL 1개 전달** → README 해석·환경 설명 → 부트스트랩 스킬로 설치 자동 진행 → 최종 테스트까지 완료 |
 | 사용자 개입 | 게이트당 **링크 + 선택 + 최소 복붙** (선택 포함 Personal 5·Project 10·Company 14개소) |
 | 적층 구조 | Personal ⊂ Project ⊂ Company — Company는 **5~50인 중소기업용 확장 에디션**(멀티 LLM 라우팅·권한·감사 + 선택형 연동) |
-| 기준 실측 | Personal: 미니PC(N100급·16GB)·월 $10 API(OpenCode Go 정액, 2026-09-25 확인) / Project: VPS 1대(4 vCPU·16GB·200GB급) |
+| 기준 실측 | Personal: 기존 Ubuntu 미니PC(N100급·16GB) 사례·월 $10 API(OpenCode Go 정액, 2026-09-25 확인); macOS·Windows 실기기 검증 대기 / Project: VPS 1대(4 vCPU·16GB·200GB급) |
 | 비용 원칙 | 본 솔루션으로 **새로 드는 비용은 서버·LLM 정액 등 솔루션 자체 항목뿐** — Google Workspace·Microsoft 365·Slack·Notion 등은 **기업이 기존에 사용 중인 서비스에 연동**(추가 비용 없음) |
-| 지원 환경 | Ubuntu LTS · 사전 요건: Hermes Agent 설치(공식) · 표면: TUI/Web 콘솔/메신저 |
+| 지원 환경 | Personal 설치 스크립트: Ubuntu LTS·Apple Silicon macOS·Windows 11 Git Bash; Project·Company: Ubuntu LTS 서버. 사전 요건: Hermes Agent 공식 설치 · 표면: TUI/Web 콘솔/메신저 |
 | 배포 | GitHub(openit-ai/open-agent-os) + Hermes 스킬(URL 설치) |
 | 최종 산출 | 동일 절차로 **누구나** 자기 환경(Personal~Company)을 구축·운영 |
 
@@ -52,7 +52,7 @@
 
 ```mermaid
 flowchart TD
-    A["1. Hermes Agent 설치 (공식 install.sh)"] --> B["2. 사용자: GitHub URL 전달 (TUI 또는 Web 콘솔 chat)"]
+    A["1. Hermes Agent 설치 (Linux/macOS install.sh · Windows install.ps1)"] --> B["2. 사용자: GitHub URL 전달 (TUI 또는 Web 콘솔 chat)"]
     B --> C["3. 에이전트: README 해석 / 환경·에디션 설명"]
     C --> D["4. 부트스트랩 스킬 설치 (저장소 skills)"]
     D --> E["5. 에디션 선택: Personal / Project / Company"]
@@ -68,7 +68,7 @@ flowchart TD
 
 ### 2.2 부트스트랩 구성요소 (저장소 자산)
 
-**지원 환경(설계 기준)**: Ubuntu LTS · 사전 요건 — Hermes Agent 설치(공식) · 표면 — TUI/Web 콘솔/메신저.
+**지원 환경(설계 기준)**: Personal은 Ubuntu LTS·Apple Silicon macOS·Windows 11 Git Bash 설치/검증 스크립트가 구현됐고, Linux 스모크 및 타 OS 모의 검증을 완료했다. 3 OS CI 워크플로는 추가됐으며 러너 결과와 실기기 검증은 대기 중이다. Project·Company는 Ubuntu LTS 서버 경로다. 사전 요건 — Hermes Agent 공식 설치 · 표면 — TUI/Web 콘솔/메신저.
 
 | 자산 | 역할 | 읽는 주체 |
 |---|---|---|
@@ -76,7 +76,7 @@ flowchart TD
 | `START-HERE.md` (또는 README 내 블록) | 에이전트가 따라야 할 정밀 절차(스킬 설치 → 선택 → 설치 → 검증) | 에이전트 |
 | `skills/oaos-bootstrap/SKILL.md` | 오케스트레이터: 환경 점검→에디션 선택→install 호출→게이트 처리→verify→리포트 | 에이전트 |
 | `editions/<e>/install.sh` | 에디션별 설치(멱등·체크포인트·로그) | 에이전트 실행 |
-| `bootstrap/verify/<e>-verify.sh` | 최종 테스트(서비스·응답·파일·위키·크론·재부팅 생존) | 에이전트 실행 |
+| `bootstrap/verify/<e>-verify.sh` | 최종 테스트(서비스·응답·파일·위키·크론·서비스 등록 확인); 실제 재부팅/로그인 생존은 별도 실기기 증거 | 에이전트 실행 |
 | `bootstrap/lib/*` | 공통: 환경 점검·시크릿 처리(.env 600)·체크포인트·로그 | 공용 |
 | `docs/editions/*.md` | 에디션별 설치·운영 문서(공통 표기 원칙으로 재작성) + Company 문서(예정) | 사람 + 에이전트 |
 
@@ -125,8 +125,8 @@ flowchart TD
 
 | 구간 | 자동 진행 | 사용자 개입 |
 |---|---|---|
-| OS 준비 | 패키지·스왑·타임존·절전 차단 | — |
-| Hermes 설정 | `config set`(모델·추론)·`.env` 기록·`gateway install`·linger | G1 키 |
+| OS 준비 | Ubuntu Personal: apt·swapfile·시간대·systemd 절전 정책; macOS: 도구 확인·OS 관리 swap·시간대/절전 수동 판정; Windows Git Bash: 도구 확인·pagefile 조회·시간대/전원 수동 판정 | 불확실한 OS 설정은 수동 확인 |
+| Hermes 설정 | `config set`(모델·추론)·`.env` 기록·`gateway install`; Ubuntu만 systemd/linger, macOS는 launchd, Windows는 ONLOGON 태스크/Startup 폴백 진단 | G1 키 |
 | Telegram | 토큰 검증·화이트리스트·(선택) Local Bot API 구성 | G2·G3 (+G4) |
 | 위키(세컨드 브레인) | git repo·bare 중계·스키마(7축) 시드·pre-commit 훅 | — |
 | 하네스 | SOUL/USER/MEMORY 초안 생성 → 대화로 확인·보정 | 문구 확인(대화) |
@@ -164,9 +164,9 @@ flowchart TD
 ### 4.1 Personal — 개인 1인 · 미니PC
 
 - **구성**: Hermes Agent + Telegram + md 세컨드 브레인(git 위키 + Obsidian) + 개인 추천 스킬 + 개인 메일(Himalaya·Gmail 앱 비밀번호)
-- **자원**: N100급 4코어 / 16GB / 256~512GB SSD — 24시간 상시
+- **자원**: 기존 Ubuntu 미니PC 사례는 N100급 4코어 / 16GB / 256~512GB SSD — 24시간 상시. macOS·Windows의 하드웨어/절전·로그인 조건은 실기기 확인 필요
 - **비용**: 월 $10(LLM 정액 — OpenCode Go, 2026-09-25 확인) + 전력. 소프트웨어 전부 무료/오픈소스
-- **기준 실측**(2026-09-22): 무중단 17일+, load 0.44
+- **기존 Ubuntu 기준 실측**(2026-09-22): 무중단 17일+, load 0.44. macOS·Windows 동일 동작의 근거는 아님
 - **차별점**: 폰(Telegram)에서 시작·종료, 대화가 곧 위키 자산, 자택 데이터 보관
 
 ### 4.2 Project — 소규모 팀(2~6인) · 서버 1대
@@ -325,7 +325,7 @@ open-agent-os/
 
 - **부트스트랩**: 설치 착수부터 최종 테스트까지 에이전트가 진행하는 자동 설치 흐름.
 - **게이트**: 사용자 개입이 꼭 필요한 지점(링크·선택·복붙).
-- **verify**: 최종 테스트 스크립트 묶음 — 서비스·응답·파일·위키·크론·재부팅 생존 확인.
+- **verify**: 최종 테스트 스크립트 묶음 — 서비스·응답·파일·위키·크론·자동 시작 등록 확인. 실제 재부팅/로그인 생존은 수동 실기기 확인.
 - **하네스(harness)**: 에이전트의 정체성·기억·설정을 구성하는 파일 세트(SOUL/USER/MEMORY/AGENTS 등). 실행 기반(현재: Hermes Agent)은 "런타임"으로 지칭한다.
 - **선택형 연동**: 기업이 기존에 사용 중인 외부 서비스에 어댑터로 연결하는 옵션(신규 구독 요구 없음).
 - **에디션 확장**: Personal→Project→Company로 올라가는 경로(데이터 이전 스크립트 제공).

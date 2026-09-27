@@ -1,6 +1,6 @@
 # Personal 크로스플랫폼 지원 설계 v1.0
 
-> **상태(2026-09-27)**: 설계 정본. Ubuntu(Linux)·macOS·Windows 11은 **Personal 제품 지원 정책**이다. 현재 저장소의 Personal 설치기·검증기·부트스트랩 스킬은 Linux 경로만 구현되어 있다. 이 문서의 macOS·Windows 명령과 완료 조건은 후속 구현 계약이며, 실행 성공을 뜻하지 않는다.
+> **상태(2026-09-27)**: 설계 정본. Personal P1~P3의 Ubuntu(Linux)·macOS Apple Silicon·Windows 11 Git Bash 스크립트 구현과 로컬 모의 검증 완료. P4 CI 매트릭스·스킬·문서를 추가했으며 호스티드 러너 결과는 아직 대기 중이다. 실기기 설치·키/메시지·로그인/재부팅 검증 P5는 미완이다. Project·Company는 Ubuntu LTS 서버 경로를 유지한다.
 
 ## 0. 범위·근거
 
