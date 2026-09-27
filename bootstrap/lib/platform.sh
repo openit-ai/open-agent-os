@@ -153,7 +153,13 @@ platform_secret_protect() {
 }
 platform_secret_check() {
   platform_linux platform_secret_check || return 3
-  [[ $(platform_file_mode "$1") == 600 ]]
+  local parent mode
+  [[ -f $1 && $(platform_file_mode "$1") == 600 ]] || return 1
+  parent=$(dirname "$1")
+  [[ -d $parent && -x $parent ]] || return 1
+  mode=$(platform_file_mode "$parent") || return 1
+  [[ $mode =~ ^[0-7]{3,4}$ ]] || return 1
+  (( (8#$mode & 0022) == 0 ))
 }
 platform_sha256() { platform_linux platform_sha256 || return 3; sha256sum "$1" | awk '{print $1}'; }
 platform_atomic_write() {
@@ -224,10 +230,4 @@ files = sorted((p for p in root.glob('hermes-verify-*.zip') if p.is_file()),
 for path in files[2:]:
     path.unlink()
 PY
-}
-
-platform_gateway_watchdog() {
-  platform_linux platform_gateway_watchdog || return 3
-  if [[ ${OAOS_DRY_RUN:-0} == 1 ]]; then info 'Would check and start Hermes gateway if stopped.'; return 0; fi
-  if ! systemctl --user is-active --quiet hermes-gateway; then systemctl --user start hermes-gateway; fi
 }

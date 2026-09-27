@@ -32,6 +32,7 @@ printf 'PASS: actual kernel/architecture/Git Bash lane rules with mocked uname\n
 
 HOME="$temp_root/home"; export HOME
 mkdir -p "$HOME"
+chmod 700 "$HOME"
 OAOS_TEST_PLATFORM=macos
 export OAOS_TEST_PLATFORM
 if os_detect >/dev/null 2>&1; then fail 'override accepted without test mode'; fi
@@ -61,7 +62,6 @@ platform_secret_protect "$HOME/private" >/dev/null
 platform_timezone_set UTC >/dev/null
 platform_sleep_policy >/dev/null
 platform_gateway_install >/dev/null
-platform_gateway_watchdog >/dev/null
 platform_install_hermes "$HOME/missing-installer" >/dev/null
 [[ $(cat "$HOME/private") == original && $(platform_file_mode "$HOME/private") == 644 ]] || fail 'dry-run changed file'
 [[ ! -e $HOME/private.tmp && ! -e $HOME/.oaos ]] || fail 'dry-run created files'
@@ -70,6 +70,10 @@ printf 'PASS: platform mutators honor dry-run without file or service changes\n'
 OAOS_DRY_RUN=0; export OAOS_DRY_RUN
 printf 'replacement\n' | platform_atomic_write "$HOME/private"
 if [[ $(cat "$HOME/private") != replacement ]] || ! platform_secret_check "$HOME/private"; then fail 'atomic write or secret mode'; fi
+chmod 777 "$HOME"
+if platform_secret_check "$HOME/private"; then fail 'writable secret parent accepted'; fi
+chmod 700 "$HOME"
+platform_secret_check "$HOME/private" || fail 'private parent rejected'
 [[ $(platform_sha256 "$HOME/private") == $(sha256sum "$HOME/private" | awk '{print $1}') ]] || fail 'SHA-256 value'
 [[ $(platform_hermes_home) == "$HOME/.hermes" && $(platform_path state) == "$HOME/.oaos-install/state.json" ]] || fail 'Linux paths'
 stage_mark wiki applied 'test'
