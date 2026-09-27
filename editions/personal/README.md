@@ -28,7 +28,7 @@
 
 **기존 Ubuntu 구동 예시:** N100급 미니PC · 16GB RAM · Ubuntu LTS. macOS·Windows의 자원·절전 조건은 실기기 확인이 필요합니다.
 
-**Personal 설치 스크립트 대상:** Ubuntu(Linux)·Apple Silicon macOS·Windows 11 Git Bash. 3개 레인 구현 및 Linux 스모크/macOS·Windows 모의 검증 완료; CI 러너 결과와 실기기 설치·로그인·백업 검증은 아직 대기 중입니다. Project·Company는 Ubuntu LTS 서버 경로입니다.
+**Personal 설치 스크립트 대상:** Ubuntu(Linux)·Apple Silicon macOS·Windows 11 Git Bash. 3개 레인 구현 및 Linux 스모크/macOS·Windows 모의 검증 완료; CI 3-러너 매트릭스 통과(2026-09-27). 실기기 설치·로그인·백업 검증은 아직 대기 중입니다. Project·Company는 Ubuntu LTS 서버 경로입니다.
 
 ## 설치 흐름 — 게이트 3개
 

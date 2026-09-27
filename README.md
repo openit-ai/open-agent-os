@@ -49,7 +49,7 @@ Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
 
 ## Editions
 
-**Personal targets Ubuntu (Linux), Apple Silicon macOS, and Windows 11 with Git Bash.** Installer and verifier scripts now have all three lanes. Linux smoke and macOS/Windows mocks passed locally; the three-runner CI workflow is added, with hosted-runner results and real-device installation/login checks still pending. Project and Company remain Ubuntu LTS server paths.
+**Personal targets Ubuntu (Linux), Apple Silicon macOS, and Windows 11 with Git Bash.** Installer and verifier scripts now have all three lanes. Linux smoke and macOS/Windows mocks passed locally, and the three-runner CI matrix (ubuntu/macos/windows) passes (2026-09-27); real-device installation/login checks are still pending. Project and Company remain Ubuntu LTS server paths.
 
 | | **Personal** | **Project** | **Company** |
 |---|---|---|---|

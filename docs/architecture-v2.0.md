@@ -68,7 +68,7 @@ flowchart TD
 
 ### 2.2 부트스트랩 구성요소 (저장소 자산)
 
-**지원 환경(설계 기준)**: Personal은 Ubuntu LTS·Apple Silicon macOS·Windows 11 Git Bash 설치/검증 스크립트가 구현됐고, Linux 스모크 및 타 OS 모의 검증을 완료했다. 3 OS CI 워크플로는 추가됐으며 러너 결과와 실기기 검증은 대기 중이다. Project·Company는 Ubuntu LTS 서버 경로다. 사전 요건 — Hermes Agent 공식 설치 · 표면 — TUI/Web 콘솔/메신저.
+**지원 환경(설계 기준)**: Personal은 Ubuntu LTS·Apple Silicon macOS·Windows 11 Git Bash 설치/검증 스크립트가 구현됐고, Linux 스모크 및 타 OS 모의 검증을 완료했다. 3 OS CI 매트릭스(ubuntu/macOS/Windows)를 통과했고(2026-09-27), 실기기 검증은 대기 중이다. Project·Company는 Ubuntu LTS 서버 경로다. 사전 요건 — Hermes Agent 공식 설치 · 표면 — TUI/Web 콘솔/메신저.
 
 | 자산 | 역할 | 읽는 주체 |
 |---|---|---|

@@ -1,6 +1,6 @@
 # Personal 크로스플랫폼 지원 설계 v1.0
 
-> **상태(2026-09-27)**: 설계 정본. Personal P1~P3의 Ubuntu(Linux)·macOS Apple Silicon·Windows 11 Git Bash 스크립트 구현과 로컬 모의 검증 완료. P4 CI 매트릭스·스킬·문서를 추가했으며 호스티드 러너 결과는 아직 대기 중이다. 실기기 설치·키/메시지·로그인/재부팅 검증 P5는 미완이다. Project·Company는 Ubuntu LTS 서버 경로를 유지한다.
+> **상태(2026-09-27)**: 설계 정본. Personal P1~P3의 Ubuntu(Linux)·macOS Apple Silicon·Windows 11 Git Bash 스크립트 구현과 로컬 모의 검증 완료. P4 CI 매트릭스·스킬·문서를 추가했고 호스티드 러너 3종(ubuntu-latest·macos-latest·windows-latest) 매트릭스를 통과했다(2026-09-27). 실기기 설치·키/메시지·로그인/재부팅 검증 P5는 미완이다. Project·Company는 Ubuntu LTS 서버 경로를 유지한다.
 
 ## 0. 범위·근거
 

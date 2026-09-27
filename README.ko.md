@@ -49,7 +49,7 @@
 
 ## 에디션
 
-**Personal 대상은 Ubuntu(Linux)·Apple Silicon macOS·Windows 11 Git Bash입니다.** 설치기·검증기 3개 레인 스크립트가 구현됐고 Linux 스모크와 macOS·Windows 모의 검증을 로컬에서 통과했습니다. 3개 러너 CI 워크플로는 추가됐으며 러너 실행 결과와 실기기 설치·로그인 검증은 아직 대기 중입니다. Project·Company는 Ubuntu LTS 서버 경로를 유지합니다.
+**Personal 대상은 Ubuntu(Linux)·Apple Silicon macOS·Windows 11 Git Bash입니다.** 설치기·검증기 3개 레인 스크립트가 구현됐고 Linux 스모크와 macOS·Windows 모의 검증을 로컬에서 통과했습니다. 3개 러너 CI 매트릭스(ubuntu/macOS/Windows)도 통과했습니다(2026-09-27). 실기기 설치·로그인 검증은 아직 대기 중입니다. Project·Company는 Ubuntu LTS 서버 경로를 유지합니다.
 
 | | **Personal** | **Project** | **Company** |
 |---|---|---|---|
