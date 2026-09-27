@@ -263,15 +263,15 @@ do_harness() {
 }
 
 do_cron() {
-  local scripts jobs name=oaos-daily-backup script
+  local scripts jobs name=oaos-daily-backup script staged
   scripts="$(oaos_home)/.hermes/scripts"
   need_hermes || return 3
   mkdir -p "$scripts"
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
   if ! grep -Fq "$name" <<< "$jobs"; then
     script="$scripts/$name.sh"
-    if [[ -e $script ]]; then warn "Existing script for $name needs review; preserving it."; return 3; fi
-    cat > "$script" <<'EOF'
+    staged="$scripts/.$name.sh.new.$$"
+    cat > "$staged" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
@@ -283,8 +283,15 @@ tar -czf "$tmp" -C "$HOME" .hermes data/wiki
 mv -- "$tmp" "$target"
 ls -1t "$HOME/.oaos/backups"/oaos-*.tar.gz 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f -- "$old"; done
 EOF
-    chmod 700 "$script"
-    hermes cron create --name "$name" --script "$script" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
+    if [[ -e $script ]] && ! cmp -s "$staged" "$script"; then
+      rm -f -- "$staged"
+      warn "Existing script for $name needs review; preserving it."
+      return 3
+    fi
+    chmod 700 "$staged"
+    mv -- "$staged" "$script"
+    # The cron CLI resolves --script relative to the Hermes scripts directory.
+    hermes cron create --name "$name" --script "$(basename "$script")" --no-agent --deliver local '0 3 * * *' >/dev/null || return 1
   fi
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
   grep -Fq "$name" <<< "$jobs" || return 3

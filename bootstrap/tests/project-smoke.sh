@@ -40,16 +40,41 @@ cat > "$cron_bin/hermes" <<'MOCK'
 set -Eeuo pipefail
 case "$1 $2" in
   'cron list') cat "$OAOS_FAKE_CRON_LIST" ;;
-  'cron create') printf 'oaos-daily-backup\n' >> "$OAOS_FAKE_CRON_LIST" ;;
+  'cron create')
+    shift 2
+    script=
+    while (($#)); do case $1 in --script) script=$2; shift 2 ;; *) shift ;; esac; done
+    [[ -n $script && $script != */* && $script != *\\* ]] || {
+      printf 'Failed to create job: Script path must be relative to the Hermes scripts directory. Got: %s\n' "$script" >&2
+      exit 1
+    }
+    printf '%s\n' "$script" >> "$OAOS_FAKE_CRON_STATE"
+    printf 'oaos-daily-backup\n' >> "$OAOS_FAKE_CRON_LIST" ;;
   *) exit 1 ;;
 esac
 MOCK
 chmod 700 "$cron_bin/hermes"
-HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-list" bash "$install" --stage cron >"$temp_root/cron.out" 2>"$temp_root/cron.err" || fail 'Project cron install'
+: > "$temp_root/cron-state"
+HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-list" OAOS_FAKE_CRON_STATE="$temp_root/cron-state" bash "$install" --stage cron >"$temp_root/cron.out" 2>"$temp_root/cron.err" || fail 'Project cron install'
 [[ $(wc -l < "$temp_root/cron-list") == 1 ]] || fail 'Project cron registered unexpected jobs'
-HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-list" bash "$install" --stage cron >"$temp_root/cron-rerun.out" 2>"$temp_root/cron-rerun.err" || fail 'Project cron rerun'
+# The cron CLI resolves --script relative to the Hermes scripts directory.
+grep -q '/' "$temp_root/cron-state" && fail 'Project cron passed an absolute script path'
+HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-list" OAOS_FAKE_CRON_STATE="$temp_root/cron-state" bash "$install" --stage cron >"$temp_root/cron-rerun.out" 2>"$temp_root/cron-rerun.err" || fail 'Project cron rerun'
 [[ $(wc -l < "$temp_root/cron-list") == 1 ]] || fail 'Project cron duplicated the backup job'
-printf 'PASS: Project cron registers one backup job and skips it on rerun\n'
+# A previous failed run must not leave the stage permanently blocked.
+: > "$temp_root/cron-state"
+: > "$temp_root/cron-state-list"
+rm -rf "$cron_home/.oaos-install"
+HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-state-list" OAOS_FAKE_CRON_STATE="$temp_root/cron-state" bash "$install" --stage cron >"$temp_root/cron-idem.out" 2>"$temp_root/cron-idem.err" || fail 'Project cron was not idempotent after a partial run'
+# An operator-modified script is still preserved instead of overwritten.
+printf '#!/usr/bin/env bash\necho operator\n' > "$cron_home/.hermes/scripts/oaos-daily-backup.sh"
+: > "$temp_root/cron-preserve-list"
+rm -rf "$cron_home/.oaos-install"
+if HOME="$cron_home" PATH="$cron_bin:$PATH" OAOS_FAKE_CRON_LIST="$temp_root/cron-preserve-list" OAOS_FAKE_CRON_STATE="$temp_root/cron-state" bash "$install" --stage cron >"$temp_root/cron-preserve.out" 2>"$temp_root/cron-preserve.err"; then
+  fail 'operator-modified cron script was overwritten'
+fi
+grep -Fq 'echo operator' "$cron_home/.hermes/scripts/oaos-daily-backup.sh" || fail 'operator cron script was not preserved'
+printf 'PASS: Project cron registers one backup job, is idempotent, and preserves operator scripts\n'
 gateway_bin="$temp_root/gateway-bin"
 mkdir -p "$gateway_bin"
 cat > "$gateway_bin/hermes" <<'MOCK'
