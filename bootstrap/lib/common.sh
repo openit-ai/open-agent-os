@@ -2,7 +2,7 @@
 # Shared functions for edition installers and verification runners.
 
 oaos_home() { printf '%s' "${HOME:?HOME is required}"; }
-oaos_state_file() { printf '%s/.oaos-install/state.json' "$(oaos_home)"; }
+oaos_state_file() { printf '%s' "${OAOS_STATE_FILE:-$(oaos_home)/.oaos-install/state.json}"; }
 oaos_log_file() { printf '%s/.oaos/logs/%s-%s.log' "$(oaos_home)" "${OAOS_LOG_NAME:-install}" "$(date +%Y%m%d)"; }
 
 redact() {
@@ -53,7 +53,12 @@ PY
   fi
 }
 
-stage_done() { [[ $(stage_status "$1") == 'done' ]]; }
+stage_done() {
+  local status
+  status=$(stage_status "$1")
+  if [[ $1 =~ ^c(0[1-9]|1[0-7])$ ]]; then [[ $status == verified ]];
+  else [[ $status == 'done' ]]; fi
+}
 
 state_valid() {
   local file
@@ -75,9 +80,10 @@ stage_mark() {
   local name=$1 status=$2 detail=${3:-} file tmp now edition stages
   edition=${OAOS_STATE_EDITION:-personal}
   stages=${OAOS_STAGES:-prep hermes llm telegram gateway wiki harness cron verify}
-  [[ $edition =~ ^[a-z]+$ && $stages =~ ^[a-z]+(\ [a-z]+)*$ ]] || die "Invalid edition stage configuration."
+  [[ $edition =~ ^[a-z]+$ && $stages =~ ^([a-z]+|c(0[1-9]|1[0-7]))(\ ([a-z]+|c(0[1-9]|1[0-7])))*$ ]] || die "Invalid edition stage configuration."
+  [[ " $stages " == *" $name "* ]] || die 'Invalid stage name.'
   [[ ${OAOS_DRY_RUN:-0} != 1 ]] || die 'Internal error: state write during dry run.'
-  [[ $status == pending || $status == 'done' || $status == blocked || $status == failed ]] || die 'Invalid state status.'
+  [[ $status == pending || $status == 'done' || $status == blocked || $status == failed || $status == applied || $status == verified || $status == SKIP ]] || die 'Invalid state status.'
   file=$(oaos_state_file)
   mkdir -p "$(dirname "$file")"
   tmp=$(mktemp "${file}.tmp.XXXXXX")
