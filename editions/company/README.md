@@ -110,6 +110,20 @@ C03은 C02의 user unit·linger 게이트를 다시 확인하므로 **systemd us
 
 read-back은 E의 loopback PostgreSQL에 직접 연결해 관리자와 두 구성원, 외부 주체, 다른 조직의 임시 행을 만들고 실제 함수 응답과 C01의 제약·RLS를 검사합니다. 검증 트랜잭션은 롤백되므로 운영 매핑을 생성하지 않습니다. 공개 도메인의 HTTP 200 응답은 C03 통과 근거로 사용하지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 매핑 응답 실패 `1`입니다.
 
+## C04: 개인비서 등록과 구성원별 공간
+
+C04는 C01~C03이 모두 `verified`인 E에서 실행합니다. C03과 같은 Ubuntu·systemd user manager·백업 경로·loopback DB·비우회 앱 역할 게이트를 확인하고 전체 DB 덤프를 보존한 다음 003 마이그레이션을 적용합니다. 원격 세션에서 `XDG_RUNTIME_DIR`이 없어서 user manager가 보이지 않으면 종료 코드 `3`으로 차단됩니다. `deployment.conf`의 `PGUSER`는 `SUPERUSER`/`BYPASSRLS`가 없는 앱 역할이어야 하며, 백업용 역할은 `.env`에만 둡니다.
+
+```bash
+bash editions/company/install.sh --stage c04 --dry-run
+bash editions/company/install.sh --stage c04
+bash bootstrap/verify/company-verify.sh --phase c04 --read-back
+```
+
+003은 활성 구성원의 본인 비서 등록·목록·해제와 실행 허용 판정, 지식·출력 기록·조회를 SQL 함수로 제공합니다. 인증된 Project 세션의 조직·구성원 ID를 신뢰된 서버가 트랜잭션 범위에 설정해야 합니다. 비서마다 고유한 `knowledge_namespace`를 만들고 지식·출력 행을 비서 ID·owner·namespace에 결속합니다. `FORCE RLS`와 활성 구성원·활성 비서 검사를 통해 교차 조회·기록을 거부합니다. 해제된 비서는 목록·실행·지식/출력 API 조회에서 거부되며, 다시 등록하면 새 비서 ID와 namespace를 받습니다. 해제된 비서의 비민감 메타데이터는 본인에게 이력으로 남지만 지식·출력은 읽을 수 없습니다. 실제 Project 인증과 사용자 화면은 G10/C10에서 연결합니다.
+
+read-back은 E의 PostgreSQL에서 두 구성원과 다른 조직의 임시 비서·지식·출력을 생성해 실제 함수 응답과 RLS를 검사하고 트랜잭션을 롤백합니다. 설치 재실행은 003 checksum이 일치하면 새 백업·마이그레이션 없이 끝납니다. 공개 HTTP 응답은 통과 근거가 아닙니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
 ## 상태
 
 Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다.

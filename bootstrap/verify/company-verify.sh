@@ -10,7 +10,7 @@ for n in $(seq -w 1 17); do stages+=("c$n"); done
 export OAOS_STAGES="${stages[*]}"
 
 usage() {
-  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 through C03 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
+  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 through C04 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
 }
 phase=''
 read_back=0
@@ -30,6 +30,12 @@ done
 OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
 export OAOS_STATE_FILE
 if ! state_valid; then die 'Company state file is invalid JSON.'; fi
+if [[ $phase == c04 ]]; then
+  # shellcheck source=editions/company/c04-verify.sh
+  . "$repo_root/editions/company/c04-verify.sh"
+  company_c04_verify
+  exit $?
+fi
 if [[ $phase == c03 ]]; then
   # shellcheck source=editions/company/c03-verify.sh
   . "$repo_root/editions/company/c03-verify.sh"
