@@ -12,7 +12,7 @@ export OAOS_STATE_EDITION=company OAOS_STAGES="${stages[*]}"
 usage() {
   cat <<'EOF'
 Usage: bash editions/company/install.sh --stage cNN [--dry-run] [--status] [--help]
-Stages: c01 through c17. c01-c03 are implemented; c04-c17 are recognized.
+Stages: c01 through c17. c01-c04 are implemented; c05-c17 are recognized.
 --status reads Company checkpoints without changing the system.
 --dry-run prints the selected stage plan without changing state or the system.
 Exit: 0 = selected stage applied; 3 = prerequisite/gate blocked; 1 = error.
@@ -67,7 +67,9 @@ if ! state_valid; then die 'Company state file is invalid JSON; preserve and rep
 if ((show_status)); then show_table; exit 0; fi
 [[ -n $selected ]] || { usage >&2; exit 1; }
 if ((OAOS_DRY_RUN)); then
-  if [[ $selected == c03 ]]; then
+  if [[ $selected == c04 ]]; then
+    printf '%s\n' 'C04 plan: require C01-C03 verified and C02 E host gates, check DB/RLS role, back up E DB, apply assistant migration, then read back two-owner isolation and revocation. No changes made.'
+  elif [[ $selected == c03 ]]; then
     printf '%s\n' 'C03 plan: require C01/C02 verified and C02 E host gates, check DB/RLS role, back up E DB, apply mapping migration, then read back mapping decisions. No changes made.'
   elif [[ $selected == c02 ]]; then
     printf '%s\n' 'C02 plan: check E isolation, C01 verified, Ubuntu/systemd user manager, backup and rollback paths; create restricted environment and user units; add two nginx TLS paths; test/reload; read back linger, certificate and renewal timer. No changes made.'
@@ -75,6 +77,19 @@ if ((OAOS_DRY_RUN)); then
     printf 'Stage %s plan only; no changes made.\n' "$selected"
   fi
   exit 0
+fi
+if [[ $selected == c04 ]]; then
+  # shellcheck source=editions/company/c04.sh
+  . "$repo_root/editions/company/c04.sh"
+  code=0
+  company_c04_apply || code=$?
+  case $code in
+    0) if [[ $(stage_status c04) != verified ]]; then stage_mark c04 applied 'C04 migration checksum confirmed; E assistant read-back pending'; fi ;;
+    3) stage_mark c04 blocked 'C04 prerequisite, host or database gate pending' ;;
+    *) stage_mark c04 failed 'C04 migration failed; inspect E backup and schema'; code=1 ;;
+  esac
+  show_table
+  exit "$code"
 fi
 if [[ $selected == c03 ]]; then
   # shellcheck source=editions/company/c03.sh
