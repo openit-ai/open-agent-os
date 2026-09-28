@@ -81,7 +81,8 @@ printf 'State Recv-Q Send-Q Local Address:Port Peer Address:Port\nLISTEN 0 5 127
 EOF
 cat > "$temp_root/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-if [[ ${OAOS_C02_CURL_FAIL:-0} == 1 ]]; then printf '503'; else printf '200'; fi
+[[ $* == *'--resolve e.example.test:443:127.0.0.1'* && $* == *'https://e.example.test/company/health'* ]] || exit 2
+if [[ ${OAOS_C02_CURL_FAIL:-0} == 1 ]]; then printf 'unavailable\n'; else printf 'ok\n'; fi
 EOF
 cat > "$temp_root/bin/uname" <<'EOF'
 #!/usr/bin/env bash

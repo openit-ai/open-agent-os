@@ -12,7 +12,7 @@ export OAOS_STATE_EDITION=company OAOS_STAGES="${stages[*]}"
 usage() {
   cat <<'EOF'
 Usage: bash editions/company/install.sh --stage cNN [--dry-run] [--status] [--help]
-Stages: c01 through c17. c01-c02 are implemented; c03-c17 are recognized.
+Stages: c01 through c17. c01-c03 are implemented; c04-c17 are recognized.
 --status reads Company checkpoints without changing the system.
 --dry-run prints the selected stage plan without changing state or the system.
 Exit: 0 = selected stage applied; 3 = prerequisite/gate blocked; 1 = error.
@@ -67,12 +67,27 @@ if ! state_valid; then die 'Company state file is invalid JSON; preserve and rep
 if ((show_status)); then show_table; exit 0; fi
 [[ -n $selected ]] || { usage >&2; exit 1; }
 if ((OAOS_DRY_RUN)); then
-  if [[ $selected == c02 ]]; then
+  if [[ $selected == c03 ]]; then
+    printf '%s\n' 'C03 plan: require C01/C02 verified and C02 E host gates, check DB/RLS role, back up E DB, apply mapping migration, then read back mapping decisions. No changes made.'
+  elif [[ $selected == c02 ]]; then
     printf '%s\n' 'C02 plan: check E isolation, C01 verified, Ubuntu/systemd user manager, backup and rollback paths; create restricted environment and user units; add two nginx TLS paths; test/reload; read back linger, certificate and renewal timer. No changes made.'
   else
     printf 'Stage %s plan only; no changes made.\n' "$selected"
   fi
   exit 0
+fi
+if [[ $selected == c03 ]]; then
+  # shellcheck source=editions/company/c03.sh
+  . "$repo_root/editions/company/c03.sh"
+  code=0
+  company_c03_apply || code=$?
+  case $code in
+    0) if [[ $(stage_status c03) != verified ]]; then stage_mark c03 applied 'C03 migration checksum confirmed; E mapping read-back pending'; fi ;;
+    3) stage_mark c03 blocked 'C03 prerequisite, host or database gate pending' ;;
+    *) stage_mark c03 failed 'C03 migration failed; inspect E backup and schema'; code=1 ;;
+  esac
+  show_table
+  exit "$code"
 fi
 if [[ $selected == c02 ]]; then
   # shellcheck source=editions/company/c02.sh
@@ -118,7 +133,7 @@ if [[ $project_ready != true ]]; then
 fi
 
 code=0
-bash "$repo_root/editions/company/migrate.sh" || code=$?
+bash "$repo_root/editions/company/migrate.sh" --through 1 || code=$?
 case $code in
   0)
     if [[ $(stage_status c01) != verified ]]; then stage_mark c01 applied 'Migration checksum confirmed; read-back pending'; fi

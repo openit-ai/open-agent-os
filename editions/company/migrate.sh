@@ -6,16 +6,20 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$repo_root/bootstrap/lib/common.sh"
 
 usage() {
-  printf 'Usage: bash editions/company/migrate.sh [--check]\nUses libpq PG* environment or PGSERVICE; set PGDATABASE explicitly.\n'
+  printf 'Usage: bash editions/company/migrate.sh [--check] [--through VERSION]\nUses libpq PG* environment or PGSERVICE; set PGDATABASE explicitly.\n'
 }
 check_only=0
-case ${1:-} in
-  '') ;;
-  --check) check_only=1 ;;
-  --help|-h) usage; exit 0 ;;
-  *) usage >&2; exit 1 ;;
-esac
-(($# <= 1)) || { usage >&2; exit 1; }
+through=0
+while (($#)); do
+  case $1 in
+    --check) check_only=1; shift ;;
+    --through)
+      (($# >= 2)) && [[ $2 =~ ^[1-9][0-9]*$ ]] || { usage >&2; exit 1; }
+      through=$2; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) usage >&2; exit 1 ;;
+  esac
+done
 [[ -n ${PGDATABASE:-} ]] || { warn 'PGDATABASE is required for the Company database.'; exit 3; }
 if ! have_cmd psql || ! have_cmd sha256sum; then warn 'psql and sha256sum are required.'; exit 3; fi
 
@@ -27,10 +31,13 @@ if ! db_query 'SELECT 1' >/dev/null; then warn 'Company database connection fail
 files=("$repo_root"/editions/company/migrations/[0-9][0-9][0-9]_*.sql)
 [[ -f ${files[0]} ]] || die 'Company migration files are missing.'
 last_file_version=0
+last_seen_version=0
 for file in "${files[@]}"; do
   name=${file##*/}
   version=$((10#${name:0:3}))
-  ((version > last_file_version)) || die 'Migration file versions are not strictly increasing.'
+  ((version == last_seen_version + 1)) || die 'Migration file versions must be consecutive.'
+  last_seen_version=$version
+  if ((through && version > through)); then continue; fi
   last_file_version=$version
   checksum=$(sha256sum "$file") || die 'Cannot checksum a migration.'
   checksum=${checksum%% *}
@@ -61,5 +68,6 @@ for file in "${files[@]}"; do
   fi
   info "Migration $version applied."
 done
-history=$(db_query "SELECT COALESCE(MAX(version), 0) || ':' || COUNT(*) FROM company.schema_migrations") || die 'Cannot inspect migration history.'
-[[ $history == "$last_file_version:${#files[@]}" ]] || die 'Database migration history has an unknown version or gap.'
+if ((through && last_file_version != through)); then die 'Requested migration version is not available.'; fi
+history=$(db_query "SELECT COALESCE(MAX(version), 0) || ':' || COUNT(*) FROM company.schema_migrations WHERE version <= $last_file_version") || die 'Cannot inspect migration history.'
+[[ $history == "$last_file_version:$last_file_version" ]] || die 'Database migration history has an unknown version or gap.'
