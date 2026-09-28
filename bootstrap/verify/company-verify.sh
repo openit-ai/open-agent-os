@@ -10,7 +10,7 @@ for n in $(seq -w 1 17); do stages+=("c$n"); done
 export OAOS_STAGES="${stages[*]}"
 
 usage() {
-  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 and C02 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
+  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 through C03 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
 }
 phase=''
 read_back=0
@@ -30,6 +30,12 @@ done
 OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
 export OAOS_STATE_FILE
 if ! state_valid; then die 'Company state file is invalid JSON.'; fi
+if [[ $phase == c03 ]]; then
+  # shellcheck source=editions/company/c03-verify.sh
+  . "$repo_root/editions/company/c03-verify.sh"
+  company_c03_verify
+  exit $?
+fi
 if [[ $phase == c02 ]]; then
   # shellcheck source=editions/company/c02-verify.sh
   . "$repo_root/editions/company/c02-verify.sh"
@@ -47,7 +53,7 @@ role_safe=$(db_query "SELECT NOT (rolsuper OR rolbypassrls) FROM pg_roles WHERE 
 if [[ $role_safe != t ]]; then warn 'Read-back needs a non-BYPASSRLS database role.'; exit 3; fi
 
 result=0
-bash "$repo_root/editions/company/migrate.sh" --check >/dev/null 2>&1 || result=$?
+bash "$repo_root/editions/company/migrate.sh" --check --through 1 >/dev/null 2>&1 || result=$?
 if ((result)); then
   if ((result == 3)); then warn 'Migration version is pending.'; exit 3; fi
   printf '%-3s %-24s %-7s %s\n' '#' CHECK RESULT EVIDENCE

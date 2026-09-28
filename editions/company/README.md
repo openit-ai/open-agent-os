@@ -92,6 +92,24 @@ bash bootstrap/verify/company-verify.sh --phase c02 --read-back
 
 첫 명령의 성공적인 설치 종료 코드 `0`은 `applied`만 뜻합니다. 검증기는 서비스·백업 타이머의 enabled/active, loopback·HTTPS health, TLS, 재실행 안정성 및 설치 당시와 다른 boot ID에서 재부팅 후 서비스 복귀를 확인한 경우에만 `verified`로 올립니다. 같은 부팅에서 확인하면 종료 코드 `3`과 `applied`를 유지합니다. 게이트 차단은 `3`, 검사 실패는 `1`입니다. 실제 E 설치와 재부팅 검증은 운영자가 수행합니다.
 
+## C03: 구성원·외부 계정 매핑
+
+C03은 C01·C02가 E에서 모두 `verified`인 뒤 실행합니다. C02의 `deployment.conf`와 Ubuntu/systemd·TLS·백업 경로 게이트를 다시 확인하고, 로컬 E PostgreSQL의 기존 `postgres` 유지보수 계정으로 전체 DB 덤프를 원복 디렉터리에 보존한 다음 002 마이그레이션을 적용합니다. 앱의 설치·조회 역할은 `SUPERUSER`/`BYPASSRLS`가 없어야 합니다. 기본 백업 소켓은 `/var/run/postgresql`이며 다른 로컬 소켓을 쓰는 E에서는 `OAOS_COMPANY_PG_SOCKET_DIR`에 절대 경로를 지정합니다. 비밀번호는 명령 인수에 넣지 말고 기존 libpq 자격 파일을 사용합니다.
+
+```bash
+bash editions/company/install.sh --stage c03 --dry-run
+bash editions/company/install.sh --stage c03
+bash bootstrap/verify/company-verify.sh --phase c03 --read-back
+```
+
+C03은 C02의 user unit·linger 게이트를 다시 확인하므로 **systemd user manager가 보이는 세션에서 실행**해야 합니다. SSH·sudo로 원격 실행할 때는 `XDG_RUNTIME_DIR=/run/user/$(id -u)`를 넘기지 않으면 `C02 BLOCKED: systemd user manager is unavailable.`로 차단됩니다(차단은 정상 동작이며 환경 문제입니다).
+
+002는 관리자 문맥에서 `resolve_project_member`, `resolve_external_member`, `bind_external_account`를 제공합니다. 조회는 활성 구성원만 `allow`하고, 미등록·정지·퇴사는 각각 `unregistered`·`inactive`·`departed`로 거부합니다. 외부 주체 중복 바인딩은 `duplicate`로 거부합니다. 세션의 조직·행위자 ID는 신뢰된 서버가 인증 후 트랜잭션 범위에 설정해야 합니다. C03은 이 SQL 계약과 검증을 제공하며, 실제 Project 관리자 인증·등록 화면은 G10/C10에서 연결합니다.
+
+**역할 구분 (E 실측 함정)**: `~/.config/oaos-company/deployment.conf`의 `PGUSER`는 **앱 조회 역할이어야 하며 `SUPERUSER`/`BYPASSRLS`이면 안 됩니다.** C01·C03 read-back은 RLS를 우회하지 않는 역할을 요구하므로, 백업용 우회 역할(예: `oaos_company_backup`)이 기록돼 있으면 C03이 `C03 BLOCKED: database role bypasses RLS.`로 차단됩니다. 백업용 우회 역할은 systemd unit의 `EnvironmentFile`인 `~/.config/oaos-company/.env`에만 둡니다(사전 전체 덤프는 C03이 `postgres` 유지보수 계정으로 수행하므로 `deployment.conf`에 둘 필요가 없습니다). C02 설치 시 `PGUSER`를 백업 역할로 넘기면 이 값이 그대로 기록되므로, 설치·검증은 앱 역할로 실행합니다.
+
+read-back은 E의 loopback PostgreSQL에 직접 연결해 관리자와 두 구성원, 외부 주체, 다른 조직의 임시 행을 만들고 실제 함수 응답과 C01의 제약·RLS를 검사합니다. 검증 트랜잭션은 롤백되므로 운영 매핑을 생성하지 않습니다. 공개 도메인의 HTTP 200 응답은 C03 통과 근거로 사용하지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 매핑 응답 실패 `1`입니다.
+
 ## 상태
 
 Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다.

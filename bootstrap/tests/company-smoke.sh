@@ -18,7 +18,7 @@ HOME="$temp_root/home" bash "$verify" --help | grep -Fq -- '--read-back' || fail
 env -u HOME bash "$verify" --help > /dev/null || fail 'verify help without HOME'
 code=0
 HOME="$temp_root/home" bash "$install" --stage c03 > /dev/null 2>&1 || code=$?
-[[ $code == 3 ]] || fail 'unimplemented stage exit code'
+[[ $code == 3 ]] || fail 'C03 prerequisite gate exit code'
 code=0
 HOME="$temp_root/home" bash "$install" --stage c01 > /dev/null 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'missing Project prerequisite exit code'
@@ -39,16 +39,21 @@ cat > "$temp_root/bin/psql" <<'MOCK'
 set -Eeuo pipefail
 [[ ${OAOS_FAKE_DB_FAIL:-0} != 1 ]] || exit 2
 if [[ $* == *--single-transaction* ]]; then
-  [[ $* == *'001_company_schema.sql'* ]] || exit 2
+  if [[ $* == *'001_company_schema.sql'* ]]; then version=1
+  elif [[ $* == *'002_member_mapping.sql'* ]]; then version=2
+  else exit 2; fi
   [[ $* =~ ([0-9a-f]{64}) ]] || exit 2
-  printf '%s\n' "${BASH_REMATCH[1]}" > "$OAOS_FAKE_DB_STATE"
+  printf '%s:%s\n' "$version" "${BASH_REMATCH[1]}" >> "$OAOS_FAKE_DB_STATE"
   printf 'apply\n' >> "$OAOS_FAKE_DB_LOG"
 elif [[ $* == *'SELECT to_regclass'* ]]; then
   [[ -f $OAOS_FAKE_DB_STATE ]] && printf 't\n' || printf 'f\n'
 elif [[ $* == *'SELECT checksum'* ]]; then
-  [[ -f $OAOS_FAKE_DB_STATE ]] && cat "$OAOS_FAKE_DB_STATE"
+  [[ $* =~ version\ =\ ([0-9]+) ]] || exit 2
+  grep "^${BASH_REMATCH[1]}:" "$OAOS_FAKE_DB_STATE" | cut -d: -f2 || true
 elif [[ $* == *'SELECT COALESCE(MAX(version)'* ]]; then
-  if [[ $* == *'COUNT(*)'* ]]; then printf '1:1\n'; else printf '1\n'; fi
+  count=$(wc -l < "$OAOS_FAKE_DB_STATE")
+  if [[ $* == *'WHERE version <= 1'* ]]; then count=1; fi
+  if [[ $* == *'COUNT(*)'* ]]; then printf '%s:%s\n' "$count" "$count"; else printf '%s\n' "$count"; fi
 elif [[ $* == *'SELECT 1'* ]]; then
   printf '1\n'
 else
@@ -58,7 +63,7 @@ MOCK
 chmod 700 "$temp_root/bin/psql"
 export OAOS_FAKE_DB_STATE="$temp_root/db-checksum" OAOS_FAKE_DB_LOG="$temp_root/db-log"
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/first"
-[[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'migration was not applied'
+[[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'only C01 migration should be applied'
 python3 - "$temp_root/home/.oaos-install/company-state.json" <<'PY' || fail 'applied state'
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
@@ -69,12 +74,12 @@ assert len(state['stages']) == 17
 PY
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/second"
 [[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'migration was applied twice'
-HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$runner" --check > /dev/null || fail 'checksum check'
+HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$runner" --check --through 1 > /dev/null || fail 'checksum check'
 printf 'PASS: atomic runner call, checksum skip and applied checkpoint\n'
 
-printf '%064d\n' 0 > "$OAOS_FAKE_DB_STATE"
+sed -i "1s/:[0-9a-f]\{64\}$/:$(printf '%064d' 0)/" "$OAOS_FAKE_DB_STATE"
 code=0
-HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$runner" --check > /dev/null 2>&1 || code=$?
+HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$runner" --check --through 1 > /dev/null 2>&1 || code=$?
 [[ $code == 1 ]] || fail 'checksum drift exit code'
 code=0
 OAOS_FAKE_DB_FAIL=1 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > /dev/null 2>&1 || code=$?
