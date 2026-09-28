@@ -54,7 +54,7 @@ Company는 5~50인 중소기업을 위한 **Project + 거버넌스 레이어**�
 | C02 | Docker 없는 배포 골격; 단계·체크포인트·systemd 단위 | E | `bash editions/company/install.sh --stage c02` → `systemctl --user is-active oaos-company` → `bash bootstrap/verify/company-verify.sh --phase c02 --read-back`; 재실행·재부팅 후 활성 상태 출력 | C01 | 1일 |
 | C03 | 구성원 식별·매핑; 관리자·외부 계정 매핑 | E | `bash editions/company/install.sh --stage c03` → `bash bootstrap/verify/company-verify.sh --phase c03 --read-back`; 실제 매핑 조회와 중복·미등록·퇴사 계정 거부 응답 | C01·C02 | 1일 |
 | C04 | 개인비서 등록; 구성원별 비서·지식 공간 생성·해제 | E | `bash editions/company/install.sh --stage c04` → `bash bootstrap/verify/company-verify.sh --phase c04 --read-back`; 두 사용자 비서 목록·지식/출력 격리 응답 | C03 | 1일 |
-| C05 | 개인 자격 보관; owner 결속·회전·철회 | E | `bash editions/company/install.sh --stage c05` → `bash bootstrap/verify/company-verify.sh --phase c05 --read-back`; 비밀 원문 없이 보관 권한·타인 조회 거부·철회 후 실패 출력 | C04 | 1일 |
+| C05 | 개인 자격 보관; owner 결속·회전·철회 | E | `bash editions/company/install.sh --stage c05` → `bash bootstrap/verify/company-verify.sh --phase c05 --read-back`; 비밀 원문 없이 보관 권한·타인 조회 거부·회전 전 세대 사용 실패·철회 후 실패와 감사 이력 출력 | C04 | 1일 |
 | C06 | 정책·JIT 승인; 최소 정책 묶음·일회 승인 | E | `bash editions/company/install.sh --stage c06` → `bash bootstrap/verify/company-verify.sh --phase c06 --read-back`; 실제 실행 요청의 기본 거부·승인 후 허용·만료/재사용 거부 응답 | C03·C05 | 1일 |
 | C07 | 감사; 등록·승인·실행·철회 이벤트 조회 | E | `bash editions/company/install.sh --stage c07` → `bash bootstrap/verify/company-verify.sh --phase c07 --read-back`; 성공·거부 사건의 감사 조회 및 비밀 원문 부재 출력 | C06 | 1일 |
 | C08 | ACL 검색; 원본과 개인 공간의 권한 선검사 | E | `bash editions/company/install.sh --stage c08` → `bash bootstrap/verify/company-verify.sh --phase c08 --read-back`; 실제 색인 후 허용 검색·타인 검색 거부·권한 변경/삭제 반영 응답 | C04·C06 | 1일 |

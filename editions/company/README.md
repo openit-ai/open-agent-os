@@ -124,6 +124,22 @@ bash bootstrap/verify/company-verify.sh --phase c04 --read-back
 
 read-back은 E의 PostgreSQL에서 두 구성원과 다른 조직의 임시 비서·지식·출력을 생성해 실제 함수 응답과 RLS를 검사하고 트랜잭션을 롤백합니다. 설치 재실행은 003 checksum이 일치하면 새 백업·마이그레이션 없이 끝납니다. 공개 HTTP 응답은 통과 근거가 아닙니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
+## C05: 개인 자격 보관, 회전과 철회
+
+C05는 C01~C04가 모두 `verified`인 E에서 실행합니다. C04와 같은 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 검사합니다. `deployment.conf`의 `PGUSER`는 앱 역할이며, 백업용 우회 역할은 `.env`에만 둡니다. 원격 실행에서 `XDG_RUNTIME_DIR`이 없어 user manager가 보이지 않으면 정상적으로 종료 코드 `3`으로 차단됩니다.
+
+```bash
+bash editions/company/install.sh --stage c05 --dry-run
+bash editions/company/install.sh --stage c05
+bash bootstrap/verify/company-verify.sh --phase c05 --read-back
+```
+
+설치기는 전체 DB 덤프를 저장한 뒤 004 마이그레이션을 적용합니다. AES-256-GCM용 32바이트 키는 Company 전용 `.env`에 생성하며, 파일은 `0600`, 상위 디렉터리는 `0700`으로 유지합니다. 제한된 키 백업 디렉터리에 `.env` 사본을 보관합니다. 설치 재실행은 004 checksum과 기존 키를 확인하며 새 백업을 만들지 않습니다. 이미 적용된 DB에서 키가 없으면 새 키를 생성하지 않고 차단합니다. Python `cryptography` 모듈이 E에 있어야 합니다.
+
+개인 자격의 원문은 서비스 내부에서만 AES-256-GCM으로 암호화·복호화합니다. 추가 인증 데이터는 조직·owner·공급자·목적이며 각 암호화에 새 nonce를 사용합니다. SQL 함수는 암호문·nonce만 저장하고, 활성 owner와 활성 개인비서 문맥에서만 암호화된 봉투를 반환합니다. 비서 사용 판정은 자격 ID와 현재 세대를 함께 확인합니다. 회전은 암호문·nonce를 교체하고 세대를 올려 이전 세대 요청을 거부합니다. 철회는 암호문·nonce를 지우고 조회·사용·회전을 거부합니다. 비서 해제 때도 그 owner의 활성 자격을 함께 철회하며, 새 비서에 이전 자격이 재노출되지 않습니다. 저장·회전·철회 사건은 원문 없이 추가 전용 감사 행에 남습니다. 실제 외부 공급자의 토큰 무효화는 해당 연동 Phase에서 함께 수행해야 합니다.
+
+read-back은 E PostgreSQL에서 두 owner와 다른 조직의 임시 자격을 만들고, owner 조회, 타인 거부, 회전 전 세대 실패, 철회 후 실패와 감사 사건을 실제 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 검증 출력에는 비밀 원문을 싣지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
 ## 상태
 
 Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다.
