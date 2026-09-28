@@ -31,7 +31,7 @@
 ## URL 하나의 경험
 
 ```text
-나      openit-ai/open-agent-os 설치해줘
+나      github.com/openit-ai/open-agent-os 설치해줘
 
 에이전트  에디션이 3개입니다: Personal(1인), Project(소규모 팀),
          Company(5~50인). 이 머신에는 Personal이 맞습니다. 진행할까요?
