@@ -487,8 +487,8 @@ do_team() {
 
 1. Mattermost 관리자: https://$chat 에서 팀을 만들고 멤버를 초대합니다.
 2. Hermes 봇을 팀에 추가하고 MATTERMOST_ALLOWED_USERS에 허용할 계정을 설정합니다.
-3. Outline 최초 로그인(운영자 수동 단계): 신원 제공자(Slack/Google/OIDC)를 .env에 설정하거나, 검증 목적이면 무인증 설치 엔드포인트로 최초 관리자를 만든 뒤 https://$note 에 로그인합니다.
-4. Settings → API Keys에서 G8 API 토큰을 발급받아 Hermes .env의 OUTLINE_API_TOKEN에 저장하고 연결을 검증합니다.
+3. Outline 최초 로그인(운영자 수동 단계): 신원 제공자(Slack/Google/OIDC)를 .env에 설정하거나, 검증 목적이면 무인증 설치 엔드포인트로 최초 팀·사용자를 만든 뒤 https://$note 에 로그인합니다. 이때 관리자 개인 계정이 아니라 AI에이전트 전용 계정을 먼저 등록합니다.
+4. AI에이전트 계정의 Settings → API Keys에서 G8 API 토큰을 발급받아 Hermes .env의 OUTLINE_API_TOKEN에 저장하고 연결을 검증합니다.
 5. 허용 계정과 비허용 계정의 채팅 동작을 각각 확인합니다.
 6. 봇 메일함의 송신·수신을 확인합니다.
 
@@ -499,7 +499,7 @@ EOF2
   fi
   outline_token=${OAOS_OUTLINE_API_TOKEN:-$(config_value OUTLINE_API_TOKEN)}
   [[ -n $outline_token && $outline_token != null ]] || outline_token=$(stack_get OUTLINE_API_TOKEN)
-  [[ -n $outline_token ]] || { warn "G8: create an Outline admin at https://$note and provide OAOS_OUTLINE_API_TOKEN."; return 3; }
+  [[ -n $outline_token ]] || { warn "G8: register the AI-agent account in Outline at https://$note and provide OAOS_OUTLINE_API_TOKEN."; return 3; }
   if curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $outline_token" -H 'Content-Type: application/json' --data '{}' "http://127.0.0.1:3000/api/auth.info" >/dev/null 2>&1; then
     hermes config set OUTLINE_API_TOKEN "$outline_token" >/dev/null 2>&1 || return 3
     stack_remove OUTLINE_API_TOKEN || return 1

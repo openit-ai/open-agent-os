@@ -62,9 +62,9 @@ Enable two-factor authentication for Gmail, then create and copy an app password
 
 Open the initial Mattermost URL provided by the agent and create the first administrator account in the browser. Create the Hermes bot and token in System Console, then let the agent store and verify the token. The checked `mmctl --local` release cannot create bots or tokens; the agent uses it for administrator and SiteURL checks.
 
-## G8 — Outline API token (Project)
+## G8 — Outline AI에이전트 계정·API 토큰 (Project)
 
-Sign in as the Outline administrator, issue an API token, and paste it to the agent. The agent stores it as a secret and verifies it without echoing it.
+AI에이전트 전용 계정을 Outline에 먼저 등록한 뒤, 그 계정으로 로그인하여 API 토큰을 발급해 에이전트에게 전달합니다. 에이전트는 토큰을 시크릿으로 보관하고 에코 없이 검증합니다. wiki 작성/관리의 주체는 AI에이전트입니다.
 
 ## G9 — Bot mailbox (Project / Company)
 

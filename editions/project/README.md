@@ -31,7 +31,7 @@ G3  Telegram 사용자 ID   숫자 ID 붙여넣기
 G0·G6  VPS + 도메인      구매 → IP·도메인 전달 (서버 셋업은 에이전트가)
 G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 붙여넣기
 G7  Mattermost 관리자    초기 관리자 계정 생성
-G8  Outline API 토큰     관리자 가입 → API 토큰 붙여넣기
+G8  Outline AI에이전트 계정·API 토큰     에이전트 전용 계정 등록 → 그 계정으로 API 토큰 붙여넣기
 ────────────────────────
 이후: 설치 → 팀 서비스 셋업 → 멤버 등록 → 검증 → 보고
 ```
@@ -62,7 +62,7 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 |---|---|---|
 | G6 | `OAOS_BASE_DOMAIN`, `OAOS_ACME_EMAIL` | 세 A 레코드가 서버 공인 IPv4를 가리켜야 합니다. 다른 도메인을 쓴다면 `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN`을 각각 지정합니다. |
 | G7 | `MATTERMOST_TOKEN` | Mattermost System Console에서 Hermes 봇과 토큰을 발급해 `~/oaos/stack/.env`(600)에 보관합니다. 확인한 `mmctl --local` 버전은 봇·토큰 생성을 지원하지 않습니다. |
-| G8 | `OAOS_OUTLINE_API_TOKEN` | **운영자 수동 단계**입니다. Outline 관리자가 브라우저로 로그인한 뒤 Settings → API Keys에서 토큰을 발급해 Hermes `.env`에 `OUTLINE_API_TOKEN`으로 저장합니다. 설치기는 토큰이 없으면 게이트를 `MANUAL`로 표시하고, 값이 있는데 인증이 거부될 때만 실패로 기록합니다. |
+| G8 | `OAOS_OUTLINE_API_TOKEN` | **운영자 수동 단계**입니다. Outline에 AI에이전트 전용 계정을 먼저 등록한 뒤, 그 계정으로 브라우저 로그인하여 Settings → API Keys에서 토큰을 발급해 Hermes `.env`에 `OUTLINE_API_TOKEN`으로 저장합니다. wiki 작성/관리의 주체는 AI에이전트이며, 봇이 만드는 모든 문서는 이 계정 명의로 생성됩니다. 사람이 Outline에서 직접 수정한 경우에만 그 사용자의 기록이 남습니다. 설치기는 토큰이 없으면 게이트를 `MANUAL`로 표시하고, 값이 있는데 인증이 거부될 때만 실패로 기록합니다. |
 | G9 | `OAOS_MAIL_ADDRESS`, `OAOS_MAIL_PASSWORD`, `OAOS_MAIL_IMAP_HOST`, `OAOS_MAIL_SMTP_HOST` | 봇 전용 메일함 값입니다. 비밀번호는 공백을 제거한 앱 비밀번호로 전달합니다. |
 
 `--stage`로 막힌 게이트부터 재시도합니다. 실제 송수신과 허용·비허용 팀 계정 동작은 에이전트와 함께 확인해야 합니다. 신규 VPS 실측 전에는 전체 설치 완료로 보고하지 않습니다.
@@ -71,7 +71,7 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 
 ### Outline 최초 로그인 — 운영자 수동 단계 (G8)
 
-설치기는 Outline을 127.0.0.1:3000에 바인딩하고 `.env`를 준비하지만, **최초 관리자 로그인과 API 토큰 발급은 브라우저에서 운영자가 수행합니다.** 실측한 v1.10.1에서는 이메일 매직링크 로그인 제공자가 활성화되지 않으므로(설치기는 SMTP만 설정하며 `/api/auth.config`가 빈 목록을 반환), 다음 중 하나로 최초 계정을 만듭니다.
+설치기는 Outline을 127.0.0.1:3000에 바인딩하고 `.env`를 준비하지만, **최초 계정 등록과 API 토큰 발급은 브라우저에서 운영자가 수행합니다.** wiki 작성/관리의 주체는 AI에이전트이므로, 관리자 개인 계정이 아니라 **AI에이전트 전용 계정을 먼저 등록**하고 이후 토큰도 그 계정으로 발급합니다. 실측한 v1.10.1에서는 이메일 매직링크 로그인 제공자가 활성화되지 않으므로(설치기는 SMTP만 설정하며 `/api/auth.config`가 빈 목록을 반환), 다음 중 하나로 최초 계정을 만듭니다.
 
 1. **권장**: Outline `.env`에 조직에서 쓰는 신원 제공자(Slack/Google/OIDC)를 설정하고 재시작한 뒤 그 계정으로 로그인합니다.
 2. 신원 제공자를 붙일 수 없고 검증·테스트 목적이라면, 무인증 설치 엔드포인트 `POST /api/installation.create`(`{"teamName","userName","userEmail"}`)로 최초 팀·사용자만 만든 뒤, 로컬에서 세션을 얻어 API 키를 발급합니다(운영 환경에서는 사용하지 않습니다).
