@@ -79,7 +79,7 @@ The agent doesn't just answer — it can operate the browser and applications on
 - **Work portals** — automates login and repeated entry on accounting, tax, and ERP sites. Korean public certificates (공동인증서) stay in your local vault; signing and submission run only after approval.
 - **Government paperwork** — from application through payment, issuance, saving, and a wiki record. Payment steps pause for your approval.
 
-Setup (the browser-automation environment) is guided by the agent. Step-by-step recipes: [Cookbook §6](docs/cookbook.md). On the Company edition, computer use is governed by the same policy, approvals, and audit.
+Setup (the browser-automation environment) is guided by the agent. Step-by-step recipes: [Cookbook §6](docs/cookbook.md). Credential typing stays vault-only by default; the local owner may opt in on a Personal machine — [design](docs/computer-use-credential-typing-v1.0.md). On the Company edition, computer use is governed by the same policy, approvals, and audit.
 
 ## Quick start — "One URL"
 

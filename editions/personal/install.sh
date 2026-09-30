@@ -255,6 +255,7 @@ do_harness() {
       { printf '<!-- Draft — refine through conversation. Do not store secrets. -->\n'; cat "$repo_root/harness/templates/$name.md"; } > "$target" || return 1
     fi
   done
+  info 'Credential typing stays vault-only (upstream default). Owner opt-in: bash editions/personal/computer-use-policy.sh enable — see docs/computer-use-credential-typing-v1.0.md.'
 }
 
 install_personal_cron_script() {

@@ -22,3 +22,11 @@ project, it belongs here.* No secrets.
 ## Notes
 
 - {{ports, paths, deployment notes, gotchas}}.
+
+<!--
+COMPUTER USE — credential typing stays vault-only by default (upstream Hermes
+policy: the agent must never type passwords / card numbers / CVC / codes
+directly). The local owner may opt in on a Personal machine only:
+  bash editions/personal/computer-use-policy.sh {status|enable|disable}
+Design: docs/computer-use-credential-typing-v1.0.md. No secrets here.
+-->
