@@ -1,0 +1,111 @@
+# Project Edition — 팀용 에이전트
+
+> 작은 팀(2~6인)을 위한 팀 어시스턴트. 팀 채팅·지식·메일을 하나의 에이전트가 잇습니다.
+
+[← README로 돌아가기](../../README.md) · [쿡북](../../docs/cookbook.md) · [FAQ](../../docs/faq.md)
+
+## 이런 분께
+
+- 팀 채팅·문서·메일이 흩어져 맥락을 다시 모으는 데 시간을 쓰는 팀
+- 팀 지식이 사람이 그만둘 때 같이 사라지는 게 아쉬운 팀
+- 외주 SaaS가 아니라 직접 통제하는 팀 비서가 필요한 팀
+
+## 구성
+
+**Personal 기반 + 추가**
+
+- Ubuntu 22.04 또는 24.04 LTS VPS 1대 — 4 vCPU / 16GB / 200GB (예: 프로모션 기준 월 약 ₩16,000대, 2026-09 확인)
+- Mattermost — 팀 채팅 창구 (+ Telegram 병행)
+- Outline — 팀 문서·지식베이스
+- 봇 전용 메일함 — 팀 메일 확인·초안·전달
+- 팀 계정 — 멤버별 접근 통제(허용목록/페어링)
+- 도메인 + HTTPS (nginx + TLS)
+
+## 설치 흐름 — 필수 게이트 8개
+
+```text
+선택  에디션 선택          "Project로 진행할까요?"
+G1  LLM 플랜             가입 링크 → 키 붙여넣기
+G2  Telegram 봇 토큰     @BotFather 토큰 붙여넣기
+G3  Telegram 사용자 ID   숫자 ID 붙여넣기
+G0·G6  VPS + 도메인      구매 → IP·도메인 전달 (서버 셋업은 에이전트가)
+G9  봇 메일함            전용 메일 계정 생성 → 앱 비밀번호 붙여넣기
+G7  Mattermost 관리자    초기 관리자 계정 생성
+G8  Outline API 토큰     관리자 가입 → API 토큰 붙여넣기
+────────────────────────
+이후: 설치 → 팀 서비스 셋업 → 멤버 등록 → 검증 → 보고
+```
+
+에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
+
+에이전트는 Project VPS에서 `bash editions/project/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/project/install.sh`를 실행합니다. 두 명령과 설치 후 `bash bootstrap/verify/project-verify.sh`는 같은 비루트 관리자 계정에서 실행하며, 실설치·검증 전 `sudo -n true`가 성공해야 합니다. 검증기는 인증서 검사와 `nginx -t`에만 비대화식 sudo를 사용합니다. 상태는 `~/.oaos-install/state.json`에 저장되며, 미완료 스테이지만 다시 실행할 수 있습니다. 도메인에는 `OAOS_BASE_DOMAIN`, 인증서 이메일에는 `OAOS_ACME_EMAIL`을 전달합니다.
+
+스테이지 순서는 `prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify`입니다. `team`에서 Mattermost·Outline 자격 증명을 저장한 뒤 처음으로 게이트웨이를 기동합니다. Project 크론은 일일 백업만 등록합니다.
+서버 준비 때 SSH 키 로그인이 되는지와 UFW가 활성화되어 있는지를 별도로 확인합니다. 설치기는 기존 UFW 규칙에 필요한 포트만 추가하며 SSH 키 정책과 자동 보안 업데이트는 설정하지 않습니다.
+
+| 구성 요소 | 설치·운영 방식 | 경로 |
+|---|---|---|
+| PostgreSQL·Redis | Ubuntu apt, systemd | 로컬 서비스; DB와 Redis는 로컬 접속 |
+| Mattermost | 서명된 공식 APT 저장소, systemd | `/opt/mattermost`; `mmctl`은 `/opt/mattermost/bin/mmctl` |
+| Outline | 공식 v1.10.1 태그, Node.js 22·Yarn 소스 빌드, systemd | `/opt/outline`, `/var/lib/outline/data`; 서비스 `oaos-outline` |
+| 환경·시크릿 | 설치 상태와 분리된 600 권한 파일 | `~/oaos/stack/.env`, `/etc/oaos/outline.env`, Mattermost 설정 |
+
+Mattermost의 [서명 APT 방식](https://docs.mattermost.com/deployment-guide/server/linux/deploy-ubuntu)은 보안 업데이트 경로가 단순하여 채택했습니다. [공식 tarball·systemd 방식](https://docs.mattermost.com/deployment-guide/server/linux/deploy-tar)은 대안입니다. Outline 빌드·설정은 [v1.10.1 공식 소스](https://github.com/outline/outline/releases/tag/v1.10.1)를 기준으로 합니다. 설치된 패키지 버전은 `~/oaos/stack/versions.txt`에 남습니다.
+
+Outline 3000 포트는 고정 태그의 `server/main.ts` 한 줄만 수정하여 `127.0.0.1`에 바인딩합니다. 소스·빌드 산출물·실제 리스너 검사를 통과하지 못하면 설치를 중단합니다. 태그를 업데이트할 때는 패치를 다시 적용하고 전부 재검증해야 합니다. upstream이 공식 바인딩 설정을 추가하면 검증 후 패치를 제거합니다. 실제 소스 빌드에서 바인딩 코드는 `build/server/main.js`에 들어가고 `build/server/index.js`가 이를 불러옵니다.
+
+Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`으로 계획을 확인하고, 같은 명령을 `--dry-run` 없이 실행합니다. 시크릿 `.env`는 이전되지 않습니다.
+
+설치 게이트에서 에이전트에게 전달할 환경값:
+
+| 게이트 | 값 | 설명 |
+|---|---|---|
+| G6 | `OAOS_BASE_DOMAIN`, `OAOS_ACME_EMAIL` | 세 A 레코드가 서버 공인 IPv4를 가리켜야 합니다. 다른 도메인을 쓴다면 `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN`을 각각 지정합니다. |
+| G7 | `MATTERMOST_TOKEN` | Mattermost System Console에서 Hermes 봇과 토큰을 발급해 `~/oaos/stack/.env`(600)에 보관합니다. 확인한 `mmctl --local` 버전은 봇·토큰 생성을 지원하지 않습니다. |
+| G8 | `OAOS_OUTLINE_API_TOKEN` | **운영자 수동 단계**입니다. Outline 관리자가 브라우저로 로그인한 뒤 Settings → API Keys에서 토큰을 발급해 Hermes `.env`에 `OUTLINE_API_TOKEN`으로 저장합니다. 설치기는 토큰이 없으면 게이트를 `MANUAL`로 표시하고, 값이 있는데 인증이 거부될 때만 실패로 기록합니다. |
+| G9 | `OAOS_MAIL_ADDRESS`, `OAOS_MAIL_PASSWORD`, `OAOS_MAIL_IMAP_HOST`, `OAOS_MAIL_SMTP_HOST` | 봇 전용 메일함 값입니다. 비밀번호는 공백을 제거한 앱 비밀번호로 전달합니다. |
+
+`--stage`로 막힌 게이트부터 재시도합니다. 실제 송수신과 허용·비허용 팀 계정 동작은 에이전트와 함께 확인해야 합니다. 신규 VPS 실측 전에는 전체 설치 완료로 보고하지 않습니다.
+
+이미 게이트웨이가 실행 중일 때 `team` 구성을 다시 적용한 경우에는 관리자(사용자)가 별도 셸에서 게이트웨이 서비스를 재시작해야 반영됩니다.
+
+### Outline 최초 로그인 — 운영자 수동 단계 (G8)
+
+설치기는 Outline을 127.0.0.1:3000에 바인딩하고 `.env`를 준비하지만, **최초 관리자 로그인과 API 토큰 발급은 브라우저에서 운영자가 수행합니다.** 실측한 v1.10.1에서는 이메일 매직링크 로그인 제공자가 활성화되지 않으므로(설치기는 SMTP만 설정하며 `/api/auth.config`가 빈 목록을 반환), 다음 중 하나로 최초 계정을 만듭니다.
+
+1. **권장**: Outline `.env`에 조직에서 쓰는 신원 제공자(Slack/Google/OIDC)를 설정하고 재시작한 뒤 그 계정으로 로그인합니다.
+2. 신원 제공자를 붙일 수 없고 검증·테스트 목적이라면, 무인증 설치 엔드포인트 `POST /api/installation.create`(`{"teamName","userName","userEmail"}`)로 최초 팀·사용자만 만든 뒤, 로컬에서 세션을 얻어 API 키를 발급합니다(운영 환경에서는 사용하지 않습니다).
+
+로그인 후 **Settings → API Keys → Create**로 토큰(`ol_api_` + 38자)을 만들고, Hermes `.env`에 `OUTLINE_API_TOKEN=<토큰>`으로 저장합니다. 토큰은 Hermes 설정 조회(`hermes config get --raw OUTLINE_API_TOKEN`)로 읽히며, 검증기는 이 값으로 `POST /api/auth.info` 인증을 확인합니다. 토큰이 아직 없으면 검증 결과는 `MANUAL`(운영자 게이트)이고, 값이 있는데 거부되면 `FAIL`입니다.
+
+`api/auth.info`는 `Authorization: Bearer <토큰>`을 요구하며, 토큰 문자열은 모델 정규식이 `ol_api_` 뒤 `\w` 38자만 허용하므로 하이픈 등 다른 문자를 쓰면 `Unable to decode token`(401)으로 떨어집니다.
+
+## 비용
+
+| 항목 | 비용 |
+|---|---|
+| LLM 플랜 | 월 약 $10 수준 (개인과 동일) |
+| VPS | 월 약 ₩16,000대~ (스펙·기간에 따라 상이) |
+| 도메인 | 연 ₩1~2만 수준 |
+| Mattermost·Outline | 셀프 호스팅 (각 서비스 라이선스 확인) |
+| 추가 구독 | 없음 |
+
+## 설치 후 첫걸음
+
+1. 팀 채널에 에이전트 초대 → "이번 주 일정 정리해줘"
+2. "회의록 정리해서 위키에 넣어줘"
+3. "주간 리포트 만들어줘"
+4. 더 많은 레시피 → [쿡북](../../docs/cookbook.md)
+
+## 상태
+
+Project 설치·검증·Personal 이전 스크립트가 제공됩니다. 신규 VPS에서 전체 게이트와 실제 서비스 동작을 검증해야 P1 완료로 판정합니다. Mattermost 관리자 생성(G7), Outline 관리자·API 토큰(G8), 봇 메일함(G9)은 사용자 게이트입니다.
+
+## 라이선스
+
+**Apache License 2.0** — 오픈소스. 자유롭게 사용·수정·배포할 수 있습니다(상업적 사용 포함). [`LICENSE`](../../LICENSE) 참조.
+
+## 관련 문서
+
+- [부트스트랩 스킬](../../skills/oaos-bootstrap/SKILL.md) · [게이트 레퍼런스](../../skills/oaos-bootstrap/references/gates.md)
+- [FAQ](../../docs/faq.md) · [설계서](../../docs/architecture-v2.0.md)
