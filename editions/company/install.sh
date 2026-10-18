@@ -73,20 +73,7 @@ if ((OAOS_DRY_RUN)); then
     printf '%s\n' 'C15 plan: require C11-C14 applied or SKIP, close the G11/G12 gates, confirm the single productivity suite, and verify SKIP providers keep no active credential. No changes made.'
   elif [[ $selected == c09 ]]; then
     printf '%s\n' 'C09 plan: require C01-C03 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the console migration, install the loopback console service on the existing nginx /company/ path, then read back admin/member tabs, secret masking and service status. No changes made.'
-  elif [[ $selected == c09 ]]; then
-  # shellcheck source=editions/company/c09.sh
-  . "$repo_root/editions/company/c09.sh"
-  code=0
-  company_c09_apply || code=$?
-  case $code in
-    0) if [[ $(stage_status c09) != verified ]]; then stage_mark c09 applied 'C09 console migration and service confirmed; E read-back pending'; fi ;;
-    3) stage_mark c09 blocked 'C09 prerequisite, host or database gate pending' ;;
-    *) stage_mark c09 failed 'C09 console migration or service installation failed; inspect E backup and schema'; code=1 ;;
-  esac
-  show_table
-  exit "$code"
-fi
-if [[ $selected == c16 ]]; then
+  elif [[ $selected == c16 ]]; then
     printf '%s\n' 'C16 plan: require C01-C05 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply LLM routing migration, configure the default model and optional approved G13 premium routes with a standard fallback, then read back routing, billing approval, cap and owner isolation. No changes made.'
   elif [[ $selected == c07 ]]; then
     printf '%s\n' 'C07 plan: require C01-C06 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the policy/approval/audit migration, then read back default deny, explicit allow, admin-only one-time JIT approval with expiry and reuse denial, policy version invalidation, and the admin/member audit boundary. No changes made.'
@@ -106,6 +93,19 @@ if [[ $selected == c16 ]]; then
     printf 'Stage %s plan only; no changes made.\n' "$selected"
   fi
   exit 0
+fi
+if [[ $selected == c09 ]]; then
+  # shellcheck source=editions/company/c09.sh
+  . "$repo_root/editions/company/c09.sh"
+  code=0
+  company_c09_apply || code=$?
+  case $code in
+    0) if [[ $(stage_status c09) != verified ]]; then stage_mark c09 applied 'C09 console migration and service confirmed; E read-back pending'; fi ;;
+    3) stage_mark c09 blocked 'C09 prerequisite, host or database gate pending' ;;
+    *) stage_mark c09 failed 'C09 console migration or service installation failed; inspect E backup and schema'; code=1 ;;
+  esac
+  show_table
+  exit "$code"
 fi
 if [[ $selected == c16 ]]; then
   # shellcheck source=editions/company/c16.sh
