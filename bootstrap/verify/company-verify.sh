@@ -35,7 +35,14 @@ if ! state_valid; then die 'Company state file is invalid JSON.'; fi
 if [[ $phase =~ ^c1[1-5]$ ]]; then
   # shellcheck source=editions/company/adapters-verify.sh
   . "$repo_root/editions/company/adapters-verify.sh"
-  provider=$(case $phase in c11) printf 'slack';; c12) printf 'notion';; c13) printf 'google_workspace';; c14) printf 'microsoft_365';; c15) printf 'slack';; esac)
+  provider=''
+  case $phase in
+    c11) provider='slack' ;;
+    c12) provider='notion' ;;
+    c13) provider='google_workspace' ;;
+    c14) provider='microsoft_365' ;;
+    c15) provider='slack' ;;
+  esac
   if [[ $phase == c15 ]]; then
     company_adapters_verify_c15
   else
