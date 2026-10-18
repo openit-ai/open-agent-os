@@ -172,6 +172,21 @@ bash bootstrap/verify/company-verify.sh --phase c16 --read-back
 
 read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 모델·라우트·사용량을 만들어 기본/프리미엄 응답, 사용량 과금 승인 거부, 월 상한 초과 시 기본 모델 대체, G13 SKIP 처리, owner·조직 격리와 비밀 없는 감사 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. Python `llm_router`는 같은 규칙으로 런타임 실패 대체와 상한 검사를 수행합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
+## Project→Company 데이터 이전
+
+에디션 확장은 데이터 이전 스크립트 + 가이드로 지원합니다([아키텍처 v2.0 §4.4](../../docs/architecture-v2.0.md)). `bootstrap/migrate/project-to-company.sh`는 Company 서버에서 실행해 기존 Project의 **위키·기억·설정**을 복사합니다. 역방향(Company→Project 축소) 전환은 범위 밖입니다.
+
+```bash
+bash bootstrap/migrate/project-to-company.sh --source user@project-host --dry-run
+bash bootstrap/migrate/project-to-company.sh --source user@project-host
+bash bootstrap/migrate/project-to-company.sh --source user@project-host --include-config
+```
+
+- 이전 대상: `~/data/wiki`(위키), `~/.hermes/SOUL.md`·`~/.hermes/memories/USER.md`·`~/.hermes/memories/MEMORY.md`(기억). `--include-config`를 주면 `~/.hermes/config.yaml`(설정)을 함께 복사합니다.
+- `.env`와 자격 증명은 **복사하지 않습니다**. 이전 후 Company 게이트에서 다시 등록합니다.
+- 기존 대상은 `.backup-<timestamp>`로 보존한 뒤 교체하고, Project 원본은 건드리지 않습니다. 복구 지점은 실행 요약에 출력됩니다.
+- 공용 위키는 출처 ACL이 확인된 문서만 Company 게이트에서 색인하고, 개인 위키는 소유 확인 뒤 개인 namespace로 복사합니다. 테스트: `bash bootstrap/tests/project-to-company-migrate-smoke.sh`.
+
 ## 상태
 
 Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C06와 C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase와 선택 연동은 후속 작업입니다.
