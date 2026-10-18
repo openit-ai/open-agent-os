@@ -12,7 +12,7 @@ export OAOS_STATE_EDITION=company OAOS_STAGES="${stages[*]}"
 usage() {
   cat <<'EOF'
 Usage: bash editions/company/install.sh --stage cNN [--dry-run] [--status] [--help]
-Stages: c01 through c17. c01-c09 and c11-c16 are implemented; c10 and c17 are recognized.
+Stages: c01 through c17. c01-c16 are implemented; c17 is recognized.
 --status reads Company checkpoints without changing the system.
 --dry-run prints the selected stage plan without changing state or the system.
 Exit: 0 = selected stage applied; 3 = prerequisite/gate blocked; 1 = error.
@@ -73,6 +73,8 @@ if ((OAOS_DRY_RUN)); then
     printf '%s\n' 'C15 plan: require C11-C14 applied or SKIP, close the G11/G12 gates, confirm the single productivity suite, and verify SKIP providers keep no active credential. No changes made.'
   elif [[ $selected == c09 ]]; then
     printf '%s\n' 'C09 plan: require C01-C03 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the console migration, install the loopback console service on the existing nginx /company/ path, then read back admin/member tabs, secret masking and service status. No changes made.'
+  elif [[ $selected == c10 ]]; then
+    printf '%s\n' 'C10 plan: require C02 and C03 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the console migration through 011, install the console with the HTTPS G10 setup link, keep the console secret and Project API values in the Company EnvironmentFile, then read back one-time admin setup, two mappings, login, CSRF, expiry and resume. No changes made.'
   elif [[ $selected == c16 ]]; then
     printf '%s\n' 'C16 plan: require C01-C05 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply LLM routing migration, configure the default model and optional approved G13 premium routes with a standard fallback, then read back routing, billing approval, cap and owner isolation. No changes made.'
   elif [[ $selected == c07 ]]; then
@@ -103,6 +105,19 @@ if [[ $selected == c09 ]]; then
     0) if [[ $(stage_status c09) != verified ]]; then stage_mark c09 applied 'C09 console migration and service confirmed; E read-back pending'; fi ;;
     3) stage_mark c09 blocked 'C09 prerequisite, host or database gate pending' ;;
     *) stage_mark c09 failed 'C09 console migration or service installation failed; inspect E backup and schema'; code=1 ;;
+  esac
+  show_table
+  exit "$code"
+fi
+if [[ $selected == c10 ]]; then
+  # shellcheck source=editions/company/c10.sh
+  . "$repo_root/editions/company/c10.sh"
+  code=0
+  company_c10_apply || code=$?
+  case $code in
+    0) if [[ $(stage_status c10) != verified ]]; then stage_mark c10 applied 'C10 console and G10 setup applied; E read-back pending'; fi ;;
+    3) stage_mark c10 blocked 'C10 prerequisite, Project API, HTTPS origin or database gate pending' ;;
+    *) stage_mark c10 failed 'C10 migration or console installation failed; inspect E backup and schema'; code=1 ;;
   esac
   show_table
   exit "$code"

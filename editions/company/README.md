@@ -191,6 +191,20 @@ bash bootstrap/verify/company-verify.sh --phase c09 --read-back
 
 010은 `console_sessions`, `secret_status`, `assistant_status` 메타데이터와 위 함수·RLS·C07 승인 조회 정책을 만듭니다. 설치 재실행은 010 checksum이 일치하면 새 백업 없이 끝납니다. read-back은 E PostgreSQL에서 관리자·두 구성원·두 조직 픽스처로 네 탭의 역할 범위·비밀 마스킹·세션 만료/철회·교차 테넌트 차단을 실제 응답으로 검사하고 롤백합니다. 서비스 미가동·health 실패·응답 실패는 `verified`가 될 수 없습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 검사 실패 `1`입니다.
 
+## C10: G10 초기 관리자·구성원 매핑과 관리 콘솔 로그인
+
+C10은 C02·C03이 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고 전체 DB 덤프를 보존한 뒤 011 마이그레이션을 적용합니다. 008~010은 C07~C09 구현이 적용됩니다.
+
+```bash
+bash editions/company/install.sh --stage c10 --dry-run
+bash editions/company/install.sh --stage c10
+bash bootstrap/verify/company-verify.sh --phase c10 --read-back
+```
+
+G10은 설치기가 만든 실제 `https://<조직 호스트>/company/setup`에서 진행합니다. 초기 관리자 Project 계정 ID는 Project API로 존재·관리자 역할을 확인한 뒤 그 계정의 Project DM으로 10분짜리 일회 코드를 보냅니다. 코드는 SHA-256 해시만 저장하고 원자적으로 1회 소비합니다. 구성원 매핑은 Project 계정 ID 두 개 이상을 저장해야 G10이 완료되며, 중간 실패 시 이미 저장된 매핑은 유지되고 같은 화면에서 재개할 수 있습니다.
+
+로그인도 별도 일회 코드를 쓰며 세션은 8시간 후 만료됩니다. 브라우저 쿠키는 `HttpOnly`·`Secure`·`SameSite=Strict`, POST는 CSRF 검증을 거칩니다. 같은 계정의 10분 내 실패 5회는 15분 잠금으로 처리합니다. 비밀 값은 화면에 재출력하지 않습니다. Project API 연동 값은 Company `.env`(`0600`)에만 보관합니다. read-back은 011 checksum, HTTPS G10 링크, 콘솔 서비스·loopback health, 일회 코드 해시·만료·1회 소비, 5회 잠금, 두 매핑·재개, 세션 만료·CSRF·철회, 감사 무비밀 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 검사 실패 `1`입니다.
+
 ## C16: G13 멀티 LLM 라우팅·과금 경로 승인
 
 C16은 C01~C05와 C07이 모두 `verified`인 E에서 실행합니다. C05와 같은 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 검사하고, G10 관리자 매핑이 있는 단일 조직을 요구합니다. 관리자가 없거나 조직이 둘 이상이면 종료 코드 `3`으로 차단됩니다.
@@ -247,7 +261,7 @@ bash bootstrap/migrate/project-to-company.sh --source user@project-host --includ
 
 ## 상태
 
-Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C07, C11~C15(선택형 연동 어댑터), C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase는 후속 작업입니다.
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C16이 공개 트리에 구현되어 있고(C11~C15 선택형 연동 어댑터·C16 멀티 LLM 라우팅 포함), C17은 후속 작업입니다.
 
 ## 라이선스
 
