@@ -78,7 +78,7 @@ bash editions/company/install.sh --stage c02
 bash editions/company/install.sh --status
 ```
 
-설치기는 매 실행 전 E DB의 일관 덤프와 기존 nginx vhost를 원복 디렉터리에 보존합니다. `.env`는 Company 계정의 `~/.config/oaos-company`에 `0700` 디렉터리·`0600` 파일로 생성됩니다. 재부팅 후 검증에 필요한 비밀 아닌 E 설정값은 같은 디렉터리의 `deployment.conf`에 `0600`으로 보관합니다. 이후 Phase의 자격과 마스터 키는 `.env`에만 안전하게 등록합니다. C02 자체는 비밀값을 생성하지 않습니다. `oaos-company.service`는 `127.0.0.1:8765`의 `/company/health`만 응답하는 표준 라이브러리 기반 임시 프로세스이며, 업무 API·인증·OAuth 기능은 후속 Phase의 구현 대상입니다. 백업 타이머는 매일 DB 덤프와 Company 상태를 저장하고 `.env` 사본은 별도 제한 디렉터리에 둡니다.
+설치기는 매 실행 전 E DB의 일관 덤프와 기존 nginx vhost를 원복 디렉터리에 보존합니다. `.env`는 Company 계정의 `~/.config/oaos-company`에 `0700` 디렉터리·`0600` 파일로 생성됩니다. 재부팅 후 검증에 필요한 비밀 아닌 E 설정값은 같은 디렉터리의 `deployment.conf`에 `0600`으로 보관합니다. 이후 Phase의 자격과 마스터 키는 `.env`에만 안전하게 등록합니다. C02 자체는 비밀값을 생성하지 않습니다. `oaos-company.service`는 `127.0.0.1:8765`의 `/company/health`만 응답하는 표준 라이브러리 기반 임시 프로세스이며, C09가 같은 유닛을 관리 콘솔 프로세스로 교체합니다. 업무 API·인증·OAuth 기능의 나머지는 후속 Phase의 구현 대상입니다. 백업 타이머는 매일 DB 덤프와 Company 상태를 저장하고 `.env` 사본은 별도 제한 디렉터리에 둡니다.
 
 원복이 필요하면 해당 실행의 `rollback/c02-날짜.난수` 스냅샷에서 nginx vhost와 기존 유닛·앱 파일을 복원하고 `nginx -t` 뒤 reload합니다. DB 덤프는 E의 분리된 복구 대상에만 복원하며, 자동 역마이그레이션이나 운영 Project DB 덮어쓰기는 하지 않습니다. 키 백업의 별도 보관과 실제 복구 시험은 후속 C17의 완료 조건입니다.
 
@@ -156,9 +156,44 @@ bash bootstrap/verify/company-verify.sh --phase c06 --read-back
 
 read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 비서·자격·출력을 실제 함수 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
+## C07: 정책·JIT 승인·감사
+
+C07은 C01~C06이 모두 `verified`인 E에서 실행합니다. C06과 같은 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 검사합니다.
+
+```bash
+bash editions/company/install.sh --stage c07 --dry-run
+bash editions/company/install.sh --stage c07
+bash bootstrap/verify/company-verify.sh --phase c07 --read-back
+```
+
+008은 명시 규칙이 없으면 **기본 거부(deny)**하는 최소 정책 묶음을 제공합니다. `install_default_policies`는 본인 채팅·읽기 검색을 `allow`, 메일 발송·문서 수정·외부 전송·정책 변경을 `approval`, 무인 실행·미등록 도구를 `deny`로 시드합니다. 정책 규칙은 활성 구성원이 읽을 수 있고, 변경은 활성 관리자만 하며, 실제 변경은 버전을 올리고 감사 행을 같은 트랜잭션에 기록합니다. 같은 규칙을 다시 적용하면 버전이 오르지 않습니다.
+
+고위험 작업은 action·resource 해시·context 해시·정책 버전에 묶인 **JIT 승인**을 요구합니다. 요청은 10분 뒤 만료되고, 같은 조직의 활성 관리자만 판정하며 요청자 본인은 자기 요청을 승인할 수 없습니다(직접 SQL도 트리거가 거부). 소비는 `state = 'approved' AND consumed_at IS NULL AND expires_at > now()` 조건부 갱신으로 **1회만** 원자적으로 일어나고, 정책이나 리소스가 바뀌거나 만료·재사용되면 실행하지 않습니다. 승인 요청·판정·만료·소비와 실행 허용/거부는 `audit_events` 추가 전용 행으로 남으며, 감사 기록 실패 시 위험 실행을 거부하는 구조입니다. 감사 행에는 비밀·본문·스니펫을 넣지 못하도록 금지 키 트리거가 있고, 관리자는 조직 전체를, 구성원은 본인 사건만 조회합니다.
+
+설치기는 전체 DB 덤프를 저장한 뒤 008 마이그레이션을 적용합니다. 전역·연속 마이그레이션 규칙상 버전 8 적용은 아직 적용되지 않은 C11~C14 어댑터 스키마(버전 7)도 함께 적용하지만, 선택·키·구성이 없는 빈 스키마라 무해합니다. 설치 재실행은 008 checksum을 확인하면 새 백업 없이 끝납니다.
+
+read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 정책·승인을 실제 함수 응답으로 검사하고 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
+## C09: 최소 관리 콘솔 (구성원·연동·정책·상태)
+
+C09는 C01~C03과 C07이 E에서 `verified`인 뒤 실행합니다. C02와 같은 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고 전체 DB 덤프를 보존한 다음 010 마이그레이션을 적용합니다. 콘솔은 기존 nginx `/company/` 경로 뒤의 **loopback 전용 단일 프로세스**이며 새 프런트엔드 서비스나 상태 저장소를 만들지 않습니다.
+
+```bash
+bash editions/company/install.sh --stage c09 --dry-run
+bash editions/company/install.sh --stage c09
+systemctl --user is-active oaos-company
+bash bootstrap/verify/company-verify.sh --phase c09 --read-back
+```
+
+콘솔은 구성원·연동·정책·상태 네 탭을 한 화면에서 제공합니다. 관리자는 조직 범위를 보고, 구성원은 본인 행·연동·요청·감사만 봅니다. 화면 데이터는 `company.console_snapshot(tab)` 하나로 나오며 비밀 원문·암호문·토큰 해시·문서 본문·감사 `metadata`를 포함하지 않습니다. Secret Vault는 `configured`/`none`/`revoked` 존재 상태만 `secret_status` 메타데이터로 보여줍니다. 비서 상태도 C04 소유자 전용 테이블이 아니라 같은 방식의 `assistant_status` 메타데이터로 읽어 관리자 시야만 넓히고 C04·C01 회귀는 유지합니다.
+
+세션은 C02의 `.env`(600)에 저장된 DB 자격으로 동작하는 HTTP 쿠키입니다. 토큰은 SHA-256만 `console_sessions`에 저장하고 세션은 8시간 뒤 만료됩니다. 쿠키는 `Secure`·`HttpOnly`·`SameSite=Strict`이고 로그아웃은 CSRF 검증 뒤 세션을 `revoked`로 바꿉니다. 관리자 세션 발급·폐기는 `console_create_session`·`console_revoke_session`으로 제한합니다. **Project 일회 코드 로그인과 초기 관리자 생성은 G10/C10 단계**이며, C09는 화면·권한·마스킹·서비스 상태 계약만 제공합니다.
+
+010은 `console_sessions`, `secret_status`, `assistant_status` 메타데이터와 위 함수·RLS·C07 승인 조회 정책을 만듭니다. 설치 재실행은 010 checksum이 일치하면 새 백업 없이 끝납니다. read-back은 E PostgreSQL에서 관리자·두 구성원·두 조직 픽스처로 네 탭의 역할 범위·비밀 마스킹·세션 만료/철회·교차 테넌트 차단을 실제 응답으로 검사하고 롤백합니다. 서비스 미가동·health 실패·응답 실패는 `verified`가 될 수 없습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 검사 실패 `1`입니다.
+
 ## C10: G10 초기 관리자·구성원 매핑과 관리 콘솔 로그인
 
-C10은 C02·C03이 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고 전체 DB 덤프를 보존한 뒤 011 마이그레이션을 적용합니다. 008~010은 C07~C09용 예약 슬롯이며 C10 마이그레이션 번호는 **011로 고정**입니다.
+C10은 C02·C03이 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고 전체 DB 덤프를 보존한 뒤 011 마이그레이션을 적용합니다. 008~010은 C07~C09 구현이 적용됩니다.
 
 ```bash
 bash editions/company/install.sh --stage c10 --dry-run
@@ -166,21 +201,9 @@ bash editions/company/install.sh --stage c10
 bash bootstrap/verify/company-verify.sh --phase c10 --read-back
 ```
 
-G10은 설치기가 만든 실제 `https://<조직 호스트>/company/setup`에서 진행합니다. 화면 순서는 **관리 콘솔 열기 → 필요한 이유 → 정확한 입력 필드**이며, URL에는 비밀번호·토큰·일회 코드를 싣지 않습니다. 초기 관리자 Project 계정 ID는 Project API로 존재·관리자 역할을 확인한 뒤 그 계정의 Project DM으로 10분짜리 일회 코드를 보냅니다. 코드는 SHA-256 해시만 저장하고 원자적으로 1회 소비합니다. 구성원 매핑은 Project 계정 ID 두 개 이상을 저장해야 G10이 완료되며, 중간 실패 시 이미 저장된 매핑은 유지되고 같은 화면에서 재개할 수 있습니다.
+G10은 설치기가 만든 실제 `https://<조직 호스트>/company/setup`에서 진행합니다. 초기 관리자 Project 계정 ID는 Project API로 존재·관리자 역할을 확인한 뒤 그 계정의 Project DM으로 10분짜리 일회 코드를 보냅니다. 코드는 SHA-256 해시만 저장하고 원자적으로 1회 소비합니다. 구성원 매핑은 Project 계정 ID 두 개 이상을 저장해야 G10이 완료되며, 중간 실패 시 이미 저장된 매핑은 유지되고 같은 화면에서 재개할 수 있습니다.
 
-로그인도 별도 일회 코드를 쓰며 세션은 8시간 후 만료됩니다. 브라우저 쿠키는 `HttpOnly`·`Secure`·`SameSite=Strict`, POST는 CSRF 검증을 거칩니다. 같은 계정의 10분 내 실패 5회는 15분 잠금으로 처리합니다. 콘솔은 구성원·연동·정책·상태 네 탭을 제공하며 관리자는 조직 범위를, 구성원은 본인 범위만 조회합니다. 비밀 값은 화면에 재출력하지 않습니다.
-
-Project API 연동 값은 Company `.env`(`0600`)에만 보관합니다.
-
-| 환경변수 | 의미 |
-|---|---|
-| `OAOS_COMPANY_PROJECT_API_URL` | Project API 기준 URL(HTTPS, 테스트는 loopback HTTP 허용) |
-| `OAOS_COMPANY_PROJECT_API_TOKEN` | Project API 서버 토큰 |
-| `OAOS_COMPANY_PROJECT_BOT_USER_ID` | 일회 코드 DM 발신 봇 계정 ID |
-| `OAOS_COMPANY_PROJECT_ADMIN_ROLES` | 관리자로 인정할 Project 역할(기본 `system_admin`) |
-| `OAOS_COMPANY_ORG_SLUG` | 최초 생성 조직 slug(기본 `company`) |
-
-`OAOS_COMPANY_CONSOLE_SECRET`은 설치기가 `.env`에 생성하며 CSRF 파생에만 사용합니다. 일회 코드·세션 토큰 원문은 DB·로그·명령 인수에 남기지 않습니다. read-back은 011 checksum, HTTPS G10 링크, 콘솔 서비스·loopback health, 일회 코드 해시·만료·1회 소비, 5회 잠금, 두 매핑·재개, 세션 만료·CSRF·철회, 감사 무비밀 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+로그인도 별도 일회 코드를 쓰며 세션은 8시간 후 만료됩니다. 브라우저 쿠키는 `HttpOnly`·`Secure`·`SameSite=Strict`, POST는 CSRF 검증을 거칩니다. 같은 계정의 10분 내 실패 5회는 15분 잠금으로 처리합니다. 비밀 값은 화면에 재출력하지 않습니다. Project API 연동 값은 Company `.env`(`0600`)에만 보관합니다. read-back은 011 checksum, HTTPS G10 링크, 콘솔 서비스·loopback health, 일회 코드 해시·만료·1회 소비, 5회 잠금, 두 매핑·재개, 세션 만료·CSRF·철회, 감사 무비밀 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 검사 실패 `1`입니다.
 
 ## C16: G13 멀티 LLM 라우팅·과금 경로 승인
 
@@ -200,7 +223,7 @@ read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 모델·라�
 
 ## C11~C15: 선택형 연동 어댑터 (G11·G12)
 
-C11~C15는 C01~C05가 모두 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 전체 DB 덤프를 원복 디렉터리에 보존한 뒤 007 마이그레이션을 적용합니다. **조직이 이미 사용 중인 서비스만** 켜며, 선택하지 않은 서비스는 `SKIP(reason=not_selected)`으로 기록하고 자격·웹훅·서비스 호출이 없어야 합니다. 추가 구독은 요구하지 않습니다. C07~C09(정책·승인·감사·검색)와 C17은 후속 Phase이며, C11~C15는 C01~C05 위에서 감사 행을 직접 기록하는 최소 경계로 구현했습니다.
+C11~C15는 C01~C05가 모두 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 전체 DB 덤프를 원복 디렉터리에 보존한 뒤 007 마이그레이션을 적용합니다. **조직이 이미 사용 중인 서비스만** 켜며, 선택하지 않은 서비스는 `SKIP(reason=not_selected)`으로 기록하고 자격·웹훅·서비스 호출이 없어야 합니다. 추가 구독은 요구하지 않습니다. C07·C08·C10(정책·승인·감사·검색·초기 로그인)은 후속 Phase이며, C09 콘솔은 C01~C03·C07 위에서 화면·권한·마스킹·서비스 상태를 제공하고 C11~C15는 C01~C05 위에서 감사 행을 직접 기록하는 최소 경계로 구현했습니다.
 
 ```bash
 bash editions/company/install.sh --stage c11   # Slack (G12)
@@ -238,7 +261,7 @@ bash bootstrap/migrate/project-to-company.sh --source user@project-host --includ
 
 ## 상태
 
-Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C06, C10(G10 관리 콘솔), C11~C15(선택형 연동 어댑터), C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, C07~C09와 C17은 후속 작업입니다.
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C16이 공개 트리에 구현되어 있고(C11~C15 선택형 연동 어댑터·C16 멀티 LLM 라우팅 포함), C17은 후속 작업입니다.
 
 ## 라이선스
 
