@@ -156,6 +156,24 @@ bash bootstrap/verify/company-verify.sh --phase c06 --read-back
 
 read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 비서·자격·출력을 실제 함수 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
+## C07: 정책·JIT 승인·감사
+
+C07은 C01~C06이 모두 `verified`인 E에서 실행합니다. C06과 같은 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 검사합니다.
+
+```bash
+bash editions/company/install.sh --stage c07 --dry-run
+bash editions/company/install.sh --stage c07
+bash bootstrap/verify/company-verify.sh --phase c07 --read-back
+```
+
+008은 명시 규칙이 없으면 **기본 거부(deny)**하는 최소 정책 묶음을 제공합니다. `install_default_policies`는 본인 채팅·읽기 검색을 `allow`, 메일 발송·문서 수정·외부 전송·정책 변경을 `approval`, 무인 실행·미등록 도구를 `deny`로 시드합니다. 정책 규칙은 활성 구성원이 읽을 수 있고, 변경은 활성 관리자만 하며, 실제 변경은 버전을 올리고 감사 행을 같은 트랜잭션에 기록합니다. 같은 규칙을 다시 적용하면 버전이 오르지 않습니다.
+
+고위험 작업은 action·resource 해시·context 해시·정책 버전에 묶인 **JIT 승인**을 요구합니다. 요청은 10분 뒤 만료되고, 같은 조직의 활성 관리자만 판정하며 요청자 본인은 자기 요청을 승인할 수 없습니다(직접 SQL도 트리거가 거부). 소비는 `state = 'approved' AND consumed_at IS NULL AND expires_at > now()` 조건부 갱신으로 **1회만** 원자적으로 일어나고, 정책이나 리소스가 바뀌거나 만료·재사용되면 실행하지 않습니다. 승인 요청·판정·만료·소비와 실행 허용/거부는 `audit_events` 추가 전용 행으로 남으며, 감사 기록 실패 시 위험 실행을 거부하는 구조입니다. 감사 행에는 비밀·본문·스니펫을 넣지 못하도록 금지 키 트리거가 있고, 관리자는 조직 전체를, 구성원은 본인 사건만 조회합니다.
+
+설치기는 전체 DB 덤프를 저장한 뒤 008 마이그레이션을 적용합니다. 전역·연속 마이그레이션 규칙상 버전 8 적용은 아직 적용되지 않은 C11~C14 어댑터 스키마(버전 7)도 함께 적용하지만, 선택·키·구성이 없는 빈 스키마라 무해합니다. 설치 재실행은 008 checksum을 확인하면 새 백업 없이 끝납니다.
+
+read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 정책·승인을 실제 함수 응답으로 검사하고 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
 ## C09: 최소 관리 콘솔 (구성원·연동·정책·상태)
 
 C09는 C01~C03과 C07이 E에서 `verified`인 뒤 실행합니다. C02와 같은 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고 전체 DB 덤프를 보존한 다음 010 마이그레이션을 적용합니다. 콘솔은 기존 nginx `/company/` 경로 뒤의 **loopback 전용 단일 프로세스**이며 새 프런트엔드 서비스나 상태 저장소를 만들지 않습니다.
@@ -229,7 +247,7 @@ bash bootstrap/migrate/project-to-company.sh --source user@project-host --includ
 
 ## 상태
 
-Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C06, C11~C15(선택형 연동 어댑터), C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase는 후속 작업입니다.
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C07, C11~C15(선택형 연동 어댑터), C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase는 후속 작업입니다.
 
 ## 라이선스
 

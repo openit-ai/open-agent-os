@@ -32,13 +32,17 @@ files=("$repo_root"/editions/company/migrations/[0-9][0-9][0-9]_*.sql)
 [[ -f ${files[0]} ]] || die 'Company migration files are missing.'
 last_file_version=0
 last_seen_version=0
+expected_versions=()
 for file in "${files[@]}"; do
   name=${file##*/}
   version=$((10#${name:0:3}))
-  ((version == last_seen_version + 1)) || die 'Migration file versions must be consecutive.'
+  # Versions must increase. A number may be reserved by a parallel phase and be
+  # absent here; the applied history still has to be strictly monotonic.
+  ((version > last_seen_version)) || die 'Migration file versions must increase.'
   last_seen_version=$version
   if ((through && version > through)); then continue; fi
   last_file_version=$version
+  expected_versions+=("$version")
   checksum=$(sha256sum "$file") || die 'Cannot checksum a migration.'
   checksum=${checksum%% *}
   [[ $checksum =~ ^[0-9a-f]{64}$ ]] || die 'Invalid migration checksum.'
@@ -70,4 +74,4 @@ for file in "${files[@]}"; do
 done
 if ((through && last_file_version != through)); then die 'Requested migration version is not available.'; fi
 history=$(db_query "SELECT COALESCE(MAX(version), 0) || ':' || COUNT(*) FROM company.schema_migrations WHERE version <= $last_file_version") || die 'Cannot inspect migration history.'
-[[ $history == "$last_file_version:$last_file_version" ]] || die 'Database migration history has an unknown version or gap.'
+[[ $history == "$last_file_version:${#expected_versions[@]}" ]] || die 'Database migration history has an unknown version, gap or missing version.'
