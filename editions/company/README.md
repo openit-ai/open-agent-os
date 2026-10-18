@@ -140,9 +140,25 @@ bash bootstrap/verify/company-verify.sh --phase c05 --read-back
 
 read-back은 E PostgreSQL에서 두 owner와 다른 조직의 임시 자격을 만들고, owner 조회, 타인 거부, 회전 전 세대 실패, 철회 후 실패와 감사 사건을 실제 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 검증 출력에는 비밀 원문을 싣지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
+## C16: G13 멀티 LLM 라우팅·과금 경로 승인
+
+C16은 C01~C05와 C07이 모두 `verified`인 E에서 실행합니다. C05와 같은 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 검사하고, G10 관리자 매핑이 있는 단일 조직을 요구합니다. 관리자가 없거나 조직이 둘 이상이면 종료 코드 `3`으로 차단됩니다.
+
+```bash
+bash editions/company/install.sh --stage c16 --dry-run
+bash editions/company/install.sh --stage c16
+bash bootstrap/verify/company-verify.sh --phase c16 --read-back
+```
+
+작업별 라우팅은 기본 저가 모델(standard)과 선택한 프리미엄 모델(premium)을 작업 이름으로 연결합니다. `OAOS_COMPANY_DEFAULT_PROVIDER`·`OAOS_COMPANY_DEFAULT_MODEL`로 기본 모델을 지정하고, G13을 켤 때만 `OAOS_COMPANY_G13_PROVIDER`·`OAOS_COMPANY_G13_MODEL`·`OAOS_COMPANY_G13_API_KEY`·`OAOS_COMPANY_G13_BILLING_MODE`·`OAOS_COMPANY_G13_MONTHLY_CAP_USD`·`OAOS_COMPANY_G13_BILLING_APPROVED`·`OAOS_COMPANY_G13_TASKS`(쉼표 구분)를 지정합니다. `OAOS_COMPANY_G13_STATE`를 생략하면 기존 상태를 유지하고, 없으면 `SKIP(reason=not_selected)`으로 기록해 기본 모델만 사용합니다.
+
+사용량 과금 경로는 `OAOS_COMPANY_G13_BILLING_APPROVED=yes`와 양수 월 상한이 있을 때만 활성화하며, 그렇지 않으면 승인 필요로 차단합니다. 프리미엄 작업은 실패하거나 월 상한에 도달하면 같은 owner 문맥 그대로 기본 모델로 대체하고, 상한 확인이 불가능하면 선택 호출을 중단합니다. 공급자 키는 Company `.env`(`0600`)에만 저장하고 원문을 출력·기록하지 않습니다.
+
+read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 모델·라우트·사용량을 만들어 기본/프리미엄 응답, 사용량 과금 승인 거부, 월 상한 초과 시 기본 모델 대체, G13 SKIP 처리, owner·조직 격리와 비밀 없는 감사 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. Python `llm_router`는 같은 규칙으로 런타임 실패 대체와 상한 검사를 수행합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
 ## 상태
 
-Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다.
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C05와 C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase와 선택 연동은 후속 작업입니다.
 
 ## 라이선스
 
