@@ -60,7 +60,7 @@ company_adapters_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
-  printf '%-28s PASS\n' 'Migration SHA-256/version 6'
+  printf '%-28s PASS\n' 'Migration SHA-256/version 7'
   printf '%-28s PASS\n' 'Selection gate and admin control'
   printf '%-28s PASS\n' 'Organization app and read-only scope'
   printf '%-28s PASS\n' 'Provider adapter responses'
@@ -136,7 +136,7 @@ company_adapters_verify_c15() {
       fi
     fi
   done
-  printf '%-28s PASS\n' 'Migration SHA-256/version 6'
+  printf '%-28s PASS\n' 'Migration SHA-256/version 7'
   printf '%-28s PASS\n' 'G11/G12 selection state'
   printf '%-28s PASS\n' 'Single productivity suite'
   printf '%-28s PASS\n' 'Selected provider app'

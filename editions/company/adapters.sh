@@ -141,7 +141,7 @@ company_adapters_preflight() {
 
 company_adapters_migrate() {
   local check_code=0 snapshot socket_dir
-  bash "$repo_root/editions/company/migrate.sh" --check --through 6 >/dev/null 2>&1 || check_code=$?
+  bash "$repo_root/editions/company/migrate.sh" --check --through 7 >/dev/null 2>&1 || check_code=$?
   case $check_code in
     0) return 0 ;;
     3) ;;
@@ -162,7 +162,7 @@ company_adapters_migrate() {
     warn 'Integration BLOCKED: E database backup failed or is empty.'; return 3
   fi
   chmod 600 "$snapshot/company.dump"
-  bash "$repo_root/editions/company/migrate.sh" --through 6 || return 1
+  bash "$repo_root/editions/company/migrate.sh" --through 7 || return 1
 }
 
 company_adapters_store_keys() {

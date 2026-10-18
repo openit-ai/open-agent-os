@@ -1,7 +1,7 @@
 """Optional integration adapters for the Company edition (G11/G12, C11-C14).
 
 An organization activates only the services it already uses. The database
-(`006_integration_adapters.sql`) is the policy source of truth; this module
+(`007_integration_adapters.sql`) is the policy source of truth; this module
 applies the same contract in the request path so a provider that is SKIP (or
 whose organization app is missing) is never called, and so a personal
 delegation never crosses the owner boundary.
