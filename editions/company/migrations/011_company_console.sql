@@ -56,20 +56,17 @@ CREATE INDEX console_login_codes_live
   ON company.console_login_codes(org_id, member_id, issued_at DESC)
   WHERE consumed_at IS NULL;
 
-CREATE TABLE company.console_sessions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id uuid NOT NULL,
-  member_id uuid NOT NULL,
-  token_hash char(64) NOT NULL UNIQUE CHECK (token_hash ~ '^[0-9a-f]{64}$'),
-  csrf_hash char(64) NOT NULL CHECK (csrf_hash ~ '^[0-9a-f]{64}$'),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  expires_at timestamptz NOT NULL,
-  revoked_at timestamptz,
-  FOREIGN KEY (org_id, member_id) REFERENCES company.members(org_id, id),
-  UNIQUE (org_id, id),
-  CHECK (expires_at > created_at)
-);
-CREATE INDEX console_sessions_live
+-- 010 (C09) already created console_sessions with a state-based design.
+-- 011 adopts the revoked_at design: add the missing columns and backfill.
+ALTER TABLE company.console_sessions
+  ADD COLUMN IF NOT EXISTS last_seen_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE company.console_sessions
+  ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
+UPDATE company.console_sessions
+   SET revoked_at = now()
+ WHERE state = 'revoked' AND revoked_at IS NULL;
+DROP INDEX IF EXISTS company.console_sessions_live_member;
+CREATE INDEX IF NOT EXISTS console_sessions_live
   ON company.console_sessions(org_id, member_id, expires_at)
   WHERE revoked_at IS NULL;
 
