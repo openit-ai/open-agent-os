@@ -140,6 +140,22 @@ bash bootstrap/verify/company-verify.sh --phase c05 --read-back
 
 read-back은 E PostgreSQL에서 두 owner와 다른 조직의 임시 자격을 만들고, owner 조회, 타인 거부, 회전 전 세대 실패, 철회 후 실패와 감사 사건을 실제 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 검증 출력에는 비밀 원문을 싣지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
+## C06: 개인별 비서 권한 격리 (owner == credential == provider == output)
+
+C06은 C01~C05가 모두 `verified`인 E에서 실행합니다. C05와 같은 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 검사합니다.
+
+```bash
+bash editions/company/install.sh --stage c06 --dry-run
+bash editions/company/install.sh --stage c06
+bash bootstrap/verify/company-verify.sh --phase c06 --read-back
+```
+
+006은 개인비서의 실행을 `owner == credential == provider == output` 한 줄로 묶습니다. 출력 행은 자격(secret)·provider와 함께 기록되어, 세션 owner가 아닌 비서·자격·출력 ID를 조합하면 존재 여부를 구별하지 않고 거부합니다. provider가 자격의 provider와 다르면 기록·조회가 모두 거부되고, 자격 회전·철회나 비서 해제 시 바인딩이 즉시 끊깁니다. 출력은 UPDATE 정책이 없어 직접 SQL로도 다시 결속할 수 없고, 결속 사건은 원문 없이 감사 행에 남습니다. C04의 레거시 출력(자격 미결속)은 종전대로 읽히지만 신원 가드는 이를 `allow`하지 않으므로 재기록이 필요합니다.
+
+설치기는 전체 DB 덤프를 저장한 뒤 006 마이그레이션을 적용합니다. 전역·연속 마이그레이션 규칙상 버전 6 적용은 아직 적용되지 않은 C16/G13 스키마(버전 5)도 함께 적용하지만, 키·구성 없는 빈 스키마라 C16 단계 이전에도 무해합니다. 설치 재실행은 006 checksum을 확인하면 새 백업 없이 끝납니다.
+
+read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 비서·자격·출력을 실제 함수 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
 ## C16: G13 멀티 LLM 라우팅·과금 경로 승인
 
 C16은 C01~C05와 C07이 모두 `verified`인 E에서 실행합니다. C05와 같은 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 검사하고, G10 관리자 매핑이 있는 단일 조직을 요구합니다. 관리자가 없거나 조직이 둘 이상이면 종료 코드 `3`으로 차단됩니다.
@@ -182,7 +198,11 @@ G11은 Google Workspace와 Microsoft 365 중 **하나만** 선택합니다(동�
 
 ## 상태
 
+<<<<<<< HEAD
 Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C05, C11~C15(선택형 연동 어댑터), C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase는 후속 작업입니다.
+=======
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C06와 C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase와 선택 연동은 후속 작업입니다.
+>>>>>>> feat/company-identity-isolation
 
 ## 라이선스
 
