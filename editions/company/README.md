@@ -244,6 +244,25 @@ bash bootstrap/verify/company-verify.sh --phase c11 --read-back
 G11은 Google Workspace와 Microsoft 365 중 **하나만** 선택합니다(동시 선택 시 `conflict`). G12의 Slack·Notion은 각각 독립입니다. 조직 앱의 토큰·클라이언트 비밀은 Company 전용 `.env`(`0600`)에만 저장하고 원문을 출력·기록하지 않습니다. 구성원 개인 위임 토큰은 C05 Secret Vault에 AES-256-GCM 암호문으로만 보관하며, `owner == credential == provider == output`을 서버가 검사합니다. `SKIP`으로 되돌리면 해당 공급자의 활성 앱과 위임이 철회되고, 미선택 공급자는 서비스 호출 없음이 read-back으로 확인됩니다.
 
 런타임 어댑터는 `integration_adapters.py`가 같은 규칙을 요청 경로에 적용합니다 — 미선택 공급자는 호출하지 않고, Slack 서명(HMAC-SHA256·5분 시각 창·중복 이벤트), Notion 명시 공유 ACL, GWS·M365 read-only scope·owner 결속을 강제합니다. read-back은 007 마이그레이션 SHA-256, 선택 게이트·관리자 통제, 조직 앱·read-only 범위, 공급자별 응답, owner 격리, 철회·SKIP 정리, 조직 격리·감사 무비밀 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
+## C17: 최종 검증·운영 인계
+
+C17은 C10·C15·C16이 모두 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 012 마이그레이션을 적용한 뒤 운영 인계 증거를 실제 백업·복구·서비스·재부팅 관측값으로 수집합니다.
+
+```bash
+bash editions/company/install.sh --stage c17 --dry-run
+bash editions/company/install.sh --stage c17
+bash bootstrap/verify/company-verify.sh --phase c17 --read-back
+```
+
+012는 `backup_runs`(백업 경로·SHA-256·크기), `recovery_drills`(별도 임시 DB 복원 결과), `member_revocations`(퇴사 회수 건수)와 조직별 단일 `handover_state`를 만듭니다. 설치기는 E DB를 `pg_dump`로 백업하고 SHA-256·크기·아카이브 목록을 확인한 뒤, 임시 복원 DB(`oaos_company_c17_restore_*`)에 실제로 복원해 스키마 버전 12를 read-back하고 즉시 삭제합니다. 이미 검증된 백업·복구 기록이 있으면 재실행 시 재사용합니다.
+
+인계 판정은 최신 검증 백업, 통과한 복구 드릴, `oaos-company.service`·`oaos-company-backup.timer`의 enabled/active, C02 설치 시점과 다른 부팅 ID, 그리고 **선택한 모든 연동의 실제 외부 왕복 확인**을 요구합니다. 선택 연동이 있으면 `OAOS_COMPANY_C17_ROUNDTRIP=<provider,...>`에 실제 왕복을 확인한 공급자를 지정해야 하며, 누락 시 종료 코드 `3`으로 차단됩니다. 연동을 하나도 선택하지 않은 설치는 `SKIP`으로 통과합니다.
+
+퇴사·정지 회수는 관리자만 실행하는 `company.c17_revoke_member(member_id, reason)` 한 트랜잭션으로 콘솔 세션, 개인비서, Vault 자격, 위임 연동, 외부 계정을 모두 철회하고 구성원을 `departed`로 고정한 뒤 감사 행과 회수 건수를 남깁니다. 마지막 활성 관리자는 회수할 수 없고, 다른 조직의 구성원은 조회·회수되지 않습니다.
+
+read-back은 012 SHA-256, 저장된 인계 판정, 백업 파일·체크섬, 복구 드릴, 재부팅 생존, 서비스·백업 타이머, 선택 연동 왕복과 퇴사 회수·교차 조직 거부를 실제 SQL 응답으로 검사하고 픽스처 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·게이트·수동 확인 대기 `3`, 검사 실패 `1`입니다.
+
 ## Project→Company 데이터 이전
 
 에디션 확장은 데이터 이전 스크립트 + 가이드로 지원합니다([아키텍처 v2.0 §4.4](../../docs/architecture-v2.0.md)). `bootstrap/migrate/project-to-company.sh`는 Company 서버에서 실행해 기존 Project의 **위키·기억·설정**을 복사합니다. 역방향(Company→Project 축소) 전환은 범위 밖입니다.
@@ -261,7 +280,7 @@ bash bootstrap/migrate/project-to-company.sh --source user@project-host --includ
 
 ## 상태
 
-Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C16이 공개 트리에 구현되어 있고(C11~C15 선택형 연동 어댑터·C16 멀티 LLM 라우팅 포함), C17은 후속 작업입니다.
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅 + 최종 검증·운영 인계가 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C17이 공개 트리에 구현되어 있고(C11~C15 선택형 연동 어댑터·C16 멀티 LLM 라우팅·C17 백업/복구/회수 인계 포함), 각 Phase는 E 실설치와 read-back 증거가 있어야 `verified`가 됩니다.
 
 ## 라이선스
 
