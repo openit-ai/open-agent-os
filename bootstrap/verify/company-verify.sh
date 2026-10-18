@@ -11,7 +11,7 @@ export OAOS_STAGES="${stages[*]}"
 
 usage() {
   printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back
-C01 through C06, C08 and C11 through C16 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.
+C01 through C08 and C11 through C16 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.
 '
 }
 phase=''
@@ -60,6 +60,12 @@ if [[ $phase == c08 ]]; then
   # shellcheck source=editions/company/c08-verify.sh
   . "$repo_root/editions/company/c08-verify.sh"
   company_c08_verify
+  exit $?
+fi
+if [[ $phase == c07 ]]; then
+  # shellcheck source=editions/company/c07-verify.sh
+  . "$repo_root/editions/company/c07-verify.sh"
+  company_c07_verify
   exit $?
 fi
 if [[ $phase == c06 ]]; then
