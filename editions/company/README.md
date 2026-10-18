@@ -152,7 +152,7 @@ bash bootstrap/verify/company-verify.sh --phase c06 --read-back
 
 006은 개인비서의 실행을 `owner == credential == provider == output` 한 줄로 묶습니다. 출력 행은 자격(secret)·provider와 함께 기록되어, 세션 owner가 아닌 비서·자격·출력 ID를 조합하면 존재 여부를 구별하지 않고 거부합니다. provider가 자격의 provider와 다르면 기록·조회가 모두 거부되고, 자격 회전·철회나 비서 해제 시 바인딩이 즉시 끊깁니다. 출력은 UPDATE 정책이 없어 직접 SQL로도 다시 결속할 수 없고, 결속 사건은 원문 없이 감사 행에 남습니다. C04의 레거시 출력(자격 미결속)은 종전대로 읽히지만 신원 가드는 이를 `allow`하지 않으므로 재기록이 필요합니다.
 
-설치기는 전체 DB 덤프를 저장한 뒤 006 마이그레이션을 적용합니다. 전역·연속 마이그레이션 규칙상 버전 6 적용은 아직 적용되지 않은 C16/G13 스키마(버전 5)도 함께 적용하지만, 키·구성 없는 빈 스키마라 C16 단계 이전에도 무해합니다. 설치 재실행은 006 checksum을 확인하면 새 백업 없이 끝납니다.
+설치기는 전체 DB 덤프를 저장한 뒤 007 마이그레이션을 적용합니다. 전역·연속 마이그레이션 규칙상 버전 6 적용은 아직 적용되지 않은 C16/G13 스키마(버전 5)도 함께 적용하지만, 키·구성 없는 빈 스키마라 C16 단계 이전에도 무해합니다. 설치 재실행은 006 checksum을 확인하면 새 백업 없이 끝납니다.
 
 read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 비서·자격·출력을 실제 함수 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
@@ -174,7 +174,7 @@ read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 모델·라�
 
 ## C11~C15: 선택형 연동 어댑터 (G11·G12)
 
-C11~C15는 C01~C05가 모두 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 전체 DB 덤프를 원복 디렉터리에 보존한 뒤 006 마이그레이션을 적용합니다. **조직이 이미 사용 중인 서비스만** 켜며, 선택하지 않은 서비스는 `SKIP(reason=not_selected)`으로 기록하고 자격·웹훅·서비스 호출이 없어야 합니다. 추가 구독은 요구하지 않습니다. C06~C10(정책·승인·감사·검색·콘솔)은 후속 Phase이며, C11~C15는 C01~C05 위에서 감사 행을 직접 기록하는 최소 경계로 구현했습니다.
+C11~C15는 C01~C05가 모두 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 전체 DB 덤프를 원복 디렉터리에 보존한 뒤 007 마이그레이션을 적용합니다. **조직이 이미 사용 중인 서비스만** 켜며, 선택하지 않은 서비스는 `SKIP(reason=not_selected)`으로 기록하고 자격·웹훅·서비스 호출이 없어야 합니다. 추가 구독은 요구하지 않습니다. C06~C10(정책·승인·감사·검색·콘솔)은 후속 Phase이며, C11~C15는 C01~C05 위에서 감사 행을 직접 기록하는 최소 경계로 구현했습니다.
 
 ```bash
 bash editions/company/install.sh --stage c11   # Slack (G12)
@@ -194,7 +194,21 @@ bash bootstrap/verify/company-verify.sh --phase c11 --read-back
 
 G11은 Google Workspace와 Microsoft 365 중 **하나만** 선택합니다(동시 선택 시 `conflict`). G12의 Slack·Notion은 각각 독립입니다. 조직 앱의 토큰·클라이언트 비밀은 Company 전용 `.env`(`0600`)에만 저장하고 원문을 출력·기록하지 않습니다. 구성원 개인 위임 토큰은 C05 Secret Vault에 AES-256-GCM 암호문으로만 보관하며, `owner == credential == provider == output`을 서버가 검사합니다. `SKIP`으로 되돌리면 해당 공급자의 활성 앱과 위임이 철회되고, 미선택 공급자는 서비스 호출 없음이 read-back으로 확인됩니다.
 
-런타임 어댑터는 `integration_adapters.py`가 같은 규칙을 요청 경로에 적용합니다 — 미선택 공급자는 호출하지 않고, Slack 서명(HMAC-SHA256·5분 시각 창·중복 이벤트), Notion 명시 공유 ACL, GWS·M365 read-only scope·owner 결속을 강제합니다. read-back은 006 마이그레이션 SHA-256, 선택 게이트·관리자 통제, 조직 앱·read-only 범위, 공급자별 응답, owner 격리, 철회·SKIP 정리, 조직 격리·감사 무비밀 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+런타임 어댑터는 `integration_adapters.py`가 같은 규칙을 요청 경로에 적용합니다 — 미선택 공급자는 호출하지 않고, Slack 서명(HMAC-SHA256·5분 시각 창·중복 이벤트), Notion 명시 공유 ACL, GWS·M365 read-only scope·owner 결속을 강제합니다. read-back은 007 마이그레이션 SHA-256, 선택 게이트·관리자 통제, 조직 앱·read-only 범위, 공급자별 응답, owner 격리, 철회·SKIP 정리, 조직 격리·감사 무비밀 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+## Project→Company 데이터 이전
+
+에디션 확장은 데이터 이전 스크립트 + 가이드로 지원합니다([아키텍처 v2.0 §4.4](../../docs/architecture-v2.0.md)). `bootstrap/migrate/project-to-company.sh`는 Company 서버에서 실행해 기존 Project의 **위키·기억·설정**을 복사합니다. 역방향(Company→Project 축소) 전환은 범위 밖입니다.
+
+```bash
+bash bootstrap/migrate/project-to-company.sh --source user@project-host --dry-run
+bash bootstrap/migrate/project-to-company.sh --source user@project-host
+bash bootstrap/migrate/project-to-company.sh --source user@project-host --include-config
+```
+
+- 이전 대상: `~/data/wiki`(위키), `~/.hermes/SOUL.md`·`~/.hermes/memories/USER.md`·`~/.hermes/memories/MEMORY.md`(기억). `--include-config`를 주면 `~/.hermes/config.yaml`(설정)을 함께 복사합니다.
+- `.env`와 자격 증명은 **복사하지 않습니다**. 이전 후 Company 게이트에서 다시 등록합니다.
+- 기존 대상은 `.backup-<timestamp>`로 보존한 뒤 교체하고, Project 원본은 건드리지 않습니다. 복구 지점은 실행 요약에 출력됩니다.
+- 공용 위키는 출처 ACL이 확인된 문서만 Company 게이트에서 색인하고, 개인 위키는 소유 확인 뒤 개인 namespace로 복사합니다. 테스트: `bash bootstrap/tests/project-to-company-migrate-smoke.sh`.
 
 ## 상태
 
