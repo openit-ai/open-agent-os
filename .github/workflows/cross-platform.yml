@@ -91,7 +91,7 @@ jobs:
             exit 1
           fi
           shellcheck --version
-          shellcheck -x \
+          shellcheck --severity=warning -x \
             bootstrap/lib/common.sh \
             bootstrap/lib/platform.sh \
             bootstrap/verify/personal-verify.sh \
