@@ -156,9 +156,33 @@ bash bootstrap/verify/company-verify.sh --phase c16 --read-back
 
 read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 모델·라우트·사용량을 만들어 기본/프리미엄 응답, 사용량 과금 승인 거부, 월 상한 초과 시 기본 모델 대체, G13 SKIP 처리, owner·조직 격리와 비밀 없는 감사 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. Python `llm_router`는 같은 규칙으로 런타임 실패 대체와 상한 검사를 수행합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
+## C11~C15: 선택형 연동 어댑터 (G11·G12)
+
+C11~C15는 C01~C05가 모두 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 전체 DB 덤프를 원복 디렉터리에 보존한 뒤 006 마이그레이션을 적용합니다. **조직이 이미 사용 중인 서비스만** 켜며, 선택하지 않은 서비스는 `SKIP(reason=not_selected)`으로 기록하고 자격·웹훅·서비스 호출이 없어야 합니다. 추가 구독은 요구하지 않습니다. C06~C10(정책·승인·감사·검색·콘솔)은 후속 Phase이며, C11~C15는 C01~C05 위에서 감사 행을 직접 기록하는 최소 경계로 구현했습니다.
+
+```bash
+bash editions/company/install.sh --stage c11   # Slack (G12)
+bash editions/company/install.sh --stage c12   # Notion (G12)
+bash editions/company/install.sh --stage c13   # Google Workspace (G11)
+bash editions/company/install.sh --stage c14   # Microsoft 365 (G11)
+bash editions/company/install.sh --stage c15   # G11/G12 게이트 마감
+bash bootstrap/verify/company-verify.sh --phase c11 --read-back
+```
+
+| 연동 | Phase | 선택 값(환경변수) | 최소 계약 |
+|---|---|---|---|
+| Slack | C11 | `OAOS_COMPANY_SLACK_STATE`·`OAOS_COMPANY_SLACK_WORKSPACE_ID`·`OAOS_COMPANY_SLACK_BOT_TOKEN`·`OAOS_COMPANY_SLACK_SIGNING_SECRET` | 요청 서명·시각·중복 이벤트 검증, 발신자를 활성 `external_accounts`로 매핑해 본인 비서로 라우팅. 미등록·타인 발신자 거부 |
+| Notion | C12 | `OAOS_COMPANY_NOTION_STATE`·`OAOS_COMPANY_NOTION_WORKSPACE_ID`·`OAOS_COMPANY_NOTION_TOKEN` | 명시 공유된 페이지만 원본 ACL 버전과 함께 색인. 공유 해제·삭제 시 파생 chunk 즉시 제거 |
+| Google Workspace | C13 | `OAOS_COMPANY_GWS_STATE`·`OAOS_COMPANY_GWS_WORKSPACE_ID`·`OAOS_COMPANY_GWS_CLIENT_ID`·`OAOS_COMPANY_GWS_CLIENT_SECRET`·`OAOS_COMPANY_GWS_REDIRECT_URI` | 조직 OAuth 앱은 read-only 범위만. 구성원 본인이 위임 동의한 owner 결속 자격만 사용 |
+| Microsoft 365 | C14 | `OAOS_COMPANY_M365_STATE`·`OAOS_COMPANY_M365_WORKSPACE_ID`·`OAOS_COMPANY_M365_TENANT_ID`·`OAOS_COMPANY_M365_CLIENT_ID`·`OAOS_COMPANY_M365_CLIENT_SECRET`·`OAOS_COMPANY_M365_REDIRECT_URI` | tenant·subject·owner 검증, read-only 위임 범위만. 애플리케이션 전체 사서함 권한 금지 |
+
+G11은 Google Workspace와 Microsoft 365 중 **하나만** 선택합니다(동시 선택 시 `conflict`). G12의 Slack·Notion은 각각 독립입니다. 조직 앱의 토큰·클라이언트 비밀은 Company 전용 `.env`(`0600`)에만 저장하고 원문을 출력·기록하지 않습니다. 구성원 개인 위임 토큰은 C05 Secret Vault에 AES-256-GCM 암호문으로만 보관하며, `owner == credential == provider == output`을 서버가 검사합니다. `SKIP`으로 되돌리면 해당 공급자의 활성 앱과 위임이 철회되고, 미선택 공급자는 서비스 호출 없음이 read-back으로 확인됩니다.
+
+런타임 어댑터는 `integration_adapters.py`가 같은 규칙을 요청 경로에 적용합니다 — 미선택 공급자는 호출하지 않고, Slack 서명(HMAC-SHA256·5분 시각 창·중복 이벤트), Notion 명시 공유 ACL, GWS·M365 read-only scope·owner 결속을 강제합니다. read-back은 006 마이그레이션 SHA-256, 선택 게이트·관리자 통제, 조직 앱·read-only 범위, 공급자별 응답, owner 격리, 철회·SKIP 정리, 조직 격리·감사 무비밀 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+
 ## 상태
 
-Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C05와 C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase와 선택 연동은 후속 작업입니다.
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅이 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C05, C11~C15(선택형 연동 어댑터), C16(멀티 LLM 라우팅)이 공개 트리에 구현되어 있고, 나머지 Phase는 후속 작업입니다.
 
 ## 라이선스
 

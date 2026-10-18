@@ -79,6 +79,7 @@ Choice gate — connect now or later; never wire one the user did not choose:
 - **G11, productivity suite:** Google Workspace or Microsoft 365 — connect the suite the organization already uses.
 - **G12, collaboration tools:** Slack or Notion — connect only tools the organization already uses.
 - Reminder for framing: these are subscriptions the company already pays for; connecting adds no new cost.
+- Adapter stages: `install.sh --stage c11..c15` configure each chosen service (`c11` Slack, `c12` Notion, `c13` Google Workspace, `c14` Microsoft 365, `c15` closes the G11/G12 gates). A service not chosen is recorded as `SKIP(reason=not_selected)` with no credential or service call. Google Workspace and Microsoft 365 are mutually exclusive.
 
 Company expansion gates G10 (admin console) and G13 (optional multi-LLM) belong to the Company bootstrap.
 
