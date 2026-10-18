@@ -10,11 +10,9 @@ for n in $(seq -w 1 17); do stages+=("c$n"); done
 export OAOS_STAGES="${stages[*]}"
 
 usage() {
-<<<<<<< HEAD
-  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 through C05 and C11 through C16 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
-=======
-  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 through C06 and C16 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
->>>>>>> feat/company-identity-isolation
+  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back
+C01 through C06 and C11 through C16 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.
+'
 }
 phase=''
 read_back=0
