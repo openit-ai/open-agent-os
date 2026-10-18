@@ -10,7 +10,9 @@ for n in $(seq -w 1 17); do stages+=("c$n"); done
 export OAOS_STAGES="${stages[*]}"
 
 usage() {
-  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back\nC01 through C06 and C16 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.\n'
+  printf 'Usage: bash bootstrap/verify/company-verify.sh --phase cNN --read-back
+C01 through C06 and C11 through C16 read-back implemented. Exit: 0 = passed; 3 = prerequisite/manual pending; 1 = failed.
+'
 }
 phase=''
 read_back=0
@@ -30,6 +32,24 @@ done
 OAOS_STATE_FILE="$(oaos_home)/.oaos-install/company-state.json"
 export OAOS_STATE_FILE
 if ! state_valid; then die 'Company state file is invalid JSON.'; fi
+if [[ $phase =~ ^c1[1-5]$ ]]; then
+  # shellcheck source=editions/company/adapters-verify.sh
+  . "$repo_root/editions/company/adapters-verify.sh"
+  provider=''
+  case $phase in
+    c11) provider='slack' ;;
+    c12) provider='notion' ;;
+    c13) provider='google_workspace' ;;
+    c14) provider='microsoft_365' ;;
+    c15) provider='slack' ;;
+  esac
+  if [[ $phase == c15 ]]; then
+    company_adapters_verify_c15
+  else
+    company_adapters_verify "$provider" "$phase"
+  fi
+  exit $?
+fi
 if [[ $phase == c16 ]]; then
   # shellcheck source=editions/company/c16-verify.sh
   . "$repo_root/editions/company/c16-verify.sh"
