@@ -12,7 +12,7 @@ export OAOS_STATE_EDITION=company OAOS_STAGES="${stages[*]}"
 usage() {
   cat <<'EOF'
 Usage: bash editions/company/install.sh --stage cNN [--dry-run] [--status] [--help]
-Stages: c01 through c17. c01-c06 and c11-c16 are implemented; c07-c10 and c17 are recognized.
+Stages: c01 through c17. c01-c06, c08 and c11-c16 are implemented; c07, c09-c10 and c17 are recognized.
 --status reads Company checkpoints without changing the system.
 --dry-run prints the selected stage plan without changing state or the system.
 Exit: 0 = selected stage applied; 3 = prerequisite/gate blocked; 1 = error.
@@ -75,6 +75,8 @@ if ((OAOS_DRY_RUN)); then
     printf '%s\n' 'C16 plan: require C01-C05 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply LLM routing migration, configure the default model and optional approved G13 premium routes with a standard fallback, then read back routing, billing approval, cap and owner isolation. No changes made.'
   elif [[ $selected == c06 ]]; then
     printf '%s\n' 'C06 plan: require C01-C05 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the identity isolation migration, then read back owner==credential==provider==output binding, cross-owner and provider denial, revocation and tenant isolation. No changes made.'
+  elif [[ $selected == c08 ]]; then
+    printf '%s\n' 'C08 plan: require C01-C06 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the ACL search migration, then read back personal/shared ACL search, cross-owner denial, ACL change/invalidation/expiry, deletion and audit without content. No changes made.'
   elif [[ $selected == c05 ]]; then
     printf '%s\n' 'C05 plan: require C01-C04 verified and C02 E host gates, check DB/RLS role and AES-GCM, back up E DB and vault key, apply personal credential migration, then read back owner isolation, rotation and revocation. No changes made.'
   elif [[ $selected == c04 ]]; then
@@ -97,6 +99,19 @@ if [[ $selected == c16 ]]; then
     0) if [[ $(stage_status c16) != verified ]]; then stage_mark c16 applied 'C16 routing migration and G13 configuration confirmed; E read-back pending'; fi ;;
     3) stage_mark c16 blocked 'C16 prerequisite, G13 approval, host or database gate pending' ;;
     *) stage_mark c16 failed 'C16 migration or routing configuration failed; inspect E backup and schema'; code=1 ;;
+  esac
+  show_table
+  exit "$code"
+fi
+if [[ $selected == c08 ]]; then
+  # shellcheck source=editions/company/c08.sh
+  . "$repo_root/editions/company/c08.sh"
+  code=0
+  company_c08_apply || code=$?
+  case $code in
+    0) if [[ $(stage_status c08) != verified ]]; then stage_mark c08 applied 'C08 ACL search migration checksum confirmed; E read-back pending'; fi ;;
+    3) stage_mark c08 blocked 'C08 prerequisite, host or database gate pending' ;;
+    *) stage_mark c08 failed 'C08 migration failed; inspect E backup and schema'; code=1 ;;
   esac
   show_table
   exit "$code"
