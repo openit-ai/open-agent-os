@@ -9,6 +9,7 @@ DECLARE
   alice uuid := gen_random_uuid();
   bob uuid := gen_random_uuid();
   carol uuid := gen_random_uuid();
+  assistant_alice uuid;
   doc_shared uuid;
   doc_bob uuid;
   doc_personal uuid;
@@ -25,6 +26,12 @@ BEGIN
     (admin_a, org_a, 'c08-admin-' || admin_a::text, 'admin', 'active'),
     (alice, org_a, 'c08-alice-' || alice::text, 'member', 'active'),
     (bob, org_a, 'c08-bob-' || bob::text, 'member', 'active');
+  PERFORM set_config('company.member_id', alice::text, true);
+  SELECT r.assistant_id INTO assistant_alice FROM company.register_personal_assistant() r;
+  IF assistant_alice IS NULL THEN
+    RAISE EXCEPTION 'personal assistant fixture is incomplete';
+  END IF;
+  PERFORM set_config('company.member_id', admin_a::text, true);
 
   -- A shared document is indexed with a confirmed source ACL for alice only.
   SELECT r.decision, r.document_id INTO decision, doc_shared
@@ -210,7 +217,21 @@ BEGIN
     RAISE EXCEPTION 'audit metadata leaked search content';
   END IF;
 
+  -- Revoking the personal assistant isolates the personal index while the
+  -- member remains active.
+  PERFORM set_config('company.member_id', alice::text, true);
+  IF company.revoke_personal_assistant(assistant_alice) IS DISTINCT FROM 'revoked' THEN
+    RAISE EXCEPTION 'personal assistant revocation failed';
+  END IF;
+  SELECT count(*) FILTER (WHERE s.document_id IS NOT NULL) INTO row_count
+    FROM company.search_documents('personalpolicy', 10) s;
+  IF row_count IS DISTINCT FROM 0
+     OR (SELECT count(*) FROM company.chunks c WHERE c.document_id = doc_personal) <> 0 THEN
+    RAISE EXCEPTION 'revoked assistant left the personal index searchable';
+  END IF;
+
   -- Suspending an owner blocks search immediately and records no content.
+  PERFORM set_config('company.member_id', admin_a::text, true);
   UPDATE company.members SET state = 'suspended' WHERE id = alice;
   PERFORM set_config('company.member_id', alice::text, true);
   SELECT s.decision INTO decision FROM company.search_documents('report', 10) s;

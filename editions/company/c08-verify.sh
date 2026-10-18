@@ -47,7 +47,8 @@ company_c08_verify() {
   printf '%-28s PASS\n' 'Deletion blocks and removes chunks'
   printf '%-28s PASS\n' 'Admin-only indexing and tenant isolation'
   printf '%-28s PASS\n' 'Audit without content'
+  printf '%-28s PASS\n' 'Assistant revocation blocks personal index'
   printf '%-28s PASS\n' 'Revoked owner denied and fixture rollback'
-  printf 'Summary: PASS=10 FAIL=0 MANUAL=0 SKIP=0\n'
+  printf 'Summary: PASS=11 FAIL=0 MANUAL=0 SKIP=0\n'
   stage_mark c08 verified 'C08 E ACL search SQL responses passed; fixture rolled back'
 }

@@ -60,7 +60,11 @@ LANGUAGE sql STABLE SECURITY INVOKER AS $$
        AND d.deleted_at IS NULL
        AND (
          (d.source = 'personal'
-          AND d.owner_id::text = current_setting('company.member_id', true))
+          AND d.owner_id::text = current_setting('company.member_id', true)
+          AND EXISTS (
+            SELECT 1 FROM company.assistants a
+             WHERE a.org_id = d.org_id AND a.owner_id = d.owner_id
+               AND a.state = 'active'))
          OR
          (d.source <> 'personal'
           AND d.acl_state = 'known'
@@ -191,7 +195,10 @@ DECLARE
 BEGIN
   IF org IS NULL OR member IS NULL OR NOT company.c04_member_ready()
      OR p_source_id IS NULL OR btrim(p_source_id) = ''
-     OR p_chunks IS NULL THEN
+     OR p_chunks IS NULL
+     OR NOT EXISTS (
+       SELECT 1 FROM company.assistants a
+        WHERE a.org_id = org AND a.owner_id = member AND a.state = 'active') THEN
     RETURN QUERY SELECT 'denied'::text, NULL::uuid; RETURN;
   END IF;
   scoped_source_id := member::text || ':' || p_source_id;
