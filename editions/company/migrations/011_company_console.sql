@@ -101,6 +101,16 @@ CREATE POLICY console_lockouts_scope ON company.console_lockouts
   USING (org_id::text = current_setting('company.org_id', true))
   WITH CHECK (org_id::text = current_setting('company.org_id', true));
 
+-- Token-bound lookup for the G10 session functions. console_sessions has
+-- FORCE RLS (010), so even the SECURITY DEFINER session functions cannot see
+-- a row before the org context exists. The functions below set
+-- company.console_token_hash to the presented hash first; only the exact row
+-- matches, and the hash itself is the unguessable bearer credential.
+CREATE POLICY console_sessions_token_lookup ON company.console_sessions
+  FOR ALL
+  USING (token_hash::text = current_setting('company.console_token_hash', true))
+  WITH CHECK (token_hash::text = current_setting('company.console_token_hash', true));
+
 -- G10 runs before a login session exists. The trusted console sets this
 -- transaction-local marker only inside the SECURITY DEFINER bootstrap functions
 -- so a single-organization install can be discovered before selecting its scope.
@@ -621,6 +631,8 @@ BEGIN
       NULL::uuid, NULL::timestamptz;
     RETURN;
   END IF;
+  -- Token-bound lookup marker (see console_sessions_token_lookup policy).
+  PERFORM set_config('company.console_token_hash', p_token_hash, true);
   SELECT s.id AS session_id, s.org_id, s.member_id, s.csrf_hash, s.expires_at
     INTO session_row
     FROM company.console_sessions s
@@ -660,6 +672,8 @@ BEGIN
   IF p_token_hash IS NULL OR p_token_hash !~ '^[0-9a-f]{64}$' THEN
     RETURN 'invalid';
   END IF;
+  -- Token-bound lookup marker (see console_sessions_token_lookup policy).
+  PERFORM set_config('company.console_token_hash', p_token_hash, true);
   UPDATE company.console_sessions SET revoked_at = now()
    WHERE token_hash = p_token_hash AND revoked_at IS NULL
    RETURNING id INTO changed;
