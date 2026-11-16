@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Sourced by company-verify.sh. Uses the C02 E host and loopback PostgreSQL.
 repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
 # shellcheck source=editions/company/verify/c02-verify.sh

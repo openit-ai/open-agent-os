@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- C17 real SQL responses. Persisted handover evidence is only read; every
 -- fixture and audit row created below is discarded with this transaction.
 BEGIN;

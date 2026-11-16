@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- C10 uses synthetic fixtures and always rolls back. Only code/token hashes are
 -- created; no plaintext credential, DM code or browser token appears here.
 BEGIN;

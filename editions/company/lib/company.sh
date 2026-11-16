@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Shared Company helpers. Sourced (after bootstrap/lib/common.sh) by the phase
 # scripts, verify scripts and install.sh. Never prints credentials.
 

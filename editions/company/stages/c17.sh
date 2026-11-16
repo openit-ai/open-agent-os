@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Sourced by install.sh. C17 collects final handover evidence on the E host:
 # migration 012, a verified backup, a recovery drill, reboot survival, systemd
 # state and the external round-trip for every selected integration.

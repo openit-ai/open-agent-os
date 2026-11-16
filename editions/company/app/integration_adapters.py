@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """Optional integration adapters for the Company edition (G11/G12, C11-C14).
 
 An organization activates only the services it already uses. The database

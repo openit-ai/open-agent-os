@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """C09 management console: four read-only tabs behind an authenticated session.
 
 The process binds loopback only; nginx terminates TLS for /company/. Session

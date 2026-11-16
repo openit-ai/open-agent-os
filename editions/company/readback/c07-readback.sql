@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- C07 uses synthetic fixtures and always rolls back. No secret value is printed.
 BEGIN;
 DO $verify$

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Installed by C17 as the oaos-company-maintenance.service ExecStart (daily).
 # Retention runs only through the local postgres maintenance account: the
 # runtime role has no DELETE on audit rows. company.maintenance_purge() removes

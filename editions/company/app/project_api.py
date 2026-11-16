@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """Minimal Project API client for the G10 administrator check and DM delivery.
 
 The Company host already trusts the Project installation, but it must not take a

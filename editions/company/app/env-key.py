@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """Atomically store one provider key in the Company EnvironmentFile."""
 from __future__ import annotations
 

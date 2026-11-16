@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Common C03+ phase skeleton. Sourced by the phase scripts after
 # bootstrap/lib/common.sh. Every database phase runs the same sequence:
 #   1. required phases verified on E,

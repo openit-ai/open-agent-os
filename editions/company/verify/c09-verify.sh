@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Sourced by company-verify.sh. Uses only E loopback PostgreSQL and the local
 # console port. Never prints session tokens or EnvironmentFile values.
 repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}

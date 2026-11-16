@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """C02 transport placeholder. Later phases replace this with the Company app."""
 
 from http.server import BaseHTTPRequestHandler, HTTPServer

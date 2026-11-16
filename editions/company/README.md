@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- Company edition: see LICENSE-COMPANY at the repository root. -->
 # Company Edition — 5~50인 기업용 에이전트 OS
 
 > 구성원마다 개인 에이전트를, 회사에는 거버넌스를. 중소기업(5~50인)을 위한 자체 운영형 AI 업무 기반.

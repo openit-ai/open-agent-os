@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """Task-level multi-LLM routing for the Company edition (G13).
 
 The database (`005_llm_routing.sql`) is the policy source of truth. This module

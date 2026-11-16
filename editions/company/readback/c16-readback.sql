@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- C16 real SQL responses. Fixtures and their audit rows are discarded with this
 -- transaction; the persisted default route and G13 state are only read.
 BEGIN;

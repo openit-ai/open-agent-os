@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """Add C02 paths to one existing TLS server without touching other server blocks."""
 
 import re

@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- Real C03 responses against C01 tables and C03 functions; no fixture persists.
 BEGIN;
 DO $verify$

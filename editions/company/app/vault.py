@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """In-process AES-256-GCM envelope for Company personal credentials.
 
 Callers obtain the key from the restricted Company EnvironmentFile, authenticate

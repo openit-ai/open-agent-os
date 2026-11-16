@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 """Company C10 console: G10 setup, one-time login, sessions and minimal tabs.
 
 The process binds only to 127.0.0.1:8765 behind the existing nginx HTTPS path.

@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- C05 uses only synthetic encrypted envelopes; the transaction always rolls back.
 BEGIN;
 DO $verify$

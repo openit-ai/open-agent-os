@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- C09 real SQL responses. Fixtures, sessions and audit rows are discarded with
 -- this transaction; no credential material is ever selected. Each passed
 -- section emits "oaos-check: <name>" for c09-verify.sh.

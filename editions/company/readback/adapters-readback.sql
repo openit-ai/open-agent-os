@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- C11-C14 read-back for one provider. Fixtures and their audit rows are rolled
 -- back; the persisted selection is only read for context. No credential is
 -- created or printed here beyond a C05 envelope the caller already owns.

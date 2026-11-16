@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: BUSL-1.1
+-- Company edition: see LICENSE-COMPANY at the repository root.
 -- Company owner/runtime role separation. Run by migrate.sh through the local
 -- postgres maintenance account (never by the runtime role) before a migration is
 -- applied, with psql variables :owner (NOLOGIN schema owner) and :runtime (the

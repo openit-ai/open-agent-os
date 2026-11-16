@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # shellcheck disable=SC2034 # COMPANY_STAGE_NOTE is read by install.sh
 # Sourced by install.sh. C01 creates the Company schema next to a verified
 # Project installation; it runs as the libpq role before C02 separates the
