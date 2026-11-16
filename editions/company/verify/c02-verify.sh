@@ -78,6 +78,58 @@ company_db_runtime_boundary() {
                      OR pg_has_role(p.proowner, n.nspowner, 'MEMBER')))" 2>/dev/null) || return 1
   [[ $result == t ]]
 }
+# Job roles (O7, db-jobs.sql + migration 023): the backup login bypasses RLS
+# but holds no write privilege and no other role; the NOLOGIN maintenance role
+# has no CREATE anywhere; the maintenance login holds no table privilege and
+# no role, and only it (not the runtime) may run the retention purge.
+company_db_job_roles_ok() {
+  local result
+  result=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "
+    SELECT COALESCE((SELECT rolcanlogin AND rolbypassrls AND NOT rolsuper AND NOT rolcreatedb
+                        AND NOT rolcreaterole AND NOT rolreplication
+                       FROM pg_roles WHERE rolname = 'oaos_company_backup'), false)
+       AND COALESCE((SELECT NOT rolcanlogin AND rolbypassrls AND NOT rolsuper AND NOT rolcreatedb
+                        AND NOT rolcreaterole
+                       FROM pg_roles WHERE rolname = 'oaos_company_maintenance'), false)
+       AND COALESCE((SELECT rolcanlogin AND NOT rolbypassrls AND NOT rolsuper AND NOT rolcreatedb
+                        AND NOT rolcreaterole
+                       FROM pg_roles WHERE rolname = 'oaos_company_maint'), false)
+       AND has_table_privilege('oaos_company_backup', 'company.audit_events', 'SELECT')
+       AND NOT EXISTS (
+             SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'company' AND c.relkind IN ('r', 'p')
+                AND (has_table_privilege('oaos_company_backup', c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE')
+                     OR has_table_privilege('oaos_company_maint', c.oid,
+                          'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')))
+       AND NOT EXISTS (
+             SELECT 1 FROM pg_auth_members m
+              WHERE m.member IN (SELECT oid FROM pg_roles WHERE rolname IN
+                      ('oaos_company_backup', 'oaos_company_maintenance', 'oaos_company_maint'))
+                AND m.roleid::regrole::text <> 'pg_read_all_data')
+       AND NOT has_schema_privilege('oaos_company_maintenance', 'company', 'CREATE')
+       AND NOT has_database_privilege('oaos_company_maintenance', current_database(), 'CREATE')
+       AND NOT has_schema_privilege('oaos_company_backup', 'company', 'CREATE')
+       AND NOT has_schema_privilege('oaos_company_maint', 'company', 'CREATE')
+       AND has_function_privilege('oaos_company_maint',
+             'company.maintenance_purge(integer, integer)', 'EXECUTE')
+       AND NOT has_function_privilege('oaos_company_runtime',
+             'company.maintenance_purge(integer, integer)', 'EXECUTE')
+       AND (SELECT proowner::regrole::text = 'oaos_company_maintenance' AND prosecdef
+              FROM pg_proc WHERE oid = 'company.maintenance_purge(integer, integer)'::regprocedure)" \
+    2>/dev/null) || return 1
+  [[ $result == t ]]
+}
+# Backup unit (C02) and maintenance unit (C17): hardened, no escalation in the
+# job script, and the job password file is the Company account's 0600 file.
+company_job_passfile_ok() {
+  local file
+  file=$(company_db_jobs_passfile)
+  [[ -f $file && ! -L $file && $(stat -c %a "$file") == 600 && $(stat -c %U "$file") == "$(id -un)" ]]
+}
+company_c02_backup_hardened() {
+  company_job_unit_hardened "$HOME/.config/systemd/user/oaos-company-backup.service" \
+    "$HOME/.local/lib/oaos-company/backup.sh" && company_job_passfile_ok
+}
 company_c02_unit_ready() {
   [[ $(systemctl --user is-enabled "$1" 2>/dev/null || true) == enabled && $(systemctl --user is-active "$1" 2>/dev/null || true) == active ]]
 }
@@ -142,6 +194,7 @@ company_c02_verify() {
   printf '%-27s %s\n' CHECK RESULT
   company_c02_check 'Service enabled/active' company_c02_unit_ready oaos-company.service
   company_c02_check 'Backup timer enabled/active' company_c02_unit_ready oaos-company-backup.timer
+  company_c02_check 'Backup unit hardening' company_c02_backup_hardened
   company_c02_check 'Backup service run' company_c02_backup_job
   company_c02_check 'Linger enabled' company_c02_linger
   company_c02_check 'Loopback port 8765' company_c02_loopback

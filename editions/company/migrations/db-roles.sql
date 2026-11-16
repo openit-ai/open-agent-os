@@ -132,3 +132,8 @@ BEGIN
   END IF;
 END;
 $adopt$;
+
+-- Job roles (O7): created before the migrations that grant them functions.
+\ir db-jobs.sql
+SELECT format('GRANT oaos_company_maintenance TO %I', :'owner')
+ WHERE NOT pg_has_role(:'owner', 'oaos_company_maintenance', 'MEMBER') \gexec

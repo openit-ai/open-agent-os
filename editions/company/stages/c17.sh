@@ -105,9 +105,8 @@ company_c17_restore_drill() {
   return "$rc"
 }
 
-# Daily retention (migration 018): a user oneshot unit + timer running
-# maintenance.sh through the postgres maintenance path. Like the backup unit it
-# omits NoNewPrivileges because that path needs the C02 non-interactive root.
+# Daily retention (migrations 018/023): a hardened user oneshot unit + timer
+# running maintenance.sh as the oaos_company_maint job login (no root, O7).
 company_c17_install_maintenance() {
   local unit_dir="$HOME/.config/systemd/user" app_dir="$HOME/.local/lib/oaos-company"
   local config_dir="$HOME/.config/oaos-company" unit
@@ -122,6 +121,7 @@ Type=oneshot
 EnvironmentFile=$config_dir/.env
 ExecStart=$app_dir/maintenance.sh
 UMask=0077
+$(company_job_unit_hardening)
 EOF
   cat > "$unit_dir/oaos-company-maintenance.timer" <<'EOF'
 [Unit]

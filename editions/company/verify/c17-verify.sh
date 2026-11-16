@@ -147,6 +147,21 @@ PY
     return 1
   fi
 
+  # O6/O7: definer functions and the job roles keep least privilege, and the
+  # backup and retention units run hardened without root.
+  if ! company_db_runtime_boundary || ! company_db_job_roles_ok; then
+    printf '%-30s FAIL\n' 'Job and definer roles'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
+  if ! company_c02_backup_hardened ||
+     ! company_job_unit_hardened "$HOME/.config/systemd/user/oaos-company-maintenance.service" \
+       "$HOME/.local/lib/oaos-company/maintenance.sh"; then
+    printf '%-30s FAIL\n' 'Job unit hardening'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
+
   local readback_error readback_code=0
   readback_error=$(mktemp)
   if ! psql -X -q -v ON_ERROR_STOP=1 -v org="$org" -v admin="$admin" \
@@ -171,6 +186,8 @@ PY
   printf '%-30s PASS\n' 'Service and backup timer'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Daily backup within 24h'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Retention timer and purge'; pass=$((pass + 1))
+  printf '%-30s PASS\n' 'Job and definer roles'; pass=$((pass + 1))
+  printf '%-30s PASS\n' 'Job unit hardening'; pass=$((pass + 1))
   if [[ $selected_count == 0 ]]; then
     printf '%-30s SKIP\n' 'External round-trip'; skip=$((skip + 1))
   else

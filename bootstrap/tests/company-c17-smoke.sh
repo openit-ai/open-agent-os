@@ -153,6 +153,20 @@ bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/installe
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'oaos_company_c17_restore_%'") == 0 ]] || fail 'scratch database leak'
 ! grep -Eq 'password|secret|token' "$temp_root/installed" || fail 'secret leaked to install output'
 
+# The C02 backup unit and job as C02 installs them (hardened, no root; O7).
+install -d -m 700 "$HOME/.local/lib/oaos-company" "$HOME/.config/systemd/user"
+install -m 700 "$repo_root/editions/company/app/backup.sh" "$HOME/.local/lib/oaos-company/backup.sh"
+{
+  printf '[Service]\nType=oneshot\nEnvironmentFile=%s\nExecStart=%s\nUMask=0077\n' \
+    "$HOME/.config/oaos-company/.env" "$HOME/.local/lib/oaos-company/backup.sh"
+  (OAOS_NO_LOG_FILE=1; . "$repo_root/bootstrap/lib/common.sh"; . "$repo_root/editions/company/lib/company.sh"
+   company_job_unit_hardening "$OAOS_COMPANY_BACKUP_DIR $OAOS_COMPANY_KEY_BACKUP_DIR")
+} > "$HOME/.config/systemd/user/oaos-company-backup.service"
+for line in NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict ProtectHome=read-only; do
+  grep -Fxq "$line" "$HOME/.config/systemd/user/oaos-company-maintenance.service" || fail "maintenance unit lacks $line"
+done
+[[ $(stat -c %a "$HOME/.config/oaos-company/db-jobs.pgpass") == 600 ]] || fail 'job password file mode'
+
 # Without a daily backup in the last 24 hours the handover read-back fails.
 code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/no-daily" 2>&1 || code=$?
@@ -163,7 +177,12 @@ if pg_dump --format=custom --dbname="$PGDATABASE" > "$temp_root/app-role.dump" 2
   fail 'runtime-role pg_dump unexpectedly bypassed FORCE RLS'
 fi
 cp "$repo_root/editions/company/app/backup.sh" "$temp_root/backup.sh"
-env -i HOME="$HOME" PATH="$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" \
+# The jobs never escalate (O7): sudo and runuser fail as under NoNewPrivileges.
+mkdir -p "$temp_root/nnp-bin"
+printf '#!/usr/bin/env bash\nprintf "no new privileges\\n" >&2\nexit 1\n' > "$temp_root/nnp-bin/sudo"
+cp "$temp_root/nnp-bin/sudo" "$temp_root/nnp-bin/runuser"
+chmod 700 "$temp_root/nnp-bin/sudo" "$temp_root/nnp-bin/runuser"
+env -i HOME="$HOME" PATH="$temp_root/nnp-bin:$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" \
   OAOS_COMPANY_PG_SOCKET_DIR=/tmp OAOS_COMPANY_BACKUP_DIR="$OAOS_COMPANY_BACKUP_DIR" \
   OAOS_COMPANY_KEY_BACKUP_DIR="$OAOS_COMPANY_KEY_BACKUP_DIR" bash "$temp_root/backup.sh" || fail 'daily backup job under FORCE RLS'
 latest=$(< "$OAOS_COMPANY_BACKUP_DIR/last-success")
@@ -175,7 +194,7 @@ if ! OAOS_C17_VERIFY_DEBUG=1 bash "$repo_root/bootstrap/verify/company-verify.sh
   cat "$temp_root/verified-skip" >&2 || true
   fail 'C17 read-back'
 fi
-grep -Fq 'Summary: PASS=9 FAIL=0 MANUAL=0 SKIP=1' "$temp_root/verified-skip" || fail 'C17 SKIP read-back summary'
+grep -Fq 'Summary: PASS=11 FAIL=0 MANUAL=0 SKIP=1' "$temp_root/verified-skip" || fail 'C17 SKIP read-back summary'
 [[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c17']['status'])
@@ -205,7 +224,7 @@ grep -Fq 'external round-trip evidence is missing for slack' "$temp_root/roundtr
 OAOS_COMPANY_C17_ROUNDTRIP=slack bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/selected" || fail 'C17 selected round-trip install'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT external_roundtrip->>'slack' FROM company.handover_state") == confirmed ]] || fail 'round-trip evidence'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/verified-selected" || fail 'C17 selected read-back'
-grep -Fq 'Summary: PASS=10 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified-selected" || fail 'C17 selected read-back summary'
+grep -Fq 'Summary: PASS=12 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified-selected" || fail 'C17 selected read-back summary'
 
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c01 --read-back > "$temp_root/c01-regression" || fail 'C01 read-back after migration 12'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01-regression" || fail 'C01 regression summary'
@@ -233,9 +252,42 @@ INSERT INTO company.documents(org_id, source, source_id, owner_id, source_acl_ve
     FROM company.members WHERE project_user_id = 'c17-gone';
 SQL
 if psql -X -q -v ON_ERROR_STOP=1 -c 'SELECT company.maintenance_purge()' >/dev/null 2>&1; then fail 'runtime role ran the retention purge'; fi
-env -i HOME="$HOME" PATH="$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" OAOS_COMPANY_PG_SOCKET_DIR=/tmp \
+env -i HOME="$HOME" PATH="$temp_root/nnp-bin:$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" OAOS_COMPANY_PG_SOCKET_DIR=/tmp \
   bash "$repo_root/editions/company/app/maintenance.sh" || fail 'maintenance job'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.audit_events WHERE request_id IN ('c17-old', 'c17-kept')") == 1 ]] || fail '180-day audit purge'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.documents WHERE source_id = 'c17-gone-doc'") == 0 ]] || fail '30-day departed content purge'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT (metadata->>'audit_deleted')::int || '|' || (metadata->>'documents_deleted')::int FROM company.audit_events WHERE action = 'retention_purged' ORDER BY at DESC LIMIT 1") == '1|1' ]] || fail 'purge audit row'
 printf 'PASS: daily backup under FORCE RLS, 24h backup age, maintenance-only 180/30-day retention\n'
+
+# O7 job roles: the backup login reads everything but writes nothing; the
+# maintenance login can only run the purge; neither reaches the owner path.
+job() {
+  local role=$1
+  shift
+  env -u PGOPTIONS -u PGPASSWORD PGHOST=127.0.0.1 PGHOSTADDR=127.0.0.1 PGUSER="$role" \
+    PGPASSFILE="$HOME/.config/oaos-company/db-jobs.pgpass" psql -X -q -A -t -v ON_ERROR_STOP=1 "$@"
+}
+[[ $(job oaos_company_backup -c 'SELECT count(*) > 0 FROM company.audit_events') == t ]] || fail 'backup role reads FORCE RLS rows'
+! job oaos_company_backup -c "INSERT INTO company.audit_events(org_id, event_type, action, decision, request_id) SELECT id, 'x', 'x', 'allow', 'x' FROM company.organizations LIMIT 1" >/dev/null 2>&1 || fail 'backup role wrote an audit row'
+! job oaos_company_backup -c 'DELETE FROM company.documents' >/dev/null 2>&1 || fail 'backup role deleted rows'
+! job oaos_company_backup -c 'CREATE TABLE company.o7_probe(id int)' >/dev/null 2>&1 || fail 'backup role created a table'
+! job oaos_company_maint -c 'SELECT count(*) FROM company.audit_events' >/dev/null 2>&1 || fail 'maintenance login read audit rows'
+! job oaos_company_maint -c 'DELETE FROM company.audit_events' >/dev/null 2>&1 || fail 'maintenance login deleted audit rows directly'
+! job oaos_company_maint -c 'SET ROLE oaos_company_maintenance' >/dev/null 2>&1 || fail 'maintenance login assumed the maintenance role'
+! job oaos_company_maint -c 'SELECT company.maintenance_purge(1, 1)' >/dev/null 2>&1 || fail 'purge accepted a window below the minimum'
+[[ $(job oaos_company_maint -c 'SELECT count(*) >= 1 FROM company.maintenance_purge()') == t ]] || fail 'maintenance login runs the purge'
+# A weakened maintenance unit fails the C17 read-back hardening row.
+maint_unit="$HOME/.config/systemd/user/oaos-company-maintenance.service"
+cp -p "$maint_unit" "$temp_root/maint-unit.saved"
+sed -i '/^NoNewPrivileges=yes$/d' "$maint_unit"
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/weak-unit" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Job unit hardening +FAIL' "$temp_root/weak-unit" || { cat "$temp_root/weak-unit" >&2; fail 'unhardened maintenance unit accepted'; }
+cp -p "$temp_root/maint-unit.saved" "$maint_unit"
+# A backup role that could write fails the job-role row.
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'GRANT INSERT ON company.audit_events TO oaos_company_backup' >/dev/null
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/weak-role" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Job and definer roles +FAIL' "$temp_root/weak-role" || { cat "$temp_root/weak-role" >&2; fail 'writable backup role accepted'; }
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'REVOKE INSERT ON company.audit_events FROM oaos_company_backup' >/dev/null
+printf 'PASS: O7 job roles (read-only backup, purge-only maintenance login), hardened units without root\n'

@@ -80,7 +80,9 @@ bash editions/company/install.sh --stage c02
 bash editions/company/install.sh --status
 ```
 
-설치기는 매 실행 전 E DB의 일관 덤프(로컬 postgres 유지보수 계정 경로; FORCE RLS 때문에 앱 역할로는 덤프할 수 없음)와 기존 nginx vhost를 원복 디렉터리에 보존합니다. `.env`는 Company 계정의 `~/.config/oaos-company`에 `0700` 디렉터리·`0600` 파일로 생성됩니다. 재부팅 후 검증에 필요한 비밀 아닌 E 설정값은 같은 디렉터리의 `deployment.conf`에 `0600`으로 보관합니다. 이후 Phase의 자격과 마스터 키는 `.env`에만 안전하게 등록합니다. C02 자체는 비밀값을 생성하지 않습니다. `oaos-company.service`는 `127.0.0.1:8765`의 `/company/health`만 응답하는 표준 라이브러리 기반 임시 프로세스이며, C09가 같은 유닛을 관리 콘솔 프로세스로 교체합니다. 업무 API·인증·OAuth 기능의 나머지는 후속 Phase의 구현 대상입니다. 백업 타이머는 매일 로컬 postgres 유지보수 계정으로 DB를 덤프(`pg_restore --list`로 읽기 확인)하고 Company 상태와 함께 저장하며, `.env` 사본은 별도 제한 디렉터리에 둡니다. 보존은 일일 7개 + 주간 4개이고 디렉터리 `0700`·파일 `0600`입니다. 이 경로는 C02가 요구하는 비대화형 root 접근을 쓰므로 백업 유닛에는 `NoNewPrivileges`를 두지 않습니다. C02 read-back은 실제 백업 유닛을 실행해 새 `last-success`·읽을 수 있는 덤프·권한을 확인합니다.
+설치기는 매 실행 전 E DB의 일관 덤프(로컬 postgres 유지보수 계정 경로; FORCE RLS 때문에 앱 역할로는 덤프할 수 없음)와 기존 nginx vhost를 원복 디렉터리에 보존합니다. `.env`는 Company 계정의 `~/.config/oaos-company`에 `0700` 디렉터리·`0600` 파일로 생성됩니다. 재부팅 후 검증에 필요한 비밀 아닌 E 설정값은 같은 디렉터리의 `deployment.conf`에 `0600`으로 보관합니다. 이후 Phase의 자격과 마스터 키는 `.env`에만 안전하게 등록합니다. C02 자체는 비밀값을 생성하지 않습니다. `oaos-company.service`는 `127.0.0.1:8765`의 `/company/health`만 응답하는 표준 라이브러리 기반 임시 프로세스이며, C09가 같은 유닛을 관리 콘솔 프로세스로 교체합니다. 업무 API·인증·OAuth 기능의 나머지는 후속 Phase의 구현 대상입니다. 백업 타이머는 매일 **전용 읽기 전용 백업 역할** `oaos_company_backup`(LOGIN·BYPASSRLS, PostgreSQL 14+는 `pg_read_all_data`, 그 이하는 Company 스키마 SELECT만; 쓰기 권한·다른 역할 소속 없음)으로 loopback TCP에 접속해 DB를 덤프(`pg_restore --list`로 읽기 확인)하고 Company 상태와 함께 저장하며, `.env` 사본은 별도 제한 디렉터리에 둡니다. 보존은 일일 7개 + 주간 4개이고 디렉터리 `0700`·파일 `0600`입니다. 작업 역할의 비밀번호는 Company 계정 소유 libpq 비밀번호 파일 `~/.config/oaos-company/db-jobs.pgpass`(`0600`)에만 있고, 설치기는 역할 생성(`migrations/db-jobs.sql`)과 SCRAM 검증자 설정만 유지보수 계정 psql의 표준 입력으로 보냅니다(비밀번호는 명령 인수·출력·서버 로그에 남지 않음). 백업 작업은 root·postgres 계정을 쓰지 않으므로 유닛은 `NoNewPrivileges=yes`·`PrivateTmp=yes`·`ProtectSystem=strict`·`ProtectHome=read-only`·`RestrictSUIDSGID=yes`·`LockPersonality=yes`이고 쓰기는 두 백업 디렉터리(`ReadWritePaths`)뿐입니다. C02 read-back은 유닛 강화 항목과 작업 스크립트의 권한 상승(sudo·runuser·su) 부재, 비밀번호 파일 `0600`을 확인하고 실제 백업 유닛을 실행해 새 `last-success`·읽을 수 있는 덤프·권한을 확인합니다.
+
+**pg_hba.** 작업 역할은 `127.0.0.1` TCP 비밀번호(SCRAM) 인증을 씁니다. Ubuntu 기본 `pg_hba.conf`(`host all all 127.0.0.1/32 scram-sha-256`)에서는 변경이 필요 없으며 **설치기는 pg_hba를 수정하지 않습니다.** E의 pg_hba가 loopback 비밀번호 인증을 막으면 C02(와 이후 Phase)가 작업 역할 로그인 확인에서 종료 코드 `3`으로 차단됩니다. 그때 운영자가 `pg_hba.conf`를 백업한 뒤 `host <PGDATABASE와 복구 드릴 DB> oaos_company_backup,oaos_company_maint 127.0.0.1/32 scram-sha-256` 한 줄을 기존 거부 규칙보다 앞에 추가하고 `pg_ctlcluster <버전> main reload`로 반영합니다(원복은 백업 파일 복원 + reload).
 
 **DB 역할 분리.** C03부터 마이그레이션은 로컬 postgres 유지보수 경로에서 NOLOGIN 소유 역할 `oaos_company_owner`로 적용됩니다(`OAOS_COMPANY_DB_OWNER`로 이름 변경 가능). 설치기·콘솔·서비스가 쓰는 libpq 역할(`PGUSER`)은 Company 객체를 소유하지 않고 `oaos_company_runtime` 그룹을 통해 RLS 아래 DML만, 감사 행은 SELECT/INSERT만 가집니다. 이미 설치된 E는 다음 Phase 실행 시 `db-roles.sql`이 기존 객체 소유권을 넘기고 보정 마이그레이션 013이 권한을 정리합니다. 013 이후 번호의 마이그레이션은 기준 버전을 고치는 **보정(amendment)**이며, 그 기준 버전을 적용하는 Phase와 이후 Phase가 함께 적용합니다.
 
@@ -110,7 +112,7 @@ C03은 C02의 user unit·linger 게이트를 다시 확인하므로 **systemd us
 
 002는 관리자 문맥에서 `resolve_project_member`, `resolve_external_member`, `bind_external_account`를 제공합니다. 조회는 활성 구성원만 `allow`하고, 미등록·정지·퇴사는 각각 `unregistered`·`inactive`·`departed`로 거부합니다. 외부 주체 중복 바인딩은 `duplicate`로 거부합니다. 세션의 조직·행위자 ID는 신뢰된 서버가 인증 후 트랜잭션 범위에 설정해야 합니다. C03은 이 SQL 계약과 검증을 제공하며, 실제 Project 관리자 인증·등록 화면은 G10/C10에서 연결합니다.
 
-**역할 구분 (E 실측 함정)**: `~/.config/oaos-company/deployment.conf`의 `PGUSER`는 **앱 조회 역할이어야 하며 `SUPERUSER`/`BYPASSRLS`이면 안 됩니다.** C01·C03 read-back은 RLS를 우회하지 않는 역할을 요구하므로, 백업용 우회 역할(예: `oaos_company_backup`)이 기록돼 있으면 C03이 `C03 BLOCKED: database role bypasses RLS.`로 차단됩니다. 백업용 우회 역할은 systemd unit의 `EnvironmentFile`인 `~/.config/oaos-company/.env`에만 둡니다(사전 전체 덤프는 C03이 `postgres` 유지보수 계정으로 수행하므로 `deployment.conf`에 둘 필요가 없습니다). C02 설치 시 `PGUSER`를 백업 역할로 넘기면 이 값이 그대로 기록되므로, 설치·검증은 앱 역할로 실행합니다.
+**역할 구분 (E 실측 함정)**: `~/.config/oaos-company/deployment.conf`의 `PGUSER`는 **앱 조회 역할이어야 하며 `SUPERUSER`/`BYPASSRLS`이면 안 됩니다.** C01·C03 read-back은 RLS를 우회하지 않는 역할을 요구하므로, 백업용 우회 역할(예: `oaos_company_backup`)이 기록돼 있으면 C03이 `C03 BLOCKED: database role bypasses RLS.`로 차단됩니다. 일일 백업은 설치기가 만드는 전용 `oaos_company_backup` 역할과 `db-jobs.pgpass`를 스스로 쓰므로 `.env`·`deployment.conf`에 백업 역할을 적지 않습니다(사전 전체 덤프는 각 Phase가 `postgres` 유지보수 계정으로 수행합니다). C02 설치 시 `PGUSER`를 백업 역할로 넘기면 이 값이 그대로 기록되므로, 설치·검증은 앱 역할로 실행합니다.
 
 read-back은 E의 loopback PostgreSQL에 직접 연결해 관리자와 두 구성원, 외부 주체, 다른 조직의 임시 행을 만들고 실제 함수 응답과 C01의 제약·RLS를 검사합니다. 검증 트랜잭션은 롤백되므로 운영 매핑을 생성하지 않습니다. 공개 도메인의 HTTP 200 응답은 C03 통과 근거로 사용하지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 매핑 응답 실패 `1`입니다.
 
@@ -295,7 +297,7 @@ editions/company/
 ├── lib/company.sh        # 유지보수 계정 실행·덤프, 세션 문맥 SQL, G10 관리자 조회 등 공용 도우미
 ├── lib/stage.sh          # C03+ 공통 골격: 선행 Phase → 설정·사전 점검 → DB·역할 → 스냅샷 덤프 → migrate
 ├── lib/migrate.sh        # 체크섬 마이그레이션 실행기 (쓰기 실행은 pg_advisory_lock으로 직렬화)
-└── migrations/           # 001~022 + db-roles.sql·db-definers.sql (라이선스·이름 변경: migrations/README.md)
+└── migrations/           # 001~023 + db-roles.sql·db-definers.sql·db-jobs.sql (라이선스·이름 변경: migrations/README.md)
 ```
 
 `bootstrap/verify/company-verify.sh`와 `bootstrap/migrate/project-to-company.sh`가 공개 진입점입니다. Company 실행 로그는 공용 설치 로그가 아니라 `~/.oaos/logs/company-<날짜>.log`에 남습니다(`OAOS_LOG_NAME`). Project 설치 상태를 읽는 곳은 `stages/c01.sh`의 `company_c01_project_ready` 하나입니다. C09 콘솔(`app/console.py`, 010 함수)은 C10이 `app/console_app.py`(011/020 함수)로 유닛을 교체하는 임시 콘솔이며, 두 앱은 HTTP 경로와 DB 계약이 달라 합치지 않았습니다.
@@ -326,6 +328,7 @@ editions/company/
 | 020 | 보정, 기준 11 | C10+ | 콘솔 호출자 검사(O6) |
 | 021 | 보정, 기준 11 | C10+ | 콘솔 잠금·설정 코드·설정 표 쓰기는 정의자 함수 전용(O9) |
 | 022 | 보정, 기준 11 | C10+ | 정의자 함수 전용 역할 `oaos_company_definer`(DDL 없음) 정책·권한(O6) |
+| 023 | 보정, 기준 12 | C17 | `maintenance_purge`를 `oaos_company_maintenance` 소유 SECURITY DEFINER로, 실행은 `oaos_company_maint`만(O7) |
 
 Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C10 11, C11~C14 7, C16 8, C17 12. 버전이 연속이므로 `--through N`은 N 이하의 미적용 기준 버전도 함께 적용하고, 보정은 기준 버전이 N 이하일 때 소유 역할 경로(C02 이후)에서 적용됩니다.
 
@@ -334,6 +337,20 @@ Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C
 - `oaos_company_owner`(NOLOGIN): 스키마와 모든 테이블의 소유자(DDL). 유지보수 경로의 `SET ROLE`(마이그레이션)에서만 동작합니다.
 - `oaos_company_definer`(NOLOGIN, 022): 콘솔 SECURITY DEFINER 함수 16개의 소유자. 스키마·DB `CREATE`가 없고 소유 역할의 구성원이 아니며, 022가 준 표 권한(콘솔 표·구성원·조직 읽기/쓰기, 감사 INSERT)과 `TO oaos_company_definer` 정책만 가집니다. 함수 소유자 변경은 스키마 `CREATE`가 필요하므로 `lib/migrate.sh`가 실행 끝에 유지보수 계정으로 `db-definers.sql`을 적용하고, `--check`는 소유 역할에 남은 정의자 함수를 미적용으로 보고합니다. read-back(`company_db_runtime_boundary`, C03·C07·C10·C17)은 정의자 함수 소유자가 superuser·로그인 역할·스키마/DB `CREATE` 보유 역할·소유 역할 구성원이면 실패합니다.
 - `oaos_company_runtime`(NOLOGIN 그룹)과 libpq `PGUSER`: FORCE RLS 아래 DML, 감사는 SELECT/INSERT만.
+- `oaos_company_backup`(LOGIN, BYPASSRLS, O7): 일일 `pg_dump` 전용. `pg_read_all_data`(또는 Company 스키마 SELECT)만, 쓰기·DDL·역할 소속 없음.
+- `oaos_company_maintenance`(NOLOGIN, BYPASSRLS, O7): `maintenance_*`·`vault_*` SECURITY DEFINER 함수 소유자. 스키마·DB `CREATE` 없음, 023이 준 표 권한(보존 삭제·감사 행)만.
+- `oaos_company_maint`(LOGIN, O7): 보존 타이머와 Vault 키 회전 전용. 표 권한·역할 소속이 없고 위 함수의 EXECUTE만 가집니다(런타임은 실행 불가).
+- 비밀번호 파일: `~/.config/oaos-company/db-jobs.pgpass`(`0600`, Company 계정 소유)에 두 로그인 역할의 무작위 비밀번호. C02와 모든 C03+ Phase가 `company_db_jobs_ensure`로 역할 속성을 재확인하고, 로그인이 안 될 때만 비밀번호를 만들고 SCRAM 검증자를 표준 입력으로 설정합니다.
+
+```text
+역할                       로그인  RLS 우회  권한
+oaos_company_owner         X       X        스키마·표 소유(DDL), 유지보수 경로 SET ROLE(마이그레이션)만
+oaos_company_definer       X       X        콘솔 정의자 함수 소유, 콘솔 표·구성원·조직 읽기/쓰기, 감사 INSERT (022)
+oaos_company_maintenance   X       O        maintenance_*/vault_* 정의자 함수 소유, 보존 삭제·감사 (023)
+oaos_company_runtime(+PGUSER) O    X        RLS 아래 DML, 감사 SELECT/INSERT, 콘솔 잠금·설정 표 읽기만 (013/021)
+oaos_company_backup        O       O        읽기 전용(pg_read_all_data), 쓰기 없음
+oaos_company_maint         O       X        maintenance_purge·vault_* EXECUTE만
+```
 - 구성원 행(019): 같은 조직은 읽기만, 쓰기는 그 조직의 활성 관리자 세션 또는 소유 역할만. 구성원이 없는 조직의 첫 관리자 자기 등록만 예외이며, 누구도 자기 역할·상태를 바꾸지 못합니다.
 - 콘솔(020): 매핑·완료 함수는 세션 문맥(`company.org_id`/`company.member_id`)의 관리자와 일치해야 하고, 코드 없는 세션 발급은 G10 초기 관리자에게만, 로그인 코드·세션 행은 본인 또는 조직 관리자만 씁니다.
 - 콘솔 표(021): `console_lockouts`·`console_setup_codes`·`console_setup`은 런타임이 읽기만 하고, 쓰기는 011/020 정의자 함수만 합니다(잠금 직접 해제·대기 중 G10에 코드 직접 추가 차단). C10 read-back은 유지보수 경로에서 런타임 역할로 `SET ROLE`해 검사하고, 만료된 설정 코드 고정값만 소유 역할로 씁니다.

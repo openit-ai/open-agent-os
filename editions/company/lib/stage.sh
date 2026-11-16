@@ -6,6 +6,7 @@
 #   1. required phases verified on E,
 #   2. C02 deployment settings and E host preflight,
 #   3. PostgreSQL tools, connection and a runtime role that cannot bypass RLS,
+#      plus the backup/maintenance job roles (company_db_jobs_ensure),
 #   4. migrate.sh --check; when pending, a maintenance-account pg_dump into a
 #      fresh 0700 rollback snapshot, then migrate.sh through the phase version.
 # Exit codes follow install.sh: 0 = done, 3 = blocked, 1 = failed.
@@ -50,6 +51,10 @@ company_stage_ready() {
     company_stage_block "$phase" 'database role check failed.'; return 3;
   }
   [[ $role_safe == t ]] || { company_stage_block "$phase" 'database role bypasses RLS.'; return 3; }
+  # Backup/maintenance job roles and their 0600 password file (O7).
+  company_db_jobs_ensure || {
+    company_stage_block "$phase" 'database job roles or their password file could not be prepared.'; return 3;
+  }
 }
 
 # company_stage_migrate <phase> <through>

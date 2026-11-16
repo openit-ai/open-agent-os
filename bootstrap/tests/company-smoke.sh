@@ -199,3 +199,29 @@ printf 'PASS: Company HTTPS evidence is anchored to this instance\n'
   [[ $pass == 1 && $fail == 1 ]]
 ) || fail 'read-back check rows'
 printf 'PASS: read-back rows reflect emitted section markers\n'
+
+# O7 job credentials: generated once into a 0600 file in the 0700 Company
+# config directory; only SCRAM verifiers are printed; unsafe files are refused.
+jobs="$repo_root/editions/company/app/db-jobs.py"
+mkdir -p "$temp_root/jobs"
+chmod 700 "$temp_root/jobs"
+python3 "$jobs" ensure "$temp_root/jobs/db-jobs.pgpass" 5432 > "$temp_root/jobs.sql" || fail 'job credential ensure'
+[[ $(stat -c %a "$temp_root/jobs/db-jobs.pgpass") == 600 ]] || fail 'job credential file mode'
+[[ $(grep -Ec '^127\.0\.0\.1:5432:\*:oaos_company_(backup|maint):[0-9a-f]{64}$' "$temp_root/jobs/db-jobs.pgpass") == 2 ]] || fail 'job credential entries'
+[[ $(grep -Ec "^ALTER ROLE oaos_company_(backup|maint) PASSWORD 'SCRAM-SHA-256\\\$4096:[A-Za-z0-9+/=]+\\\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+';\$" "$temp_root/jobs.sql") == 2 ]] || fail 'SCRAM verifier statements'
+while IFS=: read -r _ _ _ _ password; do
+  ! grep -Fq "$password" "$temp_root/jobs.sql" || fail 'job password printed'
+done < "$temp_root/jobs/db-jobs.pgpass"
+before=$(sha256sum "$temp_root/jobs/db-jobs.pgpass")
+python3 "$jobs" ensure "$temp_root/jobs/db-jobs.pgpass" 5432 > /dev/null || fail 'job credential rerun'
+[[ $(sha256sum "$temp_root/jobs/db-jobs.pgpass") == "$before" ]] || fail 'job credentials regenerated on rerun'
+chmod 644 "$temp_root/jobs/db-jobs.pgpass"
+code=0
+python3 "$jobs" ensure "$temp_root/jobs/db-jobs.pgpass" 5432 > "$temp_root/jobs-unsafe.sql" 2>/dev/null || code=$?
+[[ $code == 3 && ! -s $temp_root/jobs-unsafe.sql ]] || fail 'world-readable job credential file accepted'
+chmod 600 "$temp_root/jobs/db-jobs.pgpass"
+chmod 755 "$temp_root/jobs"
+code=0
+python3 "$jobs" ensure "$temp_root/jobs/db-jobs.pgpass" 5432 > /dev/null 2>&1 || code=$?
+[[ $code == 3 ]] || fail 'open job credential directory accepted'
+printf 'PASS: job role credentials stay in a 0600 file; only SCRAM verifiers leave it\n'
