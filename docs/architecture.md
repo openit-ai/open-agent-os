@@ -185,9 +185,9 @@ flowchart TD
 
 - **기반**: Project 에디션 구성 + 중소기업 요구 기능 확장
 - **핵심 확장**:
-  - **멀티 LLM/API 라우팅**: 기본 저가 모델 + 프리미엄 모델(Codex·Claude 등)·추가 모델 API를 작업별 라우팅(도입 선택, 사용량 과금 경로는 승인 필요)
+  - **멀티 LLM/API 라우팅**: 기본 저가 모델 + 프리미엄 모델(Codex·Claude 등)·추가 모델 API를 작업별 라우팅(도입 선택). 사용량 과금 경로는 **요청 관리자와 다른 관리자가 결정한 C07 JIT 승인**이 있어야 등록되며 승인 id·결정자가 기록된다
   - **개인별 독립 AI 비서**: 구성원별 개인 계정 연동 시 권한 제어 — `owner == credential == provider == output` 격리
-  - **거버넌스**: 정책 엔진 + JIT 승인 + 감사 + Secret Vault + ACL 지식 인덱스 + 관리 콘솔
+  - **거버넌스**: 정책 엔진 + JIT 승인 + 감사 + Secret Vault + ACL 지식 인덱스 + 관리 콘솔 — 현재는 **DB 수준(RLS·트리거·권한)에서 강제**하며, 비서 실행 경로에서 이를 호출하는 런타임 연결(서비스 API)은 후속 개발
 - **선택형 연동(옵션)** — 조직이 **이미 도입·사용 중인** 서비스에 연동한다(본 솔루션 도입으로 인한 추가 구독 비용 없음):
   - 생산성 스위트: **Google Workspace 또는 Microsoft 365** — 조직 표준에 맞춰 선택 연동(메일·문서·일정)
   - 협업·지식 도구: **Slack**·**Notion** 등 — 이미 사용 중인 조직에 한해 어댑터 활성화
@@ -277,12 +277,13 @@ open-agent-os/
 
 | 항목 | 규칙 | 강제·검증 |
 |---|---|---|
-| 시크릿 | Hermes `.env` 단일 보관 · 원자적 쓰기 · 소유자 전용(600+소유자 / NTFS ACL) · 명령행 인자 금지 · config.yaml 금지 · 값 재출력 금지 | `oaos-secret-set` 도우미 · Personal verify `.env` 보호·config.yaml 무비밀 항목 |
+| 시크릿 | Personal·Project: Hermes `.env` 단일 보관 · Company 구성원 개인 토큰은 PostgreSQL Vault에 AES-GCM 암호문으로 보관 · 원자적 쓰기 · 소유자 전용(600+소유자 / NTFS ACL) · 명령행 인자 금지 · config.yaml 금지 · 값 재출력 금지 | `oaos-secret-set` 도우미 · Personal verify `.env` 보호·config.yaml 무비밀 항목 |
 | 게이트 값 | **저장 → 즉시 검증** 순서. 실패 시 값은 남기고 단계 BLOCKED, 재입력 요청 · 채팅·로그·문서에 미기재 | 단계 재실행 검증(§2.4) |
 | 서비스 바인딩 | Dashboard·DB·Redis·내부 서비스는 127.0.0.1 고정, 원격 접근은 SSH 터널/역방향 프록시 | Personal verify Dashboard 루프백 항목(기본 포트 9119, `OAOS_DASHBOARD_PORT`) |
 | 승인 정책 | `approvals.cron_mode`·`single_query_mode`·`unattended_mode` = deny, 위험 명령 승인 | 미설정 시 설치기가 deny 설정 · 명시적 approve면 gateway 차단 · verify 항목 |
 | 백업 | 백업 디렉터리 700 · 아카이브 600 | 설치기·백업 스크립트·verify |
-| Company | 개인별 독립 비서(owner==credential==provider==output), 정책+JIT 승인, 감사 기록 | Company Phase별 read-back(§7 P2) |
+| Company | 개인별 독립 비서(owner==credential==provider==output) · 정책+JIT 승인(10분·1회·타인 결정) · 마이그레이션 소유 역할과 런타임 역할 분리 · 감사는 런타임에 SELECT/INSERT만(추가 전용) · 감사 180일·퇴사자 개인 내용 30일 보존 후 유지보수 계정만 삭제 · 콘솔·스크립트 값은 표준입력으로만 전달 | Company Phase별 read-back · DB 스모크(CI) |
+| Company 백업 | 유지보수 계정(postgres)으로 일일 덤프·복원 목록 확인·7일+4주 보관 · 백업·유지보수 유닛은 비대화형 root 경로 사용(`NoNewPrivileges` 미적용) | C02·C17 read-back(24시간 이내 백업) |
 | 선택형 연동 | OAuth·토큰은 최소 범위 요청 · `.env`(600) 보관 · 해제 절차 문서화 | Company C11~C15 |
 | 부트스트랩 | 실행 전 저장소 소유자 확인(git origin = openit-ai/open-agent-os, 포크는 `OAOS_ALLOW_FORK=1`) · 스크립트는 저장소 내 공개(감사 가능) | Personal 설치기 적용 · Project·Company 적용 진행 중 |
 
@@ -369,4 +370,4 @@ open-agent-os/
 |---|---|---|
 | v2.0 | 2026-09-25 | 3-에디션·URL 부트스트랩 재설계 최초본 |
 | v2.0.x | 2026-09-26~27 | 무Docker·systemd 정합, Personal 지원 OS(Ubuntu·macOS·Windows 11) 반영 |
-| v2.1 | 2026-11-16 | 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
+| v2.1 | 2026-11-16 | Company 보안 강화 반영(§4.3 과금 승인·DB 수준 거버넌스, §6 역할 분리·보존·백업 — PR #34) · 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
