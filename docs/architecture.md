@@ -312,9 +312,9 @@ open-agent-os/
 
 | 단계 | 범위 | D 완료 판정(코드·CI) | 현황(2026-11-16) |
 |---|---|---|---|
-| **P0 — Personal** | README/START-HERE · `skills/oaos-bootstrap` · `editions/personal` · `bootstrap/verify/personal` · 3-OS 레인 | 3-OS CI 매트릭스 + 스모크 PASS | D 완료(CI 통과) |
-| **P1 — Project** | install/verify(project) · 네이티브 systemd 스택 · nginx/TLS · Personal→Project 이전 | Project 스모크 + Personal→Project 이전 스모크 PASS | Project 스모크 PASS · 이전 스모크 미작성(개발 중) |
-| **P2 — Company** | C01~C17 · 선택 연동(G11·G12) · 멀티 LLM 라우팅(G13) · 정책·승인·감사·Vault·ACL 검색·콘솔 | Phase별 DB 스모크 + read-back SQL PASS(CI) | C01~C17 main 병합 · CI 스모크 PASS |
+| **P0 — Personal** | README/START-HERE · `skills/oaos-bootstrap` · `editions/personal` · `bootstrap/verify/personal` · 3-OS 레인 | 3-OS CI 매트릭스 + 스모크 PASS | 정책 정합 PR #33(CI 통과, 머지 대기) — 머지 시 D 완료 |
+| **P1 — Project** | install/verify(project) · 네이티브 systemd 스택 · nginx/TLS · Personal→Project 이전 | Project 스모크 + Personal→Project 이전 스모크 PASS | 정책 정합 PR #35 + 이전 스모크(#33) — 머지 시 D 완료 |
+| **P2 — Company** | C01~C17 · 선택 연동(G11·G12) · 멀티 LLM 라우팅(G13) · 정책·승인·감사·Vault·ACL 검색·콘솔 | Phase별 DB 스모크 + read-back SQL PASS(CI) | C01~C17 병합 · 보안 강화 PR #34 · 구조 정리·`members` 권한 수정 진행 중 · 런타임 연결(서비스 API)·콘솔 조치·OAuth·성능·키 교체는 후속 |
 
 | V 트랙(별도·후속) | 대상 | 완료 판정(증거) |
 |---|---|---|
