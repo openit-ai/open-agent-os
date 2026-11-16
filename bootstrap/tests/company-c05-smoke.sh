@@ -140,7 +140,7 @@ grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01-regression" ||
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c04 --read-back > "$temp_root/c04-regression" || fail 'C04 assistant read-back after C05'
 grep -Fq 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c04-regression" || fail 'C04 regression summary'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c05 --read-back > "$temp_root/verified" || fail 'C05 real DB read-back'
-grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
+grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
 grep '^Summary:' "$temp_root/verified"
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c05-%'") == 0 ]] || fail 'fixture rollback'
 [[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
@@ -175,6 +175,142 @@ for envelope, nonce, owner in ((first, first_nonce, 'owner-b'), (first, second_n
         raise AssertionError('vault binding was not authenticated')
 PY
 printf 'PASS: AES-256-GCM round trip, owner binding and nonce authentication\n'
+
+# O5 vault key rotation: two owners in two organizations store real envelopes
+# (one written before key versions were bound in the AAD, one after), then the
+# rotation re-encrypts both to V2 without changing their generation and
+# retires V1 only after the database reads back zero rows on it.
+env_file="$HOME/.config/oaos-company/.env"
+vault="$repo_root/editions/company/app/vault.py"
+app_dir="$repo_root/editions/company/app"
+cat > "$temp_root/vault_fixture.py" <<'FIXTURE'
+import base64, os, sys, uuid
+sys.path.insert(0, sys.argv[1])
+import vault
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+mode, env_path, work = sys.argv[2], sys.argv[3], sys.argv[4]
+if mode == 'seed':
+    current, keys = vault.load_store(env_path)
+    for n, legacy in ((1, True), (2, False)):
+        org, owner = str(uuid.uuid4()), str(uuid.uuid4())
+        secret = ('rotation-secret-%d-' % n).encode() + os.urandom(8).hex().encode()
+        if legacy:  # envelope as written before O5 (no key version in the AAD)
+            nonce = os.urandom(12)
+            ciphertext = AESGCM(keys[1]).encrypt(
+                nonce, secret, vault._aad(org, owner, 'slack', 'delegation'))
+        else:
+            ciphertext, nonce = vault.seal(secret, keys[current], org, owner, 'slack',
+                                           'delegation', current)
+        with open(os.path.join(work, 'plain-%d' % n), 'wb') as f:
+            f.write(secret)
+        with open(os.path.join(work, 'ids-%d' % n), 'w') as f:
+            f.write('%s %s\n' % (org, owner))
+        sys.stdout.write(
+            "BEGIN;\n"
+            "SELECT set_config('company.org_id', '%s', true), set_config('company.member_id', '%s', true);\n"
+            "INSERT INTO company.organizations(id, slug) VALUES ('%s', 'rot-%s');\n"
+            "INSERT INTO company.members(id, org_id, project_user_id, role, state)"
+            " VALUES ('%s', '%s', 'rot-%s', 'admin', 'active');\n"
+            "SELECT company.register_personal_assistant();\n"
+            "SELECT company.store_personal_secret('slack', 'delegation', decode('%s', 'base64'),"
+            " decode('%s', 'base64'), %d);\nCOMMIT;\n"
+            % (org, owner, org, org, owner, org, owner,
+               base64.b64encode(ciphertext).decode(), base64.b64encode(nonce).decode(), current))
+elif mode == 'check':
+    expected = int(sys.argv[5])
+    current, keys = vault.load_store(env_path)
+    assert current == expected and sorted(keys) == [current], 'retired key still present'
+    plain = {}
+    for n in (1, 2):
+        org = open(os.path.join(work, 'ids-%d' % n)).read().split()[0]
+        plain[org] = open(os.path.join(work, 'plain-%d' % n), 'rb').read()
+    rows = 0
+    for line in sys.stdin:
+        org, owner, ct, nonce, version, generation = line.strip().split('|')
+        assert int(version) == current and int(generation) == 1, 'version or generation'
+        value = vault.open_envelope(base64.b64decode(ct), base64.b64decode(nonce), keys[current],
+                                    org, owner, 'slack', 'delegation', current)
+        assert value == plain[org], 'plaintext changed'
+        try:  # the new envelope is bound to its key version
+            vault.open_envelope(base64.b64decode(ct), base64.b64decode(nonce), keys[current],
+                                org, owner, 'slack', 'delegation', current + 1)
+        except vault.VaultAccessDenied:
+            pass
+        else:
+            raise AssertionError('key version is not bound in the AAD')
+        rows += 1
+    assert rows == 2, 'both credentials read back'
+FIXTURE
+python3 "$temp_root/vault_fixture.py" "$app_dir" seed "$env_file" "$temp_root" |
+  psql -X -q -v ON_ERROR_STOP=1 >/dev/null || fail 'vault rotation fixtures'
+envelopes() {
+  env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT s.org_id, s.owner_id,
+      translate(encode(s.ciphertext, 'base64'), E'\n', ''), translate(encode(s.nonce, 'base64'), E'\n', ''),
+      s.key_version, s.generation
+    FROM company.secrets s JOIN company.organizations o ON o.id = s.org_id
+   WHERE o.slug LIKE 'rot-%' AND s.state = 'active' ORDER BY o.slug"
+}
+rot_versions() {
+  env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT string_agg(s.key_version::text, ',')
+    FROM company.secrets s JOIN company.organizations o ON o.id = s.org_id
+   WHERE o.slug LIKE 'rot-%' AND s.state = 'active'"
+}
+# The runtime role cannot run the rotation functions.
+! psql -X -q -v ON_ERROR_STOP=1 -c 'SELECT * FROM company.vault_key_usage()' >/dev/null 2>&1 || fail 'runtime read vault key usage'
+! psql -X -q -v ON_ERROR_STOP=1 -c 'SELECT * FROM company.vault_key_inventory(9, 10)' >/dev/null 2>&1 || fail 'runtime read the vault inventory'
+python3 "$vault" rotate "$env_file" "$OAOS_COMPANY_KEY_BACKUP_DIR" > "$temp_root/rotate.out" 2>&1 || { cat "$temp_root/rotate.out" >&2; fail 'vault rotation to V2'; }
+grep -Fq 'vault rotation retired: current key version 2, 2 credentials re-encrypted' "$temp_root/rotate.out" || { cat "$temp_root/rotate.out" >&2; fail 'rotation summary'; }
+envelopes | python3 "$temp_root/vault_fixture.py" "$app_dir" check "$env_file" "$temp_root" 2 || fail 'rotated envelopes'
+grep -Fxq 'OAOS_COMPANY_VAULT_KEY_CURRENT=2' "$env_file" && ! grep -q '^OAOS_COMPANY_VAULT_KEY_V1=' "$env_file" || fail 'V1 retired, V2 current'
+[[ $(stat -c %a "$env_file") == 600 ]] || fail 'EnvironmentFile mode after rotation'
+rotate_backup=$(find "$OAOS_COMPANY_KEY_BACKUP_DIR" -path '*vault-rotate-*/company.env')
+retired_backup=$(find "$OAOS_COMPANY_KEY_BACKUP_DIR" -path '*vault-retired-*/company.env')
+grep -q '^OAOS_COMPANY_VAULT_KEY_V1=' "$rotate_backup" && grep -q '^OAOS_COMPANY_VAULT_KEY_V2=' "$rotate_backup" || fail 'new key backed up before re-encryption'
+! grep -q '^OAOS_COMPANY_VAULT_KEY_V1=' "$retired_backup" || fail 'retired backup still holds V1'
+[[ $(stat -c %a "$rotate_backup") == 600 && $(stat -c %a "$(dirname "$rotate_backup")") == 700 ]] || fail 'key backup modes'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.audit_events
+      WHERE event_type = 'personal_credential' AND action = 'rekeyed' AND metadata->>'key_version' = '2'
+        AND metadata->>'previous_key_version' = '1' AND NOT metadata ?| array['ciphertext', 'nonce']") == 2 ]] || fail 'rekey audit rows'
+! grep -Eq 'rotation-secret|OAOS_COMPANY_VAULT_KEY_V[0-9]+=' "$temp_root/rotate.out" || fail 'rotation printed secret material'
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c05 --read-back > "$temp_root/rotated" || { cat "$temp_root/rotated" >&2; fail 'C05 read-back after rotation'; }
+grep -Eq '^Key versions in use +PASS' "$temp_root/rotated" || fail 'key versions read-back row'
+
+# An envelope that no longer opens stops the next rotation before any row
+# moves; the old key is kept, and the run resumes once that row is revoked.
+read -r bad_org bad_owner < "$temp_root/ids-2"
+psql -X -q -v ON_ERROR_STOP=1 >/dev/null <<SQL || fail 'unreadable envelope fixture'
+SELECT set_config('company.org_id', '$bad_org', false), set_config('company.member_id', '$bad_owner', false);
+SELECT company.rotate_personal_secret(id, decode(repeat('ee', 40), 'hex'), decode(repeat('0f', 12), 'hex'), 2)
+  FROM company.secrets WHERE org_id = '$bad_org' AND state = 'active';
+SQL
+code=0
+python3 "$vault" rotate "$env_file" "$OAOS_COMPANY_KEY_BACKUP_DIR" > "$temp_root/rotate-bad.out" 2>&1 || code=$?
+[[ $code == 3 ]] && grep -Fq 'Vault key rotation stopped' "$temp_root/rotate-bad.out" || { cat "$temp_root/rotate-bad.out" >&2; fail 'rotation with an unreadable envelope'; }
+[[ $(rot_versions) == 2,2 ]] || fail 'failed rotation moved rows'
+grep -q '^OAOS_COMPANY_VAULT_KEY_V2=' "$env_file" && grep -Fxq 'OAOS_COMPANY_VAULT_KEY_CURRENT=3' "$env_file" || fail 'old key kept while rotation is incomplete'
+psql -X -q -v ON_ERROR_STOP=1 >/dev/null <<SQL || fail 'revoke unreadable envelope'
+SELECT set_config('company.org_id', '$bad_org', false), set_config('company.member_id', '$bad_owner', false);
+SELECT company.revoke_personal_secret(id) FROM company.secrets WHERE org_id = '$bad_org' AND state = 'active';
+SQL
+python3 "$vault" rotate "$env_file" "$OAOS_COMPANY_KEY_BACKUP_DIR" > "$temp_root/rotate-resume.out" 2>&1 || { cat "$temp_root/rotate-resume.out" >&2; fail 'resumed rotation'; }
+grep -Fq 'vault rotation retired: current key version 3, 1 credentials re-encrypted' "$temp_root/rotate-resume.out" || { cat "$temp_root/rotate-resume.out" >&2; fail 'resumed rotation summary'; }
+! grep -q '^OAOS_COMPANY_VAULT_KEY_V2=' "$env_file" || fail 'V2 retired after resume'
+[[ $(rot_versions) == 3 ]] || fail 'remaining credential on V3'
+# A credential on a key version missing from the EnvironmentFile fails the read-back.
+psql -X -q -v ON_ERROR_STOP=1 >/dev/null <<SQL || fail 'unknown key version fixture'
+SELECT set_config('company.org_id', '$bad_org', false), set_config('company.member_id', '$bad_owner', false);
+SELECT company.store_personal_secret('slack', 'other', decode(repeat('ab', 40), 'hex'), decode(repeat('01', 12), 'hex'), 9);
+SQL
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c05 --read-back > "$temp_root/unknown-version" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Key versions in use +FAIL' "$temp_root/unknown-version" || { cat "$temp_root/unknown-version" >&2; fail 'missing key version accepted'; }
+psql -X -q -v ON_ERROR_STOP=1 >/dev/null <<SQL || fail 'revoke unknown key version fixture'
+SELECT set_config('company.org_id', '$bad_org', false), set_config('company.member_id', '$bad_owner', false);
+SELECT company.revoke_personal_secret(id) FROM company.secrets WHERE org_id = '$bad_org' AND state = 'active';
+SQL
+python3 "$vault" ensure-key "$env_file" || fail 'ensure-key after rotation'
+! grep -q '^OAOS_COMPANY_VAULT_KEY_V1=' "$env_file" || fail 'ensure-key brought back a retired key'
+printf 'PASS: O5 vault rotation re-encrypts legacy and versioned envelopes, keeps generations, retires old keys only after read-back\n'
 
 # A function drift must fail the same real query path even if the file checksum remains valid.
 env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c \

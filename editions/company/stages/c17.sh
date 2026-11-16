@@ -111,8 +111,9 @@ company_c17_key_backup() {
 # first restore step to the last check:
 #   1. restore the dump through the maintenance account (ownership, grants and
 #      policies as on E) and compare the migration history with the live one;
-#   2. restore the newest key backup into a private 0700 directory and check it
-#      holds every live vault key (vault.py check-backup, AES-GCM canary);
+#   2. restore the newest key backup into a private 0700 directory, check it
+#      holds every live vault key (vault.py check-backup, AES-GCM canary) and
+#      open every active credential of the restored copy with it;
 #   3. run the C04 two-assistant isolation, C07 audit and C08 ACL search
 #      read-backs as the runtime role against the restored database;
 #   4. fail when the elapsed time exceeds the 4-hour RTO.
@@ -121,7 +122,7 @@ company_c17_key_backup() {
 COMPANY_C17_DRILL='' COMPANY_C17_DRILL_FAILED=''
 company_c17_restore_drill() {
   local backup=$1 scratch=$2 socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
-  local version live started finished elapsed key_backup key_dir check rc=0
+  local version live started finished elapsed key_backup key_dir key_check check rc=0 opened=0
   COMPANY_C17_DRILL='' COMPANY_C17_DRILL_FAILED=''
   [[ $scratch =~ ^oaos_company_c17_restore_[0-9]{14}_[0-9]+$ ]] || return 1
   started=$(date +%s)
@@ -146,12 +147,15 @@ company_c17_restore_drill() {
   fi
   if ((rc == 0)); then
     key_dir=$(mktemp -d) || rc=1
+    # Every active credential of the restored copy must open with the restored
+    # keys (read through the maintenance login; only a count is returned).
     if ((rc == 0)) && key_backup=$(company_c17_key_backup) &&
        (umask 077; cp -- "$key_backup" "$key_dir/company.env") && chmod 700 "$key_dir" &&
        chmod 600 "$key_dir/company.env" &&
-       python3 "$repo_root/editions/company/app/vault.py" check-backup \
-         "$HOME/.config/oaos-company/.env" "$key_dir/company.env" >/dev/null 2>&1; then
-      :
+       key_check=$(python3 "$repo_root/editions/company/app/vault.py" check-backup \
+         "$HOME/.config/oaos-company/.env" "$key_dir/company.env" "$scratch" 2>/dev/null) &&
+       [[ $key_check =~ credentials\ opened:\ ([0-9]+)$ ]]; then
+      opened=${BASH_REMATCH[1]}
     else
       rc=1; COMPANY_C17_DRILL_FAILED=key_backup
     fi
@@ -172,7 +176,7 @@ company_c17_restore_drill() {
   fi
   company_maint dropdb --host="$socket_dir" --port="${PGPORT:-5432}" \
     --if-exists "$scratch" >/dev/null 2>&1 || true
-  COMPANY_C17_DRILL="{\"schema_version\":12,\"target\":\"$scratch\",\"rto_seconds\":$elapsed,\"rto_limit_seconds\":$COMPANY_C17_RTO_LIMIT,\"key_restored\":$([[ $rc == 0 || $COMPANY_C17_DRILL_FAILED == isolation || $COMPANY_C17_DRILL_FAILED == rto ]] && printf true || printf false),\"key_source\":\"${key_backup##*/}\",\"isolation\":$([[ $rc == 0 || $COMPANY_C17_DRILL_FAILED == rto ]] && printf '[\"c04_assistants\",\"c07_audit\",\"c08_acl_search\"]' || printf '[]'),\"failed_step\":\"$COMPANY_C17_DRILL_FAILED\"}"
+  COMPANY_C17_DRILL="{\"schema_version\":12,\"target\":\"$scratch\",\"rto_seconds\":$elapsed,\"rto_limit_seconds\":$COMPANY_C17_RTO_LIMIT,\"key_restored\":$([[ $rc == 0 || $COMPANY_C17_DRILL_FAILED == isolation || $COMPANY_C17_DRILL_FAILED == rto ]] && printf true || printf false),\"key_source\":\"${key_backup##*/}\",\"vault_rows_opened\":$opened,\"isolation\":$([[ $rc == 0 || $COMPANY_C17_DRILL_FAILED == rto ]] && printf '[\"c04_assistants\",\"c07_audit\",\"c08_acl_search\"]' || printf '[]'),\"failed_step\":\"$COMPANY_C17_DRILL_FAILED\"}"
   return "$rc"
 }
 

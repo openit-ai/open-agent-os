@@ -156,6 +156,26 @@ INSERT INTO company.members(org_id, project_user_id, role, state)
     FROM company.organizations WHERE slug = 'install-org';
 SQL
 
+# One real sealed credential, so the recovery drill has to open it with the
+# restored key backup.
+read -r seed_org seed_admin < <(env -u PGOPTIONS psql -X -q -A -t -F ' ' -v ON_ERROR_STOP=1 -c \
+  "SELECT org_id, id FROM company.members WHERE project_user_id = 'c17-install-admin'")
+seed_sql=$(python3 - "$repo_root/editions/company/app" "$HOME/.config/oaos-company/.env" "$seed_org" "$seed_admin" <<'FIXTURE'
+import base64, sys
+sys.path.insert(0, sys.argv[1])
+import vault
+current, keys = vault.load_store(sys.argv[2])
+ciphertext, nonce = vault.seal(b'c17-drill-credential', keys[current], sys.argv[3], sys.argv[4],
+                               'slack', 'delegation', current)
+print("SELECT set_config('company.org_id', '%s', false), set_config('company.member_id', '%s', false);"
+      % (sys.argv[3], sys.argv[4]))
+print("SELECT company.register_personal_assistant();")
+print("SELECT company.store_personal_secret('slack', 'delegation', decode('%s', 'base64'), decode('%s', 'base64'), %d);"
+      % (base64.b64encode(ciphertext).decode(), base64.b64encode(nonce).decode(), current))
+FIXTURE
+)
+psql -X -q -v ON_ERROR_STOP=1 <<< "$seed_sql" >/dev/null || fail 'sealed credential fixture'
+
 # O4 recovery drill: no key backup blocks; a key backup without the live vault
 # key fails; a drill over the 4-hour RTO fails and is recorded as failed.
 code=0
@@ -180,7 +200,7 @@ OAOS_C17_CLOCK_STEP=20000 OAOS_C17_CLOCK_FILE="$temp_root/clock" \
 # A clean handover without a selected integration records evidence and verifies.
 bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/installed" || fail 'C17 install'
 grep -Eq 'restored DB and vault keys in [0-9]+s \(RTO limit 14400s\)' "$temp_root/installed" || fail 'measured RTO reported'
-[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.recovery_drills WHERE state = 'passed' AND evidence->>'key_restored' = 'true' AND (evidence->>'rto_seconds')::int <= 14400 AND evidence->'isolation' @> '[\"c04_assistants\", \"c07_audit\", \"c08_acl_search\"]' AND evidence->>'key_source' = 'company.env'") == 1 ]] || fail 'passing drill evidence'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.recovery_drills WHERE state = 'passed' AND evidence->>'key_restored' = 'true' AND (evidence->>'rto_seconds')::int <= 14400 AND evidence->'isolation' @> '[\"c04_assistants\", \"c07_audit\", \"c08_acl_search\"]' AND evidence->>'key_source' = 'company.env' AND evidence->>'vault_rows_opened' = '1'") == 1 ]] || fail 'passing drill evidence'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT (h.evidence->>'rto_seconds') = (r.evidence->>'rto_seconds') FROM company.handover_state h JOIN company.recovery_drills r ON r.state = 'passed'") == t ]] || fail 'handover evidence carries the measured RTO'
 ! grep -Fq "$(sed -n 's/^OAOS_COMPANY_VAULT_KEY_V1=//p' "$HOME/.config/oaos-company/.env")" "$temp_root/installed" || fail 'vault key printed by the drill'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 12 ]] || fail 'migration 12 missing'

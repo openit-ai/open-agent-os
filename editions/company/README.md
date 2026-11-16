@@ -144,7 +144,20 @@ bash bootstrap/verify/company-verify.sh --phase c05 --read-back
 
 개인 자격의 원문은 서비스 내부에서만 AES-256-GCM으로 암호화·복호화합니다. 추가 인증 데이터는 조직·owner·공급자·목적이며 각 암호화에 새 nonce를 사용합니다. SQL 함수는 암호문·nonce만 저장하고, 활성 owner와 활성 개인비서 문맥에서만 암호화된 봉투를 반환합니다. 비서 사용 판정은 자격 ID와 현재 세대를 함께 확인합니다. 회전은 암호문·nonce를 교체하고 세대를 올려 이전 세대 요청을 거부합니다. 철회는 암호문·nonce를 지우고 조회·사용·회전을 거부합니다. 비서 해제 때도 그 owner의 활성 자격을 함께 철회하며, 새 비서에 이전 자격이 재노출되지 않습니다. 저장·회전·철회 사건은 원문 없이 추가 전용 감사 행에 남습니다. 실제 외부 공급자의 토큰 무효화는 해당 연동 Phase에서 함께 수행해야 합니다.
 
-read-back은 E PostgreSQL에서 두 owner와 다른 조직의 임시 자격을 만들고, owner 조회, 타인 거부, 회전 전 세대 실패, 철회 후 실패와 감사 사건을 실제 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 검증 출력에는 비밀 원문을 싣지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
+**Vault 키 버전과 회전(O5, 보정 024).** `.env`에는 `OAOS_COMPANY_VAULT_KEY_V<n>`이 하나 이상 있고 `OAOS_COMPANY_VAULT_KEY_CURRENT=<n>`(없으면 1)이 새 봉투에 쓸 버전입니다. 새 봉투는 추가 인증 데이터에 조직·owner·공급자·목적과 **키 버전**을 함께 묶고, 행의 `key_version`에 버전을 기록합니다. O5 이전에 버전 없이 봉인된 V1 봉투도 V1 키로 계속 열립니다. 회전은 운영자가 Company 계정에서 실행합니다.
+
+```bash
+python3 editions/company/app/vault.py rotate ~/.config/oaos-company/.env "$OAOS_COMPANY_KEY_BACKUP_DIR"
+systemctl --user restart oaos-company.service   # 새 현재 키로 봉인하도록 재시작
+```
+
+1. 진행 중인 회전이 없으면 키 n+1을 만들고 현재 버전으로 지정한 뒤, **어떤 행도 새 키를 쓰기 전에** `.env`를 키 백업 디렉터리의 `vault-rotate-<시각>.*/company.env`(`0700`/`0600`)로 백업합니다.
+2. 유지보수 로그인(`oaos_company_maint`, O7)으로 `vault_key_inventory`에서 이전 버전 활성 자격을 최대 100건씩 읽어 Company 계정 안에서 복호화·재봉인하고, 배치마다 한 트랜잭션으로 `vault_rekey_secret`(이전 암호문 비교 후 교체)을 호출합니다. 원문·키는 DB로 가지 않으며, 세대(`generation`)와 비서 결속(006)은 바뀌지 않고 감사 행은 `rekeyed`(키 버전만)로 남습니다. 복호화할 수 없는 행이 있으면 그 배치 전에 중단(종료 `3`)하고 아무 행도 옮기지 않습니다.
+3. `vault_key_usage()` read-back에서 이전 버전 활성 행이 0일 때만 이전 키를 `.env`에서 제거(은퇴)하고 다시 `vault-retired-*` 백업을 남깁니다. 행이 남으면(예: 재시작 전 서비스가 이전 키로 저장) 종료 `3`이며, 같은 명령을 다시 실행하면 이어서 진행합니다.
+
+세 함수는 `oaos_company_maintenance` 소유 SECURITY DEFINER이고 런타임은 실행할 수 없습니다. 런타임 세션이 재암호화 표지를 직접 켜도 일반 회전(세대 +1)으로 처리됩니다. 은퇴한 키는 그 이전 키 백업에만 남으므로, 은퇴 이전 DB 백업을 복원할 때는 같은 시기의 키 백업을 함께 복원해야 합니다(C17 드릴이 이를 확인).
+
+read-back은 E PostgreSQL에서 두 owner와 다른 조직의 임시 자격을 만들고, owner 조회, 타인 거부, 회전 전 세대 실패, 철회 후 실패와 감사 사건, 런타임의 회전 함수 실행·표지 우회 거부를 실제 응답으로 검사한 뒤 트랜잭션을 롤백합니다. 또한 유지보수 로그인으로 활성 자격이 쓰는 모든 키 버전이 `.env`에 있는지(`vault.py check-usage`, 개수만) 확인합니다. 검증 출력에는 비밀 원문을 싣지 않습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
 ## C06: 개인별 비서 권한 격리 (owner == credential == provider == output)
 
@@ -304,7 +317,7 @@ editions/company/
 ├── lib/company.sh        # 유지보수 계정 실행·덤프, 세션 문맥 SQL, G10 관리자 조회 등 공용 도우미
 ├── lib/stage.sh          # C03+ 공통 골격: 선행 Phase → 설정·사전 점검 → DB·역할 → 스냅샷 덤프 → migrate
 ├── lib/migrate.sh        # 체크섬 마이그레이션 실행기 (쓰기 실행은 pg_advisory_lock으로 직렬화)
-└── migrations/           # 001~023 + db-roles.sql·db-definers.sql·db-jobs.sql (라이선스·이름 변경: migrations/README.md)
+└── migrations/           # 001~024 + db-roles.sql·db-definers.sql·db-jobs.sql (라이선스·이름 변경: migrations/README.md)
 ```
 
 `bootstrap/verify/company-verify.sh`와 `bootstrap/migrate/project-to-company.sh`가 공개 진입점입니다. Company 실행 로그는 공용 설치 로그가 아니라 `~/.oaos/logs/company-<날짜>.log`에 남습니다(`OAOS_LOG_NAME`). Project 설치 상태를 읽는 곳은 `stages/c01.sh`의 `company_c01_project_ready` 하나입니다. C09 콘솔(`app/console.py`, 010 함수)은 C10이 `app/console_app.py`(011/020 함수)로 유닛을 교체하는 임시 콘솔이며, 두 앱은 HTTP 경로와 DB 계약이 달라 합치지 않았습니다.
@@ -336,6 +349,7 @@ editions/company/
 | 021 | 보정, 기준 11 | C10+ | 콘솔 잠금·설정 코드·설정 표 쓰기는 정의자 함수 전용(O9) |
 | 022 | 보정, 기준 11 | C10+ | 정의자 함수 전용 역할 `oaos_company_definer`(DDL 없음) 정책·권한(O6) |
 | 023 | 보정, 기준 12 | C17 | `maintenance_purge`를 `oaos_company_maintenance` 소유 SECURITY DEFINER로, 실행은 `oaos_company_maint`만(O7) |
+| 024 | 보정, 기준 4 | C05+ | Vault 키 버전 회전 함수(`vault_*`, 유지보수 역할 소유)·재암호화 트리거(O5) |
 
 Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C10 11, C11~C14 7, C16 8, C17 12. 버전이 연속이므로 `--through N`은 N 이하의 미적용 기준 버전도 함께 적용하고, 보정은 기준 버전이 N 이하일 때 소유 역할 경로(C02 이후)에서 적용됩니다.
 
@@ -346,7 +360,7 @@ Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C
 - `oaos_company_runtime`(NOLOGIN 그룹)과 libpq `PGUSER`: FORCE RLS 아래 DML, 감사는 SELECT/INSERT만.
 - `oaos_company_backup`(LOGIN, BYPASSRLS, O7): 일일 `pg_dump` 전용. `pg_read_all_data`(또는 Company 스키마 SELECT)만, 쓰기·DDL·역할 소속 없음.
 - `oaos_company_maintenance`(NOLOGIN, BYPASSRLS, O7): `maintenance_*`·`vault_*` SECURITY DEFINER 함수 소유자. 스키마·DB `CREATE` 없음, 023이 준 표 권한(보존 삭제·감사 행)만.
-- `oaos_company_maint`(LOGIN, O7): 보존 타이머와 Vault 키 회전 전용. 표 권한·역할 소속이 없고 위 함수의 EXECUTE만 가집니다(런타임은 실행 불가).
+- `oaos_company_maint`(LOGIN, O7): 보존 타이머, Vault 키 회전(024)과 C17 드릴의 키 확인 전용. 표 권한·역할 소속이 없고 위 함수의 EXECUTE만 가집니다(런타임은 실행 불가).
 - 비밀번호 파일: `~/.config/oaos-company/db-jobs.pgpass`(`0600`, Company 계정 소유)에 두 로그인 역할의 무작위 비밀번호. C02와 모든 C03+ Phase가 `company_db_jobs_ensure`로 역할 속성을 재확인하고, 로그인이 안 될 때만 비밀번호를 만들고 SCRAM 검증자를 표준 입력으로 설정합니다.
 
 ```text
@@ -356,7 +370,7 @@ oaos_company_definer       X       X        콘솔 정의자 함수 소유, 콘�
 oaos_company_maintenance   X       O        maintenance_*/vault_* 정의자 함수 소유, 보존 삭제·감사 (023)
 oaos_company_runtime(+PGUSER) O    X        RLS 아래 DML, 감사 SELECT/INSERT, 콘솔 잠금·설정 표 읽기만 (013/021)
 oaos_company_backup        O       O        읽기 전용(pg_read_all_data), 쓰기 없음
-oaos_company_maint         O       X        maintenance_purge·vault_* EXECUTE만
+oaos_company_maint         O       X        maintenance_purge·vault_key_usage·vault_key_inventory·vault_rekey_secret EXECUTE만
 ```
 - 구성원 행(019): 같은 조직은 읽기만, 쓰기는 그 조직의 활성 관리자 세션 또는 소유 역할만. 구성원이 없는 조직의 첫 관리자 자기 등록만 예외이며, 누구도 자기 역할·상태를 바꾸지 못합니다.
 - 콘솔(020): 매핑·완료 함수는 세션 문맥(`company.org_id`/`company.member_id`)의 관리자와 일치해야 하고, 코드 없는 세션 발급은 G10 초기 관리자에게만, 로그인 코드·세션 행은 본인 또는 조직 관리자만 씁니다.
