@@ -139,8 +139,8 @@ company_c17_apply() {
 
   [[ $(stage_status c01) == verified && $(stage_status c02) == verified && \
      $(stage_status c10) == verified && $(stage_status c15) == verified && \
-     $(stage_status c16) == verified ]] || {
-    company_c17_block 'C01, C02, C10, C15 and C16 must be verified on E.'; return 3;
+     ( $(stage_status c16) == verified || $(stage_status c16) == SKIP ) ]] || {
+    company_c17_block 'C01, C02, C10 and C15 must be verified and C16 verified or SKIP on E.'; return 3;
   }
   company_c02_load_settings || { company_c17_block 'C02 E deployment settings are invalid.'; return 3; }
   company_c02_preflight || return 3

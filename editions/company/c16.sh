@@ -33,12 +33,62 @@ company_c16_admin_context() {
   while IFS= read -r row; do
     [[ -n $row ]] || continue
     org=${row%%|*}
-    admin=${row#*|}
+    # Keep the first (longest-standing) administrator; never the last row read.
+    [[ -n $admin ]] || admin=${row#*|}
     [[ -z $first_org ]] && first_org=$org
     [[ $org != "$first_org" ]] && return 1
   done <<< "$rows"
   [[ $first_org =~ ^[0-9a-f-]{36}$ && $admin =~ ^[0-9a-f-]{36}$ ]] || return 1
-  printf '%s %s\n' "$org" "$admin"
+  printf '%s %s\n' "$first_org" "$admin"
+}
+
+# Resolve an operator-named Project account to an active administrator of org.
+company_c16_admin_member() {
+  local org=$1 project_user_id=$2 value=''
+  [[ $org =~ ^[0-9a-f-]{36}$ && $project_user_id =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || return 1
+  value=$(run_root env -u PGOPTIONS -u PGHOSTADDR -u PGHOST -u PGUSER \
+    -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
+    runuser -u postgres -- psql --host="${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}" \
+    --port="${PGPORT:-5432}" --dbname="$PGDATABASE" -X -q -A -t \
+    -c "SELECT m.id FROM company.members m
+         WHERE m.org_id = '$org'::uuid AND m.project_user_id = '$project_user_id'
+           AND m.role = 'admin' AND m.state = 'active'" 2>/dev/null) || return 1
+  value=${value%%$'\n'*}
+  [[ $value =~ ^[0-9a-f-]{36}$ ]] || return 1
+  printf '%s' "$value"
+}
+
+# Usage billing is a C07 JIT approval: the requesting administrator asks, a
+# different administrator named by the operator decides, the approval is
+# consumed by the execution gate, and the model row is written in the same
+# transaction (migration 016 rejects it otherwise and stores the approval id
+# and the deciding administrator). Prints decision|model_id|approval_id.
+company_c16_usage_model() {
+  local org=$1 requester=$2 approver=$3 provider=$4 model=$5 cap=$6 output last
+  output=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -v org="$org" -v requester="$requester" \
+      -v approver="$approver" -v provider="$provider" -v model="$model" -v cap="$cap" \
+      2>/dev/null <<'SQL'
+BEGIN;
+SELECT set_config('company.org_id', :'org', true) AS org_ctx \gset
+SELECT set_config('company.member_id', :'requester', true) AS member_ctx \gset
+-- The organization's C07 bundle (idempotent) carries the llm.billing.usage rule.
+SELECT r.decision AS bundle FROM company.install_default_policies() r \gset
+SELECT company.g13_billing_digest(:'provider', :'model', :'cap'::numeric) AS digest \gset
+SELECT COALESCE(r.approval_id::text, '') AS approval FROM company.request_approval(
+  'llm.billing.usage', :'digest', 'g13') r \gset
+SELECT set_config('company.member_id', :'approver', true) AS member_ctx \gset
+SELECT r.decision AS decided FROM company.decide_approval(NULLIF(:'approval', '')::uuid, true) r \gset
+SELECT set_config('company.member_id', :'requester', true) AS member_ctx \gset
+SELECT r.decision AS gate FROM company.authorize_action('llm.billing.usage', :'digest', 'g13',
+  NULLIF(:'approval', '')::uuid) r \gset
+SELECT '__C16__' || r.decision || '|' || COALESCE(r.model_id::text, '') || '|' || :'approval'
+  FROM company.configure_llm_model(:'provider', :'model', 'premium', 'usage', :'cap'::numeric, true) r;
+COMMIT;
+SQL
+  ) || return 1
+  last=${output##*__C16__}
+  [[ $output == *__C16__* ]] || return 1
+  printf '%s' "${last%%$'\n'*}"
 }
 
 company_c16_current_state() {
@@ -86,6 +136,7 @@ company_c16_configure() {
   local org=$1 admin=$2 default_provider=$3 default_model=$4 state=$5
   local decision model_id premium_provider='' premium_model='' billing='flat' cap=0 approved=false
   local premium_decision premium_id task route_decision key_name apply_state=${OAOS_COMPANY_G13_STATE:+1}
+  local requester_id='' approver_id=''
   local tasks task_list
 
   decision=$(company_c16_sql "$org" "$admin" \
@@ -112,7 +163,6 @@ company_c16_configure() {
   premium_model=${OAOS_COMPANY_G13_MODEL:-}
   billing=${OAOS_COMPANY_G13_BILLING_MODE:-flat}
   cap=${OAOS_COMPANY_G13_MONTHLY_CAP_USD:-0}
-  [[ ${OAOS_COMPANY_G13_BILLING_APPROVED:-no} == yes ]] && approved=true
   company_c16_identifier "$premium_provider" && company_c16_identifier "$premium_model" || {
     warn 'C16 BLOCKED: Set OAOS_COMPANY_G13_PROVIDER and OAOS_COMPANY_G13_MODEL.'; return 3;
   }
@@ -123,12 +173,20 @@ company_c16_configure() {
     warn 'C16 BLOCKED: usage billing requires a positive monthly cap.'; return 3;
   }
   if [[ $billing == usage ]]; then
-    [[ $approved == true ]] || {
-      warn 'C16 BLOCKED: usage billing path requires approval.'; return 3;
-    }
     [[ $cap =~ ^[1-9][0-9]*([.][0-9]{1,2})?$ || $cap =~ ^0[.][0-9]*[1-9][0-9]*$ ]] || {
       warn 'C16 BLOCKED: usage billing requires a positive monthly cap.'; return 3;
     }
+    # The approval is a C07 JIT decision by a named administrator, not a flag.
+    requester_id=$(company_c16_admin_member "$org" "${OAOS_COMPANY_G13_REQUESTED_BY:-}") || {
+      warn 'C16 BLOCKED: set OAOS_COMPANY_G13_REQUESTED_BY to the Project ID of the requesting active administrator.'; return 3;
+    }
+    approver_id=$(company_c16_admin_member "$org" "${OAOS_COMPANY_G13_APPROVED_BY:-}") || {
+      warn 'C16 BLOCKED: set OAOS_COMPANY_G13_APPROVED_BY to the Project ID of the approving active administrator.'; return 3;
+    }
+    [[ $requester_id != "$approver_id" ]] || {
+      warn 'C16 BLOCKED: the approving administrator must differ from the requester.'; return 3;
+    }
+    approved=true
   else
     cap=0
   fi
@@ -142,12 +200,25 @@ company_c16_configure() {
   decision=$(company_c16_sql "$org" "$admin" \
     "SELECT company.set_llm_g13_state('selected', 'operator_approved')") || return 1
   [[ $decision == configured ]] || { warn 'C16 BLOCKED: G13 selected state was rejected.'; return 3; }
-  premium_decision=$(company_c16_sql "$org" "$admin" \
-    "SELECT decision || '|' || model_id FROM company.configure_llm_model('$premium_provider', '$premium_model', 'premium', '$billing', $cap, $approved)") || return 1
-  [[ $premium_decision == configured\|* ]] || {
-    warn 'C16 BLOCKED: premium model configuration was rejected.'; return 3;
-  }
-  premium_id=${premium_decision#*|}
+  if [[ $billing == usage ]]; then
+    premium_decision=$(company_c16_usage_model "$org" "$requester_id" "$approver_id" \
+      "$premium_provider" "$premium_model" "$cap") || {
+      warn 'C16 BLOCKED: the usage billing approval was not decided and consumed; nothing was stored.'; return 3;
+    }
+    [[ $premium_decision =~ ^configured\|[0-9a-f-]{36}\|[0-9a-f-]{36}$ ]] || {
+      warn 'C16 BLOCKED: premium model configuration was rejected.'; return 3;
+    }
+    premium_id=${premium_decision#*|}
+    info "C16 usage billing approval ${premium_id#*|} consumed and stored with the model."
+    premium_id=${premium_id%%|*}
+  else
+    premium_decision=$(company_c16_sql "$org" "$admin" \
+      "SELECT decision || '|' || model_id FROM company.configure_llm_model('$premium_provider', '$premium_model', 'premium', '$billing', $cap, $approved)") || return 1
+    [[ $premium_decision == configured\|* ]] || {
+      warn 'C16 BLOCKED: premium model configuration was rejected.'; return 3;
+    }
+    premium_id=${premium_decision#*|}
+  fi
   tasks=${OAOS_COMPANY_G13_TASKS:-premium}
   IFS=',' read -r -a task_list <<< "$tasks"
   for task in "${task_list[@]}"; do
@@ -199,7 +270,7 @@ company_c16_apply() {
     warn 'C16 BLOCKED: a single organization with an active G10 administrator is required.'; return 3;
   }
 
-  bash "$repo_root/editions/company/migrate.sh" --check --through 5 >/dev/null 2>&1 || check_code=$?
+  bash "$repo_root/editions/company/migrate.sh" --check --through 8 >/dev/null 2>&1 || check_code=$?
   case $check_code in
     0) ;;
     3)
@@ -219,7 +290,7 @@ company_c16_apply() {
         warn 'C16 BLOCKED: E database backup failed or is empty.'; return 3
       fi
       chmod 600 "$snapshot/company.dump"
-      bash "$repo_root/editions/company/migrate.sh" --through 5 || return 1 ;;
+      bash "$repo_root/editions/company/migrate.sh" --through 8 || return 1 ;;
     *) warn 'C16 migration history or checksum is invalid.'; return 1 ;;
   esac
 

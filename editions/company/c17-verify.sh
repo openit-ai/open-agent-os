@@ -12,7 +12,7 @@ company_c17_verify() {
   local current_boot='' backup_result=0
 
   [[ $(stage_status c02) == verified && $(stage_status c10) == verified && \
-     $(stage_status c15) == verified && $(stage_status c16) == verified ]] || {
+     $(stage_status c15) == verified && ( $(stage_status c16) == verified || $(stage_status c16) == SKIP ) ]] || {
     warn 'C17 read-back needs C02, C10, C15 and C16 verified on E.'; return 3;
   }
   [[ $(stage_status c17) == applied || $(stage_status c17) == verified ]] || {

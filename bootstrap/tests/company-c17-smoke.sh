@@ -97,7 +97,7 @@ chmod 600 "$HOME/.config/oaos-company/.env"
 code=0
 bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/prereq" 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'C10/C15/C16 verified gate'
-grep -Fq 'C01, C02, C10, C15 and C16 must be verified' "$temp_root/prereq" || fail 'gate reason'
+grep -Fq 'C01, C02, C10 and C15 must be verified and C16 verified or SKIP' "$temp_root/prereq" || fail 'gate reason'
 python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
 import json, sys
 path = sys.argv[1]
