@@ -147,8 +147,8 @@ gateway_was_running=0
 gateway_running() {
   local status
   status=$(hermes gateway status 2>/dev/null) || return 1
-  printf '%s\n' "$status" | grep -Eiq '(^|[[:space:]:])(running|active)([[:space:]]|$)' &&
-    ! printf '%s\n' "$status" | grep -Eiq 'not running|inactive|stopped'
+  printf '%s\n' "$status" | grep -Ei '(^|[[:space:]:])(running|active)([[:space:]]|$)' >/dev/null &&
+    ! printf '%s\n' "$status" | grep -Ei 'not running|inactive|stopped' >/dev/null
 }
 if command -v hermes >/dev/null 2>&1 && gateway_running; then
   hermes gateway stop >/dev/null 2>&1 || { printf 'Could not stop the Hermes gateway; nothing was swapped.\n' >&2; exit 1; }

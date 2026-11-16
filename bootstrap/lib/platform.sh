@@ -88,7 +88,7 @@ platform_linux_package_prereqs() {
   local pkg
   for pkg in git curl xz-utils ca-certificates; do
     if ! command -v dpkg-query >/dev/null 2>&1 ||
-       ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+       ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -F 'install ok installed' >/dev/null; then
       printf '%s\n' "$pkg"
     fi
   done
@@ -198,7 +198,7 @@ platform_linux_gateway_install() {
 platform_linux_gateway_status() {
   platform_linux platform_gateway_status || return 3
   [[ -f $HOME/.config/systemd/user/hermes-gateway.service ]] || return 1
-  hermes gateway status 2>/dev/null | grep -Eiq 'running|active'
+  hermes gateway status 2>/dev/null | grep -Ei 'running|active' >/dev/null
 }
 platform_linux_gateway_service_present() {
   platform_linux platform_gateway_service_present || return 3
@@ -367,15 +367,15 @@ platform_macos_gateway_install() {
 platform_macos_gateway_status() {
   local status
   status=$(hermes gateway status 2>/dev/null) || return 1
-  printf '%s\n' "$status" | grep -Eiq '(^|[[:space:]:])(running|active)([[:space:]]|$)' || return 1
-  ! printf '%s\n' "$status" | grep -Eiq 'not running|inactive|stopped'
+  printf '%s\n' "$status" | grep -Ei '(^|[[:space:]:])(running|active)([[:space:]]|$)' >/dev/null || return 1
+  ! printf '%s\n' "$status" | grep -Ei 'not running|inactive|stopped' >/dev/null
 }
 platform_macos_gateway_service_present() { platform_macos_gateway_autostart registered; }
 platform_macos_gateway_autostart() {
   local action=${1:-check}
   [[ $action == registered || $action == check || $action == ensure ]] || return 1
   # launchctl is diagnostic only; Hermes owns install/start.
-  if ! launchctl list 2>/dev/null | grep -Eiq 'hermes.*gateway|gateway.*hermes'; then
+  if ! launchctl list 2>/dev/null | grep -Ei 'hermes.*gateway|gateway.*hermes' >/dev/null; then
     printf 'BLOCKED: Hermes gateway launchd registration was not found.\n' >&2
     return 3
   fi
@@ -512,8 +512,8 @@ platform_windows_gateway_install() {
 platform_windows_gateway_status() {
   local status
   status=$(hermes gateway status 2>/dev/null) || return 1
-  printf '%s\n' "$status" | grep -Eiq '(^|[[:space:]:])(running|active)([[:space:]]|$)' || return 1
-  ! printf '%s\n' "$status" | grep -Eiq 'not running|inactive|stopped'
+  printf '%s\n' "$status" | grep -Ei '(^|[[:space:]:])(running|active)([[:space:]]|$)' >/dev/null || return 1
+  ! printf '%s\n' "$status" | grep -Ei 'not running|inactive|stopped' >/dev/null
 }
 platform_windows_gateway_service_present() { platform_windows_gateway_autostart registered; }
 platform_windows_gateway_autostart() {
@@ -523,7 +523,7 @@ platform_windows_gateway_autostart() {
   task=$(printf '%s\n' "$status" | sed -n 's/.*\(Hermes_Gateway[^[:space:]]*\).*/\1/p' | awk 'NR==1 {print}')
   task=${task:-Hermes_Gateway}
   task=${task%:}
-  if command -v schtasks.exe >/dev/null 2>&1 && schtasks.exe /Query /TN "$task" /XML 2>/dev/null | grep -Eiq '<([[:alnum:]_]+:)?LogonTrigger([[:space:]>])'; then
+  if command -v schtasks.exe >/dev/null 2>&1 && schtasks.exe /Query /TN "$task" /XML 2>/dev/null | grep -Ei '<([[:alnum:]_]+:)?LogonTrigger([[:space:]>])' >/dev/null; then
     :
   elif [[ -n ${APPDATA:-} ]]; then
     local startup
@@ -622,7 +622,7 @@ platform_macos_watchdog_install() {
 }
 platform_macos_watchdog_check() {
   [[ -f $(platform_macos_watchdog_plist) ]] || return 1
-  launchctl list 2>/dev/null | grep -Fq "$OAOS_WATCHDOG_LABEL"
+  launchctl list 2>/dev/null | grep -F "$OAOS_WATCHDOG_LABEL" >/dev/null
 }
 platform_windows_watchdog_install() {
   info 'Windows: no OAOS gateway watchdog; the Hermes ONLOGON task restarts the gateway at logon.'

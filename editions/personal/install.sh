@@ -408,8 +408,8 @@ write_watchdog_script() {
   printf 'hermes=%q\n' "$hermes_bin"
   cat <<'EOF'
 status=$("$hermes" gateway status 2>/dev/null || true)
-if printf '%s\n' "$status" | grep -Eiq '(^|[[:space:]:])(running|active)([[:space:]]|$)' &&
-   ! printf '%s\n' "$status" | grep -Eiq 'not running|inactive|stopped'; then
+if printf '%s\n' "$status" | grep -Ei '(^|[[:space:]:])(running|active)([[:space:]]|$)' >/dev/null &&
+   ! printf '%s\n' "$status" | grep -Ei 'not running|inactive|stopped' >/dev/null; then
   exit 0
 fi
 "$hermes" gateway start
