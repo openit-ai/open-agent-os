@@ -25,6 +25,22 @@ with open(sys.argv[1], 'w', encoding='utf-8') as out:
     json.dump({'edition': 'company', 'stages': {
         'c01': {'status': 'verified'}}}, out)
 PY
+# Stand-in for the local nginx TLS path: a request anchored with
+# --resolve <origin>:443:127.0.0.1 is served by the loopback console.
+cat > "$temp_root/bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+args=() resolved=''
+while (($#)); do
+  case $1 in
+    --resolve) resolved=$2; shift 2 ;;
+    https://*) if [[ -n $resolved ]]; then args+=("http://127.0.0.1:8765/${1#https://*/}"); else args+=("$1"); fi; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+[[ -z $resolved || $resolved == e.example.test:443:127.0.0.1 ]] || exit 6
+[[ -z $resolved || ${OAOS_C10_NO_TLS:-0} != 1 ]] || exit 7
+exec /usr/bin/curl "${args[@]}"
+MOCK
 cat > "$temp_root/bin/systemctl" <<'MOCK'
 #!/usr/bin/env bash
 case ${1:-} in
@@ -90,7 +106,7 @@ export OAOS_COMPANY_KEY_BACKUP_DIR="$temp_root/key-backup"
 export OAOS_COMPANY_ROLLBACK_DIR="$temp_root/rollback"
 export OAOS_COMPANY_HTTPS_ORIGIN=https://e.example.test
 export OAOS_COMPANY_ORG_SLUG=company
-export OAOS_COMPANY_COOKIE_SECURE=0
+export OAOS_COMPANY_COOKIE_SECURE=0 OAOS_COMPANY_CONSOLE_TEST=1
 printf 'OAOS_COMPANY_USER=%s\nOAOS_COMPANY_E_ID=%s\nPGDATABASE=%s\nPGHOST=%s\nPGUSER=%s\nOAOS_COMPANY_HTTPS_ORIGIN=%s\nOAOS_COMPANY_NGINX_VHOST=%s\nOAOS_COMPANY_BACKUP_DIR=%s\nOAOS_COMPANY_KEY_BACKUP_DIR=%s\nOAOS_COMPANY_ROLLBACK_DIR=%s\n' \
   "$OAOS_COMPANY_USER" "$OAOS_COMPANY_E_ID" "$PGDATABASE" "$PGHOST" "$PGUSER" \
   "$OAOS_COMPANY_HTTPS_ORIGIN" "$OAOS_COMPANY_NGINX_VHOST" "$OAOS_COMPANY_BACKUP_DIR" \
@@ -174,7 +190,7 @@ done
 code=0
 bash "$repo_root/editions/company/install.sh" --stage c10 > "$temp_root/blocked" 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'C02/C03 verified gate'
-grep -Fq 'C02 and C03 must be verified' "$temp_root/blocked" || fail 'gate reason'
+grep -Fq 'C02, C03 and C09 must be verified' "$temp_root/blocked" || fail 'gate reason'
 python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
 import json, sys
 path = sys.argv[1]
@@ -182,6 +198,7 @@ with open(path, encoding='utf-8') as src:
     state = json.load(src)
 state['stages']['c02'] = {'status': 'verified'}
 state['stages']['c03'] = {'status': 'verified'}
+state['stages']['c09'] = {'status': 'verified'}
 with open(path, 'w', encoding='utf-8') as out:
     json.dump(state, out)
 PY
@@ -211,15 +228,28 @@ grep -Fq 'ExecStart=/usr/bin/python3 ' "$HOME/.config/systemd/user/oaos-company.
 grep -Fq 'console_app.py' "$HOME/.config/systemd/user/oaos-company.service" || fail 'unit console'
 [[ $(stat -c %a "$HOME/.config/oaos-company/.env") == 600 ]] || fail 'env mode'
 
-bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/verified" 2>&1 || { cat "$temp_root/verified" >&2; fail 'C10 real DB read-back'; }
-grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
-grep '^Summary:' "$temp_root/verified"
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c10-%'") == 0 ]] || fail 'fixture rollback'
+# Before anyone completed G10 through the HTTPS link the login stays MANUAL.
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/manual" 2>&1 || code=$?
+[[ $code == 3 ]] || { cat "$temp_root/manual" >&2; fail 'C10 read-back without a real login must be MANUAL'; }
+grep -Fq 'Summary: PASS=4 FAIL=0 MANUAL=1 SKIP=0' "$temp_root/manual" || { cat "$temp_root/manual" >&2; fail 'manual read-back summary'; }
 [[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c10']['status'])
 PY
-) == verified ]] || fail 'verified checkpoint'
+) == applied ]] || fail 'MANUAL read-back must keep C10 applied'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c10-%'") == 0 ]] || fail 'fixture rollback'
+# A plain-HTTP-only console (no working HTTPS path) fails the G10 link check.
+code=0
+OAOS_C10_NO_TLS=1 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/no-https" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Fq 'HTTPS G10 setup link' "$temp_root/no-https" || { cat "$temp_root/no-https" >&2; fail 'HTTPS link check must use the origin'; }
+# Test-only cookie switches in the EnvironmentFile fail the read-back.
+cp -p "$HOME/.config/oaos-company/.env" "$temp_root/env.saved"
+printf 'OAOS_COMPANY_COOKIE_SECURE=0\n' >> "$HOME/.config/oaos-company/.env"
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/test-switch" 2>&1 || code=$?
+[[ $code == 1 ]] || fail 'test-only cookie switch accepted in EnvironmentFile'
+cp -p "$temp_root/env.saved" "$HOME/.config/oaos-company/.env"
 bash "$repo_root/editions/company/install.sh" --stage c10 > "$temp_root/rerun" || fail 'C10 idempotent rerun'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'rerun created unnecessary backup'
 printf 'PASS: C10 gates, migration 11, console install, G10 read-back, rollback, idempotence\n'
@@ -233,7 +263,7 @@ status=$(curl --silent --output "$temp_root/start.html" --write-out '%{http_code
   --data-urlencode 'project_user_id=project-admin' "$base/company/setup/start")
 [[ $status == 200 ]] || fail 'setup start'
 sleep 0.1
-admin_code=$(sed -n 's/.*: \([A-F0-9]\{8\}\) (10.*/\1/p' "$temp_root/dm.log" | tail -1)
+admin_code=$(sed -n 's/.*: \([A-Z2-9]\{12\}\) (10.*/\1/p' "$temp_root/dm.log" | tail -1)
 [[ -n $admin_code ]] || fail 'admin code delivery'
 admin_jar="$temp_root/admin.jar"
 status=$(curl --silent --output "$temp_root/confirm.html" --write-out '%{http_code}' \
@@ -268,7 +298,7 @@ grep -Fq '연동' "$temp_root/admin-console.html" || fail 'console integration t
 [[ $(curl --silent --output /dev/null --write-out '%{http_code}' \
   --data-urlencode 'project_user_id=project-member-1' "$base/company/login/start") == 200 ]] || fail 'member login start'
 sleep 0.1
-member_code=$(sed -n 's/.*: \([A-F0-9]\{8\}\) (10.*/\1/p' "$temp_root/dm.log" | tail -1)
+member_code=$(sed -n 's/.*: \([A-Z2-9]\{12\}\) (10.*/\1/p' "$temp_root/dm.log" | tail -1)
 [[ -n $member_code ]] || fail 'member code delivery'
 member_jar="$temp_root/member.jar"
 status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
@@ -284,3 +314,16 @@ status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
 [[ $status == 303 ]] || fail 'logout CSRF redirect keeps session'
 
 printf 'PASS: HTTPS setup page, one-time admin code, two mappings, login and member scope\n'
+
+# The one-time code is never passed to psql in argv and is stored as an HMAC.
+! grep -Eq 'hash=[0-9a-f]{64}' "$temp_root/app.log" || fail 'code hash logged'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.console_login_codes WHERE code_hash = encode(sha256(convert_to('$member_code', 'UTF8')), 'hex')") == 0 ]] || fail 'login code stored as a bare SHA-256'
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/verified" 2>&1 || { cat "$temp_root/verified" >&2; fail 'C10 real DB read-back'; }
+grep -Fq 'Summary: PASS=6 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
+grep '^Summary:' "$temp_root/verified"
+[[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c10']['status'])
+PY
+) == verified ]] || fail 'verified checkpoint'
+printf 'PASS: C10 verified only after a real admin login over the HTTPS link\n'

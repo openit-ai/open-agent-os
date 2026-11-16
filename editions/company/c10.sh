@@ -39,8 +39,11 @@ company_c10_apply() {
   local ready check_code=0 role_safe snapshot socket_dir env_file config_dir
   local api_url api_token bot_id admin_roles secret_value slug setup_url
   local migration_pending=0 unit_dir app_dir
-  [[ $(stage_status c02) == verified && $(stage_status c03) == verified ]] || {
-    warn 'C10 BLOCKED: C02 and C03 must be verified on E.'; return 3;
+  # Migration 011 sits on top of 004-010; reaching it is only safe once the
+  # console phase (C09, which requires C07 and its own dependencies) is verified.
+  [[ $(stage_status c02) == verified && $(stage_status c03) == verified &&
+     $(stage_status c09) == verified ]] || {
+    warn 'C10 BLOCKED: C02, C03 and C09 must be verified on E.'; return 3;
   }
   company_c02_load_settings || { warn 'C10 BLOCKED: C02 E deployment settings are invalid.'; return 3; }
   company_c02_preflight || return 3
