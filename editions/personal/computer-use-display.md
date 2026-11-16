@@ -35,5 +35,5 @@ wmctrl -lG | grep -i chrom         # 창 크기 확인
 ## 관련
 
 - 자격 증명 입력 opt-in: `editions/personal/computer-use-policy.sh`
-  (설계서 `docs/computer-use-credential-typing-v1.0.md`)
+  (설계서 `docs/computer-use-credential-typing.md`)
 - 비밀번호·결제·2FA는 기본 금지. 소유자 명시적 opt-in 후에만 입력한다.

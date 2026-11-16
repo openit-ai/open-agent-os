@@ -18,7 +18,7 @@ Hermes Desktop 경로에서는 OAOS가 호출할 `hermes` CLI와 Git Bash가 실
 
 - Hermes Windows 가이드의 2026-09-27 확인본: 터미널 도구는 **Git Bash**로 셸 명령을 실행한다. 설치기는 기본적으로 PortableGit을 `%LOCALAPPDATA%\hermes\git`에 프로비저닝하고 `HERMES_GIT_BASH_PATH`를 명시적으로 설정한다. `bash.exe` 탐색 순서는 해당 변수 → `%LOCALAPPDATA%\hermes\git\usr\bin\bash.exe` → `%LOCALAPPDATA%\hermes\git\bin\bash.exe` → `%ProgramFiles%\Git\bin\bash.exe` 등 시스템 Git 경로다. MinGit을 수동 배치한다면 Bash를 포함한 **non-busybox** 변형이 필요하다(BusyBox 변형은 `ash`만 제공). OAOS는 설치 버전·사용자 설정에 따른 차이를 고려해 특정 변수·경로만 가정하지 않고 실제 `bash.exe` 기능을 검사하며, Bash가 아닌 `ash`는 차단한다. [Windows 네이티브 가이드](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native)
 - Hermes 공식 확인: Windows 소스 설치 기본 데이터 홈은 `%LOCALAPPDATA%\hermes`(`HERMES_HOME`으로 변경 가능), 소스 코드는 `%LOCALAPPDATA%\hermes\hermes-agent`, CLI 런처는 `%LOCALAPPDATA%\hermes\bin`이며 User PATH 반영에는 새 터미널이 필요하다. MSIX 전용 설치에는 소스 체크아웃이 없을 수 있다. [Windows 네이티브 가이드](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native)
-- 아래 `platform_*` API, OS별 prep, 상태 전이는 **OAOS 설계 제안**이다. macOS·Windows 명령의 실행 결과, 파일 권한의 보안 효과, 로그인·재부팅 지속성은 아직 확인 필요다. 문서 경로는 홈(`~`)·저장소 상대경로를 쓰고, Windows 고유 경로는 환경 변수로 표기한다. [기존 문서 표기 원칙 §0-1](architecture-v2.0.md)
+- 아래 `platform_*` API, OS별 prep, 상태 전이는 **OAOS 설계 제안**이다. macOS·Windows 명령의 실행 결과, 파일 권한의 보안 효과, 로그인·재부팅 지속성은 아직 확인 필요다. 문서 경로는 홈(`~`)·저장소 상대경로를 쓰고, Windows 고유 경로는 환경 변수로 표기한다. [기존 문서 표기 원칙 §0-1](architecture.md)
 
 ## 1. 아키텍처 결정
 
@@ -121,7 +121,7 @@ Hermes 설치 다운로드의 SHA-256 출력·선택적 `OAOS_HERMES_INSTALLER_S
 | `references/gates.md` | G1–G3 동일; Windows 키 저장 위치와 ACL 확인, macOS·Windows 로그인 후 게이트웨이 확인 문구. 토큰 원문 비출력 유지 |
 | `references/verify-checklist.md` | 19개 항목(2026-11; 이전 12개)의 OS별 서비스·부팅·자원·파일 권한 판정표; 실기기 MANUAL 증거와 미실행 SKIP 구분 |
 | `README.md`, `README.ko.md` | Personal 설치 표의 “host packages and systemd”를 Linux 한정으로 바꾸고 macOS/Windows 공식 설치·서비스 경로, 구현/검증 상태를 반영. 번역 쌍 동기화 |
-| `docs/faq.md`, `docs/architecture-v2.0.md`, `START-HERE.md`, `editions/personal/README.md` | Linux 전용 하드웨어·apt/systemd·recon·재부팅 설명의 범위를 세 레인으로 갱신. Project·Company Ubuntu 서버 설명 유지 |
+| `docs/faq.md`, `docs/architecture.md`, `START-HERE.md`, `editions/personal/README.md` | Linux 전용 하드웨어·apt/systemd·recon·재부팅 설명의 범위를 세 레인으로 갱신. Project·Company Ubuntu 서버 설명 유지 |
 
 현재 브랜치 파일의 문구가 이전 OS 정합 보고서와 다를 수 있으므로 실제 파일을 기준으로 갱신한다. 위 목록은 **후속 구현 완료 시 문서 수정 범위**이며 이번 설계 작업에서는 해당 파일들을 수정하지 않는다.
 

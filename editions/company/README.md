@@ -59,11 +59,11 @@ G13 (선택) 멀티 LLM     추가 모델 API 키
 
 Company 에디션은 Project의 단일 서버·systemd 운영 패턴을 승계합니다. 별도 플랫폼의 개인 에이전트·개인 위키·지식 인덱스·정책·승인·감사·Vault·관리 콘솔은 공개·이식 적합성을 확인해 필요한 부분만 Company 레이어로 선별 흡수합니다. Docker·Kubernetes 배포 경로는 흡수하지 않습니다.
 
-- [설계서](../../docs/architecture-v2.0.md) — 3-에디션 설계(정본)
+- [설계서](../../docs/architecture.md) — 3-에디션 설계(정본)
 
 ## C02: E 검증 인스턴스 단일 서버 배포
 
-C02는 [Company 설계 §3·§9](../../docs/company-design-v1.0.md)를 따릅니다. C01을 E에서 `verified`로 확인한 다음, **기존 Project 게이트웨이와 다른 비권한 Company 계정**으로 실행합니다. Ubuntu LTS, 실행 가능한 `systemctl --user`, 기존 TLS nginx vhost와 certbot 갱신 타이머, 분리된 E PostgreSQL, 설치 전 DB 백업과 원복 디렉터리가 필요합니다. 새 서버나 구독이 필요하면 승인 전 설치를 중단합니다.
+C02는 [Company 설계 §3·§9](../../docs/company-design.md)를 따릅니다. C01을 E에서 `verified`로 확인한 다음, **기존 Project 게이트웨이와 다른 비권한 Company 계정**으로 실행합니다. Ubuntu LTS, 실행 가능한 `systemctl --user`, 기존 TLS nginx vhost와 certbot 갱신 타이머, 분리된 E PostgreSQL, 설치 전 DB 백업과 원복 디렉터리가 필요합니다. 새 서버나 구독이 필요하면 승인 전 설치를 중단합니다.
 
 다음 값은 E 운영자가 환경에 설정합니다. 경로는 미리 생성하고 Company 계정에 쓰기 권한을 부여합니다. 모든 백업·원복 디렉터리는 `0700`이어야 합니다. 비밀값은 명령 인수나 이 환경변수 목록에 넣지 않습니다.
 
@@ -269,7 +269,7 @@ read-back은 012 SHA-256, 저장된 인계 판정, 백업 파일·체크섬, 복
 
 ## Project→Company 데이터 이전
 
-에디션 확장은 데이터 이전 스크립트 + 가이드로 지원합니다([아키텍처 v2.0 §4.4](../../docs/architecture-v2.0.md)). `bootstrap/migrate/project-to-company.sh`는 Company 서버에서 실행해 기존 Project의 **위키·기억·설정**을 복사합니다. 역방향(Company→Project 축소) 전환은 범위 밖입니다.
+에디션 확장은 데이터 이전 스크립트 + 가이드로 지원합니다([아키텍처 v2.0 §4.4](../../docs/architecture.md)). `bootstrap/migrate/project-to-company.sh`는 Company 서버에서 실행해 기존 Project의 **위키·기억·설정**을 복사합니다. 역방향(Company→Project 축소) 전환은 범위 밖입니다.
 
 ```bash
 bash bootstrap/migrate/project-to-company.sh --source user@project-host --dry-run
@@ -345,4 +345,4 @@ Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 +
 ## 관련 문서
 
 - [부트스트랩 스킬](../../skills/oaos-bootstrap/SKILL.md) · [게이트 레퍼런스](../../skills/oaos-bootstrap/references/gates.md)
-- [FAQ](../../docs/faq.md) · [설계서](../../docs/architecture-v2.0.md)
+- [FAQ](../../docs/faq.md) · [설계서](../../docs/architecture.md)

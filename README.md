@@ -84,7 +84,7 @@ The agent doesn't just answer — it can operate the browser and applications on
 - **Work portals** — automates login and repeated entry on accounting, tax, and ERP sites. Korean public certificates (공동인증서) stay in your local vault; signing and submission run only after approval.
 - **Government paperwork** — from application through payment, issuance, saving, and a wiki record. Payment steps pause for your approval.
 
-Setup (the browser-automation environment) is guided by the agent. Step-by-step recipes: [Cookbook §6](docs/cookbook.md). Credential typing stays vault-only by default; the local owner may opt in on a Personal machine — [design](docs/computer-use-credential-typing-v1.0.md). On the Company edition, computer use is governed by the same policy, approvals, and audit.
+Setup (the browser-automation environment) is guided by the agent. Step-by-step recipes: [Cookbook §6](docs/cookbook.md). Credential typing stays vault-only by default; the local owner may opt in on a Personal machine — [design](docs/computer-use-credential-typing.md). On the Company edition, computer use is governed by the same policy, approvals, and audit.
 
 ## Quick start — "One URL"
 
@@ -105,7 +105,7 @@ The agent does the reading, the file edits, and the commands. You only handle th
 skills/        Hermes skills shipped with OAOS — oaos-bootstrap, oaos-ops (+ optional: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
 harness/       config file templates (SOUL/USER/MEMORY/AGENTS) + seeding guide
 editions/      Edition landing pages — personal / project / company
-docs/          architecture-v2.0.md · cookbook.md · faq.md
+docs/          architecture.md · cookbook.md · faq.md
 bootstrap/     install & verify automation — shared lib + per-edition verify
 ```
 
@@ -175,7 +175,7 @@ flowchart TB
     CORE --> RT["Runtime layer — Hermes Agent, adapters for surfaces"]
 ```
 
-Full detail: [`docs/architecture-v2.0.md`](docs/architecture-v2.0.md).
+Full detail: [`docs/architecture.md`](docs/architecture.md).
 
 ## Roadmap
 
@@ -198,7 +198,7 @@ Copyright (c) 2026 OpenIT Co., Ltd.
 
 ## Documentation index
 
-- [`docs/architecture-v2.0.md`](docs/architecture-v2.0.md) — v2.0 three-edition design (canonical)
+- [`docs/architecture.md`](docs/architecture.md) — v2.0 three-edition design (canonical)
 - [`START-HERE.md`](START-HERE.md) — the agent-facing bootstrap procedure
 - [`docs/cookbook.md`](docs/cookbook.md) · [`docs/faq.md`](docs/faq.md)
 - [`harness/README.md`](harness/README.md) — agent configuration files

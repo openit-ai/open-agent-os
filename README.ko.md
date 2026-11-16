@@ -84,7 +84,7 @@
 - **업무 사이트 입력·제어** — 회계·세무·ERP 사이트의 로그인과 반복 입력을 자동화합니다. 공동인증서는 로컬 볼트에 보관하고, 서명·제출은 승인 후에만 실행합니다.
 - **정부 사이트 서류 발급** — 신청 → 결제 → 발급 → 저장 → 위키 기록까지. 결제 단계에서는 멈추고 승인을 요청합니다.
 
-설치(브라우저 자동화 환경)는 에이전트가 안내합니다. 단계별 레시피: [쿡북 §6](docs/cookbook.md). 자격증명 직접 입력은 기본 금지이며 로컬 소유자만 Personal 머신에서 opt-in할 수 있습니다 — [설계서](docs/computer-use-credential-typing-v1.0.md). Company 에디션에서는 컴퓨터 사용에도 같은 정책·승인·감사가 적용됩니다.
+설치(브라우저 자동화 환경)는 에이전트가 안내합니다. 단계별 레시피: [쿡북 §6](docs/cookbook.md). 자격증명 직접 입력은 기본 금지이며 로컬 소유자만 Personal 머신에서 opt-in할 수 있습니다 — [설계서](docs/computer-use-credential-typing.md). Company 에디션에서는 컴퓨터 사용에도 같은 정책·승인·감사가 적용됩니다.
 
 ## 빠른 시작 — "URL 하나로"
 
@@ -105,7 +105,7 @@
 skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oaos-ops (+ 옵션: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
 harness/       설정 파일 템플릿(SOUL/USER/MEMORY/AGENTS) + 시딩 가이드
 editions/      에디션별 안내 페이지 — personal / project / company
-docs/          architecture-v2.0.md · cookbook.md · faq.md
+docs/          architecture.md · cookbook.md · faq.md
 bootstrap/     설치·검증 자동화 — 공용 라이브러리 + 에디션별 검증
 ```
 
@@ -175,7 +175,7 @@ flowchart TB
     CORE --> RT["런타임 계층 — Hermes Agent, 표면별 어댑터"]
 ```
 
-상세: [`docs/architecture-v2.0.md`](docs/architecture-v2.0.md).
+상세: [`docs/architecture.md`](docs/architecture.md).
 
 ## 로드맵
 
@@ -198,7 +198,7 @@ Copyright (c) 2026 OpenIT Co., Ltd.
 
 ## 문서 색인
 
-- [`docs/architecture-v2.0.md`](docs/architecture-v2.0.md) — v2.0 3-에디션 설계(정본)
+- [`docs/architecture.md`](docs/architecture.md) — v2.0 3-에디션 설계(정본)
 - [`START-HERE.md`](START-HERE.md) — 에이전트용 부트스트랩 절차
 - [`docs/cookbook.md`](docs/cookbook.md) · [`docs/faq.md`](docs/faq.md)
 - [`harness/README.md`](harness/README.md) — 하네스·설정 파일 구성

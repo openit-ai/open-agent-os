@@ -75,6 +75,6 @@ Completion: state consistent; user informed of any unfinished phase.
 ## References
 
 - `skills/oaos-bootstrap/SKILL.md` — canonical orchestrator (phases, gates, checks)
-- `docs/architecture-v2.0.md` — design rationale (why it works this way)
+- `docs/architecture.md` — design rationale (why it works this way)
 - `docs/cookbook.md` · `docs/faq.md` — after setup
 - `harness/` — agent configuration files & seeding (SOUL / USER / MEMORY / AGENTS)

@@ -1,6 +1,6 @@
 # FAQ — 자주 묻는 질문
 
-Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊은 내용은 [설계서](architecture-v2.0.md), [쿡북](cookbook.md), 각 에디션 페이지를 참고하세요.
+Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊은 내용은 [설계서](architecture.md), [쿡북](cookbook.md), 각 에디션 페이지를 참고하세요.
 
 ---
 

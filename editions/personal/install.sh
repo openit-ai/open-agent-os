@@ -352,7 +352,7 @@ do_harness() {
       fi
     } > "$target"
   done
-  info 'Credential typing stays vault-only (upstream default). Owner opt-in: bash editions/personal/computer-use-policy.sh enable — see docs/computer-use-credential-typing-v1.0.md.'
+  info 'Credential typing stays vault-only (upstream default). Owner opt-in: bash editions/personal/computer-use-policy.sh enable — see docs/computer-use-credential-typing.md.'
 }
 
 install_personal_cron_script() {
