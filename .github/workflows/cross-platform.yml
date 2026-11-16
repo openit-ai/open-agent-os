@@ -112,3 +112,17 @@ jobs:
             bootstrap/tests/install-smoke.sh \
             bootstrap/tests/personal-verify-smoke.sh \
             bootstrap/tests/personal-to-project-migrate-smoke.sh
+
+      - name: ShellCheck Company edition shell files
+        if: runner.os == 'Linux'
+        run: |
+          shellcheck --severity=warning -x \
+            editions/company/install.sh \
+            editions/company/lib/*.sh \
+            editions/company/stages/*.sh \
+            editions/company/verify/*.sh \
+            editions/company/app/*.sh \
+            bootstrap/verify/company-verify.sh \
+            bootstrap/migrate/project-to-company.sh \
+            bootstrap/tests/company-*.sh \
+            bootstrap/tests/project-to-company-migrate-smoke.sh

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c07-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -117,7 +119,7 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c07 > "$t
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=c07_test'
-bash "$repo_root/editions/company/migrate.sh" --through 6 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 6 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c07 > "$temp_root/installed" || fail 'C07 install'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 8 ]] || fail 'migration 8 missing'

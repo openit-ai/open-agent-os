@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temp_root=$(mktemp -d)
@@ -187,7 +189,7 @@ systemctl --user start oaos-company-backup.service || fail 'backup job'
 [[ $(find "$temp_root/backup" -name 'company-state-*.json' | wc -l) == 11 ]] || fail 'state copies follow dumps'
 [[ $(find "$temp_root/key-backup" -name 'company-env-*' | wc -l) == 11 ]] || fail 'EnvironmentFile copies follow dumps'
 [[ $(stat -c %a "$temp_root/backup") == 700 ]] || fail 'backup directory mode'
-! find "$temp_root/backup" "$temp_root/key-backup" -type f ! -perm 0600 | grep -q . || fail 'backup file modes'
+! find "$temp_root/backup" "$temp_root/key-backup" -type f ! -perm 0600 | grep . >/dev/null || fail 'backup file modes'
 latest=$(< "$temp_root/backup/last-success")
 [[ -s $temp_root/backup/company-$latest.dump && -s $temp_root/key-backup/company-env-$latest ]] || fail 'latest backup set'
 printf 'PASS: daily backup runs as the maintenance account with 7+4 rotation and 0700/0600 modes\n'

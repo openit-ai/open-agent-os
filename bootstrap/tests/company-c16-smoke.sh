@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c16-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -117,7 +119,7 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c16 > "$t
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=c16_test'
-bash "$repo_root/editions/company/migrate.sh" --through 4 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 4 >/dev/null
 # C16 configures the single organization created by G10 through its administrator.
 env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO company.organizations(slug) VALUES ('install-org');
@@ -210,7 +212,7 @@ export OAOS_C16_REPO_ROOT="$repo_root"
 python3 - <<'PY'
 import os
 import sys
-sys.path.insert(0, os.path.join(os.environ['OAOS_C16_REPO_ROOT'], 'editions', 'company'))
+sys.path.insert(0, os.path.join(os.environ['OAOS_C16_REPO_ROOT'], 'editions', 'company', 'app'))
 from llm_router import BillingError, Model, Route, Router, RouteUnavailable
 
 standard = Model('std', 'opencode-go', 'kimi-k2', 'standard', 'flat', 0, 0.0, True)

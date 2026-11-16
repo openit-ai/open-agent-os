@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c10-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -179,7 +181,7 @@ chmod 600 "$HOME/.config/oaos-company/.env"
 
 # Start the console from the working tree so the installer's health read-back
 # sees the real HTTP routes before the unit is replaced.
-python3 "$repo_root/editions/company/console_app.py" > "$temp_root/app.log" 2>&1 &
+python3 "$repo_root/editions/company/app/console_app.py" > "$temp_root/app.log" 2>&1 &
 app_pid=$!
 for _ in $(seq 1 50); do
   [[ $(curl --silent --max-time 1 http://127.0.0.1:8765/company/health 2>/dev/null || true) == ok ]] && break

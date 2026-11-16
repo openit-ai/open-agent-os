@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c17-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -132,7 +134,7 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c17 > "$t
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 
 export PGOPTIONS='-c role=c17_test'
-bash "$repo_root/editions/company/migrate.sh" --through 11 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 11 >/dev/null
 env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO company.organizations(slug) VALUES ('install-org');
 INSERT INTO company.members(org_id, project_user_id, role, state)
@@ -160,12 +162,12 @@ bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "
 if pg_dump --format=custom --dbname="$PGDATABASE" > "$temp_root/app-role.dump" 2>/dev/null; then
   fail 'runtime-role pg_dump unexpectedly bypassed FORCE RLS'
 fi
-cp "$repo_root/editions/company/backup.sh" "$temp_root/backup.sh"
+cp "$repo_root/editions/company/app/backup.sh" "$temp_root/backup.sh"
 env -i HOME="$HOME" PATH="$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" \
   OAOS_COMPANY_PG_SOCKET_DIR=/tmp OAOS_COMPANY_BACKUP_DIR="$OAOS_COMPANY_BACKUP_DIR" \
   OAOS_COMPANY_KEY_BACKUP_DIR="$OAOS_COMPANY_KEY_BACKUP_DIR" bash "$temp_root/backup.sh" || fail 'daily backup job under FORCE RLS'
 latest=$(< "$OAOS_COMPANY_BACKUP_DIR/last-success")
-pg_restore --list "$OAOS_COMPANY_BACKUP_DIR/company-$latest.dump" | grep -Fq 'audit_events' || fail 'daily dump lacks Company tables'
+pg_restore --list "$OAOS_COMPANY_BACKUP_DIR/company-$latest.dump" | grep -F 'audit_events' >/dev/null || fail 'daily dump lacks Company tables'
 [[ $(stat -c %a "$OAOS_COMPANY_BACKUP_DIR/company-$latest.dump") == 600 ]] || fail 'daily dump mode'
 
 if ! OAOS_C17_VERIFY_DEBUG=1 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/verified-skip" 2>&1; then
@@ -232,7 +234,7 @@ INSERT INTO company.documents(org_id, source, source_id, owner_id, source_acl_ve
 SQL
 if psql -X -q -v ON_ERROR_STOP=1 -c 'SELECT company.maintenance_purge()' >/dev/null 2>&1; then fail 'runtime role ran the retention purge'; fi
 env -i HOME="$HOME" PATH="$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" OAOS_COMPANY_PG_SOCKET_DIR=/tmp \
-  bash "$repo_root/editions/company/maintenance.sh" || fail 'maintenance job'
+  bash "$repo_root/editions/company/app/maintenance.sh" || fail 'maintenance job'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.audit_events WHERE request_id IN ('c17-old', 'c17-kept')") == 1 ]] || fail '180-day audit purge'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.documents WHERE source_id = 'c17-gone-doc'") == 0 ]] || fail '30-day departed content purge'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT (metadata->>'audit_deleted')::int || '|' || (metadata->>'documents_deleted')::int FROM company.audit_events WHERE action = 'retention_purged' ORDER BY at DESC LIMIT 1") == '1|1' ]] || fail 'purge audit row'

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-adapters-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -135,7 +137,7 @@ env -u PGOPTIONS bash "$install" --stage c11 > "$temp_root/bypass-role" 2>&1 || 
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=adapters_test'
-bash "$repo_root/editions/company/migrate.sh" --through 4 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 4 >/dev/null
 env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO company.organizations(slug) VALUES ('install-org');
 INSERT INTO company.members(org_id, project_user_id, role, state)
@@ -251,7 +253,7 @@ export OAOS_ADAPTERS_REPO_ROOT="$repo_root"
 python3 - <<'PY'
 import os
 import sys
-sys.path.insert(0, os.path.join(os.environ['OAOS_ADAPTERS_REPO_ROOT'], 'editions', 'company'))
+sys.path.insert(0, os.path.join(os.environ['OAOS_ADAPTERS_REPO_ROOT'], 'editions', 'company', 'app'))
 from integration_adapters import (
     AdapterDenied, Delegation, IntegrationRegistry, NotionAdapter,
     SlackAdapter, SlackEvent, SuiteAdapter, scopes_allowed,

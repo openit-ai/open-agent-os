@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c09-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -13,7 +15,7 @@ trap cleanup EXIT
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 install="$repo_root/editions/company/install.sh"
 verify="$repo_root/bootstrap/verify/company-verify.sh"
-runner="$repo_root/editions/company/migrate.sh"
+runner="$repo_root/editions/company/lib/migrate.sh"
 port=18765
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/home/.config/oaos-company" \
   "$temp_root/bin" "$temp_root/backup" "$temp_root/key-backup" "$temp_root/rollback"
@@ -153,10 +155,11 @@ psql -X -q -v ON_ERROR_STOP=1 -v admin_hash="$admin_hash" \
 SELECT set_config('company.org_id', '00000000-0000-0000-0000-000000000001', false);
 INSERT INTO company.organizations(id, slug)
   VALUES ('00000000-0000-0000-0000-000000000001', 'c09-http-org');
-INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
-  ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', 'c09-http-admin', 'admin', 'active'),
-  ('00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001', 'c09-http-member', 'member', 'active');
 SELECT set_config('company.member_id', '00000000-0000-0000-0000-000000000011', false);
+INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+  ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', 'c09-http-admin', 'admin', 'active');
+INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+  ('00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001', 'c09-http-member', 'member', 'active');
 INSERT INTO company.console_sessions(org_id, member_id, token_hash, csrf_hash, expires_at) VALUES
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000011', :'admin_hash', :'csrf_hash', now() + interval '8 hours'),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000012', :'member_hash', :'csrf_hash', now() + interval '8 hours');
