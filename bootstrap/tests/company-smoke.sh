@@ -31,6 +31,32 @@ HOME="$temp_root/home" bash "$verify" --phase c01 --read-back > /dev/null 2>&1 |
 [[ $code == 3 ]] || fail 'unapplied verifier exit code'
 printf 'PASS: help, read-only status and prerequisite gate\n'
 
+# C01 reads Project readiness from the edition-scoped layout and the older flat
+# layout; a Project verify that passed is "verified" (older installers: "done"),
+# and MANUAL-pending ("applied") is not ready.
+project_ready_case() {
+  local layout=$1 verify=$2 expected=$3 code=0
+  python3 - "$temp_root/home/.oaos-install/state.json" "$layout" "$verify" <<'PY'
+import json, sys
+path, layout, verify = sys.argv[1:4]
+stages = {'stack': {'status': 'done'}, 'verify': {'status': verify}}
+if layout == 'scoped':
+    state = {'edition': 'personal', 'stages': {}, 'editions': {'personal': {'stages': {}}, 'project': {'stages': stages}}}
+else:
+    state = {'edition': 'project', 'stages': stages}
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(state, f)
+PY
+  HOME="$temp_root/home" OAOS_NO_LOG_FILE=1 bash -c '. "$1/bootstrap/lib/common.sh"; . "$1/editions/company/stages/c01.sh"; company_c01_project_ready' _ "$repo_root" > /dev/null 2>&1 || code=$?
+  [[ $code == "$expected" ]] || fail "Project readiness $layout/$verify returned $code"
+}
+project_ready_case scoped verified 0
+project_ready_case scoped 'done' 0
+project_ready_case scoped applied 3
+project_ready_case flat verified 0
+project_ready_case flat 'done' 0
+printf 'PASS: C01 reads edition-scoped and flat Project state; MANUAL-pending is not ready\n'
+
 python3 - "$temp_root/home/.oaos-install/state.json" <<'PY'
 import json, sys
 with open(sys.argv[1], 'w', encoding='utf-8') as f:

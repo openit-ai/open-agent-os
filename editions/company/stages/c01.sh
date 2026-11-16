@@ -20,15 +20,23 @@ company_c01_project_ready() {
     return 3
   fi
   if have_cmd jq; then
-    project_ready=$(jq -er '.edition == "project" and .stages.stack.status == "done" and .stages.verify.status == "done"' "$project_state" 2>/dev/null) || project_ready=false
+    # Edition-scoped state (editions.project.stages) or the older flat layout; the
+    # Project verifier records a full pass as "verified" (older installers: "done").
+    project_ready=$(jq -er '(if ((.editions // {}) | has("project")) then .editions.project.stages elif .edition == "project" then .stages else {} end) as $p | ($p.stack.status == "done" and (($p.verify.status == "verified") or ($p.verify.status == "done")))' "$project_state" 2>/dev/null) || project_ready=false
   else
     project_ready=$(oaos_python - "$project_state" <<'PY' 2>/dev/null || true
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     state = json.load(f)
-print(str(state.get('edition') == 'project' and
-          state.get('stages', {}).get('stack', {}).get('status') == 'done' and
-          state.get('stages', {}).get('verify', {}).get('status') == 'done').lower())
+editions = state.get('editions') or {}
+if 'project' in editions:
+    stages = editions['project'].get('stages') or {}
+elif state.get('edition') == 'project':
+    stages = state.get('stages') or {}
+else:
+    stages = {}
+print(str(stages.get('stack', {}).get('status') == 'done' and
+          stages.get('verify', {}).get('status') in ('verified', 'done')).lower())
 PY
 )
   fi
