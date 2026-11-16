@@ -118,9 +118,15 @@ BEGIN
         AND resource_ref = secret_a::text AND metadata->>'generation' = '2') <> 1 THEN
     RAISE EXCEPTION 'rotation audit event missing';
   END IF;
-  UPDATE company.audit_events SET decision = 'changed'
+  -- The runtime role has no UPDATE on audit rows (migration 013); a
+  -- permission error is the expected append-only answer.
+  changed := 0;
+  BEGIN
+    UPDATE company.audit_events SET decision = 'changed'
     WHERE event_type = 'personal_credential' AND resource_ref = secret_a::text;
-  GET DIAGNOSTICS changed = ROW_COUNT;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+  EXCEPTION WHEN insufficient_privilege THEN changed := 0;
+  END;
   IF changed <> 0 THEN RAISE EXCEPTION 'audit history was mutable'; END IF;
 
   IF company.revoke_personal_secret(secret_a) <> 'revoked' THEN

@@ -120,7 +120,7 @@ export PGOPTIONS='-c role=c05_test'
 bash "$repo_root/editions/company/migrate.sh" --through 3 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c05 > "$temp_root/installed" || fail 'C05 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 4 ]] || fail 'migration 4 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 4 ]] || fail 'migration 4 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ $(find "$OAOS_COMPANY_KEY_BACKUP_DIR" -name company.env | wc -l) == 1 ]] || fail 'restricted key backup'
 bash -e -o pipefail -c 'python3 "$1" check-key "$2"' _ "$repo_root/editions/company/vault.py" "$HOME/.config/oaos-company/.env" || fail 'AES-GCM key presence'
@@ -175,7 +175,7 @@ PY
 printf 'PASS: AES-256-GCM round trip, owner binding and nonce authentication\n'
 
 # A function drift must fail the same real query path even if the file checksum remains valid.
-psql -X -q -v ON_ERROR_STOP=1 -c \
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c \
   "CREATE OR REPLACE FUNCTION company.personal_secret_use_decision(p_secret uuid, p_assistant uuid, p_generation integer) RETURNS text LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT ''allow''::text'" >/dev/null
 code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c05 --read-back > "$temp_root/drift" 2>&1 || code=$?

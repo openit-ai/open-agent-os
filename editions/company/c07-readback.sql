@@ -254,8 +254,14 @@ BEGIN
     RAISE EXCEPTION 'member audit view exposed another actor';
   END IF;
   PERFORM set_config('company.member_id', admin_a::text, true);
-  UPDATE company.audit_events SET decision = 'tampered' WHERE event_type = 'policy';
-  GET DIAGNOSTICS changed = ROW_COUNT;
+  -- The runtime role has no UPDATE on audit rows (migration 013); a
+  -- permission error is the expected append-only answer.
+  changed := 0;
+  BEGIN
+    UPDATE company.audit_events SET decision = 'tampered' WHERE event_type = 'policy';
+    GET DIAGNOSTICS changed = ROW_COUNT;
+  EXCEPTION WHEN insufficient_privilege THEN changed := 0;
+  END;
   IF changed <> 0 THEN RAISE EXCEPTION 'audit rows were mutable'; END IF;
   IF (SELECT count(*) FROM company.audit_events e
        WHERE e.metadata ?| ARRAY['ciphertext', 'nonce', 'token', 'secret', 'password',

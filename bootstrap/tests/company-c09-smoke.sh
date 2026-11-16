@@ -137,7 +137,7 @@ printf 'PASS: C09 gates and reserved migration chain\n'
 
 # --- Install and service -----------------------------------------------------
 bash "$install" --stage c09 > "$temp_root/installed" || fail 'C09 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 10 ]] || fail 'migration 10 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 10 ]] || fail 'migration 10 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 grep -Fq 'console.py' "$HOME/.config/systemd/user/oaos-company.service" || fail 'console unit missing'
 grep -Fq "OAOS_COMPANY_CONSOLE_PORT=$port" "$HOME/.config/systemd/user/oaos-company.service" || fail 'console port not configured'
@@ -206,7 +206,7 @@ PY
 ) == verified ]] || fail 'verified checkpoint'
 bash "$install" --stage c09 > "$temp_root/rerun" || fail 'C09 idempotent rerun'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'rerun created unnecessary backup'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 10 ]] || fail 'rerun changed migration version'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 10 ]] || fail 'rerun changed migration version'
 bash "$verify" --phase c01 --read-back > "$temp_root/c01" || fail 'C01 read-back after C09'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01" || fail 'C01 regression summary'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c09-a-%' OR slug LIKE 'c09-b-%'") == 0 ]] || fail 'fixture rollback'

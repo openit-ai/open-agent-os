@@ -103,7 +103,7 @@ company_c17_write_backup() {
 
 company_c17_restore_drill() {
   local backup=$1 scratch=$2 socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
-  local owner version rc=0
+  local owner version live rc=0
   [[ $scratch =~ ^oaos_company_c17_restore_[0-9]{14}_[0-9]+$ ]] || return 1
   owner=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT current_user' 2>/dev/null) || return 1
   [[ $owner =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
@@ -116,9 +116,12 @@ company_c17_restore_drill() {
     rc=1
   fi
   if ((rc == 0)); then
+    # The restored history must equal the live history (base 012 plus amendments).
+    live=$(psql -X -q -A -t -v ON_ERROR_STOP=1 \
+      -c "SELECT string_agg(version::text || ':' || checksum, ',' ORDER BY version) FROM company.schema_migrations" 2>/dev/null) || rc=1
     version=$(psql -X -q -A -t -v ON_ERROR_STOP=1 --dbname="$scratch" \
-      -c 'SELECT COALESCE(MAX(version), 0) FROM company.schema_migrations' 2>/dev/null) || rc=1
-    [[ $version == 12 ]] || rc=1
+      -c "SELECT string_agg(version::text || ':' || checksum, ',' ORDER BY version) FROM company.schema_migrations" 2>/dev/null) || rc=1
+    [[ -n $live && $version == "$live" && ,$live, == *,12:* ]] || rc=1
   fi
   run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR -u PGHOST \
     -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \

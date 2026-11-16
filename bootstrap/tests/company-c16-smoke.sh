@@ -129,7 +129,7 @@ SQL
 # G13 SKIP still installs the route contract and uses the default model only.
 export OAOS_COMPANY_DEFAULT_PROVIDER=opencode-go OAOS_COMPANY_DEFAULT_MODEL=kimi-k2
 bash "$repo_root/editions/company/install.sh" --stage c16 > "$temp_root/installed" || fail 'C16 skip install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 5 ]] || fail 'migration 5 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 5 ]] || fail 'migration 5 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT g13_state FROM company.llm_settings") == skip ]] || fail 'G13 SKIP state'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.llm_routes WHERE task = 'default'") == 1 ]] || fail 'default route'

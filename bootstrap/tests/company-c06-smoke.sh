@@ -121,7 +121,7 @@ export PGOPTIONS='-c role=c06_test'
 bash "$repo_root/editions/company/migrate.sh" --through 4 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c06 > "$temp_root/installed" || fail 'C06 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 6 ]] || fail 'migration 6 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 6 ]] || fail 'migration 6 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c01 --read-back > "$temp_root/c01-regression" || fail 'C01 schema read-back after C06'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01-regression" || fail 'C01 regression summary'
@@ -142,7 +142,7 @@ printf 'PASS: C06 gates, migration 6, backup, SQL responses, rollback, idempoten
 printf 'PASS: C01 and C04 read-back remain compatible after migration 6\n'
 
 # A function drift must fail the same real query path even if the file checksum stays valid.
-psql -X -q -v ON_ERROR_STOP=1 -c \
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c \
   "CREATE OR REPLACE FUNCTION company.identity_isolation_decision(p_assistant uuid, p_secret uuid, p_provider text, p_output uuid) RETURNS text LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT ''allow''::text'" >/dev/null
 code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c06 --read-back > "$temp_root/drift" 2>&1 || code=$?

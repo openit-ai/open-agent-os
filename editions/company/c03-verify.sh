@@ -31,16 +31,22 @@ company_c03_verify() {
     if ((result == 3)); then warn 'C03 migration is pending.'; return 3; fi
     warn 'C03 migration checksum or version read-back failed.'; return 1
   fi
+  if ! company_db_runtime_boundary; then
+    printf '%%-28s FAIL\n' 'Runtime role boundary'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
   if ! psql -X -q -v ON_ERROR_STOP=1 -f "$repo_root/editions/company/c03-readback.sql" >/dev/null 2>&1; then
     printf '%-28s FAIL\n' 'Mapping response queries'
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
   printf '%-28s PASS\n' 'Migration SHA-256/version 2'
+  printf '%-28s PASS\n' 'Runtime role boundary'
   printf '%-28s PASS\n' 'Admin and member lookup'
   printf '%-28s PASS\n' 'External lookup and duplicate'
   printf '%-28s PASS\n' 'Unknown, suspended, departed'
   printf '%-28s PASS\n' 'Tenant isolation and rollback'
-  printf 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0\n'
+  printf 'Summary: PASS=6 FAIL=0 MANUAL=0 SKIP=0\n'
   stage_mark c03 verified 'C03 E SQL mapping responses passed; fixture rolled back'
 }

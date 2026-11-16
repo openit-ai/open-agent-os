@@ -202,7 +202,7 @@ env -u OAOS_COMPANY_PROJECT_API_TOKEN bash "$repo_root/editions/company/install.
 grep -Fq 'Project API URL, token, bot user ID' "$temp_root/no-api" || { cat "$temp_root/no-api" >&2; fail 'Project API gate reason'; }
 
 bash "$repo_root/editions/company/install.sh" --stage c10 > "$temp_root/installed" || fail 'C10 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 11 ]] || fail 'migration 11 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 11 ]] || fail 'migration 11 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ -f $HOME/.config/oaos-company/console.conf ]] || fail 'setup link file'
 [[ $(stat -c %a "$HOME/.config/oaos-company/console.conf") == 600 ]] || fail 'setup link mode'

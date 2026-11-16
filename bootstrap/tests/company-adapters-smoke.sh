@@ -144,7 +144,7 @@ printf 'PASS: gates, migration 1-4 and G10 organization\n'
 
 # --- Slack SKIP is the default and stores no credential ----------------------
 bash "$install" --stage c11 > "$temp_root/slack-skip" || fail 'C11 SKIP install'
-[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 7 ]] || fail 'migration 7 missing'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 7 ]] || fail 'migration 7 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT state FROM company.integration_settings WHERE provider = 'slack'") == skip ]] || fail 'slack default skip'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.integration_apps") == 0 ]] || fail 'skip created an app'
