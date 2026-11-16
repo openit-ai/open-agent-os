@@ -42,7 +42,7 @@ cp -a "${OAOS_FAKE_SOURCE:?}/$rel" "$dst"
 MOCK
 chmod 700 "$temp_root/bin/ssh" "$temp_root/bin/rsync"
 
-HOME="$temp_root/home" bash "$script" --help | grep -Fq 'project-to-company.sh' || fail 'help usage'
+HOME="$temp_root/home" bash "$script" --help | grep -F 'project-to-company.sh' >/dev/null || fail 'help usage'
 env -u HOME bash "$script" --help > /dev/null || fail 'help should not require HOME'
 code=0
 HOME="$temp_root/home" bash "$script" > /dev/null 2>&1 || code=$?

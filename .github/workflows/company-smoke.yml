@@ -1,0 +1,44 @@
+name: Company and Project smoke
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  company-smoke:
+    name: Company/Project smoke (Ubuntu 24.04 + distro PostgreSQL)
+    # Ubuntu 24.04 LTS matches the supported Project/Company server target (E),
+    # including its distribution PostgreSQL major version.
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install distribution PostgreSQL (provides pg_virtualenv)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql postgresql-common
+          command -v pg_virtualenv
+          ls /usr/lib/postgresql
+
+      - name: Run non-database Company and migration smoke
+        run: |
+          for suite in company-smoke company-c02-smoke project-to-company-migrate-smoke; do
+            printf '::group::%s\n' "$suite"
+            bash "bootstrap/tests/$suite.sh"
+            printf '::endgroup::\n'
+          done
+
+      - name: Run database-backed Company smoke in temporary clusters
+        run: |
+          for suite in company-adapters-smoke company-c03-smoke company-c04-smoke \
+                       company-c05-smoke company-c06-smoke company-c07-smoke \
+                       company-c08-smoke company-c09-smoke company-c10-smoke \
+                       company-c16-smoke company-c17-smoke; do
+            printf '::group::%s\n' "$suite"
+            pg_virtualenv bash -e -o pipefail "bootstrap/tests/$suite.sh"
+            printf '::endgroup::\n'
+          done
