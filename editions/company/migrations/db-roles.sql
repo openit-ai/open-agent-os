@@ -11,6 +11,12 @@
 --   the minimum DML (audit rows: SELECT/INSERT only) and :runtime is its member.
 -- - :runtime must not be a superuser, BYPASSRLS, or a member of :owner, so the
 --   application can never TRUNCATE audit rows, disable RLS or replace functions.
+-- - oaos_company_definer (O6) owns the SECURITY DEFINER console functions. It is
+--   NOLOGIN, has no CREATE on the schema or the database and is not a member of
+--   :owner, so a definer function can only use the table privileges migration
+--   022 grants it. :owner is a member of it (not the reverse) so a later
+--   amendment can still replace those functions. db-definers.sql moves the
+--   function ownership after the migrations of a run.
 SELECT set_config('oaos.owner', :'owner', true);
 SELECT set_config('oaos.runtime', :'runtime', true);
 
@@ -18,6 +24,8 @@ SELECT format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREAT
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'owner') \gexec
 SELECT 'CREATE ROLE oaos_company_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE'
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'oaos_company_runtime') \gexec
+SELECT 'CREATE ROLE oaos_company_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'oaos_company_definer') \gexec
 
 DO $roles$
 DECLARE
@@ -40,8 +48,24 @@ BEGIN
   IF pg_has_role(runtime_name, owner_name, 'MEMBER') THEN
     RAISE EXCEPTION 'runtime role must not be a member of the Company owner role';
   END IF;
+  -- The definer role never gains login, RLS bypass, DDL or the owner's rights.
+  ALTER ROLE oaos_company_definer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
+    NOCREATEROLE NOREPLICATION;
+  IF pg_has_role('oaos_company_definer', owner_name, 'MEMBER')
+     OR pg_has_role('oaos_company_definer', 'oaos_company_runtime', 'MEMBER')
+     OR pg_has_role(runtime_name, 'oaos_company_definer', 'MEMBER') THEN
+    RAISE EXCEPTION 'definer role must stay separate from the owner and runtime roles';
+  END IF;
+  EXECUTE format('REVOKE CREATE, TEMPORARY ON DATABASE %I FROM oaos_company_definer',
+    current_database());
+  IF to_regnamespace('company') IS NOT NULL THEN
+    REVOKE CREATE ON SCHEMA company FROM oaos_company_definer;
+  END IF;
 END;
 $roles$;
+
+SELECT format('GRANT oaos_company_definer TO %I', :'owner')
+ WHERE NOT pg_has_role(:'owner', 'oaos_company_definer', 'MEMBER') \gexec
 
 SELECT format('GRANT oaos_company_runtime TO %I', :'runtime')
  WHERE NOT pg_has_role(:'runtime', 'oaos_company_runtime', 'MEMBER') \gexec
@@ -80,10 +104,12 @@ BEGIN
   LOOP
     EXECUTE format('ALTER SEQUENCE %s OWNER TO %I', obj.name, owner_name);
   END LOOP;
+  -- Functions handed to a definer role (db-definers.sql) keep that owner.
   FOR obj IN
     SELECT p.oid::regprocedure AS name, p.prokind
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'company' AND p.proowner <> to_regrole(owner_name)
+       AND p.proowner::regrole::text NOT IN ('oaos_company_definer', 'oaos_company_maintenance')
   LOOP
     EXECUTE format('ALTER %s %s OWNER TO %I',
       CASE obj.prokind WHEN 'p' THEN 'PROCEDURE' WHEN 'a' THEN 'AGGREGATE'

@@ -295,7 +295,7 @@ editions/company/
 ├── lib/company.sh        # 유지보수 계정 실행·덤프, 세션 문맥 SQL, G10 관리자 조회 등 공용 도우미
 ├── lib/stage.sh          # C03+ 공통 골격: 선행 Phase → 설정·사전 점검 → DB·역할 → 스냅샷 덤프 → migrate
 ├── lib/migrate.sh        # 체크섬 마이그레이션 실행기 (쓰기 실행은 pg_advisory_lock으로 직렬화)
-└── migrations/           # 001~021 + db-roles.sql (라이선스·이름 변경: migrations/README.md)
+└── migrations/           # 001~022 + db-roles.sql·db-definers.sql (라이선스·이름 변경: migrations/README.md)
 ```
 
 `bootstrap/verify/company-verify.sh`와 `bootstrap/migrate/project-to-company.sh`가 공개 진입점입니다. Company 실행 로그는 공용 설치 로그가 아니라 `~/.oaos/logs/company-<날짜>.log`에 남습니다(`OAOS_LOG_NAME`). Project 설치 상태를 읽는 곳은 `stages/c01.sh`의 `company_c01_project_ready` 하나입니다. C09 콘솔(`app/console.py`, 010 함수)은 C10이 `app/console_app.py`(011/020 함수)로 유닛을 교체하는 임시 콘솔이며, 두 앱은 HTTP 경로와 DB 계약이 달라 합치지 않았습니다.
@@ -325,12 +325,14 @@ editions/company/
 | 019 | 보정, 기준 1 | C03+ (소유 역할 경로) | 구성원 쓰기 경계(O1) |
 | 020 | 보정, 기준 11 | C10+ | 콘솔 호출자 검사(O6) |
 | 021 | 보정, 기준 11 | C10+ | 콘솔 잠금·설정 코드·설정 표 쓰기는 정의자 함수 전용(O9) |
+| 022 | 보정, 기준 11 | C10+ | 정의자 함수 전용 역할 `oaos_company_definer`(DDL 없음) 정책·권한(O6) |
 
 Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C10 11, C11~C14 7, C16 8, C17 12. 버전이 연속이므로 `--through N`은 N 이하의 미적용 기준 버전도 함께 적용하고, 보정은 기준 버전이 N 이하일 때 소유 역할 경로(C02 이후)에서 적용됩니다.
 
 ### 역할과 쓰기 경계
 
-- `oaos_company_owner`(NOLOGIN): 스키마와 모든 객체의 소유자. 유지보수 경로의 `SET ROLE`과 검증하는 SECURITY DEFINER 함수 안에서만 동작합니다.
+- `oaos_company_owner`(NOLOGIN): 스키마와 모든 테이블의 소유자(DDL). 유지보수 경로의 `SET ROLE`(마이그레이션)에서만 동작합니다.
+- `oaos_company_definer`(NOLOGIN, 022): 콘솔 SECURITY DEFINER 함수 16개의 소유자. 스키마·DB `CREATE`가 없고 소유 역할의 구성원이 아니며, 022가 준 표 권한(콘솔 표·구성원·조직 읽기/쓰기, 감사 INSERT)과 `TO oaos_company_definer` 정책만 가집니다. 함수 소유자 변경은 스키마 `CREATE`가 필요하므로 `lib/migrate.sh`가 실행 끝에 유지보수 계정으로 `db-definers.sql`을 적용하고, `--check`는 소유 역할에 남은 정의자 함수를 미적용으로 보고합니다. read-back(`company_db_runtime_boundary`, C03·C07·C10·C17)은 정의자 함수 소유자가 superuser·로그인 역할·스키마/DB `CREATE` 보유 역할·소유 역할 구성원이면 실패합니다.
 - `oaos_company_runtime`(NOLOGIN 그룹)과 libpq `PGUSER`: FORCE RLS 아래 DML, 감사는 SELECT/INSERT만.
 - 구성원 행(019): 같은 조직은 읽기만, 쓰기는 그 조직의 활성 관리자 세션 또는 소유 역할만. 구성원이 없는 조직의 첫 관리자 자기 등록만 예외이며, 누구도 자기 역할·상태를 바꾸지 못합니다.
 - 콘솔(020): 매핑·완료 함수는 세션 문맥(`company.org_id`/`company.member_id`)의 관리자와 일치해야 하고, 코드 없는 세션 발급은 G10 초기 관리자에게만, 로그인 코드·세션 행은 본인 또는 조직 관리자만 씁니다.

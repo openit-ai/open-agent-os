@@ -40,6 +40,10 @@ company_c02_load_settings() {
 # Runtime role boundary (migration 013): the libpq role used by the installer,
 # console and service must not own any Company object, must not be able to
 # create objects in the schema, and must have only SELECT/INSERT on audit rows.
+# Definer boundary (O6/O7, migrations 022+): no SECURITY DEFINER function in the
+# schema (console functions once C10+ applied 022) belongs to a superuser, a
+# login role, a role with CREATE on the schema or the database (the owner
+# role), or a member of the owner role.
 company_db_runtime_boundary() {
   local result
   result=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "
@@ -61,7 +65,17 @@ company_db_runtime_boundary() {
        AND NOT EXISTS (
              SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
               WHERE n.nspname = 'company' AND c.relkind IN ('r', 'p')
-                AND has_table_privilege(c.oid, 'TRUNCATE'))" 2>/dev/null) || return 1
+                AND has_table_privilege(c.oid, 'TRUNCATE'))
+       AND NOT EXISTS (
+             SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+               JOIN pg_roles r ON r.oid = p.proowner
+              WHERE n.nspname = 'company' AND p.prosecdef
+                AND (p.proname NOT LIKE 'console\\_%' OR EXISTS (
+                       SELECT 1 FROM company.schema_migrations WHERE version = 22))
+                AND (r.rolsuper OR r.rolcanlogin
+                     OR has_schema_privilege(p.proowner, n.oid, 'CREATE')
+                     OR has_database_privilege(p.proowner, current_database(), 'CREATE')
+                     OR pg_has_role(p.proowner, n.nspowner, 'MEMBER')))" 2>/dev/null) || return 1
   [[ $result == t ]]
 }
 company_c02_unit_ready() {

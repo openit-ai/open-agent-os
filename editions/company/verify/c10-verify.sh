@@ -123,6 +123,12 @@ company_c10_verify() {
              (SELECT count(*) FROM company.members WHERE role = 'member' AND state = 'active')" \
     2>/dev/null) || evidence=''
   IFS='|' read -r complete login mapped <<< "${evidence%%$'\n'*}"
+  # O6: the console definer functions run as a role without DDL rights.
+  if ! company_db_runtime_boundary; then
+    printf '%-30s FAIL\n' 'Definer and runtime roles'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
   printf '%-30s PASS\n' 'Migration SHA-256/version 11'
   printf '%-30s PASS\n' 'HTTPS G10 setup link'
   printf '%-30s PASS\n' 'Console service and loopback health'
