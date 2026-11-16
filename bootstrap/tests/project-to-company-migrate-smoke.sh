@@ -22,23 +22,28 @@ cat > "$temp_root/bin/ssh" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 cmd=${!#}
-if [[ $cmd == test\ -e* ]]; then
+if [[ $cmd == test\ -[ed]* ]]; then
   rel=${cmd#*\"\$HOME/}
   rel=${rel%\"}
-  [[ -e ${OAOS_FAKE_SOURCE:?}/$rel ]]
+  test "${cmd:5:2}" "${OAOS_FAKE_SOURCE:?}/$rel"
   exit $?
 fi
 exit 1
 MOCK
+# Real rsync on local paths: only the remote spec user@host:~/ is mapped to the
+# fake source tree, so trailing-slash semantics are exercised for real.
 cat > "$temp_root/bin/rsync" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-dst=${!#}
-src=${*: -2:1}
-rel=${src#*:~/}
-[[ -e ${OAOS_FAKE_SOURCE:?}/$rel ]] || exit 3
-mkdir -p "$(dirname "$dst")"
-cp -a "${OAOS_FAKE_SOURCE:?}/$rel" "$dst"
+args=()
+while (($#)); do
+  case $1 in
+    -e) shift 2 ;;
+    *:~/*) args+=("${OAOS_FAKE_SOURCE:?}/${1#*:~/}"); shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+exec /usr/bin/rsync "${args[@]}"
 MOCK
 chmod 700 "$temp_root/bin/ssh" "$temp_root/bin/rsync"
 
@@ -67,6 +72,8 @@ printf 'PASS: dry-run plan without changes\n'
 
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" bash "$script" --source user@host > "$temp_root/run"
 [[ -f $temp_root/home/data/wiki/index.md ]] || fail 'wiki must be copied'
+[[ ! -e $temp_root/home/data/wiki/wiki ]] || fail 'wiki directory was nested inside itself'
+[[ -d $temp_root/home/data/wiki/.git ]] || fail 'wiki directory contents (including .git) must be copied'
 [[ -f $temp_root/home/.hermes/SOUL.md ]] || fail 'SOUL must be copied'
 [[ -f $temp_root/home/.hermes/memories/USER.md ]] || fail 'USER must be copied'
 [[ -f $temp_root/home/.hermes/memories/MEMORY.md ]] || fail 'MEMORY must be copied'
