@@ -88,7 +88,7 @@ flowchart TD
 1. 모든 게이트는 **① 클릭 가능한 링크 ② 왜 필요한지 1줄 ③ 저장할 변수 이름(정확한 키)** 순서로 안내한다.
 2. 비밀값은 사용자가 **자기 터미널의 숨김 입력**(`bash bootstrap/bin/oaos-secret-set KEY`)으로 넣는다. 채팅에 붙여넣지 않게 안내하고, 명령행 인자(`hermes config set KEY <값>` 등)로 넘기는 경로는 금지한다. 비밀이 아닌 값(숫자 ID·도메인 등)은 채팅으로 받아도 된다.
 3. 저장 직후 단계 재실행에서 **즉시 검증**한다(게이트별 검증 방법은 §2.4). 실패하면 값은 저장된 채로 단계를 BLOCKED로 두고 원인·재입력 링크를 다시 안내한다.
-4. 값은 Hermes `.env`에만 저장한다 — 원자적 쓰기, 소유자 전용(Linux·macOS 600+소유자 확인, Windows NTFS ACL), 단일 도우미(`bootstrap/lib/secret.sh`)만 쓴다. 스킬·스크립트는 값을 재출력하지 않으며 로그·문서·위키·상태 파일에 남기지 않는다.
+4. 값은 Hermes `.env`에만 저장한다(예외: Project 서비스 내부 파일 `~/oaos/stack/.env`·`/etc/oaos/outline.env`(root 600)·Mattermost `config.json`(600) — 게이트 값이 아닌 서비스 내부 값만, verify가 권한 확인. Outline IdP 값은 Hermes `.env`에 `OUTLINE_<KEY>`로 저장) — 원자적 쓰기, 소유자 전용(Linux·macOS 600+소유자 확인, Windows NTFS ACL), 단일 도우미(`bootstrap/lib/secret.sh`)만 쓴다. 스킬·스크립트는 값을 재출력하지 않으며 로그·문서·위키·상태 파일에 남기지 않는다.
 5. 게이트는 "선택"과 "제공(필수)" 두 종류만 존재한다. 그 외(설정 파일 편집·명령 타이핑)는 전부 에이전트 몫이다. 설치기를 `--yes`로 실행하는 것은 사용자가 해당 선택 게이트를 승인한 뒤에만 한다.
 6. 게이트가 발생하기 전까지는 **무인 진행**을 원칙으로 하고, 진행 상황은 시작·게이트·검증·완료 시점에만 보고한다.
 
@@ -105,15 +105,18 @@ flowchart TD
 | G4 | (보류) 대용량 파일·Local Bot API | — | — | 구현 보류 — 필요 시 별도 설계 |
 | G5 | (선택·수동) 이메일 | Gmail 앱 비밀번호 | 도우미로 저장 | 자동 검증 없음(수동 단계) |
 
-**Project — Personal 게이트 + 5**
+**Project — 필수 8 (G0–G3·G6–G9) · G4/G5 미제공**
 
-| # | 게이트 | 사용자 액션(최소) | 에이전트 제공 |
-|---|---|---|---|
-| G0 | 서버 준비 | VPS 구매(권장 사양 링크) 또는 기존 서버 접속 정보 | 사양 표·구매 링크·SSH 키 준비 안내 |
-| G6 | 도메인 DNS | A 레코드 3개 등록(chat/note/portal) | 레코드 값 표 제공 → 전파 자동 확인 |
-| G7 | Mattermost 관리자 | 초기 관리자 계정 생성(브라우저) | 접속 URL·단계 안내 |
-| G8 | Outline API 토큰 | 관리자 가입 → API 토큰 발급·복붙 | 링크·발급 경로 안내 |
-| G9 | 봇 전용 메일 | 전용 Gmail 생성 + 앱 비밀번호 복붙 | 이유(개인계정 정보보안 분리)·링크 |
+| # | 게이트 | 사용자 액션(최소) | 저장 키 | 즉시 검증 |
+|---|---|---|---|---|
+| G0 | 서버 준비 | VPS 구매 → **그 VPS에 Hermes 설치** → 에이전트에 URL 전달 | — | 사양 4 vCPU·16 GB·200 GB 미만 WARN, 2 vCPU·8 GB·60 GB 미만 BLOCKED(`OAOS_ALLOW_SMALL_HOST=1` 예외) · SSH 키 로그인 여부 · 포트 80/443/3000/5432/6379/8065 선점 확인 · UFW(22·현재 SSH·80·443 허용 후 활성, `OAOS_UFW_ENABLE=0` 제외) |
+| G1–G3 | LLM·Telegram | Personal과 동일 | Personal과 동일 | Personal과 동일 |
+| G6 | 도메인 DNS(필수) | A 레코드 3개(chat/note/portal) 등록 | 도메인 값 | 전파 자동 폴링(기본 최대 600초) · ACME 이메일 기본값 = G9 주소 |
+| G7 | Mattermost | 사람 관리자 가입 → **봇 계정** 토큰 + 허용 사용자 ID | `MATTERMOST_TOKEN` · `MATTERMOST_ALLOWED_USERS` | 토큰이 봇(`is_bot`)이고 `system_admin` 아님 · 허용 ID 26자 형식·실존 확인 |
+| G8 | Outline | 사람 관리자가 먼저 가입 → **AI 에이전트 계정**(G9 봇 메일함, 멤버·편집자) 초대 → 그 계정의 API 토큰 | `OUTLINE_API_TOKEN` (+ `OUTLINE_URL` 자동) | `auth.info` 이메일 = G9 주소 · 관리자 아님 |
+| G9 | 봇 전용 메일 | 전용 Gmail + 앱 비밀번호 | `OAOS_MAIL_ADDRESS` 등(IMAP/SMTP 호스트는 Gmail 기본값) | IMAP·SMTP 로그인 둘 다(실패 = FAIL) |
+
+- 봇·에이전트 계정 원칙: 팀 서비스에 쓰는 토큰은 사람 관리자 계정이 아닌 **비관리자 봇/에이전트 계정** 것만 받는다(정보보안 분리·최소 권한·감사 귀속).
 
 **Company — Project 게이트 + 확장 게이트(제공 1 + 선택 3)**
 
@@ -175,7 +178,10 @@ flowchart TD
 
 ### 4.2 Project — 소규모 팀(2~6인) · 서버 1대
 
-- **구성**: Hermes Agent + **Mattermost**(팀 허브) + **Outline**(프로젝트 위키) + PostgreSQL/Redis + Telegram(개인 창구) + nginx/TLS(3도메인)
+- **구성**: Hermes Agent + **Mattermost**(팀 허브) + **Outline**(프로젝트 위키) + PostgreSQL/Redis + Telegram(개인 창구) + nginx/TLS(3도메인) — **Docker 미사용, 네이티브 systemd**
+- **바인딩**: PostgreSQL(`listen_addresses=localhost`)·Redis·Mattermost·Outline 모두 127.0.0.1, 외부는 nginx 443만
+- **백업·복구**: 두 DB `pg_dump` + 서비스 데이터·설정 + Hermes/위키 → 700/600, 최근 7개 보관 · `restore.sh --dry-run|--yes` · verify가 실제 백업 작업과 복구 dry-run 실행
+- **Outline 연동 범위**: `OUTLINE_URL`·`OUTLINE_API_TOKEN`만 저장 — 전용 Outline 스킬/MCP는 아직 미제공(후속)
 - **자원**: 4 vCPU / 16GB / 200GB급 VPS 1대(예: Hostinger KVM 4). 요금은 프로모션 변동 — 공식 KR 페이지 기준 KVM 전 플랜 월 ₩10,059~₩40,259(2026-09-25 확인, 구매 시점 확인)
 - **메일 분리 원칙**: 외부 소통은 **봇 전용 Gmail + Himalaya** — 개인 Google 계정 연동 시 정보보안 문제를 구조적으로 차단
 - **기준 실측**(2026-09-22): 5개 서비스 동시 구동, 메모리 여유 12 GiB(4 vCPU/15 GiB)
@@ -240,7 +246,7 @@ open-agent-os/
 ├── harness/templates/           # SOUL/USER/MEMORY/AGENTS 초안 템플릿
 ├── editions/
 │   ├── personal/  install.sh · computer-use-policy.sh · README
-│   ├── project/   install.sh · native-stack.sh · systemd/ · ingress/ · README
+│   ├── project/   install.sh · lib.sh · native-stack.sh · backup.sh · restore.sh · render-outline-env.py · systemd/ · ingress/ · README
 │   └── company/   install.sh · cNN.sh · cNN-verify.sh · cNN-readback.sql · migrations/ · *.py · README
 ├── bootstrap/
 │   ├── lib/                     # common.sh(점검·시크릿·로그·체크포인트) · platform.sh(OS 레인)
@@ -279,7 +285,9 @@ open-agent-os/
 |---|---|---|
 | 시크릿 | Personal·Project: Hermes `.env` 단일 보관 · Company 구성원 개인 토큰은 PostgreSQL Vault에 AES-GCM 암호문으로 보관 · 원자적 쓰기 · 소유자 전용(600+소유자 / NTFS ACL) · 명령행 인자 금지 · config.yaml 금지 · 값 재출력 금지 | `oaos-secret-set` 도우미 · Personal verify `.env` 보호·config.yaml 무비밀 항목 |
 | 게이트 값 | **저장 → 즉시 검증** 순서. 실패 시 값은 남기고 단계 BLOCKED, 재입력 요청 · 채팅·로그·문서에 미기재 | 단계 재실행 검증(§2.4) |
-| 서비스 바인딩 | Dashboard·DB·Redis·내부 서비스는 127.0.0.1 고정, 원격 접근은 SSH 터널/역방향 프록시 | Personal verify Dashboard 루프백 항목(기본 포트 9119, `OAOS_DASHBOARD_PORT`) |
+| 서비스 바인딩 | Dashboard·PostgreSQL·Redis·Mattermost·Outline은 127.0.0.1 고정, 원격 접근은 SSH 터널/nginx 443 | Personal: Dashboard 루프백 항목(기본 9119) · Project: 5432/6379/8065/3000 리스너·`SHOW listen_addresses` |
+| 계정 원칙 | 팀 서비스 토큰은 비관리자 봇/에이전트 계정만(Mattermost 봇·`system_admin` 아님, Outline 비관리자 에이전트 계정) | Project G7·G8 즉시 검증 |
+| 방화벽 | Project: UFW 22·SSH·80·443 허용 후 활성 | Project verify UFW 항목 |
 | 승인 정책 | `approvals.cron_mode`·`single_query_mode`·`unattended_mode` = deny, 위험 명령 승인 | 미설정 시 설치기가 deny 설정 · 명시적 approve면 gateway 차단 · verify 항목 |
 | 백업 | 백업 디렉터리 700 · 아카이브 600 | 설치기·백업 스크립트·verify |
 | Company | 개인별 독립 비서(owner==credential==provider==output) · 정책+JIT 승인(10분·1회·타인 결정) · 마이그레이션 소유 역할과 런타임 역할 분리 · 감사는 런타임에 SELECT/INSERT만(추가 전용) · 감사 180일·퇴사자 개인 내용 30일 보존 후 유지보수 계정만 삭제 · 콘솔·스크립트 값은 표준입력으로만 전달 | Company Phase별 read-back · DB 스모크(CI) |
@@ -361,6 +369,7 @@ open-agent-os/
 | Hostinger KVM VPS 요금 | 전 플랜 월 ₩10,059~₩40,259(프로모션·기간 변동) | hostinger.com/kr/vps-hosting | 2026-09-25 |
 | Hermes 스킬 설치 문법 | `hermes skills install` — identifier·SKILL.md 직링크 지원 | hermes CLI 도움말(v0.21.5) | 2026-09-25 |
 | Hermes Agent 버전 | v0.21.5 (2026.9.24) | 로컬 설치 실측 | 2026-09-25 |
+| Outline 고정 버전 | v1.10.1 · 커밋 `4a5a616a21be800257dc11cef4263d0dd0412156` · NodeSource Node 22(`/usr/bin`) | `git ls-remote` | 2026-11-16 |
 
 > Google Workspace·Microsoft 365·Slack·Notion 등 기존 사용 서비스의 요금은 본 솔루션 비용이 아니므로(§0-1 원칙 3) 이 일람에서 제외한다.
 
@@ -370,4 +379,4 @@ open-agent-os/
 |---|---|---|
 | v2.0 | 2026-09-25 | 3-에디션·URL 부트스트랩 재설계 최초본 |
 | v2.0.x | 2026-09-26~27 | 무Docker·systemd 정합, Personal 지원 OS(Ubuntu·macOS·Windows 11) 반영 |
-| v2.1 | 2026-11-16 | Company 보안 강화 반영(§4.3 과금 승인·DB 수준 거버넌스, §6 역할 분리·보존·백업 — PR #34) · 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
+| v2.1 | 2026-11-16 | Project 게이트·봇 계정 원칙·백업/복구·바인딩·무Docker 반영(PR #35) · Company 보안 강화 반영(§4.3 과금 승인·DB 수준 거버넌스, §6 역할 분리·보존·백업 — PR #34) · 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
