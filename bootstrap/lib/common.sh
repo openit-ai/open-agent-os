@@ -57,18 +57,42 @@ oaos_python() {
   "$executable" "$@"
 }
 
+# Stage state is scoped per edition so Personal, Project and Company on one host
+# never read each other's checkpoints. Layout of the state file:
+#   { "edition": "<last writer>", "updated_at": "...",
+#     "editions": { "<edition>": { "updated_at": "...", "stages": { "<stage>": {...} } } },
+#     "stages": { ... } }   <- flat view of the last writer's (.edition) stages, kept
+#                              for older readers; never read across editions.
+# A reader uses the flat .stages only when .edition is its own edition (this also
+# honours files written before scoping and direct edits of the flat view), and
+# otherwise .editions[<edition>].stages. Every write first folds the flat view back
+# into .editions[<previous .edition>], so no edition's checkpoints are lost.
+oaos_state_edition() { printf '%s' "${OAOS_STATE_EDITION:-personal}"; }
+
 stage_status() {
-  local file
+  local file edition
   file=$(oaos_state_file)
+  edition=$(oaos_state_edition)
   if [[ ! -f $file ]]; then printf 'pending\n'; return; fi
   if have_cmd jq; then
-    jq -r --arg name "$1" '.stages[$name].status // "pending"' "$file"
+    jq -r --arg name "$1" --arg edition "$edition" '
+      (if ((.edition // "personal") == $edition and .stages != null) then .stages
+       elif ((.editions // {}) | has($edition)) then .editions[$edition].stages
+       else {} end) // {} | .[$name].status // "pending"' "$file"
   else
-    oaos_python - "$(oaos_native_path "$file")" "$1" <<'PY'
+    oaos_python - "$(oaos_native_path "$file")" "$1" "$edition" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as f:
     state = json.load(f)
-print(state.get("stages", {}).get(sys.argv[2], {}).get("status", "pending"))
+name, edition = sys.argv[2], sys.argv[3]
+editions = state.get("editions") or {}
+if state.get("edition", "personal") == edition and state.get("stages") is not None:
+    stages = state["stages"]
+elif edition in editions:
+    stages = editions[edition].get("stages") or {}
+else:
+    stages = {}
+print(stages.get(name, {}).get("status", "pending"))
 PY
   fi
 }
@@ -98,7 +122,7 @@ PY
 
 stage_mark() {
   local name=$1 status=$2 detail=${3:-} file tmp now edition stages
-  edition=${OAOS_STATE_EDITION:-personal}
+  edition=$(oaos_state_edition)
   stages=${OAOS_STAGES:-prep hermes llm telegram gateway wiki harness cron verify}
   [[ $edition =~ ^[a-z]+$ && $stages =~ ^([a-z]+|c(0[1-9]|1[0-7]))(\ ([a-z]+|c(0[1-9]|1[0-7])))*$ ]] || die "Invalid edition stage configuration."
   [[ " $stages " == *" $name "* ]] || die 'Invalid stage name.'
@@ -119,12 +143,21 @@ stage_mark() {
   else chmod 600 "$tmp"; fi
   now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   if have_cmd jq; then
+    local jq_program='
+      ($old.editions // {}) as $eds
+      | (if $old.stages != null
+         then $eds + {($old.edition // "personal"): {updated_at: ($old.updated_at // $now), stages: $old.stages}}
+         else $eds end) as $eds
+      | (($eds[$edition].stages // {})
+         | reduce ($stages | split(" "))[] as $s (.; .[$s] = (.[$s] // {status:"pending",updated_at:$now,detail:""}))
+         | .[$name] = {status:$status,updated_at:$now,detail:$detail}) as $mine
+      | $old + {edition:$edition, updated_at:$now, editions:($eds + {($edition): {updated_at:$now, stages:$mine}}), stages:$mine}'
     if [[ -f $file ]]; then
       jq --arg edition "$edition" --arg stages "$stages" --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
-        '.edition=$edition | .updated_at=$now | .stages=(.stages // {}) | reduce ($stages | split(" "))[] as $s (. ; .stages[$s]=(.stages[$s] // {status:"pending",updated_at:$now,detail:""})) | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' "$file" > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
+        ". as \$old | $jq_program" "$file" > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
     else
       jq -n --arg edition "$edition" --arg stages "$stages" --arg name "$name" --arg status "$status" --arg detail "$detail" --arg now "$now" \
-        '{edition:$edition,updated_at:$now,stages:(reduce ($stages | split(" "))[] as $s ({}; .[$s]={status:"pending",updated_at:$now,detail:""}))} | .stages[$name]={status:$status,updated_at:$now,detail:$detail}' > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
+        "{} as \$old | $jq_program" > "$tmp" || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
     fi
   else
     oaos_python - "$(oaos_native_path "$file")" "$(oaos_native_path "$tmp")" "$name" "$status" "$detail" "$now" "$edition" "$stages" <<'PY' || { rm -f -- "$tmp"; die 'Failed to write state file.'; }
@@ -134,11 +167,16 @@ state = {}
 if os.path.isfile(source):
     with open(source, encoding="utf-8") as f:
         state = json.load(f)
-state.update(edition=edition, updated_at=now)
-stages = state.setdefault("stages", {})
+editions = dict(state.get("editions") or {})
+legacy_edition = state.get("edition", "personal")
+if state.get("stages") is not None:
+    editions[legacy_edition] = dict(updated_at=state.get("updated_at", now), stages=state["stages"])
+mine = dict((editions.get(edition) or {}).get("stages") or {})
 for stage in stage_names.split():
-    stages.setdefault(stage, dict(status="pending", updated_at=now, detail=""))
-stages[name] = dict(status=status, updated_at=now, detail=detail)
+    mine.setdefault(stage, dict(status="pending", updated_at=now, detail=""))
+mine[name] = dict(status=status, updated_at=now, detail=detail)
+editions[edition] = dict(updated_at=now, stages=mine)
+state.update(edition=edition, updated_at=now, editions=editions, stages=mine)
 with open(target, "w", encoding="utf-8") as f:
     json.dump(state, f, indent=2, ensure_ascii=False)
     f.write("\n")
