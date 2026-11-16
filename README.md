@@ -38,13 +38,18 @@ Agent  Sure — three editions: Personal (one person), Project (small team),
 
 You    yes
 
-Agent  Installing… ✓ Hermes  ✓ gateway  ✓ Telegram connected
-       Two quick gates: paste your bot token, paste your user ID.
-       ✓ LLM plan connected  ✓ wiki seeded  ✓ scheduled jobs on
-       ✓ reboot survival verified on Ubuntu (macOS/Windows: device check pending)
+Agent  Installing… ✓ host prep  ✓ Hermes
+       G1: pick an LLM plan, then type its key at the hidden prompt
+       (bash bootstrap/bin/oaos-secret-set OPENCODE_GO_API_KEY)  ✓ test reply OK
+       G2/G3: bot token and your numeric user ID, same hidden prompt
+       ✓ getMe OK  ✓ allowlist numeric  ✓ gateway running  ✓ wiki seeded
+       ✓ harness drafted  ✓ daily backup + gateway watchdog scheduled
+       Verify: 15 PASS · 0 FAIL · MANUAL pending: reboot survival, chat
+       round-trip, allowlist, harness seeding conversation
 
-Agent  Done — verified end-to-end. Try: "brief me every morning at 8."
-       Full recipe list: docs/cookbook.md
+Agent  Installed; four checks need you. Message the bot, reboot once when
+       convenient, and let's finish SOUL/USER together. Then try:
+       "brief me every morning at 8." Full recipe list: docs/cookbook.md
 ```
 
 ## Editions
@@ -88,7 +93,7 @@ Setup (the browser-automation environment) is guided by the agent. Step-by-step 
 2. Tell it this repository     → e.g. "set up openit-ai/open-agent-os"
 3. Follow the agent            → README → START-HERE → installs skills/oaos-bootstrap
 4. Pick an edition             → Personal / Project / Company
-5. Gates (3–6)                 → click links, choose options, paste keys/tokens (each verified on the spot)
+5. Gates (3–6)                 → click links, choose options, type keys/tokens at a hidden prompt (each checked right away: model test reply, Telegram getMe, numeric user ID)
 6. Verify & report             → services, responses, files, wiki, cron; real reboot/login needs a device check
 ```
 
@@ -156,7 +161,7 @@ Settings (`config.yaml`), secrets (`.env`), skills, and schedules complete the s
 
 ## Company edition base
 
-The enterprise platform behind the Company edition — personal agents, a personal wiki, a permission-aware company knowledge index, policy + just-in-time approvals, an audit ledger, a secret vault, an execution gateway, and an admin console — is developed and delivered separately from this public repository. Under the v2.0 design these assets are **absorbed into the Company edition** — existing code and tests are carried over, not discarded.
+The Company edition is in this repository under [`editions/company/`](editions/company/) (BSL 1.1): installer phases C01–C17, checksummed PostgreSQL migrations and real-database read-backs for member mapping, personal assistants, an owner-bound secret vault, policy + just-in-time approvals, an append-only audit ledger, permission-aware search, LLM routing and an admin console. Policy, approvals, vault and routing are enforced at the database level (functions, triggers, row-level security); wiring them into a runtime assistant service API, console approval forms, OAuth callbacks and Slack events is still pending, and optional integrations are not `verified` without a real external round-trip.
 
 - Scope, setup flow, and licensing: [`editions/company/README.md`](editions/company/README.md)
 
@@ -179,6 +184,8 @@ Full detail: [`docs/architecture.md`](docs/architecture.md).
 | **P0 — Bootstrap MVP (Personal)** | README/START-HERE, `skills/oaos-bootstrap`, `editions/personal` install, `bootstrap/verify` | Clean machine: one URL → ≤5 gates → all verify checks pass |
 | **P1 — Project** | Project install/verify and Personal→Project migration scripts are available | End-to-end run on a fresh VPS + migration proof pending |
 | **P2 — Company** | absorb existing platform, optional integrations (Slack/Notion), multi-LLM routing, governance | Full test suite green + runtime read-back + regression pass |
+
+**Status (2026-11-16):** Company phases C01–C17 (installer stages, verifiers, migrations 001–012) are merged on `main`, and every Company smoke suite runs in CI against temporary PostgreSQL clusters. P2 is not yet declared done: the full C01–C17 run with runtime read-back on a real Ubuntu LTS server is still pending.
 
 ## License
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temp_root=$(mktemp -d)
@@ -33,7 +35,14 @@ if [[ ${1:-} == --user ]]; then
     list-unit-files) exit 0 ;;
     is-enabled) printf 'enabled\n' ;;
     is-active) printf 'active\n' ;;
-    start) "$HOME/.local/lib/oaos-company/backup.sh" ;;
+    start)
+      # Emulate systemd: only the unit's EnvironmentFile reaches ExecStart.
+      unit="$HOME/.config/systemd/user/$2"
+      env_file=$(sed -n 's/^EnvironmentFile=//p' "$unit")
+      exec_start=$(sed -n 's/^ExecStart=//p' "$unit")
+      ! grep -Fxq 'NoNewPrivileges=yes' "$unit" || { printf 'sudo blocked by NoNewPrivileges\n' >&2; exit 1; }
+      mapfile -t vars < <(grep -E '^[A-Z_]+=' "$env_file")
+      env -i HOME="$HOME" PATH="$PATH" "${vars[@]}" $exec_start ;;
     show) printf 'success\n' ;;
   esac
 else
@@ -64,7 +73,19 @@ set -Eeuo pipefail
 for arg in "$@"; do
   if [[ $arg == --file=* ]]; then printf 'mock custom dump\n' > "${arg#--file=}"; exit 0; fi
 done
-exit 1
+# The daily job must dump as the postgres maintenance account (FORCE RLS).
+[[ ${OAOS_C02_AS_POSTGRES:-0} == 1 ]] || { printf 'query would be affected by row-level security policy\n' >&2; exit 1; }
+printf 'mock custom dump\n'
+EOF
+cat > "$temp_root/bin/runuser" <<'EOF'
+#!/usr/bin/env bash
+[[ ${1:-} == -u && ${2:-} == postgres && ${3:-} == -- ]] || exit 1
+shift 3
+OAOS_C02_AS_POSTGRES=1 exec "$@"
+EOF
+cat > "$temp_root/bin/pg_restore" <<'EOF'
+#!/usr/bin/env bash
+[[ ${1:-} == --list && $(head -c 16 "${2:-/nonexistent}" 2>/dev/null) == 'mock custom dump' ]]
 EOF
 cat > "$temp_root/bin/openssl" <<'EOF'
 #!/usr/bin/env bash
@@ -146,6 +167,32 @@ import json, sys
 assert json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c02']['status'] == 'verified'
 PY
 printf 'PASS: C02 gates, install, idempotence, read-back and reboot checkpoint\n'
+
+# Daily backup job: rotation keeps 7 daily + 4 weekly dumps and their state and
+# EnvironmentFile copies, removes the rest, and keeps 0700/0600 modes.
+python3 - "$temp_root/backup" "$temp_root/key-backup" <<'PY'
+import datetime, os, sys
+backup, keys = sys.argv[1:3]
+now = datetime.datetime.now(datetime.timezone.utc)
+for day in range(1, 61):
+    stamp = (now - datetime.timedelta(days=day)).strftime('%Y%m%dT%H%M%SZ')
+    for path in (os.path.join(backup, 'company-%s.dump' % stamp),
+                 os.path.join(backup, 'company-state-%s.json' % stamp),
+                 os.path.join(keys, 'company-env-%s' % stamp)):
+        with open(path, 'w') as out:
+            out.write('mock custom dump\n')
+        os.chmod(path, 0o644)
+PY
+chmod 755 "$temp_root/backup"
+systemctl --user start oaos-company-backup.service || fail 'backup job'
+[[ $(find "$temp_root/backup" -name 'company-*.dump' ! -name '*.tmp.*' | wc -l) == 11 ]] || fail 'backup rotation 7 daily + 4 weekly'
+[[ $(find "$temp_root/backup" -name 'company-state-*.json' | wc -l) == 11 ]] || fail 'state copies follow dumps'
+[[ $(find "$temp_root/key-backup" -name 'company-env-*' | wc -l) == 11 ]] || fail 'EnvironmentFile copies follow dumps'
+[[ $(stat -c %a "$temp_root/backup") == 700 ]] || fail 'backup directory mode'
+! find "$temp_root/backup" "$temp_root/key-backup" -type f ! -perm 0600 | grep . >/dev/null || fail 'backup file modes'
+latest=$(< "$temp_root/backup/last-success")
+[[ -s $temp_root/backup/company-$latest.dump && -s $temp_root/key-backup/company-env-$latest ]] || fail 'latest backup set'
+printf 'PASS: daily backup runs as the maintenance account with 7+4 rotation and 0700/0600 modes\n'
 
 # A failed nginx syntax check must restore the original vhost and leave C02 unverified.
 sed -i '/# OAOS Company C02 begin/,/# OAOS Company C02 end/d' "$temp_root/vhost.conf"

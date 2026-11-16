@@ -5,11 +5,12 @@
 
 ## 0. Preconditions
 
-The Personal edition supports Ubuntu (Linux), macOS, and Windows 11, where Hermes Agent can be installed natively. This bootstrap procedure currently targets a Linux host (Ubuntu LTS recommended); its OS package, systemd, and host inspection commands are Linux-specific.
+Personal has three lanes: Ubuntu LTS (Linux), Apple Silicon macOS, and Windows 11 with Git Bash. Project and Company are Ubuntu LTS servers. Recon commands below are given per lane; apt, `/proc`, systemd and linger steps apply to Ubuntu only.
 
 - Hermes Agent installed and tool-capable (`terminal`, `read_file`, `write_file` available).
 - You are on the machine that will host the agent (confirm with the user).
 - Network reachable: GitHub, the official Hermes installer, and the LLM provider endpoint; Ubuntu Project/Company also need OS package sources.
+- A clone of the **official** repository: `git clone https://github.com/openit-ai/open-agent-os.git`. The installers check that `origin` is `github.com/openit-ai/open-agent-os` and stop otherwise; a reviewed fork needs `OAOS_ALLOW_FORK=1`.
 
 ## 1. Recon — read-only
 
@@ -23,18 +24,17 @@ Completion: you can state OS, resources, Hermes presence, and a recommended edit
 ## 2. Edition choice
 
 - Present a condensed README §2 comparison and your recommendation (default: Personal).
-- Wait for the user's choice. Keep it in the session; the selected edition installer writes stage status to `~/.oaos-install/state.json`.
+- Wait for the user's choice. Keep it in the session. Nothing is written yet: the selected installer creates `~/.oaos-install/state.json` when it records its first stage (a `--dry-run` writes nothing), keeping each edition's stages under `editions.<edition>`.
 
-Completion: user picked an edition; state file written.
+Completion: user picked an edition.
 
 ## 3. Install the bootstrap skill
 
 ```bash
-hermes skills install openit-ai/open-agent-os/skills/oaos-bootstrap
-# fallback: raw URL form (see README §5)
+hermes skills install https://raw.githubusercontent.com/openit-ai/open-agent-os/main/skills/oaos-bootstrap/SKILL.md
 ```
 
-If skill installation is unavailable in this Hermes build, read `skills/oaos-bootstrap/SKILL.md` from this repository and follow it manually.
+If skill installation is unavailable in this Hermes build, read `skills/oaos-bootstrap/SKILL.md` from the clone and follow it manually.
 
 Completion: `oaos-bootstrap` appears in the skills list, or its SKILL.md content is loaded.
 
@@ -42,16 +42,17 @@ Completion: `oaos-bootstrap` appears in the skills list, or its SKILL.md content
 
 From here the **skill is the procedure of record** (`skills/oaos-bootstrap/SKILL.md`): environment prep → install → gates → verify → report. Its phases, gates, and completion criteria supersede any summary in this file.
 
-For Personal, use `bash editions/personal/install.sh --dry-run` and then the installer from the selected OS Bash (Git Bash on Windows); run `bash bootstrap/verify/personal-verify.sh` afterward. Ubuntu apt, `/proc`, systemd and linger steps are Linux only. macOS uses the official `install.sh` and launchd; Windows uses the official `install.ps1` through Git Bash and an ONLOGON task/Startup fallback. Scripts cover all three lanes, local mocks passed, and the three-runner CI matrix is green (2026-09-27); real-device installation/login checks are pending. A registered service does not by itself prove reboot or login survival.
+For Personal, use `bash editions/personal/install.sh --dry-run` and then the installer from the selected OS Bash (Git Bash on Windows); the installer's last stage runs `bash bootstrap/verify/personal-verify.sh`, and every rerun runs it again (`--reverify` runs only that). Ubuntu apt, `/proc`, systemd and linger steps are Linux only. macOS uses the official `install.sh` and launchd; Windows uses the official `install.ps1` through Git Bash and an ONLOGON task/Startup fallback. Scripts cover all three lanes, local mocks passed, and the three-runner CI matrix is green (2026-09-27); real-device installation/login checks are pending. A registered service does not by itself prove reboot or login survival.
 
 For Project, use `bash editions/project/install.sh --dry-run` before the real install and `bash bootstrap/verify/project-verify.sh` afterward. Run the installer and verifier as the same non-root administrator; `sudo -n true` must succeed for host changes and privileged certificate/nginx checks. Project runs PostgreSQL, Redis, Mattermost, and Outline as native systemd services. See `editions/project/README.md` for the domain and mailbox inputs, source patch check, and Personal migration command.
 
 ## 5. Gates — what the human does
 
-A gate is one small interaction: **open a link**, **choose an option**, or **paste a value**. Rules:
+A gate is one small interaction: **open a link**, **choose an option**, or **enter a value**. Rules:
 
 - One gate at a time; explain why in one line; wait for the result before continuing.
-- Never invent credentials; never echo secrets into chat, logs, or docs; verify every pasted value immediately (API returns 200, login succeeds, etc.).
+- Secrets are entered by the user in their own terminal at a hidden prompt: `bash bootstrap/bin/oaos-secret-set KEY`. It writes only the Hermes `.env` (owner-only, mode 600 / protected NTFS ACL), never argv, logs or chat. Do not ask the user to paste a secret into chat, and never run `hermes config set KEY <secret>`.
+- Never invent credentials; verify every value immediately by rerunning its stage: G1 needs a model test reply, G2 a Telegram `getMe` success, G3 a numeric ID list.
 - Link gates: give the exact URL, what to click, and what to copy back (if anything).
 - Choice gates: give 2–3 options with a recommendation.
 
@@ -59,13 +60,13 @@ Completion: gate result verified; state file updated.
 
 ## 6. Verify & report
 
-- Run the verify checklist (skill §Verification; `bootstrap/verify` when available).
-- Report: edition built · addresses/URLs · what to try first (link to cookbook) · backup location · known gaps.
+- Run the edition verifier (Personal: `bootstrap/verify/personal-verify.sh`; Project: `bootstrap/verify/project-verify.sh`). Personal exits 0 when every check passes, 2 when only MANUAL checks remain, 1 on any FAIL.
+- Report: edition built · addresses/URLs · what to try first (link to cookbook) · backup location · MANUAL checks still pending · known gaps.
 - Do not report success for any check that did not actually run and pass.
 
 ## 7. Resume, failure, rollback
 
-- **Resume:** read `~/.oaos-install/state.json`; continue from the last incomplete stage. Re-running completed stages must be safe (idempotent) — check before re-applying.
+- **Resume:** run the installer's `--status` (it reads this edition's stages in `~/.oaos-install/state.json`); continue from the first incomplete stage. Re-running completed stages must be safe (idempotent) — check before re-applying.
 - **Failure:** fix forward when safe; if a step is destructive, irreversible, or externally blocked, stop and report — never guess a workaround on production data.
 - **Rollback:** for everything you change, know the undo (package remove, service disable, file restore). Take backups before destructive steps.
 

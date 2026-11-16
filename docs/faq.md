@@ -17,8 +17,8 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 
 **Q. 어떤 하드웨어가 필요한가요?**
 - Personal: Ubuntu 미니PC(N100급·16GB 권장)가 한 예시입니다. Apple Silicon Mac·Windows 11 PC(Git Bash)도 설치 스크립트 대상이며, OS별 실기기 적정 자원은 아직 확인 중입니다.
-- Project: Ubuntu 22.04 또는 24.04 LTS, 4 vCPU / 16GB / 200GB VPS 1대.
-- Personal의 apt·`/proc`·systemd·swapfile 설정은 Ubuntu 경로에만 적용됩니다. macOS는 공식 Hermes `install.sh`와 launchd, Windows 11은 Git Bash에서 공식 `install.ps1`을 호출하고 ONLOGON 태스크/Startup 폴백을 확인하도록 구현했습니다. Project·Company는 Ubuntu LTS 서버 경로이며, Project의 PostgreSQL·Redis는 Ubuntu apt, Mattermost는 공식 서명 APT, Outline은 고정 릴리스 소스 빌드로 설치합니다.
+- Project: Ubuntu 22.04 또는 24.04 LTS, 4 vCPU / 16GB / 200GB VPS 1대(권장 미만은 경고, 2 vCPU / 8GB / 60GB 미만은 설치 중단). 도메인 1개(chat·note·portal 하위 이름)가 필수입니다.
+- Personal의 apt·`/proc`·systemd·swapfile 설정은 Ubuntu 경로에만 적용됩니다. macOS는 공식 Hermes `install.sh`와 launchd, Windows 11은 Git Bash에서 공식 `install.ps1`을 호출하고 ONLOGON 태스크/Startup 폴백을 확인하도록 구현했습니다. Project·Company는 Ubuntu LTS 서버 경로이며, Project의 PostgreSQL·Redis는 Ubuntu apt, Mattermost는 공식 서명 APT, Outline은 고정 릴리스 소스 빌드로 설치하며 Docker는 쓰지 않습니다(전부 systemd).
 - Company: Project 구성 + 거버넌스 레이어(동일 서버에서 시작 가능).
 
 **Q. 개발 지식이 필요한가요?**
@@ -35,29 +35,29 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 네 — 설계 목표입니다. Hermes Agent 설치 → 채팅에 이 저장소 URL 전달 → 에이전트가 README → START-HERE → 부트스트랩 스킬 순서로 진행합니다. 설치 스크립트 자동화(`bootstrap/`)가 포함되어 있습니다.
 
 **Q. 설치 중 제가 해야 하는 건 뭔가요?**
-게이트(gate) 3~6개입니다: 에디션 선택, LLM 플랜 가입/키 붙여넣기, Telegram 봇 토큰·사용자 ID 붙여넣기, (Project부터) 서버·도메인. 각 값은 즉시 검증되고, 시크릿은 채팅에 재출력되지 않습니다.
+Personal은 에디션 선택·Hermes 설치 승인과 필수 게이트 3개(LLM 플랜, Telegram 봇 토큰, Telegram 사용자 ID)입니다. Project는 필수 게이트 8개입니다: G0 서버(VPS에 Hermes 설치 후 에이전트에게 저장소 URL 전달), G1~G3(Personal과 같음), G6 도메인 A 레코드, G9 봇 전용 메일함, G7 Mattermost 봇 계정·허용 사용자 ID, G8 Outline AI 에이전트 계정의 API 토큰. Personal의 선택 게이트 G4·G5는 Project에 없습니다. 키·토큰은 내 터미널에서 `bash bootstrap/bin/oaos-secret-set KEY`의 숨김 입력으로 넣습니다(채팅에 붙여넣지 않음). 값은 즉시 확인합니다: LLM은 모델 테스트 응답, 봇 토큰은 Telegram getMe, 사용자 ID는 숫자 목록 형식. Project는 추가로 DNS 전파(최대 10분 대기), 메일 IMAP·SMTP 로그인, Mattermost 토큰이 관리자 아닌 봇인지, Outline 토큰이 봇 메일함 주소의 관리자 아닌 에이전트 계정인지 확인합니다.
 
 **Q. 설치가 중간에 실패하면?**
-진행 상태가 `~/.oaos-install/state.json`에 기록되어 이어서 재개할 수 있습니다. 완료된 단계는 다시 실행해도 안전하도록 설계되어 있습니다.
+진행 상태가 `~/.oaos-install/state.json`에 에디션별로 기록되어 이어서 재개할 수 있습니다(`install.sh --status`로 확인). 완료된 단계는 건너뛰고, 검증(verify)은 재실행할 때마다 다시 돕니다. 단계 안의 명령이 하나라도 실패하면 그 단계는 `failed`로 남습니다.
 
 **Q. 재부팅 후에도 살아있나요?**
-게이트웨이 등록·현재 실행 상태는 자동으로 검사합니다. Ubuntu는 systemd 사용자 서비스와 linger를, macOS는 launchd를, Windows 11은 ONLOGON 태스크 또는 Hermes Startup 폴백을 확인합니다. 실제 재부팅 또는 로그아웃·로그인 후 생존은 별도 실기기 확인이 필요하며 아직 세 OS 전체의 통과 증거는 없습니다.
+게이트웨이 등록·현재 실행 상태는 자동으로 검사합니다(검증 항목 4 "Autostart registered"). Ubuntu는 systemd 사용자 서비스와 linger를, macOS는 launchd를, Windows 11은 ONLOGON 태스크 또는 Hermes Startup 폴백을 확인합니다. 실제 재부팅 또는 로그아웃·로그인 후 생존(항목 5 "Reboot survival")은 사람이 확인해야 하는 MANUAL 항목이며, 확인 후 `personal-verify.sh --confirm reboot`로 기록합니다. 세 OS 모두 아직 실기기 통과 증거는 없습니다. 게이트웨이가 멈추면 Linux는 systemd 사용자 타이머, macOS는 launchd 에이전트가 5분마다 다시 띄웁니다(Windows는 Hermes ONLOGON 태스크에만 의존).
 
 **Q. 기존 서버에 같이 설치할 수 있나요?**
-가능하지만 전용 머신/VPS를 권장합니다. 포트·자원 충돌을 에이전트가 점검합니다.
+가능하지만 전용 머신/VPS를 권장합니다. Personal 설치 스크립트는 포트 충돌을 미리 점검하지 않으며, 검증기는 디스크·메모리/스왑 여유와 대시보드 포트(9119)가 루프백에만 열려 있는지만 확인합니다. Project 설치 스크립트는 `prep`에서 80·443·3000·5432·6379·8065 포트를 다른 프로그램이 쓰고 있으면 멈추고, 검증기는 5432·6379·8065·3000이 루프백에만 열려 있는지 확인합니다.
 
 ---
 
 ## 계정·게이트
 
 **Q. 어떤 계정이 필요한가요?**
-① LLM 플랜(필수 — 저가 정액 예: OpenCode Go, 월 약 $10 / 또는 Nous Portal), ② Telegram(무료, 봇 토큰), ③ Project부터: VPS와 도메인. Company의 Slack/Notion/Workspace/365 연동은 **선택**입니다.
+① LLM 플랜(필수 — 저가 정액 예: OpenCode Go, 월 약 $10 / 또는 Nous Portal), ② Telegram(무료, 봇 토큰), ③ Project부터: VPS, 도메인, 봇 전용 메일함(예: 새 Gmail 계정 + 앱 비밀번호). Mattermost 봇 계정과 Outline 에이전트 계정은 설치 중에 사람 관리자가 만듭니다. Company의 Slack/Notion/Workspace/365 연동은 **선택**입니다.
 
 **Q. Telegram 봇은 어떻게 만드나요?**
 텔레그램에서 @BotFather → `/newbot` → 이름/아이디 지정 → 토큰 복사. 내 사용자 ID는 @userinfobot에게 말 걸면 숫자로 알려줍니다. 에이전트가 이 과정을 안내합니다.
 
 **Q. 키·토큰이 채팅 기록에 남나요?**
-재출력되지 않게 설계되어 있습니다. 값은 Hermes 홈의 `.env`에 저장하며 Linux·macOS에서는 소유자/모드 600, Windows에서는 NTFS ACL을 확인하도록 구현했습니다. 채팅·로그·문서에는 값을 재출력하지 않습니다. Windows ACL의 실기기 효과는 아직 검증 중입니다. 노출이 의심되면 즉시 교체(로테이션)하세요.
+채팅에 붙여넣지 않으면 남지 않습니다. 키·토큰은 내 터미널에서 `bash bootstrap/bin/oaos-secret-set KEY`로 숨김 입력하며, 값은 명령행 인자·로그·상태 파일에 쓰이지 않고 Hermes 홈의 `.env`에만 원자적으로 저장됩니다. 저장 직후 Linux·macOS는 소유자·모드 600, Windows는 NTFS 소유자·보호 ACL을 다시 읽어 확인하고, 검증기(항목 14 "Hermes .env protected")도 매번 확인합니다. `config.yaml`에 시크릿 형태의 값이 있으면 항목 15가 FAIL입니다. Windows ACL의 실기기 효과는 아직 검증 중입니다. 노출이 의심되면 즉시 교체(로테이션)하세요.
 
 **Q. 회사 계정(Google Workspace/Microsoft 365)이 있어야 하나요?**
 아니요, 선택입니다. 이미 쓰고 있다면 연동해서 메일·일정·문서 작업을 연결할 수 있습니다.
@@ -70,7 +70,7 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 에이전트에게 "백업하고 업데이트한 다음 점검해줘"라고 하면 됩니다(`hermes update`). 업데이트 전 백업이 기본 안전장치로 동작합니다.
 
 **Q. 백업은?**
-`hermes backup`으로 전체 상태를, 위키는 git으로 백업됩니다. "매주 백업하고 위치 알려줘"처럼 예약할 수 있습니다.
+Personal 설치 스크립트가 매일 03:00 Hermes 홈과 위키를 묶은 `~/.oaos/backups/oaos-*.tar.gz`를 만드는 Hermes 예약 작업(`oaos-daily-backup`, 최근 7개 보관)을 등록합니다. 이 작업은 게이트웨이가 켜져 있을 때 실행됩니다. 백업 폴더는 소유자 전용(700), 파일은 600입니다. 위키는 로컬 git 저장소일 뿐 원격으로 자동 백업되지 않습니다 — 다른 장소에 보관하려면 원격 저장소나 외부 디스크 복사를 직접 구성하세요. 전체 상태는 `hermes backup`으로도 만들 수 있습니다. Project는 같은 시각에 `~/.oaos/backups/oaos-project-*.tar`(700/600, 최근 7개)를 만들며 Hermes 홈·위키·`~/oaos/stack`에 더해 PostgreSQL(mattermost·outline) 덤프, `/etc/oaos`, Mattermost 설정·데이터, Outline 데이터를 담습니다. 복원은 `bash editions/project/restore.sh --dry-run <아카이브>`로 먼저 점검한 뒤 `--yes`로 실행합니다. 백업에는 시크릿이 들어 있으니 서버 밖으로 옮길 때 암호화하세요.
 
 **Q. 모델을 바꾸고 싶어요.**
 채팅에서 `/model` 또는 CLI에서 `hermes model`로 바꿉니다. 작업별로 상위/저가 모델을 나누는 라우팅도 가능합니다.

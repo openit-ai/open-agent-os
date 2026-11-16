@@ -148,7 +148,46 @@ bash bootstrap/verify/company-verify.sh --phase cNN --read-back
 
 성능 목표 초안은 E에서 활성 구성원 **5/25/50명**을 차례로 시험해 각 부하 구간의 인증+ACL 검색 로컬 처리 p95 **0.75/1.0/1.5초 이하**, 큐 대기 p95 **10초 이하**, 큐 상한 **100건**을 확인하는 것이다. 외부 LLM 응답은 공급자 지연과 분리해 기록하고 통제된 공급자 응답에서 채팅 전체 p95 **30초 이하**를 목표로 한다. 오류율 목표는 부하 구간별 **1% 미만**, 교차 owner 유출은 **0건**이다. 백업 RPO 24시간·복구 RTO 4시간, 재부팅 후 서비스·로그인 복귀 **10분 이내**를 C17에서 실측한다. 이 수치는 목표이지 현재 성능 주장이나 통과 증거가 아니다.
 
-## 10. 착수 순서와 남은 확인
+## 10. 위협·완화·증거 (2026-11 보안 감사 반영)
+
+독립 감사가 지적한 위협과 현재 구현의 완화, 그리고 그 완화를 실제 DB·서비스 응답으로 확인하는 read-back/smoke 증거를 한 표에 둔다. 마이그레이션 013 이후는 기준 버전을 고치는 **보정**이며 `-- oaos-applied-with: N` 머리글의 기준 버전 N을 적용하는 Phase부터 적용된다(적용된 001~012는 수정하지 않는다). 증거 열의 파일은 `editions/company/`(read-back SQL은 `readback/`, read-back 스크립트는 `verify/`, 마이그레이션은 `migrations/`; 구성과 마이그레이션↔Phase 표는 [Company README](../editions/company/README.md#파일-구성))와 `bootstrap/tests/` 기준이다.
+
+| # | 위협 | 완화 | 증거 |
+|---|---|---|---|
+| T1 | 구성원이 `approved` 상태·임의 관리자·1년 만료의 승인 행을 직접 INSERT해 자기 승인 | 015 `approvals_c07_insert_guard`: pending·승인자/소비 없음·세션 구성원·현재 정책 버전·만료 10분 이내 | `c07-readback.sql` 위조·장기 요청 거부, 만료 승인 거부 |
+| T2 | 앱 역할이 테이블 소유자라 감사 행 TRUNCATE·RLS 해제·함수 교체 가능 | `db-roles.sql`(NOLOGIN 소유 역할로 소유권 이전, 유지보수 경로로만 DDL) + 013 권한(감사 SELECT/INSERT만, UPDATE/DELETE/TRUNCATE 명시 회수) | `c02-verify.sh` `company_db_runtime_boundary`(C03·C07 read-back), `company-c03-smoke.sh` TRUNCATE·DELETE·RLS 해제·객체 생성 거부 |
+| T3 | FORCE RLS로 앱 역할 일일 덤프 실패, 보존 무제한 | `backup.sh` 유지보수 계정 덤프·`pg_restore --list`·7일+4주 보존·0700/0600, C01·C02 사전 덤프도 같은 경로 | C02 read-back이 실제 유닛 실행 결과 확인, `company-c02-smoke.sh` 회전, `company-c17-smoke.sh` 앱 역할 덤프 거부·일일 작업 성공, C17 24시간 이내 백업 |
+| T4 | 정지·퇴사 경로에 따라 비서·자격이 남음 | 014 활성에서 벗어나는 첫 전이에 비서(→자격 폐기)·외부 계정·위임·세션 철회, 018 `c17_revoke_member` 상태 무관 | `c05-readback.sql` 정지·퇴사·재활성화, `c17-readback.sql` 정지 구성원 철회 |
+| T5 | Phase가 후속 Phase의 마이그레이션을 게이트 없이 적용 | C10이 C09 검증 요구, 보정 마이그레이션 모델 | `company-c10-smoke.sh` 선행 게이트 |
+| T6 | G13 사용량 과금 승인이 환경 변수·임의 관리자 귀속 | 016 소비된 `llm.billing.usage` 승인 없이는 모델 행 불가, 실제 승인자·승인 ID 저장, C16은 요청/승인 관리자 명시 | `c16-readback.sql` 승인 없음·다른 상한 승인 거부·귀속 확인, `company-c16-smoke.sh` 자기 승인·미등록 승인자 거부 |
+| T7 | 외부 왕복 없이 연동 `verified`, SKIP 후 키 잔존 | 선택 공급자는 왕복 감사 행 없으면 MANUAL, 미선택은 `.env` 키 부재 확인 후 SKIP, C15가 SKIP 키 제거 | `company-adapters-smoke.sh` MANUAL·SKIP·키 제거 |
+| T8 | HTTPS G10 링크를 loopback HTTP로만 확인 | `curl --resolve <host>:443:127.0.0.1 $ORIGIN/company/setup`, 실제 관리자 로그인 전 MANUAL | `company-c10-smoke.sh` TLS 경로 실패·MANUAL·완료 후 verified |
+| T9 | Project 이전 시 위키가 `wiki/wiki`로 중첩 | 디렉터리는 내용 복사(끝 슬래시) | `project-to-company-migrate-smoke.sh` 실제 rsync |
+| T10 | 감사 메타데이터·증거의 중첩/대소문자 변형 비밀 키 | 015 재귀·대소문자 무시 검사, 018 증거 검사 공유 | `c07-readback.sql`, `c17-readback.sql` |
+| T11 | 짧은 로그인 코드의 무염 SHA-256이 psql 인수(ps)에 노출, 테스트용 비보안 쿠키 | 12자 코드·콘솔 비밀 HMAC, psql 값 표준 입력 전달, 테스트 플래그+예약 도메인에서만 비보안 쿠키 | `company-c10-smoke.sh` 무염 해시 부재·EnvironmentFile 스위치 거부 |
+| T12 | 감사 무기한 보존, 퇴사자 개인 내용 잔존 | 018 `maintenance_purge`(유지보수 계정 전용, 180일 감사·30일 개인 내용, 자체 감사 행) + 일일 타이머 | `company-c17-smoke.sh` 런타임 실행 거부·삭제·감사 행, C17 48시간 이내 실행 |
+| T13 | 오래된 원본 ACL로 장기간 검색 허용 | 017 공유 문서 ACL 만료 ≤ 5분 | `c08-readback.sql` 30일·직접 연장 제한 |
+| T14 | 정책 직접 UPDATE로 버전·감사 없이 기존 승인 유지, 승인 없는 정책 변경 | 015 정책 트리거(버전 증가·감사·같은 트랜잭션에서 소비된 `policy.change` 승인 요구) | `c07-readback.sql` 무승인·직접 UPDATE 거부, 버전 감사 |
+| T15 | 요청 단위 추적 불가(이벤트마다 임의 request_id) | 015 `company.request_id` GUC, 콘솔이 HTTP 요청마다 설정 | `c07-readback.sql` 요청 ID 공유 |
+| T16 | 001 `member_scope`가 조직 내 모든 세션에 `members` 쓰기 허용(구성원 자기 관리자 승격·타 구성원 정지·매핑 변경) — O1 | 019 읽기/쓰기 정책 분리: 쓰기는 조직의 활성 관리자 또는 소유 역할(검증하는 SECURITY DEFINER 함수·유지보수 경로)만, 구성원이 없는 조직의 첫 관리자 자기 등록만 예외; 본인 역할·상태 변경 트리거 거부 | C01 read-back(019 적용 후 매 Phase) 자기 승격·타 구성원 수정·삭제·관리자 생성·조직 간 쓰기 거부, 관리자 자기 강등 거부 |
+| T17 | 011 콘솔 SECURITY DEFINER 함수가 인수의 행위자를 신뢰(`console_add_member`·`console_complete_setup`), 코드 없이 아무 구성원 세션 발급(`console_open_session`), 런타임이 `console_bootstrap` 표지를 직접 켜 타 조직 조회, 구성원이 관리자용 로그인 코드·세션 행 직접 저장 — O6 | 020: 15개 함수 검토, 행위자를 세션 문맥(`company.org_id`/`member_id`)에 결속, `console_open_session`은 G10 `admin_created` 초기 관리자만, 내부 도우미 3개 런타임 EXECUTE 회수, 표지 정책은 소유 역할 안에서만, `console_sessions`·`console_login_codes` 쓰기는 본인·조직 관리자·정의자 함수만 | `c10-readback.sql` 문맥 밖 행위자·구성원 대리 호출·무코드 세션·관리자용 코드/세션 저장·표지로 타 조직 조회 거부 |
+| T18 | 동시에 실행된 두 설치기가 같은 미적용 버전을 함께 보고 경합 적용 | `lib/migrate.sh` 쓰기 실행은 이력 확인 전부터 끝날 때까지 `pg_advisory_lock` 보유(`--check`는 잠금 없음, 대기 상한 `OAOS_COMPANY_MIGRATE_LOCK_TIMEOUT`) | `company-c03-smoke.sh` 잠금 보유 중 거부·해제 후 적용 |
+
+**알려진 미해결 위협**(완화 전, 확인 필요):
+
+| # | 위협 | 현재 상태와 다음 조치 |
+|---|---|---|
+| O1 | ~~001 `member_scope`가 같은 조직의 모든 세션에 `members` UPDATE를 허용(역할 상승 가능)~~ | **수정됨(T16, 019).** 본인 정지·퇴사도 다른 관리자가 처리(본인 역할·상태 변경은 일괄 거부) |
+| O2 | 정책·JIT·Vault·라우팅이 DB 수준에서만 강제되고 런타임 비서 요청 경로가 호출하지 않음 | 서비스 API에서 `authorize_action`·`identity_isolation_decision`·`llm_route_decision`을 단일 진입점으로 호출 |
+| O3 | OAuth 콜백·Slack 이벤트 수신 미구현, 왕복 증거를 쓰는 주체 없음 | 런타임 어댑터가 실제 왕복 후 `integration/external_roundtrip` 감사 행 기록 |
+| O4 | 키 백업 복원과 RTO 4시간 실측 미실시 | C17 드릴에 키 복원·시간 측정 추가 |
+| O5 | Vault 키 회전 미구현 | 키 버전별 재암호화 절차와 read-back |
+| O6 | 011 콘솔 함수가 SECURITY DEFINER로 소유 역할 권한 실행 | **호출자 검사는 수정됨(T17, 020).** 남은 부분: 소유 역할이 DDL 권한을 가지므로 INVOKER 전환 또는 DDL 없는 함수 소유 역할 분리 검토 |
+| O7 | 백업·보존 유닛이 비대화형 root(sudo)에 의존해 `NoNewPrivileges`를 쓸 수 없음 | 전용 백업 역할(BYPASSRLS 읽기 전용)·전용 자격으로 대체 검토 |
+| O8 | 5/25/50명 성능·큐 실측, Phase 증거 JSON 미구현 | 부하 하네스와 증거 JSON 생성기 |
+| O9 | 런타임 세션이 `console_lockouts`를 직접 삭제(잠금 해제)하거나 `pending` G10에 `console_setup_codes`를 직접 추가 가능 | 두 표 쓰기를 정의자 함수 전용으로 좁히고 C10 read-back 만료/잠금 고정값을 유지보수 경로로 이전 |
+
+## 11. 착수 순서와 남은 확인
 
 | 개발일 | 착수 작업 | 그날 완료 정의 |
 |---|---|---|

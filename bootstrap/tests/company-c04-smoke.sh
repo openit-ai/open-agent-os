@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c04-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -113,10 +115,10 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c04 > "$t
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=c04_test'
-bash "$repo_root/editions/company/migrate.sh" --through 2 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 2 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c04 > "$temp_root/installed" || fail 'C04 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 3 ]] || fail 'migration 3 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 3 ]] || fail 'migration 3 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c04 --read-back > "$temp_root/verified" || fail 'C04 real DB read-back'
 grep -Fq 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
@@ -132,7 +134,7 @@ bash "$repo_root/editions/company/install.sh" --stage c04 > "$temp_root/rerun" |
 printf 'PASS: C04 gates, migration 3, backup, SQL responses, rollback, idempotence\n'
 
 # A function drift must fail the same real query path even if the file checksum remains valid.
-psql -X -q -v ON_ERROR_STOP=1 -c \
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c \
   "CREATE OR REPLACE FUNCTION company.assistant_execution_decision(p_assistant uuid) RETURNS text LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT ''allow''::text'" >/dev/null
 code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c04 --read-back > "$temp_root/drift" 2>&1 || code=$?

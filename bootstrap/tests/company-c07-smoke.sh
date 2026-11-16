@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c07-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -117,10 +119,10 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c07 > "$t
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=c07_test'
-bash "$repo_root/editions/company/migrate.sh" --through 6 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 6 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c07 > "$temp_root/installed" || fail 'C07 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 8 ]] || fail 'migration 8 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 8 ]] || fail 'migration 8 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c01 --read-back > "$temp_root/c01-regression" || fail 'C01 schema read-back after C07'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01-regression" || fail 'C01 regression summary'
@@ -129,7 +131,7 @@ grep -Fq 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c04-regression" ||
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c06 --read-back > "$temp_root/c06-regression" || fail 'C06 identity read-back after C07'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c06-regression" || fail 'C06 regression summary'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c07 --read-back > "$temp_root/verified" || fail 'C07 real DB read-back'
-grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
+grep -Fq 'Summary: PASS=10 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
 grep '^Summary:' "$temp_root/verified"
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c07-%'") == 0 ]] || fail 'fixture rollback'
 [[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
@@ -143,7 +145,7 @@ printf 'PASS: C07 gates, migration 8, backup, SQL responses, rollback, idempoten
 printf 'PASS: C01, C04 and C06 read-back remain compatible after migration 8\n'
 
 # A function drift must fail the same real query path even if the file checksum stays valid.
-psql -X -q -v ON_ERROR_STOP=1 -c \
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c \
   "CREATE OR REPLACE FUNCTION company.authorize_action(p_action text, p_resource_digest text, p_context_digest text, p_approval_id uuid DEFAULT NULL) RETURNS TABLE(decision text, reason_code text, policy_version integer, approval_id uuid) LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT ''allow''::text, ''drift''::text, 0, p_approval_id'" >/dev/null
 code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c07 --read-back > "$temp_root/drift" 2>&1 || code=$?

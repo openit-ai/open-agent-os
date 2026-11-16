@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-adapters-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -18,7 +20,9 @@ with open(sys.argv[1], 'w', encoding='utf-8') as out:
     json.dump({'edition': 'company', 'stages': {
         'c01': {'status': 'verified'}, 'c02': {'status': 'verified'},
         'c03': {'status': 'verified'}, 'c04': {'status': 'verified'},
-        'c05': {'status': 'verified'}}}, out)
+        'c05': {'status': 'verified'}, 'c06': {'status': 'verified'},
+        'c07': {'status': 'verified'}, 'c08': {'status': 'verified'},
+        'c10': {'status': 'verified'}}}, out)
 PY
 cat > "$temp_root/bin/systemctl" <<'MOCK'
 #!/usr/bin/env bash
@@ -107,7 +111,7 @@ PY
 code=0
 bash "$install" --stage c11 > "$temp_root/prereq" 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'C05 verified gate'
-grep -Fq 'C01, C02, C03, C04 and C05 must be verified' "$temp_root/prereq" || fail 'prerequisite gate reason'
+grep -Fq 'C01, C02, C03, C04, C05, C06 and C07 must be verified' "$temp_root/prereq" || fail 'prerequisite gate reason'
 python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
 import json, sys
 path = sys.argv[1]
@@ -133,7 +137,7 @@ env -u PGOPTIONS bash "$install" --stage c11 > "$temp_root/bypass-role" 2>&1 || 
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=adapters_test'
-bash "$repo_root/editions/company/migrate.sh" --through 4 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 4 >/dev/null
 env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO company.organizations(slug) VALUES ('install-org');
 INSERT INTO company.members(org_id, project_user_id, role, state)
@@ -144,7 +148,7 @@ printf 'PASS: gates, migration 1-4 and G10 organization\n'
 
 # --- Slack SKIP is the default and stores no credential ----------------------
 bash "$install" --stage c11 > "$temp_root/slack-skip" || fail 'C11 SKIP install'
-[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 7 ]] || fail 'migration 7 missing'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 7 ]] || fail 'migration 7 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT state FROM company.integration_settings WHERE provider = 'slack'") == skip ]] || fail 'slack default skip'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.integration_apps") == 0 ]] || fail 'skip created an app'
@@ -159,16 +163,36 @@ grep -Fq 'SLACK_BOT_TOKEN=xoxb-adapters-test-0123456789' "$HOME/.config/oaos-com
 [[ $(stat -c %a "$HOME/.config/oaos-company/.env") == 600 ]] || fail 'EnvironmentFile mode'
 ! grep -Fq 'xoxb-adapters-test' "$temp_root/slack-selected" || fail 'slack secret leaked to output'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.integration_apps WHERE provider = 'slack' AND state = 'active'") == 1 ]] || fail 'slack app missing'
+# Without a recorded round-trip with the real service the phase stays applied.
+code=0
+bash "$verify" --phase c11 --read-back > "$temp_root/slack-manual" || code=$?
+[[ $code == 3 ]] || fail 'C11 verified without an external round-trip'
+grep -Fq 'Summary: PASS=6 FAIL=0 MANUAL=1 SKIP=0' "$temp_root/slack-manual" || fail 'C11 MANUAL summary'
+[[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c11']['status'])
+PY
+) == applied ]] || fail 'C11 must stay applied without round-trip evidence'
+roundtrip() {
+  env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -v provider="$1" <<'SQL' >/dev/null
+INSERT INTO company.audit_events(org_id, actor_id, event_type, action, resource_ref, decision, request_id)
+  SELECT o.id, m.id, 'integration', 'external_roundtrip', :'provider', 'allow', 'adapters-roundtrip'
+    FROM company.organizations o JOIN company.members m ON m.org_id = o.id
+   WHERE o.slug = 'install-org' AND m.project_user_id = 'adapters-install-admin';
+SQL
+}
+roundtrip slack
 bash "$verify" --phase c11 --read-back > "$temp_root/slack-verified" || fail 'C11 read-back'
-grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/slack-verified" || fail 'C11 summary'
+grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/slack-verified" || fail 'C11 summary'
 
 # --- Notion selected ---------------------------------------------------------
 export OAOS_COMPANY_NOTION_STATE=selected OAOS_COMPANY_NOTION_WORKSPACE_ID=ws-notion
 export OAOS_COMPANY_NOTION_TOKEN=secret-adapters-notion-token
 bash "$install" --stage c12 > "$temp_root/notion-selected" || fail 'C12 selected install'
 ! grep -Fq 'secret-adapters-notion-token' "$temp_root/notion-selected" || fail 'notion secret leaked to output'
+roundtrip notion
 bash "$verify" --phase c12 --read-back > "$temp_root/notion-verified" || fail 'C12 read-back'
-grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/notion-verified" || fail 'C12 summary'
+grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/notion-verified" || fail 'C12 summary'
 
 # --- Google Workspace selected; Microsoft 365 conflicts and is then SKIP -----
 export OAOS_COMPANY_GWS_STATE=selected OAOS_COMPANY_GWS_WORKSPACE_ID=example.test
@@ -177,8 +201,9 @@ export OAOS_COMPANY_GWS_CLIENT_ID=adapters-gws-client
 export OAOS_COMPANY_GWS_CLIENT_SECRET=adapters-gws-secret
 bash "$install" --stage c13 > "$temp_root/gws-selected" || fail 'C13 selected install'
 ! grep -Fq 'adapters-gws-secret' "$temp_root/gws-selected" || fail 'gws secret leaked to output'
+roundtrip google_workspace
 bash "$verify" --phase c13 --read-back > "$temp_root/gws-verified" || fail 'C13 read-back'
-grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/gws-verified" || fail 'C13 summary'
+grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/gws-verified" || fail 'C13 summary'
 
 code=0
 OAOS_COMPANY_M365_STATE=selected OAOS_COMPANY_M365_WORKSPACE_ID=tenant-1 \
@@ -190,11 +215,24 @@ grep -Fq 'mutually exclusive' "$temp_root/m365-conflict" || fail 'suite conflict
 OAOS_COMPANY_M365_STATE=skip bash "$install" --stage c14 > "$temp_root/m365-skip" || fail 'C14 SKIP install'
 
 # --- C15 gate close ----------------------------------------------------------
+code=0
+bash "$install" --stage c15 > "$temp_root/gate-early" 2>&1 || code=$?
+[[ $code == 3 ]] && grep -Fq 'c14 must be verified or SKIP' "$temp_root/gate-early" || fail 'C15 before C14 verified/SKIP'
+bash "$verify" --phase c14 --read-back > "$temp_root/m365-skip-verified" || fail 'C14 SKIP read-back'
+grep -Fq 'Summary: PASS=6 FAIL=0 MANUAL=0 SKIP=1' "$temp_root/m365-skip-verified" || fail 'C14 SKIP summary'
+[[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c14']['status'])
+PY
+) == SKIP ]] || fail 'unselected provider must record SKIP'
+# A leftover key of a SKIP provider is removed when the gate closes.
+printf 'MICROSOFT_365_CLIENT_SECRET=leftover-m365-secret\n' >> "$HOME/.config/oaos-company/.env"
 bash "$install" --stage c15 > "$temp_root/gate" || fail 'C15 gate install'
+! grep -Fq 'MICROSOFT_365_' "$HOME/.config/oaos-company/.env" || fail 'SKIP provider key left in EnvironmentFile'
+[[ $(stat -c %a "$HOME/.config/oaos-company/.env") == 600 ]] || fail 'EnvironmentFile mode after key removal'
+grep -Fq 'SLACK_BOT_TOKEN=' "$HOME/.config/oaos-company/.env" || fail 'selected provider key removed'
 bash "$verify" --phase c15 --read-back > "$temp_root/gate-verified" || fail 'C15 read-back'
 grep -Fq 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/gate-verified" || fail 'C15 summary'
-bash "$verify" --phase c14 --read-back > "$temp_root/m365-skip-verified" || fail 'C14 SKIP read-back'
-grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/m365-skip-verified" || fail 'C14 SKIP summary'
 printf 'PASS: adapters selected/SKIP, read-back, suite exclusivity and C15 gate\n'
 
 # --- Idempotence and regression ---------------------------------------------
@@ -215,7 +253,7 @@ export OAOS_ADAPTERS_REPO_ROOT="$repo_root"
 python3 - <<'PY'
 import os
 import sys
-sys.path.insert(0, os.path.join(os.environ['OAOS_ADAPTERS_REPO_ROOT'], 'editions', 'company'))
+sys.path.insert(0, os.path.join(os.environ['OAOS_ADAPTERS_REPO_ROOT'], 'editions', 'company', 'app'))
 from integration_adapters import (
     AdapterDenied, Delegation, IntegrationRegistry, NotionAdapter,
     SlackAdapter, SlackEvent, SuiteAdapter, scopes_allowed,

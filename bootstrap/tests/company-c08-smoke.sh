@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c08-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -115,10 +117,10 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c08 > "$t
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=c08_test'
-bash "$repo_root/editions/company/migrate.sh" --through 4 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 4 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c08 > "$temp_root/installed" || fail 'C08 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 9 ]] || fail 'migration 9 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 9 ]] || fail 'migration 9 missing'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM company.schema_migrations WHERE version = 9') == 1 ]] || fail 'migration 9 was not recorded'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c01 --read-back > "$temp_root/c01-regression" || fail 'C01 schema read-back after C08'
@@ -141,7 +143,7 @@ printf 'PASS: C01 and C04 read-back remain compatible after migration 9\n'
 
 # A permissive read decision must fail the same real query path even if the
 # migration checksum stays valid.
-psql -X -q -v ON_ERROR_STOP=1 -c \
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c \
   "CREATE OR REPLACE FUNCTION company.c08_document_readable(p_document uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT true'" >/dev/null
 code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c08 --read-back > "$temp_root/drift" 2>&1 || code=$?

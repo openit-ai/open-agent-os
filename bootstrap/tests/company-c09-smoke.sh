@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 # Run with: pg_virtualenv bash -e -o pipefail bootstrap/tests/company-c09-smoke.sh
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -13,7 +15,7 @@ trap cleanup EXIT
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 install="$repo_root/editions/company/install.sh"
 verify="$repo_root/bootstrap/verify/company-verify.sh"
-runner="$repo_root/editions/company/migrate.sh"
+runner="$repo_root/editions/company/lib/migrate.sh"
 port=18765
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/home/.config/oaos-company" \
   "$temp_root/bin" "$temp_root/backup" "$temp_root/key-backup" "$temp_root/rollback"
@@ -137,7 +139,7 @@ printf 'PASS: C09 gates and reserved migration chain\n'
 
 # --- Install and service -----------------------------------------------------
 bash "$install" --stage c09 > "$temp_root/installed" || fail 'C09 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 10 ]] || fail 'migration 10 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 10 ]] || fail 'migration 10 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 grep -Fq 'console.py' "$HOME/.config/systemd/user/oaos-company.service" || fail 'console unit missing'
 grep -Fq "OAOS_COMPANY_CONSOLE_PORT=$port" "$HOME/.config/systemd/user/oaos-company.service" || fail 'console port not configured'
@@ -153,10 +155,11 @@ psql -X -q -v ON_ERROR_STOP=1 -v admin_hash="$admin_hash" \
 SELECT set_config('company.org_id', '00000000-0000-0000-0000-000000000001', false);
 INSERT INTO company.organizations(id, slug)
   VALUES ('00000000-0000-0000-0000-000000000001', 'c09-http-org');
-INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
-  ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', 'c09-http-admin', 'admin', 'active'),
-  ('00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001', 'c09-http-member', 'member', 'active');
 SELECT set_config('company.member_id', '00000000-0000-0000-0000-000000000011', false);
+INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+  ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', 'c09-http-admin', 'admin', 'active');
+INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+  ('00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001', 'c09-http-member', 'member', 'active');
 INSERT INTO company.console_sessions(org_id, member_id, token_hash, csrf_hash, expires_at) VALUES
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000011', :'admin_hash', :'csrf_hash', now() + interval '8 hours'),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000012', :'member_hash', :'csrf_hash', now() + interval '8 hours');
@@ -206,7 +209,7 @@ PY
 ) == verified ]] || fail 'verified checkpoint'
 bash "$install" --stage c09 > "$temp_root/rerun" || fail 'C09 idempotent rerun'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'rerun created unnecessary backup'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 10 ]] || fail 'rerun changed migration version'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 10 ]] || fail 'rerun changed migration version'
 bash "$verify" --phase c01 --read-back > "$temp_root/c01" || fail 'C01 read-back after C09'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01" || fail 'C01 regression summary'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c09-a-%' OR slug LIKE 'c09-b-%'") == 0 ]] || fail 'fixture rollback'

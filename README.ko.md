@@ -38,13 +38,18 @@
 
 나      응
 
-에이전트  설치 중… ✓ Hermes  ✓ 게이트웨이  ✓ Telegram 연결
-         게이트 2개만 부탁드릴게요: 봇 토큰 붙여넣기, 사용자 ID 붙여넣기.
-         ✓ LLM 플랜 연결  ✓ 위키 시딩  ✓ 예약 작업 등록
-         ✓ 재부팅 생존은 Ubuntu에서 검증 (macOS·Windows는 실기기 확인 대기)
+에이전트  설치 중… ✓ 호스트 준비  ✓ Hermes
+         G1: LLM 플랜을 고르고 키는 숨김 입력으로 넣어 주세요
+         (bash bootstrap/bin/oaos-secret-set OPENCODE_GO_API_KEY)  ✓ 테스트 응답 OK
+         G2/G3: 봇 토큰과 숫자 사용자 ID도 같은 숨김 입력으로
+         ✓ getMe OK  ✓ 허용 목록 숫자 확인  ✓ 게이트웨이 실행  ✓ 위키 시딩
+         ✓ 하네스 초안  ✓ 일일 백업 + 게이트웨이 워치독 등록
+         검증: PASS 15 · FAIL 0 · MANUAL 대기: 재부팅 생존, 채팅 왕복,
+         허용 목록, 하네스 시딩 대화
 
-에이전트  완료 — 전 과정 검증됐습니다. 이걸 시도해보세요:
-         "매일 아침 8시에 브리핑해줘". 전체 레시피: docs/cookbook.md
+에이전트  설치됐습니다. 남은 4개는 직접 확인이 필요해요. 봇에 메시지를 보내고,
+         편할 때 한 번 재부팅한 뒤 SOUL/USER를 같이 채워요. 그다음
+         "매일 아침 8시에 브리핑해줘"를 시도해보세요. 전체 레시피: docs/cookbook.md
 ```
 
 ## 에디션
@@ -88,7 +93,7 @@
 2. 이 저장소 URL 전달       → 예: "openit-ai/open-agent-os 설치해줘"
 3. 에이전트 안내 따라가기    → README → START-HERE → skills/oaos-bootstrap 설치
 4. 에디션 선택              → Personal / Project / Company
-5. 게이트(3~6개)            → 링크 클릭·선택·키/토큰 붙여넣기 (즉시 검증)
+5. 게이트(3~6개)            → 링크 클릭·선택·키/토큰은 숨김 입력 (즉시 확인: 모델 테스트 응답, Telegram getMe, 숫자 사용자 ID)
 6. 최종 테스트·보고          → 서비스·응답·파일·위키·크론 확인, 실제 재부팅·로그인은 실기기 확인
 ```
 
@@ -156,7 +161,7 @@ hermes skills install openit-ai/open-agent-os/skills/vps-youtube-content
 
 ## Company 에디션 기반
 
-Company 에디션을 뒷받침하는 엔터프라이즈 플랫폼(개인 에이전트, Personal Wiki, 권한 인식 전사 지식 인덱스, 정책 + JIT 승인, 감사 원장, Secret Vault, Execution Gateway, 관리 콘솔)은 이 공개 저장소와 별도로 개발·제공됩니다. v2.0 설계에서 이 자산들은 **Company 에디션으로 흡수**됩니다 — 기존 코드·테스트는 버리지 않고 승계합니다.
+Company 에디션은 이 저장소의 [`editions/company/`](editions/company/)(BSL 1.1)에 있습니다: 설치 Phase C01~C17, 체크섬 PostgreSQL 마이그레이션, 구성원 매핑·개인비서·owner 결속 Secret Vault·정책 + JIT 승인·추가 전용 감사 원장·권한 인식 검색·LLM 라우팅·관리 콘솔의 실제 DB read-back. 정책·승인·Vault·라우팅은 **DB 수준**(함수·트리거·RLS)에서 강제되며, 이를 런타임 비서 서비스 API·콘솔 승인 화면·OAuth 콜백·Slack 이벤트에 연결하는 작업은 남아 있습니다. 선택 연동은 실제 외부 왕복 증거 없이 `verified`가 되지 않습니다.
 
 - 범위·설치 흐름·라이선스: [`editions/company/README.md`](editions/company/README.md)
 
@@ -179,6 +184,8 @@ flowchart TB
 | **P0 — 부트스트랩 MVP (Personal)** | README/START-HERE, `skills/oaos-bootstrap`, `editions/personal` 설치, `bootstrap/verify` | 클린 머신에서 URL 1개 → 게이트 ≤5회 → verify 전 항목 PASS |
 | **P1 — Project** | Project install/verify·Personal→Project 이전 스크립트 제공 | 신규 VPS E2E 완주 + 이전 실증 필요 |
 | **P2 — Company** | 기존 플랫폼 흡수, 선택 연동(Slack/Notion), 멀티 LLM 라우팅, 거버넌스 | 전체 테스트 green + 런타임 read-back + 회귀 통과 |
+
+**현황(2026-11-16):** Company C01~C17 단계(설치 단계·검증기·마이그레이션 001~012)가 `main`에 병합됐고, Company 스모크 전체가 CI의 임시 PostgreSQL 클러스터에서 실행됩니다. 실제 Ubuntu LTS 서버에서의 C01~C17 전체 실행·런타임 read-back이 남아 있어 P2 완료로 판정하지 않습니다.
 
 ## 라이선스
 

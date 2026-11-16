@@ -7,10 +7,13 @@ trap 'rm -rf -- "$temp_root"' EXIT
 # Every mocked lane starts from an explicit environment, even inside Hermes.
 for name in ${!OAOS_@}; do unset "$name"; done
 unset HERMES_HOME MSYSTEM LOCALAPPDATA APPDATA
+export OAOS_ALLOW_FORK=1
 # shellcheck source=bootstrap/lib/common.sh
 . "$repo_root/bootstrap/lib/common.sh"
 # shellcheck source=bootstrap/lib/platform.sh
 . "$repo_root/bootstrap/lib/platform.sh"
+# shellcheck source=bootstrap/lib/secret.sh
+. "$repo_root/bootstrap/lib/secret.sh"
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 test_sha256() {
@@ -204,6 +207,15 @@ printf 'PASS: mocked macOS resources, shasum, secret owner/mode, paths, launchd,
   grep -Fq '/inheritance:r' "$temp_root/icacls.args" || fail 'Windows icacls not invoked'
   printf 'replacement\n' | platform_atomic_write "$HOME/win-secret" || fail 'Windows atomic ACL write'
   [[ $(cat "$HOME/win-secret") == replacement ]] || fail 'Windows atomic content'
+  rm -f "$temp_root/icacls.args"
+  mkdir -p "$HOME/win-hermes"
+  HERMES_HOME="$HOME/win-hermes"; export HERMES_HOME
+  # shellcheck disable=SC2317,SC2329
+  cygpath() { case $1 in -u) printf '%s\n' "$2" ;; -w) printf 'C:\\mock\\%s\n' "${2##*/}" ;; *) return 1 ;; esac; }
+  printf 'win-value\n' | oaos_secret_set WIN_TEST_KEY 2>/dev/null || fail 'Windows secret helper'
+  [[ $(cat "$HOME/win-hermes/.env") == 'WIN_TEST_KEY=win-value' ]] || fail 'Windows secret helper content'
+  grep -Fq '/inheritance:r' "$temp_root/icacls.args" || fail 'Windows secret helper skipped the NTFS ACL'
+  unset HERMES_HOME
   mock_acl_fail=1
   if platform_secret_check "$HOME/win-secret"; then fail 'Windows ACL failure accepted'; fi
   code=0
@@ -226,6 +238,12 @@ printf 'PASS: mocked Windows CIM, timezone, path, SHA, PowerShell install, ONLOG
 
 # Generate macOS cron scripts through the real entrypoint; Hermes is a local mock.
 mkdir -p "$temp_root/cron-bin" "$temp_root/cron-home"
+cat > "$temp_root/cron-bin/launchctl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$LAUNCHCTL_LOG"
+[[ $1 == list ]] && printf '123 0 ai.openit.oaos.gateway-watchdog\n'
+exit 0
+SH
 cat > "$temp_root/cron-bin/hermes" <<'SH'
 #!/usr/bin/env bash
 [[ $1 == cron ]] || exit 1
@@ -240,17 +258,21 @@ case $2 in
     exit 1 ;;
 esac
 SH
-chmod 700 "$temp_root/cron-bin/hermes"
-HOME="$temp_root/cron-home" HERMES_HOME="$temp_root/custom hermes" HERMES_MOCK_JOBS="$temp_root/jobs" \
+chmod 700 "$temp_root/cron-bin/hermes" "$temp_root/cron-bin/launchctl"
+HOME="$temp_root/cron-home" HERMES_HOME="$temp_root/custom hermes" HERMES_MOCK_JOBS="$temp_root/jobs" LAUNCHCTL_LOG="$temp_root/launchctl.log" \
   PATH="$temp_root/cron-bin:$PATH" OAOS_TEST_MODE=1 OAOS_TEST_PLATFORM=macos \
   bash "$repo_root/editions/personal/install.sh" --stage cron >"$temp_root/cron.out" 2>"$temp_root/cron.err" || fail 'macOS cron generation'
 backup_script="$temp_root/custom hermes/scripts/oaos-daily-backup.sh"
-watchdog_script="$temp_root/custom hermes/scripts/oaos-gateway-watchdog.sh"
-[[ -f $backup_script && -f $watchdog_script ]] || fail 'macOS cron scripts absent'
+watchdog_script="$temp_root/cron-home/.oaos/bin/oaos-gateway-watchdog.sh"
+plist="$temp_root/cron-home/Library/LaunchAgents/ai.openit.oaos.gateway-watchdog.plist"
+[[ -f $backup_script && -f $watchdog_script && -f $plist ]] || fail 'macOS cron scripts or watchdog agent absent'
 grep -Fq 'custom\ hermes' "$backup_script" || fail 'backup script ignored custom Hermes path'
-grep -Fq 'hermes gateway start' "$watchdog_script" || fail 'watchdog start missing'
+grep -Fq '"$hermes" gateway start' "$watchdog_script" || fail 'watchdog start missing'
+grep -Fq "<string>$watchdog_script</string>" "$plist" && grep -Fq '<integer>300</integer>' "$plist" || fail 'watchdog plist content'
+grep -Eq '^bootstrap gui/[0-9]+ ' "$temp_root/launchctl.log" || fail 'watchdog agent not bootstrapped'
+[[ $(cat "$temp_root/jobs") == oaos-daily-backup ]] || fail 'macOS registered a Hermes cron watchdog'
 bash -n "$backup_script" "$watchdog_script" || fail 'generated scripts syntax'
-printf 'PASS: generated macOS backup and watchdog scripts honor HERMES_HOME in isolated HOME\n'
+printf 'PASS: macOS backup honours HERMES_HOME; watchdog is a launchd agent, not a Hermes cron job\n'
 
 OAOS_TEST_PLATFORM=linux; export OAOS_TEST_PLATFORM
 unset HERMES_HOME MSYSTEM LOCALAPPDATA APPDATA
@@ -282,6 +304,21 @@ if [[ $(uname -s) == Linux ]]; then
   platform_secret_check "$HOME/private" || fail 'private parent rejected'
   [[ $(platform_sha256 "$HOME/private") == $(test_sha256 "$HOME/private") ]] || fail 'SHA-256 value'
   [[ $(platform_hermes_home) == "$HOME/.hermes" && $(platform_path state) == "$HOME/.oaos-install/state.json" ]] || fail 'Linux paths'
+  [[ $(HERMES_HOME="$HOME/custom" platform_hermes_home) == "$HOME/custom" && $(HERMES_HOME="$HOME/custom" platform_path scripts) == "$HOME/custom/scripts" ]] || fail 'Linux HERMES_HOME precedence'
+  # Secret helper: stdin only, atomic owner-only write, replace in place, reject bad input, never print.
+  mkdir -p "$HOME/.hermes"; chmod 700 "$HOME/.hermes"
+  printf 'export KEEP=1\nTEST_SECRET_KEY=old\nTEST_SECRET_KEY = duplicate\n' > "$HOME/.hermes/.env"
+  printf 'sk-NEWVALUE with space\n' | oaos_secret_set TEST_SECRET_KEY > "$temp_root/secret.out" 2> "$temp_root/secret.err" || fail 'secret helper write'
+  [[ $(cat "$HOME/.hermes/.env") == $'export KEEP=1\nTEST_SECRET_KEY="sk-NEWVALUE with space"' ]] || fail 'secret helper content'
+  [[ $(platform_file_mode "$HOME/.hermes/.env") == 600 ]] || fail 'secret helper mode'
+  ! grep -Fq NEWVALUE "$temp_root/secret.out" "$temp_root/secret.err" || fail 'secret helper printed the value'
+  oaos_secret_present TEST_SECRET_KEY || fail 'secret presence'
+  if printf '' | oaos_secret_set EMPTY_KEY 2>/dev/null; then fail 'empty secret accepted'; fi
+  if printf 'a\nb\n' | oaos_secret_set MULTI_KEY 2>/dev/null; then fail 'multi-line secret accepted'; fi
+  if printf 'x\n' | oaos_secret_set lower_key 2>/dev/null; then fail 'invalid key accepted'; fi
+  printf 'value\n' | HERMES_HOME="$HOME/alt hermes" bash "$repo_root/bootstrap/bin/oaos-secret-set" ALT_KEY 2>/dev/null || fail 'secret CLI'
+  [[ $(cat "$HOME/alt hermes/.env") == 'ALT_KEY=value' ]] || fail 'secret CLI honours HERMES_HOME'
+  printf 'PASS: secret helper reads stdin, rejects empty/multi-line values, writes owner-only atomically\n'
   export OAOS_STAGES='prep hermes llm telegram gateway wiki harness cron verify optional'
   stage_mark wiki applied 'test'
   if [[ $(stage_status wiki) != applied ]] || stage_done wiki; then fail 'applied status'; fi
@@ -293,6 +330,18 @@ if [[ $(uname -s) == Linux ]]; then
   if (OAOS_STAGES='prep hermes' stage_mark undeclared applied 'x') >/dev/null 2>&1; then fail 'undeclared stage name accepted'; fi
   stage_mark wiki 'done' 'legacy'
   stage_done wiki || fail 'legacy done resume'
+  # Editions on one host never share checkpoints; a pre-scoping flat file stays readable.
+  (
+    export OAOS_STATE_FILE="$HOME/scoped-state.json"
+    printf '{"edition":"personal","stages":{"prep":{"status":"done"},"verify":{"status":"done"}}}\n' > "$OAOS_STATE_FILE"
+    stage_done prep || fail 'legacy flat Personal state not read'
+    if OAOS_STATE_EDITION=project stage_done prep; then fail 'Project read Personal prep'; fi
+    OAOS_STATE_EDITION=project OAOS_STAGES='prep stack verify' stage_mark stack 'done' 'p'
+    stage_done prep || fail 'Personal state lost after Project write'
+    if OAOS_STATE_EDITION=project stage_done verify; then fail 'Project read Personal verify'; fi
+    OAOS_STATE_EDITION=project stage_done stack || fail 'Project stage not read back'
+    [[ $(jq -r '.edition' "$OAOS_STATE_FILE") == project && $(jq -r '.editions.personal.stages.prep.status' "$OAOS_STATE_FILE") == 'done' ]] || fail 'scoped layout'
+  ) || exit 1
   printf 'PASS: Linux hash, atomic mode, paths, and legacy/new status read-back\n'
 else
   printf 'SKIP: Linux native hash/mode/state checks require Linux host primitives\n'

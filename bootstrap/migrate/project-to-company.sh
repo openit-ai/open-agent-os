@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 set -Eeuo pipefail
 
 source_host=''
@@ -47,7 +49,13 @@ for relative in "${paths[@]}"; do
   mkdir -p "$(dirname "$target")"
   staging="${target}.incoming-${timestamp}-$$"
   [[ ! -e $staging ]] || { printf 'Staging path exists: %s\n' "$staging" >&2; exit 1; }
-  if ! rsync -a -e 'ssh -o BatchMode=yes' -- "$source_host:~/$relative" "$staging"; then
+  # A directory is copied by its contents (trailing slash); without it rsync
+  # would nest the source inside the staging path (~/data/wiki/wiki).
+  source_path="$source_host:~/$relative"
+  if ssh -o BatchMode=yes -- "$source_host" "test -d \"\$HOME/$relative\""; then
+    source_path+=/
+  fi
+  if ! rsync -a -e 'ssh -o BatchMode=yes' -- "$source_path" "$staging"; then
     printf 'Transfer failed for %s; existing target was preserved.\n' "$relative" >&2
     exit 1
   fi

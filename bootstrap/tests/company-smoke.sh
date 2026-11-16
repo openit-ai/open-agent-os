@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BUSL-1.1
+# Company edition: see LICENSE-COMPANY at the repository root.
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temp_root=$(mktemp -d)
@@ -6,15 +8,15 @@ trap 'rm -rf -- "$temp_root"' EXIT
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 install="$repo_root/editions/company/install.sh"
 verify="$repo_root/bootstrap/verify/company-verify.sh"
-runner="$repo_root/editions/company/migrate.sh"
+runner="$repo_root/editions/company/lib/migrate.sh"
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/bin"
 
-HOME="$temp_root/home" bash "$install" --help | grep -Fq 'c01 through c17' || fail 'install help'
+HOME="$temp_root/home" bash "$install" --help | grep -F 'c01 through c17' >/dev/null || fail 'install help'
 env -u HOME bash "$install" --help > /dev/null || fail 'install help without HOME'
 HOME="$temp_root/home" bash "$install" --status > "$temp_root/status"
 [[ $(grep -Ec '^c[0-9][0-9] +pending ' "$temp_root/status") == 17 ]] || fail 'empty status'
 [[ ! -e $temp_root/home/.oaos-install/company-state.json ]] || fail 'status changed state'
-HOME="$temp_root/home" bash "$verify" --help | grep -Fq -- '--read-back' || fail 'verify help'
+HOME="$temp_root/home" bash "$verify" --help | grep -F -- '--read-back' >/dev/null || fail 'verify help'
 env -u HOME bash "$verify" --help > /dev/null || fail 'verify help without HOME'
 code=0
 HOME="$temp_root/home" bash "$install" --stage c03 > /dev/null 2>&1 || code=$?
@@ -29,6 +31,32 @@ HOME="$temp_root/home" bash "$verify" --phase c01 --read-back > /dev/null 2>&1 |
 [[ $code == 3 ]] || fail 'unapplied verifier exit code'
 printf 'PASS: help, read-only status and prerequisite gate\n'
 
+# C01 reads Project readiness from the edition-scoped layout and the older flat
+# layout; a Project verify that passed is "verified" (older installers: "done"),
+# and MANUAL-pending ("applied") is not ready.
+project_ready_case() {
+  local layout=$1 verify=$2 expected=$3 code=0
+  python3 - "$temp_root/home/.oaos-install/state.json" "$layout" "$verify" <<'PY'
+import json, sys
+path, layout, verify = sys.argv[1:4]
+stages = {'stack': {'status': 'done'}, 'verify': {'status': verify}}
+if layout == 'scoped':
+    state = {'edition': 'personal', 'stages': {}, 'editions': {'personal': {'stages': {}}, 'project': {'stages': stages}}}
+else:
+    state = {'edition': 'project', 'stages': stages}
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(state, f)
+PY
+  HOME="$temp_root/home" OAOS_NO_LOG_FILE=1 bash -c '. "$1/bootstrap/lib/common.sh"; . "$1/editions/company/stages/c01.sh"; company_c01_project_ready' _ "$repo_root" > /dev/null 2>&1 || code=$?
+  [[ $code == "$expected" ]] || fail "Project readiness $layout/$verify returned $code"
+}
+project_ready_case scoped verified 0
+project_ready_case scoped 'done' 0
+project_ready_case scoped applied 3
+project_ready_case flat verified 0
+project_ready_case flat 'done' 0
+printf 'PASS: C01 reads edition-scoped and flat Project state; MANUAL-pending is not ready\n'
+
 python3 - "$temp_root/home/.oaos-install/state.json" <<'PY'
 import json, sys
 with open(sys.argv[1], 'w', encoding='utf-8') as f:
@@ -38,7 +66,11 @@ cat > "$temp_root/bin/psql" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 [[ ${OAOS_FAKE_DB_FAIL:-0} != 1 ]] || exit 2
-if [[ $* == *--single-transaction* ]]; then
+if [[ $* != *' -c '* && $* != *' -f '* && $* != *--single-transaction* ]]; then
+  # migrate.sh advisory lock connection: statements arrive on stdin.
+  while IFS= read -r line; do [[ $line == '\echo locked' ]] && printf 'locked\n'; done
+  exit 0
+elif [[ $* == *--single-transaction* ]]; then
   if [[ $* == *'001_company_schema.sql'* ]]; then version=1
   elif [[ $* == *'002_member_mapping.sql'* ]]; then version=2
   else exit 2; fi
@@ -60,10 +92,35 @@ else
   exit 2
 fi
 MOCK
-chmod 700 "$temp_root/bin/psql"
+cat > "$temp_root/bin/sudo" <<'MOCK'
+#!/usr/bin/env bash
+[[ ${1:-} == -n ]] || exit 1
+shift
+"$@"
+MOCK
+cat > "$temp_root/bin/runuser" <<'MOCK'
+#!/usr/bin/env bash
+[[ ${1:-} == -u && ${2:-} == postgres && ${3:-} == -- ]] || exit 1
+shift 3
+exec "$@"
+MOCK
+cat > "$temp_root/bin/pg_dump" <<'MOCK'
+#!/usr/bin/env bash
+[[ ${OAOS_FAKE_DB_FAIL:-0} != 1 ]] || exit 2
+printf 'mock custom dump\n'
+MOCK
+chmod 700 "$temp_root/bin/psql" "$temp_root/bin/sudo" "$temp_root/bin/runuser" "$temp_root/bin/pg_dump"
+mkdir -p "$temp_root/rollback" && chmod 700 "$temp_root/rollback"
+export OAOS_COMPANY_ROLLBACK_DIR="$temp_root/rollback" OAOS_COMPANY_PG_SOCKET_DIR=/tmp
 export OAOS_FAKE_DB_STATE="$temp_root/db-checksum" OAOS_FAKE_DB_LOG="$temp_root/db-log"
+code=0
+HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test OAOS_COMPANY_ROLLBACK_DIR='' bash "$install" --stage c01 > /dev/null 2>&1 || code=$?
+[[ $code == 3 ]] || fail 'C01 without a rollback directory must block'
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/first"
 [[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'only C01 migration should be applied'
+[[ $(find "$temp_root/rollback" -name company.dump | wc -l) == 1 ]] || fail 'C01 pre-migration backup'
+[[ -n $(find "$temp_root/home/.oaos/logs" -name 'company-*.log' 2>/dev/null) &&
+   -z $(find "$temp_root/home/.oaos/logs" -name 'install-*.log' 2>/dev/null) ]] || fail 'Company log name'
 python3 - "$temp_root/home/.oaos-install/company-state.json" <<'PY' || fail 'applied state'
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
@@ -74,6 +131,7 @@ assert len(state['stages']) == 17
 PY
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/second"
 [[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'migration was applied twice'
+[[ $(find "$temp_root/rollback" -name company.dump | wc -l) == 1 ]] || fail 'rerun created an unnecessary C01 backup'
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$runner" --check --through 1 > /dev/null || fail 'checksum check'
 printf 'PASS: atomic runner call, checksum skip and applied checkpoint\n'
 
@@ -118,13 +176,26 @@ printf 'PASS: SQL table, partial index, FK, owner trigger and RLS structure\n'
 # evidence must be anchored to this instance's loopback and check the payload.
 resolve_helper="--resolve \"\$host:443:127.0.0.1\""
 resolve_backup="--resolve \"\$health_host:443:127.0.0.1\""
-for file in "$repo_root"/editions/company/c02.sh "$repo_root"/editions/company/c02-verify.sh; do
+for file in "$repo_root"/editions/company/stages/c02.sh "$repo_root"/editions/company/verify/c02-verify.sh; do
   if ! grep -Fq -- "$resolve_helper" "$file" && ! grep -Fq -- "$resolve_backup" "$file"; then
     fail "Company HTTPS check in ${file##*/} is not anchored to loopback"
   fi
   grep -Fq 'OAOS_COMPANY_HTTPS_ORIGIN/company/health' "$file" || fail "Company HTTPS check missing in ${file##*/}"
 done
-if grep -nE '%\{http_code\}' "$repo_root/editions/company/c02.sh" "$repo_root/editions/company/c02-verify.sh" | grep -F 'company/health' >/dev/null; then
+if grep -nE '%\{http_code\}' "$repo_root/editions/company/stages/c02.sh" "$repo_root/editions/company/verify/c02-verify.sh" | grep -F 'company/health' >/dev/null; then
   fail 'Company HTTPS check must not rely on a bare status code'
 fi
 printf 'PASS: Company HTTPS evidence is anchored to this instance\n'
+
+# Read-back rows follow the sections that really passed, not fixed PASS lines.
+(
+  # shellcheck source=bootstrap/lib/common.sh
+  . "$repo_root/bootstrap/lib/common.sh"
+  # shellcheck source=editions/company/lib/company.sh
+  . "$repo_root/editions/company/lib/company.sh"
+  pass=0 fail=0 COMPANY_READBACK=$'owner_isolation\nrolled_back'
+  company_readback_check 20 'Owner isolation' owner_isolation >/dev/null
+  company_readback_check 20 'Fixture cleanup' tenant_isolation rolled_back >/dev/null
+  [[ $pass == 1 && $fail == 1 ]]
+) || fail 'read-back check rows'
+printf 'PASS: read-back rows reflect emitted section markers\n'
