@@ -471,6 +471,8 @@ grep -Fqx 'OAOS_MAIL_PASSWORD=abcdefghijklmnop' "$mail_home/.hermes/.env" || fai
   . "$repo_root/bootstrap/lib/platform.sh"
   # shellcheck source=bootstrap/lib/secret.sh
   . "$repo_root/bootstrap/lib/secret.sh"
+  # shellcheck source=bootstrap/lib/mail.sh
+  . "$repo_root/bootstrap/lib/mail.sh"
   # shellcheck source=editions/project/lib.sh
   . "$repo_root/editions/project/lib.sh"
   [[ $(project_mail_default_host imap Bot@GMail.com) == imap.gmail.com && $(project_mail_default_host smtp x@googlemail.com) == smtp.gmail.com ]] || exit 1

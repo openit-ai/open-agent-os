@@ -1,65 +1,17 @@
 #!/usr/bin/env bash
 # Project helpers shared by editions/project/install.sh and bootstrap/verify/project-verify.sh.
-# Load bootstrap/lib/common.sh, platform.sh and secret.sh first.
+# Load bootstrap/lib/common.sh, platform.sh, secret.sh and mail.sh first.
 #
 # Gate values live in the Hermes .env (owner-only, written by bootstrap/bin/oaos-secret-set).
 # Secrets are never accepted from argv or the process environment; API tokens reach curl
 # through a config on stdin (curl -K -), never through argv.
 
-# Prints the value of KEY from the Hermes .env (unquoted the way oaos_secret_set writes it).
-# Exit 0 with output when set and non-empty; 1 otherwise.
-project_env_get() {
-  local key=$1 env_file line value found=''
-  oaos_secret_valid_key "$key" || return 1
-  env_file=$(oaos_hermes_env_file) || return 1
-  [[ -f $env_file ]] || return 1
-  while IFS= read -r line || [[ -n $line ]]; do
-    oaos_env_line_defines "$line" "$key" || continue
-    value=${line#*=}
-    value=${value#"${value%%[![:space:]]*}"}
-    value=${value%"${value##*[![:space:]]}"}
-    if [[ $value == \"*\" && ${#value} -ge 2 ]]; then
-      value=${value:1:${#value}-2}
-      value=${value//\\\"/\"}
-      value=${value//\\\\/\\}
-    elif [[ $value == \'*\' && ${#value} -ge 2 ]]; then
-      value=${value:1:${#value}-2}
-    fi
-    found=$value
-  done < "$env_file"
-  [[ -n $found ]] || return 1
-  printf '%s' "$found"
-}
-
-# Non-secret gate value: the Hermes .env first; otherwise the same-named process variable,
-# which is then stored in the Hermes .env so later reruns do not need it.
-project_gate_value() {
-  local key=$1 value
-  if value=$(project_env_get "$key"); then printf '%s' "$value"; return 0; fi
-  value=${!key:-}
-  [[ -n $value ]] || return 1
-  if [[ ${OAOS_DRY_RUN:-0} != 1 ]]; then
-    printf '%s' "$value" | oaos_secret_set "$key" 2>/dev/null || return 1
-  fi
-  printf '%s' "$value"
-}
-
-# Secrets are read from the Hermes .env only. A same-named process variable is refused,
-# because it usually came from a command line (shell history, process list).
-project_secret_value() {
-  local key=$1
-  if [[ -n ${!key:-} ]]; then
-    warn "$key in the process environment is ignored; store it with: bash bootstrap/bin/oaos-secret-set $key"
-  fi
-  project_env_get "$key"
-}
-
-# Store a non-secret value (URL, allowlist) in the Hermes .env without argv.
-project_env_put() {
-  [[ ${OAOS_DRY_RUN:-0} != 1 ]] || return 0
-  [[ $(project_env_get "$1" 2>/dev/null || true) == "$2" ]] && return 0
-  printf '%s' "$2" | oaos_secret_set "$1" 2>/dev/null
-}
+# Hermes .env accessors live in bootstrap/lib/secret.sh; these names are kept for the
+# Project installer and verifier.
+project_env_get() { oaos_env_get "$@"; }
+project_gate_value() { oaos_gate_value "$@"; }
+project_secret_value() { oaos_secret_value "$@"; }
+project_env_put() { oaos_env_put "$@"; }
 
 # Tokens are embedded in a curl config, so only token-safe characters are accepted.
 project_token_safe() { [[ $1 =~ ^[A-Za-z0-9_.-]{8,256}$ ]]; }
@@ -160,43 +112,11 @@ print("agent account (G9 mailbox, role %s)" % (user.get("role") or "member"), en
 ' <<< "$body"
 }
 
-# Gmail addresses get Google's IMAP/SMTP hosts by default.
-project_mail_default_host() {
-  local domain=${2##*@}
-  domain=$(printf '%s' "$domain" | tr '[:upper:]' '[:lower:]')
-  case $domain in
-    gmail.com|googlemail.com) printf '%s.gmail.com' "$1" ;;
-    *) return 1 ;;
-  esac
-}
+# IMAP/SMTP checks are shared with the Personal G5 stage (bootstrap/lib/mail.sh).
+project_mail_default_host() { oaos_mail_default_host "$@"; }
 
-# project_mail_login imap|smtp ADDRESS HOST: the password comes from the Hermes .env and
-# reaches Python on stdin. Prints a short reason; exit 0 when the login succeeds.
-project_mail_login() {
-  local kind=$1 address=$2 host=$3 password
-  password=$(project_env_get OAOS_MAIL_PASSWORD) || { printf 'OAOS_MAIL_PASSWORD absent'; return 1; }
-  printf '%s' "$password" | OAOS_MAIL_KIND=$kind OAOS_MAIL_ADDRESS=$address OAOS_MAIL_HOST=$host \
-    OAOS_MAIL_TIMEOUT=${OAOS_MAIL_TIMEOUT:-15} oaos_python -c '
-import imaplib, os, smtplib, socket, ssl, sys
-password = sys.stdin.read()
-kind, address, host = os.environ["OAOS_MAIL_KIND"], os.environ["OAOS_MAIL_ADDRESS"], os.environ["OAOS_MAIL_HOST"]
-timeout = float(os.environ["OAOS_MAIL_TIMEOUT"])
-try:
-    if kind == "imap":
-        with imaplib.IMAP4_SSL(host, 993, timeout=timeout) as client:
-            client.login(address, password)
-            client.logout()
-    else:
-        with smtplib.SMTP(host, 587, timeout=timeout) as client:
-            client.starttls(context=ssl.create_default_context())
-            client.login(address, password)
-except (imaplib.IMAP4.error, smtplib.SMTPAuthenticationError):
-    print("login rejected", end=""); sys.exit(1)
-except (OSError, socket.timeout, smtplib.SMTPException, ssl.SSLError):
-    print("connection failed", end=""); sys.exit(1)
-print("login succeeded", end="")
-'
-}
+# project_mail_login imap|smtp ADDRESS HOST: G9 login with OAOS_MAIL_PASSWORD from the Hermes .env.
+project_mail_login() { oaos_mail_login "$1" "$2" "$3" OAOS_MAIL_PASSWORD; }
 
 # Hermes gateway runtime state: prints the recorded state of PLATFORM ("connected", ...).
 project_gateway_platform_state() {

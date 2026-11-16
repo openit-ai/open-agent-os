@@ -96,6 +96,7 @@ jobs:
             bootstrap/lib/common.sh \
             bootstrap/lib/platform.sh \
             bootstrap/lib/secret.sh \
+            bootstrap/lib/mail.sh \
             bootstrap/bin/oaos-secret-set \
             bootstrap/verify/personal-verify.sh \
             bootstrap/migrate/personal-to-project.sh \

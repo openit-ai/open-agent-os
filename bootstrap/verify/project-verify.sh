@@ -8,6 +8,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$repo_root/bootstrap/lib/platform.sh"
 # shellcheck source=bootstrap/lib/secret.sh
 . "$repo_root/bootstrap/lib/secret.sh"
+# shellcheck source=bootstrap/lib/mail.sh
+. "$repo_root/bootstrap/lib/mail.sh"
 # shellcheck source=editions/project/lib.sh
 . "$repo_root/editions/project/lib.sh"
 
