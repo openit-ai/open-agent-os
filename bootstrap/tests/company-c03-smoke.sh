@@ -116,10 +116,10 @@ psql -X -q -v ON_ERROR_STOP=1 --single-transaction \
   -c "INSERT INTO company.schema_migrations(version, checksum) VALUES (1, '$checksum')" >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c03 > "$temp_root/installed" || fail 'C03 install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 2 ]] || fail 'migration 2 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 2 ]] || fail 'migration 2 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c03 --read-back > "$temp_root/verified" || fail 'C03 real DB read-back'
-grep -Fq 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
+grep -Fq 'Summary: PASS=6 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c03-%'") == 0 ]] || fail 'fixture rollback'
 [[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
 import json, sys
@@ -130,8 +130,21 @@ bash "$repo_root/editions/company/install.sh" --stage c03 > "$temp_root/rerun" |
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'rerun created unnecessary backup'
 printf 'PASS: C03 gates, migration 2, backup, SQL responses, rollback, idempotence\n'
 
+# Owner/runtime separation: the schema moved to the NOLOGIN owner, amendment 013
+# is recorded, and the runtime role cannot mutate audit rows or alter tables.
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT nspowner::regrole FROM pg_namespace WHERE nspname = 'company'") == oaos_company_owner ]] || fail 'schema owner'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'company' AND c.relowner::regrole::text <> 'oaos_company_owner'") == 0 ]] || fail 'table owner'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM company.schema_migrations WHERE version = 13') == 1 ]] || fail 'amendment 13 missing'
+for statement in 'TRUNCATE company.audit_events' 'DELETE FROM company.audit_events' \
+    'ALTER TABLE company.audit_events DISABLE ROW LEVEL SECURITY' \
+    'CREATE TABLE company.c03_planted(id int)' \
+    "INSERT INTO company.schema_migrations(version, checksum) VALUES (99, repeat('0', 64))"; do
+  if psql -X -q -v ON_ERROR_STOP=1 -c "$statement" >/dev/null 2>&1; then fail "runtime role executed: $statement"; fi
+done
+printf 'PASS: runtime role owns nothing and cannot truncate, delete or alter audit rows\n'
+
 # A function drift must fail the same real query path even if the file checksum remains valid.
-psql -X -q -v ON_ERROR_STOP=1 -c \
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c \
   "CREATE OR REPLACE FUNCTION company.c03_admin_ready() RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT true'" >/dev/null
 code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c03 --read-back > "$temp_root/drift" 2>&1 || code=$?

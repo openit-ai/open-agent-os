@@ -13,6 +13,8 @@ DECLARE
   owner_a uuid := gen_random_uuid();
   owner_b uuid := gen_random_uuid();
   admin_b uuid := gen_random_uuid();
+  approver_a uuid := gen_random_uuid();
+  billing_approval uuid;
   standard_a uuid;
   premium_a uuid;
   premium_flat uuid;
@@ -45,6 +47,10 @@ BEGIN
       SELECT 1 FROM company.llm_models m
       WHERE m.org_id = persisted_org AND m.tier = 'premium' AND m.state = 'active'
         AND m.billing_approved_at IS NOT NULL AND m.monthly_cap_usd > 0
+        AND (m.billing_mode <> 'usage' OR EXISTS (
+          SELECT 1 FROM company.approvals a
+           WHERE a.id = m.billing_approval_id AND a.state = 'consumed'
+             AND a.action = 'llm.billing.usage' AND a.approver_id = m.billing_approved_by))
     ) THEN RAISE EXCEPTION 'selected G13 has no approved premium model'; END IF;
     IF NOT EXISTS (
       SELECT 1 FROM company.llm_routes r
@@ -59,6 +65,7 @@ BEGIN
   INSERT INTO company.organizations(id, slug) VALUES (org_a, 'c16-a-' || org_a::text);
   INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
     (admin_a, org_a, 'c16-admin-' || admin_a::text, 'admin', 'active'),
+    (approver_a, org_a, 'c16-approver-' || approver_a::text, 'admin', 'active'),
     (owner_a, org_a, 'c16-owner-' || owner_a::text, 'member', 'active'),
     (owner_b, org_a, 'c16-owner-' || owner_b::text, 'member', 'active');
   PERFORM set_config('company.org_id', org_b::text, true);
@@ -80,9 +87,52 @@ BEGIN
   IF EXISTS (SELECT 1 FROM company.llm_models WHERE org_id = org_a AND provider = 'c16-premium') THEN
     RAISE EXCEPTION 'unapproved usage model was stored';
   END IF;
+  -- The installer flag alone is not an approval (P1-6): without a consumed
+  -- llm.billing.usage approval the usage model is rejected.
+  IF (SELECT r.decision FROM company.install_default_policies() r) IS DISTINCT FROM 'installed' THEN
+    RAISE EXCEPTION 'fixture policy bundle failed';
+  END IF;
+  rejected := false;
+  BEGIN
+    PERFORM company.configure_llm_model(
+      'c16-premium', 'premium-model', 'premium', 'usage', 5, true);
+  EXCEPTION WHEN raise_exception THEN rejected := true;
+  END;
+  IF NOT rejected THEN RAISE EXCEPTION 'usage billing without a C07 approval was accepted'; END IF;
+  -- A JIT approval for a different cap does not cover this model.
+  SELECT r.approval_id INTO billing_approval FROM company.request_approval('llm.billing.usage',
+    company.g13_billing_digest('c16-premium', 'premium-model', 50), 'g13') r;
+  PERFORM set_config('company.member_id', approver_a::text, true);
+  PERFORM company.decide_approval(billing_approval, true);
+  PERFORM set_config('company.member_id', admin_a::text, true);
+  PERFORM company.authorize_action('llm.billing.usage',
+    company.g13_billing_digest('c16-premium', 'premium-model', 50), 'g13', billing_approval);
+  rejected := false;
+  BEGIN
+    PERFORM company.configure_llm_model(
+      'c16-premium', 'premium-model', 'premium', 'usage', 5, true);
+  EXCEPTION WHEN raise_exception THEN rejected := true;
+  END;
+  IF NOT rejected THEN RAISE EXCEPTION 'a billing approval for another cap was accepted'; END IF;
+  -- The matching approval decided by a second administrator is consumed.
+  SELECT r.approval_id INTO billing_approval FROM company.request_approval('llm.billing.usage',
+    company.g13_billing_digest('c16-premium', 'premium-model', 5), 'g13') r;
+  PERFORM set_config('company.member_id', approver_a::text, true);
+  PERFORM company.decide_approval(billing_approval, true);
+  PERFORM set_config('company.member_id', admin_a::text, true);
+  IF (SELECT r.decision FROM company.authorize_action('llm.billing.usage',
+        company.g13_billing_digest('c16-premium', 'premium-model', 5), 'g13', billing_approval) r)
+     IS DISTINCT FROM 'allow' THEN
+    RAISE EXCEPTION 'billing approval was not consumed';
+  END IF;
   SELECT r.model_id INTO premium_a FROM company.configure_llm_model(
     'c16-premium', 'premium-model', 'premium', 'usage', 5, true) r;
   IF premium_a IS NULL THEN RAISE EXCEPTION 'approved premium model configuration failed'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM company.llm_models m
+                  WHERE m.id = premium_a AND m.billing_approval_id = billing_approval
+                    AND m.billing_approved_by = approver_a) THEN
+    RAISE EXCEPTION 'usage billing was attributed to an administrator who did not approve';
+  END IF;
   IF (SELECT company.set_llm_g13_state('selected', 'fixture') ) IS DISTINCT FROM 'configured' THEN
     RAISE EXCEPTION 'G13 selected state failed';
   END IF;

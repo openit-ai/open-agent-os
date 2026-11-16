@@ -103,7 +103,7 @@ company_c17_write_backup() {
 
 company_c17_restore_drill() {
   local backup=$1 scratch=$2 socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
-  local owner version rc=0
+  local owner version live rc=0
   [[ $scratch =~ ^oaos_company_c17_restore_[0-9]{14}_[0-9]+$ ]] || return 1
   owner=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT current_user' 2>/dev/null) || return 1
   [[ $owner =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
@@ -116,15 +116,58 @@ company_c17_restore_drill() {
     rc=1
   fi
   if ((rc == 0)); then
+    # The restored history must equal the live history (base 012 plus amendments).
+    live=$(psql -X -q -A -t -v ON_ERROR_STOP=1 \
+      -c "SELECT string_agg(version::text || ':' || checksum, ',' ORDER BY version) FROM company.schema_migrations" 2>/dev/null) || rc=1
     version=$(psql -X -q -A -t -v ON_ERROR_STOP=1 --dbname="$scratch" \
-      -c 'SELECT COALESCE(MAX(version), 0) FROM company.schema_migrations' 2>/dev/null) || rc=1
-    [[ $version == 12 ]] || rc=1
+      -c "SELECT string_agg(version::text || ':' || checksum, ',' ORDER BY version) FROM company.schema_migrations" 2>/dev/null) || rc=1
+    [[ -n $live && $version == "$live" && ,$live, == *,12:* ]] || rc=1
   fi
   run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR -u PGHOST \
     -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
     dropdb --host="$socket_dir" --port="${PGPORT:-5432}" \
     --if-exists "$scratch" >/dev/null 2>&1 || true
   return "$rc"
+}
+
+# Daily retention (migration 018): a user oneshot unit + timer running
+# maintenance.sh through the postgres maintenance path. Like the backup unit it
+# omits NoNewPrivileges because that path needs the C02 non-interactive root.
+company_c17_install_maintenance() {
+  local unit_dir="$HOME/.config/systemd/user" app_dir="$HOME/.local/lib/oaos-company"
+  local config_dir="$HOME/.config/oaos-company" unit
+  install -d -m 700 "$app_dir" "$unit_dir" || return 1
+  install -m 700 "$repo_root/editions/company/maintenance.sh" "$app_dir/maintenance.sh" || return 1
+  cat > "$unit_dir/oaos-company-maintenance.service" <<EOF
+[Unit]
+Description=OAOS Company retention (180-day audit, 30-day departed personal content)
+
+[Service]
+Type=oneshot
+EnvironmentFile=$config_dir/.env
+ExecStart=$app_dir/maintenance.sh
+UMask=0077
+EOF
+  cat > "$unit_dir/oaos-company-maintenance.timer" <<'EOF'
+[Unit]
+Description=OAOS Company daily retention timer
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+Unit=oaos-company-maintenance.service
+
+[Install]
+WantedBy=timers.target
+EOF
+  chmod 600 "$unit_dir/oaos-company-maintenance.service" "$unit_dir/oaos-company-maintenance.timer"
+  systemctl --user daemon-reload || return 1
+  systemctl --user enable --now oaos-company-maintenance.timer >/dev/null || return 1
+  unit=oaos-company-maintenance.timer
+  [[ $(systemctl --user is-enabled "$unit" 2>/dev/null) == enabled &&
+     $(systemctl --user is-active "$unit" 2>/dev/null) == active ]] || return 1
+  # Run once now so the handover carries retention evidence.
+  systemctl --user start oaos-company-maintenance.service >/dev/null 2>&1
 }
 
 company_c17_apply() {
@@ -136,8 +179,8 @@ company_c17_apply() {
 
   [[ $(stage_status c01) == verified && $(stage_status c02) == verified && \
      $(stage_status c10) == verified && $(stage_status c15) == verified && \
-     $(stage_status c16) == verified ]] || {
-    company_c17_block 'C01, C02, C10, C15 and C16 must be verified on E.'; return 3;
+     ( $(stage_status c16) == verified || $(stage_status c16) == SKIP ) ]] || {
+    company_c17_block 'C01, C02, C10 and C15 must be verified and C16 verified or SKIP on E.'; return 3;
   }
   company_c02_load_settings || { company_c17_block 'C02 E deployment settings are invalid.'; return 3; }
   company_c02_preflight || return 3
@@ -188,6 +231,10 @@ company_c17_apply() {
       bash "$repo_root/editions/company/migrate.sh" --through 12 || return 1 ;;
     *) warn 'C17 migration history or checksum is invalid.'; return 1 ;;
   esac
+
+  company_c17_install_maintenance || {
+    warn 'C17 retention timer could not be installed or its first run failed.'; return 1;
+  }
 
   selected=$(company_c17_providers "$org" "$admin") || return 1
   confirmed=${OAOS_COMPANY_C17_ROUNDTRIP:-}

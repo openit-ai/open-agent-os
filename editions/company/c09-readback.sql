@@ -187,8 +187,9 @@ BEGIN
   END IF;
 
   snapshot := company.console_snapshot('status');
-  IF (snapshot->'data'->>'migration_version')::integer <> 10 THEN
-    RAISE EXCEPTION 'status snapshot migration version is not 10';
+  -- Amendments (013+) may follow base version 10; the snapshot reports the max.
+  IF (snapshot->'data'->>'migration_version')::integer < 10 THEN
+    RAISE EXCEPTION 'status snapshot migration version is below 10';
   END IF;
   IF jsonb_array_length(snapshot->'data'->'recent_audit') < 1 THEN
     RAISE EXCEPTION 'status snapshot has no audit evidence';

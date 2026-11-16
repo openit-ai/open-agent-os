@@ -18,6 +18,8 @@ DECLARE
   appr_stale uuid;
   appr_deny uuid;
   appr_b uuid;
+  appr_forged uuid;
+  appr_policy uuid;
   expires timestamptz;
   rejected boolean;
   changed integer;
@@ -54,7 +56,7 @@ BEGIN
 
   -- Administrator installs the minimum bundle; re-applying a rule is a no-op.
   PERFORM set_config('company.member_id', admin_a::text, true);
-  IF (SELECT r.policy_count FROM company.install_default_policies() r) <> 8 THEN
+  IF (SELECT r.policy_count FROM company.install_default_policies() r) <> 9 THEN
     RAISE EXCEPTION 'default policy bundle is incomplete';
   END IF;
   IF (SELECT r.decision FROM company.set_policy('self.chat', 'low', 'allow') r)
@@ -164,13 +166,53 @@ BEGIN
     RAISE EXCEPTION 'a denied approval was allowed';
   END IF;
 
-  -- An expired approval is denied and recorded as expired.
-  INSERT INTO company.approvals(org_id, requester_id, approver_id, action,
-    resource_digest, context_digest, policy_version, expires_at, state)
-  VALUES (org_a, owner_a, admin_b, 'mail.send', 'mail-3', 'ctx-1',
+  -- A member cannot create an already-approved request (P1-1): state, approver
+  -- and consumption are rejected, and the expiry is clamped to 10 minutes.
+  rejected := false;
+  BEGIN
+    INSERT INTO company.approvals(org_id, requester_id, approver_id, action,
+      resource_digest, context_digest, policy_version, expires_at, state)
+    VALUES (org_a, owner_a, admin_b, 'mail.send', 'mail-forged', 'ctx-1',
+      (SELECT p.version FROM company.policies p
+        WHERE p.org_id = org_a AND p.action = 'mail.send'),
+      now() + interval '1 year', 'approved');
+  EXCEPTION WHEN raise_exception THEN rejected := true;
+  END;
+  IF NOT rejected THEN RAISE EXCEPTION 'a member inserted an approved request'; END IF;
+  INSERT INTO company.approvals(org_id, requester_id, action, resource_digest,
+    context_digest, policy_version, expires_at)
+  VALUES (org_a, owner_a, 'mail.send', 'mail-long', 'ctx-1',
     (SELECT p.version FROM company.policies p
       WHERE p.org_id = org_a AND p.action = 'mail.send'),
-    now() - interval '1 minute', 'approved') RETURNING id INTO appr_exp;
+    now() + interval '1 year') RETURNING id INTO appr_forged;
+  IF (SELECT a.expires_at FROM company.approvals a WHERE a.id = appr_forged)
+       > now() + interval '10 minutes' THEN
+    RAISE EXCEPTION 'a request expiry beyond 10 minutes was accepted';
+  END IF;
+  IF (SELECT r.reason_code FROM company.authorize_action('mail.send', 'mail-long', 'ctx-1', appr_forged) r)
+       IS DISTINCT FROM 'approval_pending' THEN
+    RAISE EXCEPTION 'an undecided request was allowed';
+  END IF;
+  rejected := false;
+  BEGIN
+    INSERT INTO company.approvals(org_id, requester_id, action, resource_digest,
+      context_digest, policy_version, expires_at)
+    VALUES (org_a, owner_a, 'mail.send', 'mail-stale', 'ctx-1', 99, now());
+  EXCEPTION WHEN raise_exception THEN rejected := true;
+  END;
+  IF NOT rejected THEN RAISE EXCEPTION 'a request with a foreign policy version was accepted'; END IF;
+
+  -- An expired approval is denied and recorded as expired, even when an
+  -- administrator approved it.
+  INSERT INTO company.approvals(org_id, requester_id, action,
+    resource_digest, context_digest, policy_version, expires_at)
+  VALUES (org_a, owner_a, 'mail.send', 'mail-3', 'ctx-1',
+    (SELECT p.version FROM company.policies p
+      WHERE p.org_id = org_a AND p.action = 'mail.send'),
+    now() - interval '1 minute') RETURNING id INTO appr_exp;
+  PERFORM set_config('company.member_id', admin_b::text, true);
+  UPDATE company.approvals SET state = 'approved', approver_id = admin_b WHERE id = appr_exp;
+  PERFORM set_config('company.member_id', owner_a::text, true);
   IF (SELECT r.reason_code FROM company.authorize_action('mail.send', 'mail-3', 'ctx-1', appr_exp) r)
        IS DISTINCT FROM 'expired' THEN
     RAISE EXCEPTION 'an expired approval was allowed';
@@ -186,9 +228,40 @@ BEGIN
   PERFORM set_config('company.member_id', admin_b::text, true);
   PERFORM company.decide_approval(appr_stale, true);
   PERFORM set_config('company.member_id', admin_a::text, true);
+  -- A policy change needs its own consumed policy.change approval (P2-18), and
+  -- a direct UPDATE cannot bypass it (P2-17).
+  IF (SELECT r.decision FROM company.set_policy('mail.send', 'critical', 'approval') r)
+       IS DISTINCT FROM 'approval_required' THEN
+    RAISE EXCEPTION 'a policy change without approval was accepted';
+  END IF;
+  rejected := false;
+  BEGIN
+    UPDATE company.policies SET risk = 'critical' WHERE org_id = org_a AND action = 'mail.send';
+  EXCEPTION WHEN raise_exception THEN rejected := true;
+  END;
+  IF NOT rejected THEN RAISE EXCEPTION 'a direct policy update bypassed approval'; END IF;
+  SELECT r.approval_id INTO appr_policy FROM company.request_approval('policy.change',
+    company.policy_change_digest('mail.send', 'critical', 'approval'), 'policy.change') r;
+  PERFORM set_config('company.member_id', admin_b::text, true);
+  PERFORM company.decide_approval(appr_policy, true);
+  PERFORM set_config('company.member_id', admin_a::text, true);
+  IF (SELECT r.decision FROM company.set_policy('mail.send', 'critical', 'deny', appr_policy) r)
+       IS DISTINCT FROM 'binding_mismatch' THEN
+    RAISE EXCEPTION 'a policy approval was used for a different rule';
+  END IF;
+  SELECT r.approval_id INTO appr_policy FROM company.request_approval('policy.change',
+    company.policy_change_digest('mail.send', 'critical', 'approval'), 'policy.change') r;
+  PERFORM set_config('company.member_id', admin_b::text, true);
+  PERFORM company.decide_approval(appr_policy, true);
+  PERFORM set_config('company.member_id', admin_a::text, true);
   SELECT r.policy_version INTO version
-    FROM company.set_policy('mail.send', 'critical', 'approval') r;
+    FROM company.set_policy('mail.send', 'critical', 'approval', appr_policy) r;
   IF version IS NULL THEN RAISE EXCEPTION 'policy version change failed'; END IF;
+  IF (SELECT count(*) FROM company.audit_events e
+       WHERE e.event_type = 'policy' AND e.action = 'policy_changed'
+         AND e.resource_ref = 'mail.send' AND (e.metadata->>'policy_version')::integer = version) <> 1 THEN
+    RAISE EXCEPTION 'policy change was not audited with its new version';
+  END IF;
   PERFORM set_config('company.member_id', owner_a::text, true);
   IF (SELECT r.reason_code FROM company.authorize_action('mail.send', 'mail-4', 'ctx-1', appr_stale) r)
        IS DISTINCT FROM 'stale_policy' THEN
@@ -254,8 +327,14 @@ BEGIN
     RAISE EXCEPTION 'member audit view exposed another actor';
   END IF;
   PERFORM set_config('company.member_id', admin_a::text, true);
-  UPDATE company.audit_events SET decision = 'tampered' WHERE event_type = 'policy';
-  GET DIAGNOSTICS changed = ROW_COUNT;
+  -- The runtime role has no UPDATE on audit rows (migration 013); a
+  -- permission error is the expected append-only answer.
+  changed := 0;
+  BEGIN
+    UPDATE company.audit_events SET decision = 'tampered' WHERE event_type = 'policy';
+    GET DIAGNOSTICS changed = ROW_COUNT;
+  EXCEPTION WHEN insufficient_privilege THEN changed := 0;
+  END;
   IF changed <> 0 THEN RAISE EXCEPTION 'audit rows were mutable'; END IF;
   IF (SELECT count(*) FROM company.audit_events e
        WHERE e.metadata ?| ARRAY['ciphertext', 'nonce', 'token', 'secret', 'password',
@@ -271,6 +350,35 @@ BEGIN
   EXCEPTION WHEN raise_exception THEN rejected := true;
   END;
   IF NOT rejected THEN RAISE EXCEPTION 'sensitive audit metadata was accepted'; END IF;
+  -- Nested and differently cased keys are rejected too (P1-10).
+  rejected := false;
+  BEGIN
+    INSERT INTO company.audit_events(org_id, actor_id, owner_id, event_type, action,
+      resource_ref, decision, request_id, metadata)
+    VALUES (org_a, admin_a, admin_a, 'fixture', 'action', 'ref', 'allow', 'req',
+      '{"outer": {"items": [{"API_Key": "leak"}]}}'::jsonb);
+  EXCEPTION WHEN raise_exception THEN rejected := true;
+  END;
+  IF NOT rejected THEN RAISE EXCEPTION 'nested sensitive audit metadata was accepted'; END IF;
+  rejected := false;
+  BEGIN
+    INSERT INTO company.audit_events(org_id, actor_id, owner_id, event_type, action,
+      resource_ref, decision, request_id, metadata)
+    VALUES (org_a, admin_a, admin_a, 'fixture', 'action', 'ref', 'allow', 'req',
+      '{"Access-Token": "leak"}'::jsonb);
+  EXCEPTION WHEN raise_exception THEN rejected := true;
+  END;
+  IF NOT rejected THEN RAISE EXCEPTION 'case-variant sensitive audit metadata was accepted'; END IF;
+
+  -- Events of one request share the server-provided request_id (P2-34).
+  PERFORM set_config('company.request_id', 'c07-request-fixture', true);
+  PERFORM set_config('company.member_id', owner_a::text, true);
+  PERFORM company.authorize_action('self.chat', 'chat-r', 'ctx-r');
+  PERFORM company.authorize_action('unattended.run', 'run-r', 'ctx-r');
+  IF (SELECT count(*) FROM company.audit_events e
+       WHERE e.request_id = 'c07-request-fixture' AND e.event_type = 'execution') <> 2 THEN
+    RAISE EXCEPTION 'audit events did not carry the request id';
+  END IF;
 END;
 $verify$;
 ROLLBACK;

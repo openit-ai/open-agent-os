@@ -56,6 +56,50 @@ company_adapters_map_files() {
 
 company_adapters_env_has_key() { grep -Eq "^${2}=.+" "$1" 2>/dev/null; }
 
+# Remove a SKIP provider's organization app keys from the EnvironmentFile
+# atomically (0600); values are never read into the shell.
+company_adapters_remove_keys() {
+  local provider=$1 env_file="$HOME/.config/oaos-company/.env" mapping entry names=()
+  mapping=$(company_adapters_map_files "$provider") || return 1
+  for entry in $mapping; do names+=("${entry%%:*}"); done
+  [[ -f $env_file ]] || return 0
+  python3 - "$env_file" "${names[@]}" <<'PY'
+import os, sys, tempfile
+path, names = sys.argv[1], sys.argv[2:]
+with open(path, encoding='utf-8') as source:
+    lines = source.read().splitlines()
+kept = [line for line in lines if not any(line.startswith(name + '=') for name in names)]
+if kept != lines:
+    descriptor, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.env-')
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as target:
+            target.write('\n'.join(kept) + ('\n' if kept else ''))
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+PY
+}
+
+company_adapters_keys_absent() {
+  local mapping entry
+  mapping=$(company_adapters_map_files "$1") || return 1
+  for entry in $mapping; do
+    ! grep -Eq "^${entry%%:*}=" "$2" 2>/dev/null || return 1
+  done
+}
+
+# External round-trip evidence: an audit row the runtime adapter writes after a
+# real event/read with the organization's service (event_type integration,
+# action external_roundtrip, resource_ref = provider). Nothing else counts.
+company_adapters_roundtrip_count() {
+  company_adapters_sql "$1" "$2" \
+    "SELECT count(*) FROM company.audit_events
+      WHERE org_id = '$1'::uuid AND event_type = 'integration'
+        AND action = 'external_roundtrip' AND resource_ref = '$3' AND decision = 'allow'"
+}
+
 company_adapters_write_key() {
   printf '%s' "$3" | python3 "$repo_root/editions/company/env-key.py" "$1" "$2"
 }
@@ -74,7 +118,7 @@ company_adapters_admin_context() {
   while IFS= read -r row; do
     [[ -n $row ]] || continue
     org=${row%%|*}
-    admin=${row#*|}
+    [[ -n $admin ]] || admin=${row#*|}
     [[ -z $first_org ]] && first_org=$org
     [[ $org != "$first_org" ]] && return 1
   done <<< "$rows"
@@ -111,12 +155,32 @@ company_adapters_quote_list() {
   printf 'ARRAY[%s]' "$out"
 }
 
+# Phase dependencies from the Company plan: C11 Slack needs C06+C07, C12 Notion
+# C06-C08, C13/C14 C05+C06, each on top of the C01-C05 base.
+company_adapters_required_stages() {
+  case $1 in
+    slack) printf 'c01 c02 c03 c04 c05 c06 c07' ;;
+    notion) printf 'c01 c02 c03 c04 c05 c06 c07 c08' ;;
+    google_workspace|microsoft_365) printf 'c01 c02 c03 c04 c05 c06' ;;
+    *) printf 'c01 c02 c03 c04 c05' ;;
+  esac
+}
+
+company_adapters_dependencies_met() {
+  local stage required
+  required=$(company_adapters_required_stages "$1")
+  for stage in $required; do
+    [[ $(stage_status "$stage") == verified ]] || {
+      printf '%s' "$(printf '%s' "$required" | tr '[:lower:]' '[:upper:]' | sed 's/ /, /g; s/, \([^,]*\)$/ and \1/')"
+      return 1
+    }
+  done
+}
+
 company_adapters_preflight() {
-  local provider=$1 ready role_safe
-  [[ $(stage_status c01) == verified && $(stage_status c02) == verified && \
-     $(stage_status c03) == verified && $(stage_status c04) == verified && \
-     $(stage_status c05) == verified ]] || {
-    warn 'Integration BLOCKED: C01, C02, C03, C04 and C05 must be verified on E.'; return 3;
+  local provider=$1 ready role_safe missing
+  missing=$(company_adapters_dependencies_met "$provider") || {
+    warn "Integration BLOCKED: $missing must be verified on E."; return 3;
   }
   company_c02_load_settings || { warn 'Integration BLOCKED: C02 E deployment settings are invalid.'; return 3; }
   company_c02_preflight || return 3

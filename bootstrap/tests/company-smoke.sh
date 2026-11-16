@@ -60,10 +60,33 @@ else
   exit 2
 fi
 MOCK
-chmod 700 "$temp_root/bin/psql"
+cat > "$temp_root/bin/sudo" <<'MOCK'
+#!/usr/bin/env bash
+[[ ${1:-} == -n ]] || exit 1
+shift
+"$@"
+MOCK
+cat > "$temp_root/bin/runuser" <<'MOCK'
+#!/usr/bin/env bash
+[[ ${1:-} == -u && ${2:-} == postgres && ${3:-} == -- ]] || exit 1
+shift 3
+exec "$@"
+MOCK
+cat > "$temp_root/bin/pg_dump" <<'MOCK'
+#!/usr/bin/env bash
+[[ ${OAOS_FAKE_DB_FAIL:-0} != 1 ]] || exit 2
+printf 'mock custom dump\n'
+MOCK
+chmod 700 "$temp_root/bin/psql" "$temp_root/bin/sudo" "$temp_root/bin/runuser" "$temp_root/bin/pg_dump"
+mkdir -p "$temp_root/rollback" && chmod 700 "$temp_root/rollback"
+export OAOS_COMPANY_ROLLBACK_DIR="$temp_root/rollback" OAOS_COMPANY_PG_SOCKET_DIR=/tmp
 export OAOS_FAKE_DB_STATE="$temp_root/db-checksum" OAOS_FAKE_DB_LOG="$temp_root/db-log"
+code=0
+HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test OAOS_COMPANY_ROLLBACK_DIR= bash "$install" --stage c01 > /dev/null 2>&1 || code=$?
+[[ $code == 3 ]] || fail 'C01 without a rollback directory must block'
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/first"
 [[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'only C01 migration should be applied'
+[[ $(find "$temp_root/rollback" -name company.dump | wc -l) == 1 ]] || fail 'C01 pre-migration backup'
 python3 - "$temp_root/home/.oaos-install/company-state.json" <<'PY' || fail 'applied state'
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
@@ -74,6 +97,7 @@ assert len(state['stages']) == 17
 PY
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/second"
 [[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'migration was applied twice'
+[[ $(find "$temp_root/rollback" -name company.dump | wc -l) == 1 ]] || fail 'rerun created an unnecessary C01 backup'
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$runner" --check --through 1 > /dev/null || fail 'checksum check'
 printf 'PASS: atomic runner call, checksum skip and applied checkpoint\n'
 

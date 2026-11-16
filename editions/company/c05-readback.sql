@@ -7,6 +7,12 @@ DECLARE
   owner_a uuid := gen_random_uuid();
   owner_b uuid := gen_random_uuid();
   owner_c uuid := gen_random_uuid();
+  owner_d uuid := gen_random_uuid();
+  owner_e uuid := gen_random_uuid();
+  assistant_d uuid;
+  assistant_e uuid;
+  secret_d uuid;
+  secret_e uuid;
   assistant_a uuid;
   assistant_b uuid;
   assistant_c uuid;
@@ -118,9 +124,15 @@ BEGIN
         AND resource_ref = secret_a::text AND metadata->>'generation' = '2') <> 1 THEN
     RAISE EXCEPTION 'rotation audit event missing';
   END IF;
-  UPDATE company.audit_events SET decision = 'changed'
+  -- The runtime role has no UPDATE on audit rows (migration 013); a
+  -- permission error is the expected append-only answer.
+  changed := 0;
+  BEGIN
+    UPDATE company.audit_events SET decision = 'changed'
     WHERE event_type = 'personal_credential' AND resource_ref = secret_a::text;
-  GET DIAGNOSTICS changed = ROW_COUNT;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+  EXCEPTION WHEN insufficient_privilege THEN changed := 0;
+  END;
   IF changed <> 0 THEN RAISE EXCEPTION 'audit history was mutable'; END IF;
 
   IF company.revoke_personal_secret(secret_a) <> 'revoked' THEN
@@ -166,6 +178,45 @@ BEGIN
   SELECT r.assistant_id INTO assistant_b FROM company.register_personal_assistant() r;
   IF assistant_b IS NULL OR company.personal_secret_use_decision(secret_b, assistant_b, 1) <> 'denied' THEN
     RAISE EXCEPTION 'replacement assistant reused old credential';
+  END IF;
+
+  -- Migration 014: suspension and departure revoke assistants, credential
+  -- envelopes, and external accounts independent of the route taken.
+  PERFORM set_config('company.member_id', owner_a::text, true);
+  INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+    (owner_d, org_a, 'c05-' || owner_d::text, 'member', 'active'),
+    (owner_e, org_a, 'c05-' || owner_e::text, 'member', 'active');
+  INSERT INTO company.external_accounts(org_id, member_id, provider, workspace_id,
+    subject_id, state) VALUES (org_a, owner_d, 'slack', 'c05-ws', 'c05-' || owner_d::text, 'active');
+  PERFORM set_config('company.member_id', owner_d::text, true);
+  SELECT r.assistant_id INTO assistant_d FROM company.register_personal_assistant() r;
+  SELECT r.secret_id INTO secret_d
+    FROM company.store_personal_secret('fixture', 'personal', old_envelope, old_nonce, 1) r;
+  PERFORM set_config('company.member_id', owner_e::text, true);
+  SELECT r.assistant_id INTO assistant_e FROM company.register_personal_assistant() r;
+  SELECT r.secret_id INTO secret_e
+    FROM company.store_personal_secret('fixture', 'personal', old_envelope, old_nonce, 1) r;
+  IF secret_d IS NULL OR secret_e IS NULL THEN RAISE EXCEPTION 'revocation fixtures missing'; END IF;
+  PERFORM set_config('company.member_id', owner_a::text, true);
+  UPDATE company.members SET state = 'suspended' WHERE id = owner_d;
+  UPDATE company.members SET state = 'departed' WHERE id = owner_e;
+  IF current_setting('company.member_id', true) IS DISTINCT FROM owner_a::text THEN
+    RAISE EXCEPTION 'revocation trigger did not restore the caller context';
+  END IF;
+  IF (SELECT count(*) FROM company.external_accounts
+       WHERE member_id = owner_d AND state <> 'revoked') <> 0 THEN
+    RAISE EXCEPTION 'suspension left an external account active';
+  END IF;
+  IF (SELECT count(*) FROM company.audit_events
+       WHERE action = 'revoked' AND resource_ref IN (secret_d::text, secret_e::text)) <> 2 THEN
+    RAISE EXCEPTION 'suspension or departure left a credential active';
+  END IF;
+  -- A reactivated member finds the old assistant and credential revoked.
+  UPDATE company.members SET state = 'active' WHERE id = owner_d;
+  PERFORM set_config('company.member_id', owner_d::text, true);
+  IF company.assistant_execution_decision(assistant_d) <> 'denied'
+     OR company.personal_secret_use_decision(secret_d, assistant_d, 1) <> 'denied' THEN
+    RAISE EXCEPTION 'reactivated member regained a suspended assistant or credential';
   END IF;
 END;
 $verify$;

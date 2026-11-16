@@ -26,15 +26,57 @@ company_c02_load_settings() {
     ((count+=1))
     declare -gx "$key=$value"
   done < "$file"
-  [[ $count == 10 && -n ${OAOS_COMPANY_USER:-} && -n ${OAOS_COMPANY_E_ID:-} && -n ${PGDATABASE:-} && -n ${OAOS_COMPANY_NGINX_VHOST:-} ]]
+  [[ $count == 10 && -n ${OAOS_COMPANY_USER:-} && -n ${OAOS_COMPANY_E_ID:-} && -n ${PGDATABASE:-} && -n ${OAOS_COMPANY_NGINX_VHOST:-} ]] || return 1
+  # C02-based phases apply schema changes as this NOLOGIN owner role through the
+  # local postgres maintenance path; PGUSER stays the non-owning runtime role.
+  export OAOS_COMPANY_DB_OWNER=${OAOS_COMPANY_DB_OWNER:-oaos_company_owner}
+  [[ $OAOS_COMPANY_DB_OWNER =~ ^[a-z_][a-z0-9_]{0,62}$ ]]
+}
+# Runtime role boundary (migration 013): the libpq role used by the installer,
+# console and service must not own any Company object, must not be able to
+# create objects in the schema, and must have only SELECT/INSERT on audit rows.
+company_db_runtime_boundary() {
+  local result
+  result=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "
+    SELECT NOT EXISTS (
+             SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'company' AND pg_has_role(current_user, c.relowner, 'MEMBER'))
+       AND NOT EXISTS (
+             SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'company' AND pg_has_role(current_user, p.proowner, 'MEMBER'))
+       AND NOT pg_has_role(current_user,
+             (SELECT nspowner FROM pg_namespace WHERE nspname = 'company'), 'MEMBER')
+       AND NOT has_schema_privilege('company', 'CREATE')
+       AND has_table_privilege('company.audit_events', 'SELECT')
+       AND has_table_privilege('company.audit_events', 'INSERT')
+       AND NOT has_table_privilege('company.audit_events', 'UPDATE')
+       AND NOT has_table_privilege('company.audit_events', 'DELETE')
+       AND NOT has_table_privilege('company.audit_events', 'TRUNCATE')
+       AND NOT has_table_privilege('company.schema_migrations', 'INSERT')
+       AND NOT EXISTS (
+             SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'company' AND c.relkind IN ('r', 'p')
+                AND has_table_privilege(c.oid, 'TRUNCATE'))" 2>/dev/null) || return 1
+  [[ $result == t ]]
 }
 company_c02_unit_ready() {
   [[ $(systemctl --user is-enabled "$1" 2>/dev/null || true) == enabled && $(systemctl --user is-active "$1" 2>/dev/null || true) == active ]]
 }
+# Runs the real job through systemd and checks what it produced: a fresh
+# last-success stamp, a readable custom-format dump, and 0700/0600 modes.
 company_c02_backup_job() {
+  local dir=${OAOS_COMPANY_BACKUP_DIR:-/nonexistent} key_dir=${OAOS_COMPANY_KEY_BACKUP_DIR:-/nonexistent}
+  local started stamp latest
+  started=$(date -u +%Y%m%dT%H%M%SZ)
   systemctl --user start oaos-company-backup.service >/dev/null 2>&1 || return 1
   [[ $(systemctl --user show oaos-company-backup.service -p Result --value 2>/dev/null) == success ]] || return 1
-  [[ -s ${OAOS_COMPANY_BACKUP_DIR:-/nonexistent}/last-success ]]
+  [[ -s $dir/last-success ]] || return 1
+  stamp=$(< "$dir/last-success")
+  [[ $stamp =~ ^[0-9]{8}T[0-9]{6}Z$ && ! $stamp < $started ]] || return 1
+  latest="$dir/company-$stamp.dump"
+  [[ -s $latest ]] && pg_restore --list "$latest" >/dev/null 2>&1 || return 1
+  [[ $(stat -c %a "$dir") == 700 && $(stat -c %a "$key_dir") == 700 ]] || return 1
+  ! find "$dir" "$key_dir" -maxdepth 1 -type f ! -perm 0600 | grep -q .
 }
 company_c02_linger() { [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null) == yes ]]; }
 company_c02_env_mode() {
@@ -80,7 +122,7 @@ company_c02_verify() {
   local pass=0 fail=0 cert host
   [[ $(stage_status c02) == applied || $(stage_status c02) == verified ]] || { warn 'C02 has not been applied.'; return 3; }
   company_c02_load_settings || { warn 'C02 deployment settings are missing or invalid.'; return 3; }
-  if ! { have_cmd systemctl && have_cmd loginctl && have_cmd ss && have_cmd curl && have_cmd sha256sum; }; then warn 'C02 read-back commands unavailable.'; return 3; fi
+  if ! { have_cmd systemctl && have_cmd loginctl && have_cmd ss && have_cmd curl && have_cmd sha256sum && have_cmd pg_restore; }; then warn 'C02 read-back commands unavailable.'; return 3; fi
   printf '%-27s %s\n' CHECK RESULT
   company_c02_check 'Service enabled/active' company_c02_unit_ready oaos-company.service
   company_c02_check 'Backup timer enabled/active' company_c02_unit_ready oaos-company-backup.timer

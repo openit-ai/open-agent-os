@@ -5,22 +5,23 @@ repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 . "$repo_root/editions/company/adapters.sh"
 
 company_c15_state() {
-  local stage=$1
-  case $(stage_status "$stage") in
-    applied|verified) return 0 ;;
-    SKIP) return 0 ;;
+  case $(stage_status "$1") in
+    verified|SKIP) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 company_c15_apply() {
   local org='' admin='' providers provider state selected_count=0 suite='' summary=''
-  company_adapters_preflight slack || return $?
+  [[ $(stage_status c10) == verified ]] || {
+    warn 'C15 BLOCKED: C10 must be verified before the G11/G12 gates close.'; return 3;
+  }
   for stage in c11 c12 c13 c14; do
     company_c15_state "$stage" || {
-      warn "C15 BLOCKED: $stage must be applied or SKIP before the gate closes."; return 3;
+      warn "C15 BLOCKED: $stage must be verified or SKIP before the gate closes."; return 3;
     }
   done
+  company_adapters_preflight slack || return $?
   read -r org admin < <(company_adapters_admin_context) || true
   [[ -n $org && -n $admin ]] || {
     warn 'C15 BLOCKED: a single organization with an active G10 administrator is required.'; return 3;
@@ -50,6 +51,9 @@ company_c15_apply() {
            UNION ALL SELECT count(*) FROM company.integration_delegations WHERE provider = '$provider' AND state = 'active'") || return 1
       [[ $check =~ ^0?$ ]] || {
         warn "C15 BLOCKED: SKIP provider $provider still has an active credential."; return 3;
+      }
+      company_adapters_remove_keys "$provider" || {
+        warn "C15 BLOCKED: cannot remove $provider keys from the Company EnvironmentFile."; return 3;
       }
       summary+="$provider=SKIP "
     fi

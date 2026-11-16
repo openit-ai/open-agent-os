@@ -78,9 +78,11 @@ bash editions/company/install.sh --stage c02
 bash editions/company/install.sh --status
 ```
 
-설치기는 매 실행 전 E DB의 일관 덤프와 기존 nginx vhost를 원복 디렉터리에 보존합니다. `.env`는 Company 계정의 `~/.config/oaos-company`에 `0700` 디렉터리·`0600` 파일로 생성됩니다. 재부팅 후 검증에 필요한 비밀 아닌 E 설정값은 같은 디렉터리의 `deployment.conf`에 `0600`으로 보관합니다. 이후 Phase의 자격과 마스터 키는 `.env`에만 안전하게 등록합니다. C02 자체는 비밀값을 생성하지 않습니다. `oaos-company.service`는 `127.0.0.1:8765`의 `/company/health`만 응답하는 표준 라이브러리 기반 임시 프로세스이며, C09가 같은 유닛을 관리 콘솔 프로세스로 교체합니다. 업무 API·인증·OAuth 기능의 나머지는 후속 Phase의 구현 대상입니다. 백업 타이머는 매일 DB 덤프와 Company 상태를 저장하고 `.env` 사본은 별도 제한 디렉터리에 둡니다.
+설치기는 매 실행 전 E DB의 일관 덤프(로컬 postgres 유지보수 계정 경로; FORCE RLS 때문에 앱 역할로는 덤프할 수 없음)와 기존 nginx vhost를 원복 디렉터리에 보존합니다. `.env`는 Company 계정의 `~/.config/oaos-company`에 `0700` 디렉터리·`0600` 파일로 생성됩니다. 재부팅 후 검증에 필요한 비밀 아닌 E 설정값은 같은 디렉터리의 `deployment.conf`에 `0600`으로 보관합니다. 이후 Phase의 자격과 마스터 키는 `.env`에만 안전하게 등록합니다. C02 자체는 비밀값을 생성하지 않습니다. `oaos-company.service`는 `127.0.0.1:8765`의 `/company/health`만 응답하는 표준 라이브러리 기반 임시 프로세스이며, C09가 같은 유닛을 관리 콘솔 프로세스로 교체합니다. 업무 API·인증·OAuth 기능의 나머지는 후속 Phase의 구현 대상입니다. 백업 타이머는 매일 로컬 postgres 유지보수 계정으로 DB를 덤프(`pg_restore --list`로 읽기 확인)하고 Company 상태와 함께 저장하며, `.env` 사본은 별도 제한 디렉터리에 둡니다. 보존은 일일 7개 + 주간 4개이고 디렉터리 `0700`·파일 `0600`입니다. 이 경로는 C02가 요구하는 비대화형 root 접근을 쓰므로 백업 유닛에는 `NoNewPrivileges`를 두지 않습니다. C02 read-back은 실제 백업 유닛을 실행해 새 `last-success`·읽을 수 있는 덤프·권한을 확인합니다.
 
-원복이 필요하면 해당 실행의 `rollback/c02-날짜.난수` 스냅샷에서 nginx vhost와 기존 유닛·앱 파일을 복원하고 `nginx -t` 뒤 reload합니다. DB 덤프는 E의 분리된 복구 대상에만 복원하며, 자동 역마이그레이션이나 운영 Project DB 덮어쓰기는 하지 않습니다. 키 백업의 별도 보관과 실제 복구 시험은 후속 C17의 완료 조건입니다.
+**DB 역할 분리.** C03부터 마이그레이션은 로컬 postgres 유지보수 경로에서 NOLOGIN 소유 역할 `oaos_company_owner`로 적용됩니다(`OAOS_COMPANY_DB_OWNER`로 이름 변경 가능). 설치기·콘솔·서비스가 쓰는 libpq 역할(`PGUSER`)은 Company 객체를 소유하지 않고 `oaos_company_runtime` 그룹을 통해 RLS 아래 DML만, 감사 행은 SELECT/INSERT만 가집니다. 이미 설치된 E는 다음 Phase 실행 시 `db-roles.sql`이 기존 객체 소유권을 넘기고 보정 마이그레이션 013이 권한을 정리합니다. 013 이후 번호의 마이그레이션은 기준 버전을 고치는 **보정(amendment)**이며, 그 기준 버전을 적용하는 Phase와 이후 Phase가 함께 적용합니다.
+
+원복이 필요하면 해당 실행의 `rollback/c02-날짜.난수` 스냅샷에서 nginx vhost와 기존 유닛·앱 파일을 복원하고 `nginx -t` 뒤 reload합니다. DB 덤프는 E의 분리된 복구 대상에만 복원하며, 자동 역마이그레이션이나 운영 Project DB 덮어쓰기는 하지 않습니다. DB 복구 시험과 24시간 이내 백업은 C17 read-back이 확인합니다. 암호화 키 백업으로의 실제 복원과 RTO 시간 측정은 아직 자동화되지 않았습니다.
 
 nginx는 지정한 **기존 HTTPS server block**에 `/company/`와 `/company/oauth/callback`만 추가합니다. `nginx -t` 또는 reload가 실패하면 설치 전 vhost를 복원합니다. 인증서 만료와 갱신 타이머, linger 상태를 read-back합니다. DB·Redis·Company 포트가 외부 주소에 바인딩되어 있으면 차단합니다. 외부 방화벽 허용 범위는 E 운영자가 기존 80/443 설정과 함께 확인해야 합니다.
 
@@ -187,13 +189,13 @@ bash bootstrap/verify/company-verify.sh --phase c09 --read-back
 
 콘솔은 구성원·연동·정책·상태 네 탭을 한 화면에서 제공합니다. 관리자는 조직 범위를 보고, 구성원은 본인 행·연동·요청·감사만 봅니다. 화면 데이터는 `company.console_snapshot(tab)` 하나로 나오며 비밀 원문·암호문·토큰 해시·문서 본문·감사 `metadata`를 포함하지 않습니다. Secret Vault는 `configured`/`none`/`revoked` 존재 상태만 `secret_status` 메타데이터로 보여줍니다. 비서 상태도 C04 소유자 전용 테이블이 아니라 같은 방식의 `assistant_status` 메타데이터로 읽어 관리자 시야만 넓히고 C04·C01 회귀는 유지합니다.
 
-세션은 C02의 `.env`(600)에 저장된 DB 자격으로 동작하는 HTTP 쿠키입니다. 토큰은 SHA-256만 `console_sessions`에 저장하고 세션은 8시간 뒤 만료됩니다. 쿠키는 `Secure`·`HttpOnly`·`SameSite=Strict`이고 로그아웃은 CSRF 검증 뒤 세션을 `revoked`로 바꿉니다. 관리자 세션 발급·폐기는 `console_create_session`·`console_revoke_session`으로 제한합니다. **Project 일회 코드 로그인과 초기 관리자 생성은 G10/C10 단계**이며, C09는 화면·권한·마스킹·서비스 상태 계약만 제공합니다.
+세션은 C02의 `.env`(600)에 저장된 DB 자격으로 동작하는 HTTP 쿠키입니다. psql 값은 명령 인수가 아니라 표준 입력으로 전달합니다. 토큰은 SHA-256만 `console_sessions`에 저장하고 세션은 8시간 뒤 만료됩니다. 쿠키는 `Secure`·`HttpOnly`·`SameSite=Strict`이고 로그아웃은 CSRF 검증 뒤 세션을 `revoked`로 바꿉니다. 관리자 세션 발급·폐기는 `console_create_session`·`console_revoke_session`으로 제한합니다. **Project 일회 코드 로그인과 초기 관리자 생성은 G10/C10 단계**이며, C09는 화면·권한·마스킹·서비스 상태 계약만 제공합니다.
 
 010은 `console_sessions`, `secret_status`, `assistant_status` 메타데이터와 위 함수·RLS·C07 승인 조회 정책을 만듭니다. 설치 재실행은 010 checksum이 일치하면 새 백업 없이 끝납니다. read-back은 E PostgreSQL에서 관리자·두 구성원·두 조직 픽스처로 네 탭의 역할 범위·비밀 마스킹·세션 만료/철회·교차 테넌트 차단을 실제 응답으로 검사하고 롤백합니다. 서비스 미가동·health 실패·응답 실패는 `verified`가 될 수 없습니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 검사 실패 `1`입니다.
 
 ## C10: G10 초기 관리자·구성원 매핑과 관리 콘솔 로그인
 
-C10은 C02·C03이 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고 전체 DB 덤프를 보존한 뒤 011 마이그레이션을 적용합니다. 008~010은 C07~C09 구현이 적용됩니다.
+C10은 C02·C03·C09가 `verified`인 E에서 실행합니다(011은 004~010 위에 놓이므로 C09와 그 선행 Phase가 먼저 검증되어야 합니다). C02의 Ubuntu·systemd user manager·백업 경로·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고 전체 DB 덤프를 보존한 뒤 011 마이그레이션을 적용합니다. 일회 코드는 12자(약 60비트)이고 콘솔 비밀로 키를 둔 HMAC으로만 저장합니다. read-back은 `$ORIGIN/company/setup`을 로컬 nginx/TLS 경로(`curl --resolve`)로 확인하고, G10 완료 전 픽스처 SQL 계약을 통과시킨 뒤 실제 관리자 로그인과 두 매핑이 E에 남기 전까지 `MANUAL`(종료 3, `applied` 유지)로 둡니다. `OAOS_COMPANY_COOKIE_SECURE=0`은 `OAOS_COMPANY_CONSOLE_TEST=1`과 `.test`/loopback origin을 함께 준 로컬 테스트에서만 적용되며, EnvironmentFile에 있으면 read-back이 실패합니다.
 
 ```bash
 bash editions/company/install.sh --stage c10 --dry-run
@@ -215,15 +217,15 @@ bash editions/company/install.sh --stage c16
 bash bootstrap/verify/company-verify.sh --phase c16 --read-back
 ```
 
-작업별 라우팅은 기본 저가 모델(standard)과 선택한 프리미엄 모델(premium)을 작업 이름으로 연결합니다. `OAOS_COMPANY_DEFAULT_PROVIDER`·`OAOS_COMPANY_DEFAULT_MODEL`로 기본 모델을 지정하고, G13을 켤 때만 `OAOS_COMPANY_G13_PROVIDER`·`OAOS_COMPANY_G13_MODEL`·`OAOS_COMPANY_G13_API_KEY`·`OAOS_COMPANY_G13_BILLING_MODE`·`OAOS_COMPANY_G13_MONTHLY_CAP_USD`·`OAOS_COMPANY_G13_BILLING_APPROVED`·`OAOS_COMPANY_G13_TASKS`(쉼표 구분)를 지정합니다. `OAOS_COMPANY_G13_STATE`를 생략하면 기존 상태를 유지하고, 없으면 `SKIP(reason=not_selected)`으로 기록해 기본 모델만 사용합니다.
+작업별 라우팅은 기본 저가 모델(standard)과 선택한 프리미엄 모델(premium)을 작업 이름으로 연결합니다. `OAOS_COMPANY_DEFAULT_PROVIDER`·`OAOS_COMPANY_DEFAULT_MODEL`로 기본 모델을 지정하고, G13을 켤 때만 `OAOS_COMPANY_G13_PROVIDER`·`OAOS_COMPANY_G13_MODEL`·`OAOS_COMPANY_G13_API_KEY`·`OAOS_COMPANY_G13_BILLING_MODE`·`OAOS_COMPANY_G13_MONTHLY_CAP_USD`·`OAOS_COMPANY_G13_TASKS`(쉼표 구분)를 지정합니다. `OAOS_COMPANY_G13_STATE`를 생략하면 기존 상태를 유지하고, 없으면 `SKIP(reason=not_selected)`으로 기록해 기본 모델만 사용합니다.
 
-사용량 과금 경로는 `OAOS_COMPANY_G13_BILLING_APPROVED=yes`와 양수 월 상한이 있을 때만 활성화하며, 그렇지 않으면 승인 필요로 차단합니다. 프리미엄 작업은 실패하거나 월 상한에 도달하면 같은 owner 문맥 그대로 기본 모델로 대체하고, 상한 확인이 불가능하면 선택 호출을 중단합니다. 공급자 키는 Company `.env`(`0600`)에만 저장하고 원문을 출력·기록하지 않습니다.
+사용량 과금 경로는 C07 JIT 승인으로만 활성화합니다. 요청 관리자 `OAOS_COMPANY_G13_REQUESTED_BY`와 **다른** 승인 관리자 `OAOS_COMPANY_G13_APPROVED_BY`(각 Project 계정 ID)를 지정하면 설치기가 한 트랜잭션에서 `llm.billing.usage` 승인 요청·결정·소비와 모델 등록을 수행하고, 모델 행에 승인 ID와 실제 승인자를 남깁니다(보정 016). 이전의 `OAOS_COMPANY_G13_BILLING_APPROVED` 플래그는 승인으로 인정하지 않습니다. G13을 선택하지 않으면 C16은 `SKIP`으로 기록됩니다. 프리미엄 작업은 실패하거나 월 상한에 도달하면 같은 owner 문맥 그대로 기본 모델로 대체하고, 상한 확인이 불가능하면 선택 호출을 중단합니다. 공급자 키는 Company `.env`(`0600`)에만 저장하고 원문을 출력·기록하지 않습니다.
 
 read-back은 E PostgreSQL에서 두 조직·세 구성원의 임시 모델·라우트·사용량을 만들어 기본/프리미엄 응답, 사용량 과금 승인 거부, 월 상한 초과 시 기본 모델 대체, G13 SKIP 처리, owner·조직 격리와 비밀 없는 감사 행을 실제 SQL 응답으로 검사한 뒤 트랜잭션을 롤백합니다. Python `llm_router`는 같은 규칙으로 런타임 실패 대체와 상한 검사를 수행합니다. 결과 `0`은 `verified`, 선행·환경 게이트 `3`, 응답 실패 `1`입니다.
 
 ## C11~C15: 선택형 연동 어댑터 (G11·G12)
 
-C11~C15는 C01~C05가 모두 `verified`인 E에서 실행합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 전체 DB 덤프를 원복 디렉터리에 보존한 뒤 007 마이그레이션을 적용합니다. **조직이 이미 사용 중인 서비스만** 켜며, 선택하지 않은 서비스는 `SKIP(reason=not_selected)`으로 기록하고 자격·웹훅·서비스 호출이 없어야 합니다. 추가 구독은 요구하지 않습니다. C07·C08·C10(정책·승인·감사·검색·초기 로그인)은 후속 Phase이며, C09 콘솔은 C01~C03·C07 위에서 화면·권한·마스킹·서비스 상태를 제공하고 C11~C15는 C01~C05 위에서 감사 행을 직접 기록하는 최소 경계로 구현했습니다.
+C11~C14는 C01~C05에 더해 계획서의 선행 Phase가 `verified`인 E에서 실행합니다: C11(Slack) C06·C07, C12(Notion) C06~C08, C13·C14 C06. C15는 C10이 `verified`이고 C11~C14가 각각 `verified` 또는 `SKIP`이어야 합니다. C02의 Ubuntu·systemd user manager·백업·loopback PostgreSQL·비우회 앱 역할 게이트를 다시 확인하고, 전체 DB 덤프를 원복 디렉터리에 보존한 뒤 007 마이그레이션을 적용합니다. **조직이 이미 사용 중인 서비스만** 켜며, 선택하지 않은 서비스는 `SKIP(reason=not_selected)`으로 기록하고 자격·웹훅·서비스 호출이 없어야 합니다. 추가 구독은 요구하지 않습니다. read-back의 SQL은 픽스처로 DB 계약만 증명합니다. 선택한 공급자는 런타임 어댑터가 실제 왕복 뒤 남기는 감사 행(`integration`/`external_roundtrip`)이 없으면 `MANUAL`(종료 3, `applied` 유지)이고, 선택하지 않은 공급자는 `.env`에 키가 없음을 확인한 뒤 `SKIP(not_selected)`으로 기록합니다. C15는 SKIP 공급자의 키를 `.env`에서 제거하고 부재를 다시 확인합니다. 실제 OAuth 콜백·Slack 이벤트 수신과 왕복 기록은 런타임 연동 작업으로 남아 있습니다.
 
 ```bash
 bash editions/company/install.sh --stage c11   # Slack (G12)
@@ -280,7 +282,7 @@ bash bootstrap/migrate/project-to-company.sh --source user@project-host --includ
 
 ## 상태
 
-Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅 + 최종 검증·운영 인계가 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C17이 공개 트리에 구현되어 있고(C11~C15 선택형 연동 어댑터·C16 멀티 LLM 라우팅·C17 백업/복구/회수 인계 포함), 각 Phase는 E 실설치와 read-back 증거가 있어야 `verified`가 됩니다.
+Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅 + 최종 검증·운영 인계가 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C17 설치기·마이그레이션·read-back이 공개 트리에 있고, 각 Phase는 E 실설치와 read-back 증거가 있어야 `verified`가 됩니다. 정책·JIT 승인·Secret Vault·ACL 검색·LLM 라우팅은 **DB 수준 강제**(함수·트리거·RLS)로 구현되어 있으며, 이를 실제 비서 요청 경로에 연결하는 런타임 서비스 API·콘솔 승인 화면·OAuth 콜백·Slack 이벤트 수신은 아직 연결 전입니다. 선택 연동은 실제 외부 왕복 증거 없이 `verified`가 되지 않습니다.
 
 ## 라이선스
 

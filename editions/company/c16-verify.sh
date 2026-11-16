@@ -5,13 +5,13 @@ repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 . "$repo_root/editions/company/c16.sh"
 
 company_c16_verify() {
-  local role_safe result=0 org='' admin='' state='' key_name='' env_file
+  local role_safe result=0 org='' admin='' state='' key_name='' env_file premium
   [[ $(stage_status c01) == verified && $(stage_status c02) == verified && \
      $(stage_status c03) == verified && $(stage_status c04) == verified && \
      $(stage_status c05) == verified && $(stage_status c07) == verified ]] || {
     warn 'C16 read-back needs C01, C02, C03, C04, C05 and C07 verified on E.'; return 3;
   }
-  [[ $(stage_status c16) == applied || $(stage_status c16) == verified ]] || {
+  [[ $(stage_status c16) == applied || $(stage_status c16) == verified || $(stage_status c16) == SKIP ]] || {
     warn 'C16 has not been applied.'; return 3;
   }
   company_c02_load_settings || { warn 'C02 E deployment settings are invalid.'; return 3; }
@@ -28,7 +28,7 @@ company_c16_verify() {
     warn 'C16 database role check failed.'; return 3;
   }
   [[ $role_safe == t ]] || { warn 'C16 read-back needs a non-BYPASSRLS role.'; return 3; }
-  bash "$repo_root/editions/company/migrate.sh" --check --through 5 >/dev/null 2>&1 || result=$?
+  bash "$repo_root/editions/company/migrate.sh" --check --through 8 >/dev/null 2>&1 || result=$?
   if ((result)); then
     if ((result == 3)); then warn 'C16 migration is pending.'; return 3; fi
     warn 'C16 migration checksum or version read-back failed.'; return 1
@@ -65,14 +65,28 @@ company_c16_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
-  printf '%-28s PASS\n' 'Migration SHA-256/version 5'
+  printf '%-28s PASS\n' 'Migration SHA-256/5,8 + 016'
   printf '%-28s PASS\n' 'Default route and G13 state'
-  printf '%-28s PASS\n' 'Billing approval boundary'
+  printf '%-28s PASS\n' 'C07 billing approval boundary'
   printf '%-28s PASS\n' 'Monthly cap enforcement'
-  printf '%-28s PASS\n' 'Task premium routing'
   printf '%-28s PASS\n' 'Standard fallback on cap/SKIP'
   printf '%-28s PASS\n' 'Owner and tenant isolation'
   printf '%-28s PASS\n' 'Audit trail and fixture rollback'
+  if [[ $state != selected ]]; then
+    # G13 not selected: the default model only, no premium model or route.
+    premium=$(company_c16_sql "$org" "$admin" \
+      "SELECT count(*) FROM company.llm_models WHERE org_id = '$org'::uuid AND tier = 'premium' AND state = 'active'") || premium=''
+    if [[ $premium != 0 ]]; then
+      printf '%-28s FAIL\n' 'SKIP has no premium model'
+      printf 'Summary: PASS=7 FAIL=1 MANUAL=0 SKIP=0\n'
+      return 1
+    fi
+    printf '%-28s SKIP\n' 'G13 premium routing'
+    printf 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=1\n'
+    stage_mark c16 SKIP 'G13 not_selected: default model only; no premium model or route'
+    return 0
+  fi
+  printf '%-28s PASS\n' 'Task premium routing'
   printf 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0\n'
-  stage_mark c16 verified "C16 E LLM routing SQL responses passed (G13 ${state:-skip}); fixture rolled back"
+  stage_mark c16 verified "C16 E LLM routing SQL responses passed (G13 selected); fixture rolled back"
 }

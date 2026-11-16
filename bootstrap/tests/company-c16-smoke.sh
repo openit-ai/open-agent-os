@@ -124,36 +124,57 @@ INSERT INTO company.organizations(slug) VALUES ('install-org');
 INSERT INTO company.members(org_id, project_user_id, role, state)
   SELECT id, 'c16-install-admin', 'admin', 'active'
     FROM company.organizations WHERE slug = 'install-org';
+INSERT INTO company.members(org_id, project_user_id, role, state)
+  SELECT id, 'c16-approver', 'admin', 'active'
+    FROM company.organizations WHERE slug = 'install-org';
 SQL
 
 # G13 SKIP still installs the route contract and uses the default model only.
 export OAOS_COMPANY_DEFAULT_PROVIDER=opencode-go OAOS_COMPANY_DEFAULT_MODEL=kimi-k2
 bash "$repo_root/editions/company/install.sh" --stage c16 > "$temp_root/installed" || fail 'C16 skip install'
-[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations') == 5 ]] || fail 'migration 5 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 8 ]] || fail 'migration 5-8 missing'
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM company.schema_migrations WHERE version = 16') == 1 ]] || fail 'billing approval amendment 16 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT g13_state FROM company.llm_settings") == skip ]] || fail 'G13 SKIP state'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.llm_routes WHERE task = 'default'") == 1 ]] || fail 'default route'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.llm_models WHERE tier = 'premium'") == 0 ]] || fail 'SKIP added a premium model'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c16 --read-back > "$temp_root/skip-verified" || fail 'C16 SKIP read-back'
-grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/skip-verified" || fail 'SKIP read-back summary'
+grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=1' "$temp_root/skip-verified" || fail 'SKIP read-back summary'
+[[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c16']['status'])
+PY
+) == SKIP ]] || fail 'G13 not selected must record SKIP'
 
 # A usage-billing path without explicit approval must stay blocked and never store a secret.
 export OAOS_COMPANY_G13_STATE=selected
 export OAOS_COMPANY_G13_PROVIDER=openai OAOS_COMPANY_G13_MODEL=gpt-5.2
 export OAOS_COMPANY_G13_API_KEY=sk-c16-test-secret-0123456789
 export OAOS_COMPANY_G13_BILLING_MODE=usage OAOS_COMPANY_G13_MONTHLY_CAP_USD=5
-export OAOS_COMPANY_G13_BILLING_APPROVED=no
+export OAOS_COMPANY_G13_BILLING_APPROVED=yes
 export OAOS_COMPANY_G13_TASKS=complex,research
 code=0
+# The former environment flag is not an approval: a named approving admin is required.
 bash "$repo_root/editions/company/install.sh" --stage c16 > "$temp_root/unapproved" 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'usage billing approval gate'
-grep -Fq 'usage billing path requires approval' "$temp_root/unapproved" || fail 'approval gate reason'
+grep -Fq 'OAOS_COMPANY_G13_REQUESTED_BY' "$temp_root/unapproved" || fail 'approval gate reason'
 ! grep -Fq 'sk-c16-test-secret' "$temp_root/unapproved" || fail 'secret leaked to output'
 ! grep -Fq 'OPENAI_API_KEY=sk-c16-test-secret' "$HOME/.config/oaos-company/.env" || fail 'unapproved key stored'
+code=0
+OAOS_COMPANY_G13_REQUESTED_BY=c16-install-admin OAOS_COMPANY_G13_APPROVED_BY=c16-install-admin \
+  bash "$repo_root/editions/company/install.sh" --stage c16 > "$temp_root/self-approved" 2>&1 || code=$?
+[[ $code == 3 ]] || fail 'self approval of usage billing'
+grep -Fq 'must differ from the requester' "$temp_root/self-approved" || fail 'self approval reason'
+code=0
+OAOS_COMPANY_G13_REQUESTED_BY=c16-install-admin OAOS_COMPANY_G13_APPROVED_BY=c16-not-an-admin \
+  bash "$repo_root/editions/company/install.sh" --stage c16 > "$temp_root/bad-approver" 2>&1 || code=$?
+[[ $code == 3 ]] || fail 'unknown approver of usage billing'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.llm_models WHERE tier = 'premium'") == 0 ]] || fail 'unapproved premium model stored'
 
-# Approved usage billing with a monthly cap registers the premium route.
-export OAOS_COMPANY_G13_BILLING_APPROVED=yes
+# Usage billing approved through C07 by a second, named administrator.
+export OAOS_COMPANY_G13_REQUESTED_BY=c16-install-admin OAOS_COMPANY_G13_APPROVED_BY=c16-approver
 bash "$repo_root/editions/company/install.sh" --stage c16 > "$temp_root/selected" || fail 'C16 selected install'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT m.project_user_id || '|' || a.state || '|' || (a.approver_id = l.billing_approved_by) FROM company.llm_models l JOIN company.approvals a ON a.id = l.billing_approval_id JOIN company.members m ON m.id = l.billing_approved_by WHERE l.tier = 'premium'") == 'c16-approver|consumed|true' ]] || fail 'billing approval attribution'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT g13_state FROM company.llm_settings") == selected ]] || fail 'G13 selected state'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.llm_models WHERE tier = 'premium' AND billing_mode = 'usage'") == 1 ]] || fail 'premium model'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.llm_routes WHERE task IN ('complex', 'research')") == 2 ]] || fail 'task routes'
@@ -179,6 +200,7 @@ bash "$repo_root/editions/company/install.sh" --stage c16 > "$temp_root/rerun" |
 env -u OAOS_COMPANY_G13_STATE -u OAOS_COMPANY_G13_PROVIDER -u OAOS_COMPANY_G13_MODEL \
   -u OAOS_COMPANY_G13_API_KEY -u OAOS_COMPANY_G13_BILLING_MODE \
   -u OAOS_COMPANY_G13_MONTHLY_CAP_USD -u OAOS_COMPANY_G13_BILLING_APPROVED \
+  -u OAOS_COMPANY_G13_REQUESTED_BY -u OAOS_COMPANY_G13_APPROVED_BY \
   -u OAOS_COMPANY_G13_TASKS bash "$repo_root/editions/company/install.sh" --stage c16 \
   > "$temp_root/preserve" || fail 'C16 preserved-state rerun'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT g13_state FROM company.llm_settings") == selected ]] || fail 'rerun downgraded G13'

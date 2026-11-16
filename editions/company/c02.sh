@@ -32,7 +32,7 @@ company_c02_preflight() {
   [[ -d $OAOS_COMPANY_BACKUP_DIR && -w $OAOS_COMPANY_BACKUP_DIR && -d $OAOS_COMPANY_KEY_BACKUP_DIR && -w $OAOS_COMPANY_KEY_BACKUP_DIR && -d $OAOS_COMPANY_ROLLBACK_DIR && -w $OAOS_COMPANY_ROLLBACK_DIR && -f $OAOS_COMPANY_NGINX_VHOST ]] || { company_c02_block 'Backup/rollback paths must exist and be writable; TLS vhost must exist.'; return 3; }
   [[ $OAOS_COMPANY_BACKUP_DIR != "$OAOS_COMPANY_KEY_BACKUP_DIR" && $OAOS_COMPANY_BACKUP_DIR != "$OAOS_COMPANY_ROLLBACK_DIR" && $OAOS_COMPANY_KEY_BACKUP_DIR != "$OAOS_COMPANY_ROLLBACK_DIR" ]] || { company_c02_block 'Backup, key backup and rollback need separate directories.'; return 3; }
   [[ $(stat -c %a "$OAOS_COMPANY_BACKUP_DIR") == 700 && $(stat -c %a "$OAOS_COMPANY_KEY_BACKUP_DIR") == 700 && $(stat -c %a "$OAOS_COMPANY_ROLLBACK_DIR") == 700 ]] || { company_c02_block 'Backup and rollback directories require mode 0700.'; return 3; }
-  if ! { have_cmd systemctl && have_cmd loginctl && have_cmd nginx && have_cmd openssl && have_cmd pg_dump && have_cmd python3 && have_cmd ss && have_cmd curl; }; then
+  if ! { have_cmd systemctl && have_cmd loginctl && have_cmd nginx && have_cmd openssl && have_cmd pg_dump && have_cmd pg_restore && have_cmd runuser && have_cmd python3 && have_cmd ss && have_cmd curl; }; then
     company_c02_block 'Required Project host commands are missing.'; return 3
   fi
   systemctl --user show-environment >/dev/null 2>&1 || { company_c02_block 'systemd user manager is unavailable.'; return 3; }
@@ -62,8 +62,17 @@ company_c02_apply() {
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   snapshot=$(mktemp -d "$OAOS_COMPANY_ROLLBACK_DIR/c02-$stamp.XXXXXX") || return 1
   # A consistent pre-install E database dump and original TLS file are the rollback point.
+  # C01 already created FORCE RLS tables, so an app-role pg_dump fails; dump
+  # through the local postgres maintenance account like every later phase.
   if [[ ! -e $snapshot/company.dump ]]; then
-    pg_dump --format=custom --file="$snapshot/company.dump" "$PGDATABASE" >/dev/null 2>&1 || { warn 'Pre-install E database backup failed.'; return 3; }
+    local socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
+    company_c02_valid_path "$socket_dir" && [[ -d $socket_dir && ${PGPORT:-5432} =~ ^[0-9]{1,5}$ ]] ||
+      { warn 'Local PostgreSQL backup socket or port is invalid.'; return 3; }
+    (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
+      -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
+      pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
+      --dbname="$PGDATABASE" --format=custom > "$snapshot/company.dump" 2>/dev/null) ||
+      { warn 'Pre-install E database backup failed.'; return 3; }
     [[ -s $snapshot/company.dump ]] || { warn 'Pre-install E database backup is empty.'; return 3; }
   fi
   chmod 600 "$snapshot/company.dump"
@@ -77,7 +86,11 @@ company_c02_apply() {
   install -d -m 700 "$config_dir" "$app_dir" || return 1
   install -d -m 700 "$unit_dir" || return 1
   if [[ ! -e $config_dir/.env ]]; then
-    (umask 077; printf 'PGDATABASE=%s\nPGHOST=%s\nOAOS_COMPANY_BACKUP_DIR=%s\nOAOS_COMPANY_KEY_BACKUP_DIR=%s\n' "$PGDATABASE" "${PGHOST:-127.0.0.1}" "$OAOS_COMPANY_BACKUP_DIR" "$OAOS_COMPANY_KEY_BACKUP_DIR" > "$config_dir/.env"; if [[ -n ${PGUSER:-} ]]; then printf 'PGUSER=%s\n' "$PGUSER" >> "$config_dir/.env"; fi) || return 1
+    (umask 077; printf 'PGDATABASE=%s\nPGHOST=%s\nOAOS_COMPANY_BACKUP_DIR=%s\nOAOS_COMPANY_KEY_BACKUP_DIR=%s\n' "$PGDATABASE" "${PGHOST:-127.0.0.1}" "$OAOS_COMPANY_BACKUP_DIR" "$OAOS_COMPANY_KEY_BACKUP_DIR" > "$config_dir/.env"; if [[ -n ${PGUSER:-} ]]; then printf 'PGUSER=%s\n' "$PGUSER" >> "$config_dir/.env"; fi
+      # The backup and maintenance jobs reach PostgreSQL through the local
+      # maintenance socket; record a non-default location for them.
+      if [[ -n ${OAOS_COMPANY_PG_SOCKET_DIR:-} ]]; then printf 'OAOS_COMPANY_PG_SOCKET_DIR=%s\n' "$OAOS_COMPANY_PG_SOCKET_DIR" >> "$config_dir/.env"; fi
+      if [[ -n ${PGPORT:-} ]]; then printf 'PGPORT=%s\n' "$PGPORT" >> "$config_dir/.env"; fi) || return 1
   else
     grep -Fxq "PGDATABASE=$PGDATABASE" "$config_dir/.env" || { warn 'Existing Company environment targets a different database.'; return 3; }
   fi
@@ -118,6 +131,10 @@ NoNewPrivileges=yes
 [Install]
 WantedBy=default.target
 EOF
+  # The dump must run as the local postgres maintenance account (FORCE RLS
+  # blocks a runtime-role pg_dump), reached with the same non-interactive root
+  # access C02 requires; NoNewPrivileges would block that, so this oneshot unit
+  # omits it. The script accepts no input and writes only the backup paths.
   cat > "$unit_dir/oaos-company-backup.service" <<EOF
 [Unit]
 Description=OAOS Company daily E backup
@@ -127,7 +144,6 @@ Type=oneshot
 EnvironmentFile=$config_dir/.env
 ExecStart=$app_dir/backup.sh
 UMask=0077
-NoNewPrivileges=yes
 EOF
   cat > "$unit_dir/oaos-company-backup.timer" <<'EOF'
 [Unit]

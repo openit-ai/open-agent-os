@@ -68,17 +68,17 @@ if ((show_status)); then show_table; exit 0; fi
 [[ -n $selected ]] || { usage >&2; exit 1; }
 if ((OAOS_DRY_RUN)); then
   if [[ $selected == c11 || $selected == c12 || $selected == c13 || $selected == c14 ]]; then
-    printf '%s\n' "Integration $selected plan: require C01-C05 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the integration adapter migration, select the organization's existing provider or SKIP, configure the organization app and read-only scopes, and store app credentials in the Company EnvironmentFile. No changes made."
+    printf '%s\n' "Integration $selected plan: require C01-C05 plus the plan dependencies (C11: C06+C07, C12: C06-C08, C13/C14: C06) verified and C02 E host gates, check DB/RLS role, back up E DB, apply the integration adapter migration, select the organization's existing provider or SKIP, configure the organization app and read-only scopes, and store app credentials in the Company EnvironmentFile. Read-back records SKIP for an unselected provider and stays MANUAL until a real external round-trip is recorded. No changes made."
   elif [[ $selected == c15 ]]; then
-    printf '%s\n' 'C15 plan: require C11-C14 applied or SKIP, close the G11/G12 gates, confirm the single productivity suite, and verify SKIP providers keep no active credential. No changes made.'
+    printf '%s\n' 'C15 plan: require C10 verified and C11-C14 verified or SKIP, close the G11/G12 gates, confirm the single productivity suite, remove SKIP provider keys from the EnvironmentFile and verify they keep no active credential. No changes made.'
   elif [[ $selected == c09 ]]; then
     printf '%s\n' 'C09 plan: require C01-C03 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the console migration, install the loopback console service on the existing nginx /company/ path, then read back admin/member tabs, secret masking and service status. No changes made.'
   elif [[ $selected == c10 ]]; then
-    printf '%s\n' 'C10 plan: require C02 and C03 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the console migration through 011, install the console with the HTTPS G10 setup link, keep the console secret and Project API values in the Company EnvironmentFile, then read back one-time admin setup, two mappings, login, CSRF, expiry and resume. No changes made.'
+    printf '%s\n' 'C10 plan: require C02, C03 and C09 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the console migration through 011, install the console with the HTTPS G10 setup link, keep the console secret and Project API values in the Company EnvironmentFile, then read back the HTTPS G10 link through the local TLS path, the setup/login SQL contract before G10 completes, and a real administrator login with two mappings afterwards. No changes made.'
   elif [[ $selected == c17 ]]; then
-    printf '%s\n' 'C17 plan: require C01, C02, C10, C15 and C16 verified and C02 E host gates, check DB/RLS role, back up E DB, apply handover migration 012, create a verified backup and restore it into a scratch database, confirm systemd and reboot survival, require a confirmed external round-trip for each selected integration, and record the handover verdict and member revocation contract. No changes made.'
+    printf '%s\n' 'C17 plan: require C01, C02, C10 and C15 verified and C16 verified or SKIP and C02 E host gates, check DB/RLS role, back up E DB, apply handover migration 012 and amendment 018, install the daily retention timer and run it once, create a verified backup and restore it into a scratch database, confirm systemd and reboot survival, require a confirmed external round-trip for each selected integration, and record the handover verdict and member revocation contract. No changes made.'
   elif [[ $selected == c16 ]]; then
-    printf '%s\n' 'C16 plan: require C01-C05 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply LLM routing migration, configure the default model and optional approved G13 premium routes with a standard fallback, then read back routing, billing approval, cap and owner isolation. No changes made.'
+    printf '%s\n' 'C16 plan: require C01-C05 and C07 verified and C02 E host gates, check DB/RLS role, back up E DB, apply LLM routing migration, configure the default model and optional G13 premium routes with a standard fallback (usage billing only through a C07 approval decided by a second named administrator), then read back routing, billing approval, cap and owner isolation; G13 not selected records SKIP. No changes made.'
   elif [[ $selected == c07 ]]; then
     printf '%s\n' 'C07 plan: require C01-C06 verified and C02 E host gates, check DB/RLS role, back up E DB, apply the policy/approval/audit migration, then read back default deny, explicit allow, admin-only one-time JIT approval with expiry and reuse denial, policy version invalidation, and the admin/member audit boundary. No changes made.'
   elif [[ $selected == c08 ]]; then
@@ -290,6 +290,37 @@ if [[ $project_ready != true ]]; then
   exit 3
 fi
 
+# Like every later phase, C01 keeps a pre-migration dump of E as its rollback
+# point, taken through the local postgres maintenance account (no credential
+# is passed) into a 0700 rollback directory. Nothing is dumped when the
+# checksummed migration is already applied.
+check_code=0
+bash "$repo_root/editions/company/migrate.sh" --check --through 1 >/dev/null 2>&1 || check_code=$?
+if ((check_code == 3)); then
+  rollback_dir=${OAOS_COMPANY_ROLLBACK_DIR:-}
+  socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
+  if [[ ! $rollback_dir =~ ^/[A-Za-z0-9_./-]+$ || ! -d $rollback_dir || ! -w $rollback_dir ||
+        $(stat -c %a "$rollback_dir" 2>/dev/null) != 700 ]]; then
+    stage_mark c01 blocked 'Pre-migration backup directory is missing'
+    warn 'Set OAOS_COMPANY_ROLLBACK_DIR to an existing 0700 directory for the C01 rollback dump.'
+    show_table
+    exit 3
+  fi
+  snapshot=$(mktemp -d "$rollback_dir/c01-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || die 'Cannot create the C01 rollback snapshot.'
+  chmod 700 "$snapshot"
+  if [[ ! ${PGDATABASE:-} =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ! $socket_dir =~ ^/[A-Za-z0-9_./-]+$ ]] ||
+     ! (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
+        -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
+        pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
+        --dbname="$PGDATABASE" --format=custom > "$snapshot/company.dump" 2>/dev/null) ||
+     [[ ! -s $snapshot/company.dump ]]; then
+    stage_mark c01 blocked 'Pre-migration E database backup failed'
+    warn 'c01 blocked: the pre-migration E database backup failed or is empty.'
+    show_table
+    exit 3
+  fi
+  chmod 600 "$snapshot/company.dump"
+fi
 code=0
 bash "$repo_root/editions/company/migrate.sh" --through 1 || code=$?
 case $code in

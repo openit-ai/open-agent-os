@@ -64,9 +64,9 @@ Company는 5~50인 중소기업을 위한 **Project + 거버넌스 레이어**�
 | C12 | Notion 선택 연동; 공유 원본 동기화·삭제·해제 | E+S(Notion) | `bash editions/company/install.sh --stage c12` → 기존 조직의 공유 페이지 변경 → `bash bootstrap/verify/company-verify.sh --phase c12 --read-back`; 실제 원본/색인·ACL 변경·삭제 반영 출력 | C06·C07·C08 | 1일 |
 | C13 | Google Workspace 선택 연동; 개인 위임·철회 | E+S(Google Workspace) | `bash editions/company/install.sh --stage c13` → 두 사용자가 본인 동의 → `bash bootstrap/verify/company-verify.sh --phase c13 --read-back`; 각자 읽기·타인 차단·토큰 철회 후 실패 출력 | C05·C06 | 1일 |
 | C14 | Microsoft 365 선택 연동; 개인 위임·철회 | E+S(Microsoft 365) | `bash editions/company/install.sh --stage c14` → 두 사용자가 본인 동의 → `bash bootstrap/verify/company-verify.sh --phase c14 --read-back`; 각자 읽기·타인 차단·토큰 철회 후 실패 출력 | C05·C06 | 1일 |
-| C15 | G11·G12 설치 연결; 공식 링크·값 검증·옵션 SKIP | E+선택한 S | `bash editions/company/install.sh --stage c15` → 실제 선택 게이트 완료 또는 미사용 선택 → `bash bootstrap/verify/company-verify.sh --phase c15 --read-back`; 잘못된 값 재요청·선택 서비스 왕복·미선택 무자격 상태 출력 | C10·C11~C14 | 1일 |
+| C15 | G11·G12 설치 연결; 공식 링크·값 검증·옵션 SKIP | E+선택한 S | `bash editions/company/install.sh --stage c15` → 실제 선택 게이트 완료 또는 미사용 선택 → `bash bootstrap/verify/company-verify.sh --phase c15 --read-back`; 잘못된 값 재요청·선택 서비스 왕복·미선택 무자격 상태 출력 | C10·C11~C14(각각 verified 또는 SKIP) | 1일 |
 | C16 | G13과 선택 라우팅; 승인된 정액 모델·실패 대체 | E+기존 LLM 플랜 | `bash editions/company/install.sh --stage c16` → `bash bootstrap/verify/company-verify.sh --phase c16 --read-back`; 실제 기본/선택 모델 응답·실패 대체·owner·비용 설정 출력 | C05·C07 | 1일 |
-| C17 | Company 최종 검증·운영 인계; 백업·복구·회수 절차 | E+선택한 S | `bash editions/company/install.sh --stage c17` → `bash bootstrap/verify/company-verify.sh --phase c17 --read-back`; 설치 상태·systemd·백업 복구·재부팅 생존·외부 왕복의 실제 출력 수집 | C10·C15·C16 | 1일 |
+| C17 | Company 최종 검증·운영 인계; 백업·복구·회수 절차 | E+선택한 S | `bash editions/company/install.sh --stage c17` → `bash bootstrap/verify/company-verify.sh --phase c17 --read-back`; 설치 상태·systemd·백업 복구·재부팅 생존·외부 왕복의 실제 출력 수집 | C10·C15·C16(verified 또는 SKIP) | 1일 |
 
 Phase별 대상 테스트와 하위 시스템 회귀를 먼저 돌리고, P2 통합 판정에서는 [아키텍처 v2.0 로드맵](architecture-v2.0.md)의 전체 회귀·런타임 리드백 요구를 별도 수행한다. 설치·유지보수는 Project의 apt/시스템 패키지, 단일 서버와 systemd 운영 패턴을 우선 재사용한다. 별도 플랫폼의 Docker·Kubernetes 배포 경로는 흡수하지 않는다. 아키텍처 v2.0 §5.2의 과거 배포 예시 중 Docker 호출 문구는 이번 Company의 **무Docker·systemd** 결정과 다르다. **C01 착수 전** 정본 문구를 무Docker·systemd로 정합 수정하는 것을 선행 게이트로 둔다(문서 수정은 별도 작업).
 

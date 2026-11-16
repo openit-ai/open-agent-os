@@ -50,6 +50,24 @@ BEGIN
     RAISE EXCEPTION 'second shared document indexing failed';
   END IF;
 
+  -- A long-lived source ACL is clamped to the 5 minute re-check window (P2-15).
+  SELECT r.decision INTO decision
+    FROM company.index_shared_document('project', 'doc-long-acl', 'acl-1',
+      ARRAY[]::uuid[], now() + interval '30 days', ARRAY['zzlongaclonly']) r;
+  IF decision IS DISTINCT FROM 'indexed'
+     OR (SELECT d.acl_expires_at FROM company.documents d
+          WHERE d.source = 'project' AND d.source_id = 'doc-long-acl')
+        > now() + interval '5 minutes' THEN
+    RAISE EXCEPTION 'source ACL expiry beyond 5 minutes was accepted';
+  END IF;
+  UPDATE company.documents d SET acl_expires_at = now() + interval '1 day'
+    WHERE d.source = 'project' AND d.source_id = 'doc-long-acl';
+  IF (SELECT d.acl_expires_at FROM company.documents d
+       WHERE d.source = 'project' AND d.source_id = 'doc-long-acl')
+     > now() + interval '5 minutes' THEN
+    RAISE EXCEPTION 'direct ACL expiry extension was accepted';
+  END IF;
+
   PERFORM set_config('company.member_id', alice::text, true);
   SELECT r.decision, r.document_id INTO decision, doc_personal
     FROM company.index_personal_document('note-1', ARRAY['report personalpolicy']) r;

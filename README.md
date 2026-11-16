@@ -161,7 +161,7 @@ Settings (`config.yaml`), secrets (`.env`), skills, and schedules complete the s
 
 ## Company edition base
 
-The enterprise platform behind the Company edition — personal agents, a personal wiki, a permission-aware company knowledge index, policy + just-in-time approvals, an audit ledger, a secret vault, an execution gateway, and an admin console — is developed and delivered separately from this public repository. Under the v2.0 design these assets are **absorbed into the Company edition** — existing code and tests are carried over, not discarded.
+The Company edition is in this repository under [`editions/company/`](editions/company/) (BSL 1.1): installer phases C01–C17, checksummed PostgreSQL migrations and real-database read-backs for member mapping, personal assistants, an owner-bound secret vault, policy + just-in-time approvals, an append-only audit ledger, permission-aware search, LLM routing and an admin console. Policy, approvals, vault and routing are enforced at the database level (functions, triggers, row-level security); wiring them into a runtime assistant service API, console approval forms, OAuth callbacks and Slack events is still pending, and optional integrations are not `verified` without a real external round-trip.
 
 - Scope, setup flow, and licensing: [`editions/company/README.md`](editions/company/README.md)
 

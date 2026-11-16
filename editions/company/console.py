@@ -30,14 +30,21 @@ TAB_LABELS = {
 MAX_FORM_BYTES = 4096
 
 
+def _psql_set(name, value):
+    """A psql \\set line; values travel on stdin, never in argv (visible in ps)."""
+    value = "" if value is None else str(value)
+    if not name.replace("_", "").isalnum() or any(c in value for c in "\r\n\0"):
+        raise subprocess.SubprocessError("invalid psql variable")
+    return "\\set " + name + " '" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
 def _psql(statements, variables=None, timeout=10):
     # psql expands :'name' variables when it reads a script from stdin, but not
-    # inside -c strings. Feeding the script through stdin keeps every value a
-    # quoted psql variable instead of string-concatenating it into SQL.
+    # inside -c strings. Feeding the script and the \\set values through stdin
+    # keeps every value a quoted psql variable and out of the process arguments.
     command = ["psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-f", "-"]
-    for key, value in (variables or {}).items():
-        command.extend(["-v", f"{key}={value}"])
-    script = "\n".join(statements) + "\n"
+    prelude = [_psql_set(key, value) for key, value in (variables or {}).items()]
+    script = "\n".join(prelude + list(statements)) + "\n"
     return subprocess.run(
         command, input=script, check=True, capture_output=True, text=True,
         timeout=timeout

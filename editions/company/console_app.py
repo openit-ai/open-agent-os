@@ -18,6 +18,8 @@ import re
 import secrets
 import subprocess
 import sys
+import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -39,8 +41,48 @@ class ConsoleError(Exception):
     """A generic console failure that is safe to show without detail."""
 
 
+def insecure_cookie_allowed():
+    """The Secure cookie flag can only be dropped by an explicit local test run.
+
+    Both OAOS_COMPANY_CONSOLE_TEST=1 and OAOS_COMPANY_COOKIE_SECURE=0 are
+    required, and the configured origin must be a reserved test or loopback
+    host (*.test, localhost, 127.0.0.1) that a production deployment cannot use.
+    The installer never writes either variable to the EnvironmentFile, and the
+    C10 read-back fails if one is present there.
+    """
+    if os.environ.get("OAOS_COMPANY_CONSOLE_TEST") != "1":
+        return False
+    if os.environ.get("OAOS_COMPANY_COOKIE_SECURE", "1") != "0":
+        return False
+    host = urlsplit(os.environ.get("OAOS_COMPANY_HTTPS_ORIGIN", "")).hostname or ""
+    return host in ("localhost", "127.0.0.1") or host.endswith(".test")
+
+
 def _sha256(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+# One-time codes are short enough to type, so they are never stored as a bare
+# SHA-256: the stored value is an HMAC keyed with the console secret and bound to
+# the Project account. 12 symbols from a 32-symbol alphabet give 60 bits.
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+CODE_LENGTH = 12
+
+
+def new_login_code():
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+
+
+def normalize_code(value):
+    code = re.sub(r"[\s-]", "", value or "").upper()
+    if len(code) != CODE_LENGTH or any(char not in CODE_ALPHABET for char in code):
+        return None
+    return code
+
+
+def code_hash(secret, project_user_id, code):
+    message = b"login-code:" + project_user_id.encode("utf-8") + b":" + code.encode("ascii")
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
 
 
 def _console_secret():
@@ -70,12 +112,31 @@ def _check_project_id(value):
     return bool(value and PROJECT_ID_RE.fullmatch(value))
 
 
+VARIABLE_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+_REQUEST = threading.local()
+
+
+def _psql_set(name, value):
+    """Return a psql \\set line. Values travel on stdin, never in argv/ps."""
+    value = "" if value is None else str(value)
+    if not VARIABLE_NAME_RE.fullmatch(name) or any(c in value for c in "\r\n\0"):
+        raise ConsoleError("Company database input is invalid")
+    quoted = value.replace("\\", "\\\\").replace("'", "''")
+    return "\\set " + name + " '" + quoted + "'\n"
+
+
 def _psql(sql, variables=None, timeout=10):
     command = ["psql", "-X", "-q", "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1"]
-    for name, value in (variables or {}).items():
-        command.extend(("-v", name + "=" + value))
+    prelude = "".join(_psql_set(name, value) for name, value in (variables or {}).items())
+    # One request_id per HTTP request (migration 015 stamps every audit row).
+    request_id = getattr(_REQUEST, "request_id", None)
+    if request_id:
+        prelude += (_psql_set("oaos_request_id", request_id)
+                    + "\\o /dev/null\n"
+                    + "SELECT set_config('company.request_id', :'oaos_request_id', false);\n"
+                    + "\\o\n")
     try:
-        result = subprocess.run(command, input=sql, capture_output=True, text=True,
+        result = subprocess.run(command, input=prelude + sql, capture_output=True, text=True,
                                 timeout=timeout, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ConsoleError("Company database is unavailable") from exc
@@ -444,7 +505,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return ""
 
     def _cookie_header(self, token):
-        secure = os.environ.get("OAOS_COMPANY_COOKIE_SECURE", "1") != "0"
+        secure = not insecure_cookie_allowed()
         parts = [COOKIE_NAME + "=" + token, "Path=/company", "HttpOnly",
                  "SameSite=Strict", "Max-Age=28800"]
         if secure:
@@ -487,6 +548,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
 
     def do_GET(self):
+        _REQUEST.request_id = str(uuid.uuid4())
         path = urlsplit(self.path).path
         if path == HEALTH_PATH:
             self._send(200, b"ok\n", {"Content-Type": "text/plain; charset=utf-8"})
@@ -538,6 +600,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self._send(404, b"not found\n", {"Content-Type": "text/plain; charset=utf-8"})
 
     def do_POST(self):
+        _REQUEST.request_id = str(uuid.uuid4())
         if not self._same_origin():
             self._send(403, _page("Company", "<p>요청 출처를 확인할 수 없습니다.</p>"))
             return
@@ -572,7 +635,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return ProjectAPI.from_environment()
 
     def _new_code(self):
-        return secrets.token_hex(4).upper()
+        return new_login_code()
 
     def _setup_start(self, form):
         project_user_id = form.get("project_user_id", "")
@@ -584,7 +647,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         project.require_admin(project_user_id)
         code = self._new_code()
         slug = os.environ.get("OAOS_COMPANY_ORG_SLUG", "company")
-        decision, org_id = start_setup(slug, project_user_id, _sha256(code))
+        decision, org_id = start_setup(slug, project_user_id,
+                                       code_hash(_console_secret(), project_user_id, code))
         if decision == "issued":
             project.send_direct_message(
                 project_user_id,
@@ -599,7 +663,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _setup_confirm(self, form):
         project_user_id = form.get("project_user_id", "")
-        code = form.get("code", "")
+        code = normalize_code(form.get("code", ""))
         if not _check_project_id(project_user_id) or not code:
             self._send(400, _page("G10", _confirm_admin_body(project_user_id,
                                                              "코드를 확인하세요.")))
@@ -608,7 +672,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not status["org_id"]:
             self._send(409, _page("G10", _setup_body(status, "먼저 관리자 코드를 요청하세요.")))
             return
-        decision, member_id = confirm_admin(status["org_id"], project_user_id, _sha256(code))
+        decision, member_id = confirm_admin(status["org_id"], project_user_id,
+                                            code_hash(_console_secret(), project_user_id, code))
         if decision != "admin_created" or not member_id:
             message = "코드가 만료되었거나 일치하지 않습니다. 다시 요청하세요."
             self._send(400, _page("G10", _confirm_admin_body(project_user_id, message)))
@@ -667,7 +732,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         project = self._project()
         code = self._new_code()
-        decision, _org_id, _member_id = begin_login(project_user_id, _sha256(code))
+        decision, _org_id, _member_id = begin_login(
+            project_user_id, code_hash(_console_secret(), project_user_id, code))
         if decision == "issued":
             project.send_direct_message(
                 project_user_id,
@@ -681,7 +747,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _login_confirm(self, form):
         project_user_id = form.get("project_user_id", "")
-        code = form.get("code", "")
+        code = normalize_code(form.get("code", ""))
         if not _check_project_id(project_user_id) or not code:
             self._send(400, _page("Company 로그인",
                                   _login_body("코드를 확인하세요.", project_user_id)))
@@ -690,7 +756,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         token = secrets.token_urlsafe(32)
         csrf = csrf_for(secret, token)
         decision, _org_id, _member_id, _role = consume_login(
-            project_user_id, _sha256(code), _sha256(token), _sha256(csrf))
+            project_user_id, code_hash(secret, project_user_id, code),
+            _sha256(token), _sha256(csrf))
         if decision != "authenticated":
             self._send(401, _page("Company 로그인",
                                   _login_body("코드가 만료되었거나 일치하지 않습니다.",
@@ -713,6 +780,9 @@ def main():
     except ConsoleError:
         print("Company console secret is missing.", file=sys.stderr)
         return 3
+    if os.environ.get("OAOS_COMPANY_COOKIE_SECURE") == "0" and not insecure_cookie_allowed():
+        print("OAOS_COMPANY_COOKIE_SECURE=0 ignored outside an explicit local test run.",
+              file=sys.stderr)
     server = ThreadingHTTPServer(("127.0.0.1", 8765), ConsoleHandler)
     server.daemon_threads = True
     try:

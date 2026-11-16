@@ -161,7 +161,7 @@ hermes skills install openit-ai/open-agent-os/skills/vps-youtube-content
 
 ## Company 에디션 기반
 
-Company 에디션을 뒷받침하는 엔터프라이즈 플랫폼(개인 에이전트, Personal Wiki, 권한 인식 전사 지식 인덱스, 정책 + JIT 승인, 감사 원장, Secret Vault, Execution Gateway, 관리 콘솔)은 이 공개 저장소와 별도로 개발·제공됩니다. v2.0 설계에서 이 자산들은 **Company 에디션으로 흡수**됩니다 — 기존 코드·테스트는 버리지 않고 승계합니다.
+Company 에디션은 이 저장소의 [`editions/company/`](editions/company/)(BSL 1.1)에 있습니다: 설치 Phase C01~C17, 체크섬 PostgreSQL 마이그레이션, 구성원 매핑·개인비서·owner 결속 Secret Vault·정책 + JIT 승인·추가 전용 감사 원장·권한 인식 검색·LLM 라우팅·관리 콘솔의 실제 DB read-back. 정책·승인·Vault·라우팅은 **DB 수준**(함수·트리거·RLS)에서 강제되며, 이를 런타임 비서 서비스 API·콘솔 승인 화면·OAuth 콜백·Slack 이벤트에 연결하는 작업은 남아 있습니다. 선택 연동은 실제 외부 왕복 증거 없이 `verified`가 되지 않습니다.
 
 - 범위·설치 흐름·라이선스: [`editions/company/README.md`](editions/company/README.md)
 

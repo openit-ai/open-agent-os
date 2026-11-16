@@ -6,8 +6,9 @@ repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 
 company_c10_verify() {
   local role_safe result=0 env_file setup_file unit_file setup_url health
-  [[ $(stage_status c02) == verified && $(stage_status c03) == verified ]] || {
-    warn 'C10 read-back needs C02 and C03 verified on E.'; return 3;
+  [[ $(stage_status c02) == verified && $(stage_status c03) == verified &&
+     $(stage_status c09) == verified ]] || {
+    warn 'C10 read-back needs C02, C03 and C09 verified on E.'; return 3;
   }
   [[ $(stage_status c10) == applied || $(stage_status c10) == verified ]] || {
     warn 'C10 has not been applied.'; return 3;
@@ -49,6 +50,12 @@ company_c10_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   }
+  # Test-only console switches must never reach the production EnvironmentFile.
+  if grep -Eq '^(OAOS_COMPANY_COOKIE_SECURE|OAOS_COMPANY_CONSOLE_TEST)=' "$env_file"; then
+    printf '%-30s FAIL\n' 'No test-only console switches'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
   [[ -f $setup_file && $(stat -c %a "$setup_file") == 600 ]] || {
     printf '%-30s FAIL\n' 'G10 setup link file'
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
@@ -86,20 +93,70 @@ company_c10_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   }
-  if ! psql -X -q -v ON_ERROR_STOP=1 \
-      -f "$repo_root/editions/company/c10-readback.sql" >/dev/null 2>&1; then
-    printf '%-30s FAIL\n' 'G10 setup and login queries'
+  # The G10 link must answer through this instance's nginx/TLS path, not only on
+  # loopback HTTP: anchor the origin host to 127.0.0.1 as C02 does.
+  local https_host https_code https_body
+  https_host=${OAOS_COMPANY_HTTPS_ORIGIN#https://}
+  https_body=$(mktemp)
+  https_code=$(curl --silent --show-error --noproxy '*' --max-time 8 \
+    --resolve "$https_host:443:127.0.0.1" --output "$https_body" --write-out '%{http_code}' \
+    "$setup_url" 2>/dev/null || true)
+  if [[ $https_code != 200 ]] || ! grep -Eq 'G10|Company' "$https_body"; then
+    rm -f -- "$https_body"
+    printf '%-30s FAIL\n' 'HTTPS G10 setup link'
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
+  rm -f -- "$https_body"
+  # Real G10 state of this single-organization E (maintenance path, read-only).
+  local evidence complete=f login=f mapped=0
+  evidence=$(run_root env -u PGOPTIONS -u PGHOSTADDR -u PGHOST -u PGUSER \
+    -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
+    runuser -u postgres -- psql --host="${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}" \
+    --port="${PGPORT:-5432}" --dbname="$PGDATABASE" -X -q -A -t -F '|' -c "
+      SELECT EXISTS (SELECT 1 FROM company.console_setup WHERE state = 'complete'),
+             EXISTS (SELECT 1 FROM company.audit_events e
+                       JOIN company.members m ON m.org_id = e.org_id AND m.id = e.actor_id
+                      WHERE m.role = 'admin' AND m.state = 'active'
+                        AND ((e.event_type = 'console_login' AND e.action = 'authenticated')
+                          OR (e.event_type = 'console_setup' AND e.action = 'admin_created'))),
+             (SELECT count(*) FROM company.members WHERE role = 'member' AND state = 'active')" \
+    2>/dev/null) || evidence=''
+  IFS='|' read -r complete login mapped <<< "${evidence%%$'\n'*}"
   printf '%-30s PASS\n' 'Migration SHA-256/version 11'
   printf '%-30s PASS\n' 'HTTPS G10 setup link'
   printf '%-30s PASS\n' 'Console service and loopback health'
-  printf '%-30s PASS\n' 'One-time administrator code'
-  printf '%-30s PASS\n' 'Two member mappings and resume'
-  printf '%-30s PASS\n' 'One-time login and 8-hour session'
-  printf '%-30s PASS\n' 'CSRF, expiry, lockout and revocation'
-  printf '%-30s PASS\n' 'Audit trail without credential material'
-  printf 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0\n'
-  stage_mark c10 verified 'C10 E G10 setup/login SQL responses passed; fixture rolled back'
+  if [[ $complete != t ]]; then
+    # The SQL contract creates a fixture organization, which the single-org
+    # G10 flow only accepts before the real setup completes.
+    if ! psql -X -q -v ON_ERROR_STOP=1 \
+        -f "$repo_root/editions/company/c10-readback.sql" >/dev/null 2>&1; then
+      printf '%-30s FAIL\n' 'G10 setup/login SQL contract'
+      printf 'Summary: PASS=3 FAIL=1 MANUAL=0 SKIP=0\n'
+      return 1
+    fi
+    printf '%-30s PASS\n' 'G10 setup/login SQL contract'
+    (umask 077; date -u +%Y-%m-%dT%H:%M:%SZ > "$HOME/.config/oaos-company/g10-contract-passed")
+    printf '%-30s MANUAL\n' 'Real admin login and G10 done'
+    printf 'Summary: PASS=4 FAIL=0 MANUAL=1 SKIP=0\n'
+    stage_mark c10 applied 'C10 G10 SQL contract passed; real administrator login over HTTPS pending'
+    info 'Open the HTTPS G10 link, confirm the administrator and two mappings, then rerun the read-back.'
+    return 3
+  fi
+  # The contract must have passed on this E before G10 completed (MANUAL run).
+  if [[ ! -s $HOME/.config/oaos-company/g10-contract-passed ]]; then
+    printf '%-30s FAIL\n' 'G10 SQL contract before setup'
+    printf 'Summary: PASS=3 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
+  printf '%-30s PASS\n' 'G10 SQL contract before setup'
+  if [[ $login != t || ! $mapped =~ ^[0-9]+$ ]] || ((mapped < 2)); then
+    printf '%-30s FAIL\n' 'Real admin login and mappings'
+    printf 'Summary: PASS=4 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
+  printf '%-30s PASS\n' 'Real admin login and G10 done'
+  printf '%-30s PASS\n' 'Two member mappings'
+  printf 'Summary: PASS=6 FAIL=0 MANUAL=0 SKIP=0\n'
+  stage_mark c10 verified 'C10 E G10 completed with a real administrator login over the HTTPS link; SQL contract passed'
 }

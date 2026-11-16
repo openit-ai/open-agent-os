@@ -6,10 +6,9 @@ repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 
 company_adapters_verify() {
   local provider=$1 stage=$2 role_safe result=0 org='' admin='' state='' mapping entry name
-  [[ $(stage_status c01) == verified && $(stage_status c02) == verified && \
-     $(stage_status c03) == verified && $(stage_status c04) == verified && \
-     $(stage_status c05) == verified ]] || {
-    warn 'Integration read-back needs C01, C02, C03, C04 and C05 verified on E.'; return 3;
+  local missing roundtrip env_file="$HOME/.config/oaos-company/.env"
+  missing=$(company_adapters_dependencies_met "$provider") || {
+    warn "Integration read-back needs $missing verified on E."; return 3;
   }
   [[ $(stage_status "$stage") == applied || $(stage_status "$stage") == verified || \
      $(stage_status "$stage") == SKIP ]] || {
@@ -29,7 +28,7 @@ company_adapters_verify() {
     warn 'Integration database role check failed.'; return 3;
   }
   [[ $role_safe == t ]] || { warn 'Integration read-back needs a non-BYPASSRLS role.'; return 3; }
-  bash "$repo_root/editions/company/migrate.sh" --check --through 6 >/dev/null 2>&1 || result=$?
+  bash "$repo_root/editions/company/migrate.sh" --check --through 7 >/dev/null 2>&1 || result=$?
   if ((result)); then
     if ((result == 3)); then warn 'Integration migration is pending.'; return 3; fi
     warn 'Integration migration checksum or version read-back failed.'; return 1
@@ -60,25 +59,48 @@ company_adapters_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
+  # The SQL above proves the DB contract with fixtures; it is not evidence that
+  # the organization's real service answered.
   printf '%-28s PASS\n' 'Migration SHA-256/version 7'
-  printf '%-28s PASS\n' 'Selection gate and admin control'
-  printf '%-28s PASS\n' 'Organization app and read-only scope'
-  printf '%-28s PASS\n' 'Provider adapter responses'
-  printf '%-28s PASS\n' 'Owner delegation isolation'
-  printf '%-28s PASS\n' 'Revocation and SKIP cleanup'
-  printf '%-28s PASS\n' 'Tenant isolation and audit trail'
-  printf '%-28s PASS\n' 'Fixture rollback'
-  printf 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0\n'
-  stage_mark "$stage" verified "Integration $provider E read-back passed (state ${state}); fixture rolled back"
+  printf '%-28s PASS\n' 'DB contract: selection/admin'
+  printf '%-28s PASS\n' 'DB contract: app and scopes'
+  printf '%-28s PASS\n' 'DB contract: owner isolation'
+  printf '%-28s PASS\n' 'DB contract: revocation/audit'
+  if [[ $state != selected ]]; then
+    # Not selected: SKIP(reason=not_selected) with no credential anywhere.
+    if ! company_adapters_keys_absent "$provider" "$env_file"; then
+      printf '%-28s FAIL\n' 'SKIP has no app credential'
+      printf 'Summary: PASS=5 FAIL=1 MANUAL=0 SKIP=0\n'
+      return 1
+    fi
+    printf '%-28s PASS\n' 'SKIP has no app credential'
+    printf '%-28s SKIP\n' 'External round-trip'
+    printf 'Summary: PASS=6 FAIL=0 MANUAL=0 SKIP=1\n'
+    stage_mark "$stage" SKIP "not_selected: $provider has no credential, webhook or service call"
+    return 0
+  fi
+  printf '%-28s PASS\n' 'Organization app secret'
+  roundtrip=$(company_adapters_roundtrip_count "$org" "$admin" "$provider") || roundtrip=0
+  if [[ ! $roundtrip =~ ^[1-9][0-9]*$ ]]; then
+    printf '%-28s MANUAL\n' 'External round-trip'
+    printf 'Summary: PASS=6 FAIL=0 MANUAL=1 SKIP=0\n'
+    info "Integration $provider stays applied until a real round-trip with the organization's service is recorded."
+    return 3
+  fi
+  printf '%-28s PASS\n' 'External round-trip'
+  printf 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0\n'
+  stage_mark "$stage" verified "Integration $provider E read-back passed with a recorded external round-trip"
 }
 
 company_adapters_verify_c15() {
   local role_safe result=0 org='' admin='' provider state suite='' check
-  [[ $(stage_status c01) == verified && $(stage_status c02) == verified && \
-     $(stage_status c03) == verified && $(stage_status c04) == verified && \
-     $(stage_status c05) == verified ]] || {
-    warn 'C15 read-back needs C01, C02, C03, C04 and C05 verified on E.'; return 3;
-  }
+  local stage env_file="$HOME/.config/oaos-company/.env"
+  [[ $(stage_status c10) == verified ]] || { warn 'C15 read-back needs C10 verified on E.'; return 3; }
+  for stage in c11 c12 c13 c14; do
+    [[ $(stage_status "$stage") == verified || $(stage_status "$stage") == SKIP ]] || {
+      warn "C15 read-back needs $stage verified or SKIP."; return 3;
+    }
+  done
   [[ $(stage_status c15) == applied || $(stage_status c15) == verified ]] || {
     warn 'C15 has not been applied.'; return 3;
   }
@@ -96,7 +118,7 @@ company_adapters_verify_c15() {
     warn 'C15 database role check failed.'; return 3;
   }
   [[ $role_safe == t ]] || { warn 'C15 read-back needs a non-BYPASSRLS role.'; return 3; }
-  bash "$repo_root/editions/company/migrate.sh" --check --through 6 >/dev/null 2>&1 || result=$?
+  bash "$repo_root/editions/company/migrate.sh" --check --through 7 >/dev/null 2>&1 || result=$?
   if ((result)); then
     if ((result == 3)); then warn 'Integration migration is pending.'; return 3; fi
     warn 'Integration migration checksum or version read-back failed.'; return 1
@@ -129,7 +151,7 @@ company_adapters_verify_c15() {
       check=$(company_adapters_sql "$org" "$admin" \
         "SELECT count(*) FROM company.integration_apps WHERE provider = '$provider' AND state = 'active'
            UNION ALL SELECT count(*) FROM company.integration_delegations WHERE provider = '$provider' AND state = 'active'") || return 1
-      if [[ ! $check =~ ^0?$ ]]; then
+      if [[ ! $check =~ ^0?$ ]] || ! company_adapters_keys_absent "$provider" "$env_file"; then
         printf '%-28s FAIL\n' 'SKIP credential absence'
         printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
         return 1
@@ -140,7 +162,7 @@ company_adapters_verify_c15() {
   printf '%-28s PASS\n' 'G11/G12 selection state'
   printf '%-28s PASS\n' 'Single productivity suite'
   printf '%-28s PASS\n' 'Selected provider app'
-  printf '%-28s PASS\n' 'SKIP provider has no credential'
+  printf '%-28s PASS\n' 'SKIP: no DB or .env credential'
   printf 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0\n'
   stage_mark c15 verified 'C15 G11/G12 gate read-back passed; existing services only'
 }

@@ -33,18 +33,26 @@ company_c07_verify() {
     if ((result == 3)); then warn 'C07 migration is pending.'; return 3; fi
     warn 'C07 migration checksum or version read-back failed.'; return 1
   fi
+  if ! company_db_runtime_boundary; then
+    printf '%%-28s FAIL\n' 'Runtime role boundary'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
   if ! psql -X -q -v ON_ERROR_STOP=1 -f "$repo_root/editions/company/c07-readback.sql" >/dev/null 2>&1; then
     printf '%-28s FAIL\n' 'Policy and approval queries'
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
-  printf '%-28s PASS\n' 'Migration SHA-256/version 8'
+  printf '%-28s PASS\n' 'Migration SHA-256/8 + 013-015'
+  printf '%-28s PASS\n' 'Runtime role boundary'
   printf '%-28s PASS\n' 'Default deny and explicit allow'
   printf '%-28s PASS\n' 'Non-admin and self-approval denied'
   printf '%-28s PASS\n' 'Binding, expiry and single-use reuse'
   printf '%-28s PASS\n' 'Policy version invalidation'
+  printf '%-28s PASS\n' 'Forged/long request rejected'
+  printf '%-28s PASS\n' 'Policy change approval/audit'
   printf '%-28s PASS\n' 'Admin/member audit boundary'
   printf '%-28s PASS\n' 'Sensitive metadata and tenant isolation'
-  printf 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0\n'
+  printf 'Summary: PASS=10 FAIL=0 MANUAL=0 SKIP=0\n'
   stage_mark c07 verified 'C07 E policy, JIT approval and audit SQL responses passed; fixture rolled back'
 }
