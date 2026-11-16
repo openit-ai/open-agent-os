@@ -85,23 +85,25 @@ flowchart TD
 
 ### 2.3 개입 게이트 설계 규칙 (사용자 부담 최소화)
 
-1. 모든 게이트는 **① 클릭 가능한 링크 ② 왜 필요한지 1줄 ③ 붙여넣을 값의 정확한 지정** 순서로 안내한다.
-2. 붙여넣은 값은 **즉시 검증**(API 200·토큰 getMe 등)하고, 실패 시 원인과 재시도 링크를 다시 제공한다.
-3. 값은 `.env`(600)에만 저장 — 스킬은 값을 **재출력하지 않는다**. 로그·문서·위키에 남기지 않는다.
-4. 게이트는 "선택"과 "제공(필수)" 두 종류만 존재한다. 그 외(설정 파일 편집·명령 타이핑)는 전부 에이전트 몫이다.
-5. 게이트가 발생하기 전까지는 **무인 진행**을 원칙으로 하고, 진행 상황은 시작·게이트·검증·완료 시점에만 보고한다.
+1. 모든 게이트는 **① 클릭 가능한 링크 ② 왜 필요한지 1줄 ③ 저장할 변수 이름(정확한 키)** 순서로 안내한다.
+2. 비밀값은 사용자가 **자기 터미널의 숨김 입력**(`bash bootstrap/bin/oaos-secret-set KEY`)으로 넣는다. 채팅에 붙여넣지 않게 안내하고, 명령행 인자(`hermes config set KEY <값>` 등)로 넘기는 경로는 금지한다. 비밀이 아닌 값(숫자 ID·도메인 등)은 채팅으로 받아도 된다.
+3. 저장 직후 단계 재실행에서 **즉시 검증**한다(게이트별 검증 방법은 §2.4). 실패하면 값은 저장된 채로 단계를 BLOCKED로 두고 원인·재입력 링크를 다시 안내한다.
+4. 값은 Hermes `.env`에만 저장한다 — 원자적 쓰기, 소유자 전용(Linux·macOS 600+소유자 확인, Windows NTFS ACL), 단일 도우미(`bootstrap/lib/secret.sh`)만 쓴다. 스킬·스크립트는 값을 재출력하지 않으며 로그·문서·위키·상태 파일에 남기지 않는다.
+5. 게이트는 "선택"과 "제공(필수)" 두 종류만 존재한다. 그 외(설정 파일 편집·명령 타이핑)는 전부 에이전트 몫이다. 설치기를 `--yes`로 실행하는 것은 사용자가 해당 선택 게이트를 승인한 뒤에만 한다.
+6. 게이트가 발생하기 전까지는 **무인 진행**을 원칙으로 하고, 진행 상황은 시작·게이트·검증·완료 시점에만 보고한다.
 
 ### 2.4 개입 지점 (에디션별)
 
-**Personal — 필수 3 + 선택 2**
+**Personal — 필수 3 + 선택 1 (G4 보류)**
 
-| # | 게이트 | 사용자 액션(최소) | 에이전트 제공 |
-|---|---|---|---|
-| G1 | LLM API 키 | OpenCode Go(또는 대안: OpenRouter·Vercel AI Gateway) 가입 → 키 복붙 | 가입 링크·요금 안내·대안 비교 |
-| G2 | Telegram 봇 | BotFather `/newbot` → 토큰 복붙 | BotFather 링크·명령·주의(노출 시 revoke) |
-| G3 | Telegram 사용자 ID | @userinfobot → 숫자 복붙 | 링크·화이트리스트 설명 |
-| G4 | (선택) 대용량 파일 | my.telegram.org → api_id/hash 복붙 | 링크·절차·보안 경고 |
-| G5 | (선택) 이메일 | Gmail 앱 비밀번호 16자 복붙 | 2단계 인증·발급 링크 |
+| # | 게이트 | 사용자 액션(최소) | 저장 키 | 즉시 검증 |
+|---|---|---|---|---|
+| 선택 | Hermes 설치 승인 | 설치 스크립트 SHA-256 확인 후 승인 | — | Windows `install.ps1`은 `OAOS_HERMES_INSTALLER_SHA256` 지정 시에만 실행 |
+| G1 | LLM | OpenCode Go(대안: OpenRouter·Vercel AI Gateway) 키 입력 또는 Nous Portal OAuth 로그인 | `OPENCODE_GO_API_KEY` · `OPENROUTER_API_KEY` · `AI_GATEWAY_API_KEY` | 30초 제한 모델 응답 1회(키 존재만으로는 통과 아님, OAuth도 응답으로 판정) |
+| G2 | Telegram 봇 | BotFather `/newbot` → 토큰 입력 | `TELEGRAM_BOT_TOKEN` | `getMe`(토큰은 curl 표준입력 설정으로 전달) |
+| G3 | Telegram 사용자 ID | @userinfobot → 숫자 ID | `TELEGRAM_ALLOWED_USERS` | 숫자 ID 목록 형식 |
+| G4 | (보류) 대용량 파일·Local Bot API | — | — | 구현 보류 — 필요 시 별도 설계 |
+| G5 | (선택·수동) 이메일 | Gmail 앱 비밀번호 | 도우미로 저장 | 자동 검증 없음(수동 단계) |
 
 **Project — Personal 게이트 + 5**
 
@@ -122,27 +124,28 @@ flowchart TD
 | G12 | 선택 | 협업 도구 연동 | Slack·Notion 사용 조직: 앱 생성·토큰 복붙 | 매니페스트·콘솔 링크·권한 안내 |
 | G13 | 선택 | 멀티 LLM 확장 | 프리미엄 모델(Codex·Claude 등)·추가 모델 API 도입 시 키 복붙 | 요금 비교·라우팅 자동 구성; 사용량 과금 경로는 승인 필요 |
 
-### 2.5 자동화 범위 (Personal 기준 예시)
+### 2.5 자동화 범위 (Personal 기준)
 
 | 구간 | 자동 진행 | 사용자 개입 |
 |---|---|---|
-| OS 준비 | Ubuntu Personal: apt·swapfile·시간대·systemd 절전 정책; macOS: 도구 확인·OS 관리 swap·시간대/절전 수동 판정; Windows Git Bash: 도구 확인·pagefile 조회·시간대/전원 수동 판정 | 불확실한 OS 설정은 수동 확인 |
-| Hermes 설정 | `config set`(모델·추론)·`.env` 기록·`gateway install`; Ubuntu만 systemd/linger, macOS는 launchd, Windows는 ONLOGON 태스크/Startup 폴백 진단 | G1 키 |
-| Telegram | 토큰 검증·화이트리스트·(선택) Local Bot API 구성 | G2·G3 (+G4) |
-| 위키(세컨드 브레인) | git repo·bare 중계·스키마(7축) 시드·pre-commit 훅 | — |
-| 하네스 | SOUL/USER/MEMORY 초안 생성 → 대화로 확인·보정 | 문구 확인(대화) |
-| 자동화 | 단일 통합 크론·watchdog 시드 | — |
-| 최종 테스트 | `verify` 전 항목 실행 + 결과 리포트 | 최종 확인(+G5 선택) |
+| OS 준비 | Ubuntu: apt·swapfile(여유 10 GiB·10% 이상일 때만)·시간대·절전 마스킹/logind 드롭인(변경한 호스트 설정으로 보고); macOS: 도구 확인·OS 관리 swap·시간대/절전 수동 판정; Windows Git Bash: 도구 확인·pagefile 조회·시간대/전원 수동 판정 | 불확실한 OS 설정은 수동 확인 |
+| Hermes 설정 | `.env`는 비밀값 도우미로만 기록 · 승인 정책 `approvals.cron_mode`·`single_query_mode`·`unattended_mode`를 미설정 시 deny로 설정(명시적 approve면 gateway 단계 차단) · `gateway install`(Ubuntu systemd/linger, macOS launchd, Windows ONLOGON 태스크/Startup 폴백) — 모델 선택은 Hermes 설정 마법사 | G1 |
+| Telegram | `getMe`·숫자 허용 목록 확인 → gateway는 telegram 단계 완료 후에만 기동(변경 시 재시작) | G2·G3 |
+| 위키(세컨드 브레인) | git repo·색인 시드·비밀값 차단 pre-commit 훅 (bare 중계·7축 스키마는 미구현) | — |
+| 하네스 | SOUL/USER/MEMORY 초안 + 설치기가 아는 호스트 정보를 MEMORY에 기입 → 대화로 확인·보정 | 문구 확인(대화) |
+| 자동화 | 일일 백업 = Hermes cron(에이전트 비호출) · gateway watchdog = OS 타이머(systemd user timer / launchd — Hermes cron은 gateway 안에서 돌아 gateway 정지 시 동작 불가) · Windows는 watchdog 없음 | — |
+| 최종 테스트 | `personal-verify.sh` 19항목 · 종료코드 0 PASS / 2 MANUAL 대기 / 1 FAIL · 사람 확인은 `--confirm reboot,chat,allowlist`로 기록 | 재부팅·대화·허용 목록 확인 |
 
 - 원칙: **자동이 기본값, 개입은 예외**. 개입 지점 수를 늘리는 설계 변경은 이 문서에 반영해 승인받는다.
-- Project·Company도 동일 구조로 자동 구간을 확장한다(설치 가이드의 수동 절차가 자동화 대상 목록이다).
+- Project·Company도 같은 구조(도우미·상태·종료코드)를 쓴다.
 
 ### 2.6 실패·재개 원칙
 
-- **멱등**: install·verify는 재실행 안전(이미 된 단계는 스킵).
-- **재개 가능**: `~/.oaos-install/state.json` 체크포인트 — 중단 후 "이어서 진행"이 가능.
+- **멱등**: install은 재실행 안전 — 완료된 단계는 건너뛰되 **verify는 항상 다시 실행**한다. `--recheck`는 완료 단계도 재검사, `--reverify`는 검증만 실행.
+- **실패 시 닫힘**: 각 단계는 errexit가 켜진 서브셸에서 실행해 중간 실패를 무시하지 않는다.
+- **재개 가능**: `~/.oaos-install/state.json`에 에디션별 단계(`editions.<edition>.stages`)를 기록한다 — 같은 호스트의 다른 에디션 기록이 단계를 건너뛰게 하지 않는다. 기존 평면 `stages`는 마지막 기록 에디션의 보기로만 읽는다.
 - **비파괴 기본**: 기존 데이터·설정은 보존, 파괴적 작업은 명시 승인 후만.
-- **부분 성공 금지**: 최종 판정은 verify 전 항목 PASS 또는 원인·영향·다음 조치 보고 — PARTIAL 포장 금지.
+- **세 가지 결과만**: 전 항목 PASS = `verified`(종료 0) · FAIL 없음+MANUAL 대기 = `applied`(종료 2, "대기"로 보고하며 완료로 표기 금지) · FAIL = `failed`(종료 1). PARTIAL 포장 금지.
 
 ---
 
@@ -272,8 +275,18 @@ open-agent-os/
 
 ## 6. 보안 설계 요약
 
-| 항목 | 규칙 |
-|---|---|
+| 항목 | 규칙 | 강제·검증 |
+|---|---|---|
+| 시크릿 | Hermes `.env` 단일 보관 · 원자적 쓰기 · 소유자 전용(600+소유자 / NTFS ACL) · 명령행 인자 금지 · config.yaml 금지 · 값 재출력 금지 | `oaos-secret-set` 도우미 · Personal verify `.env` 보호·config.yaml 무비밀 항목 |
+| 게이트 값 | **저장 → 즉시 검증** 순서. 실패 시 값은 남기고 단계 BLOCKED, 재입력 요청 · 채팅·로그·문서에 미기재 | 단계 재실행 검증(§2.4) |
+| 서비스 바인딩 | Dashboard·DB·Redis·내부 서비스는 127.0.0.1 고정, 원격 접근은 SSH 터널/역방향 프록시 | Personal verify Dashboard 루프백 항목(기본 포트 9119, `OAOS_DASHBOARD_PORT`) |
+| 승인 정책 | `approvals.cron_mode`·`single_query_mode`·`unattended_mode` = deny, 위험 명령 승인 | 미설정 시 설치기가 deny 설정 · 명시적 approve면 gateway 차단 · verify 항목 |
+| 백업 | 백업 디렉터리 700 · 아카이브 600 | 설치기·백업 스크립트·verify |
+| Company | 개인별 독립 비서(owner==credential==provider==output), 정책+JIT 승인, 감사 기록 | Company Phase별 read-back(§7 P2) |
+| 선택형 연동 | OAuth·토큰은 최소 범위 요청 · `.env`(600) 보관 · 해제 절차 문서화 | Company C11~C15 |
+| 부트스트랩 | 실행 전 저장소 소유자 확인(git origin = openit-ai/open-agent-os, 포크는 `OAOS_ALLOW_FORK=1`) · 스크립트는 저장소 내 공개(감사 가능) | Personal 설치기 적용 · Project·Company 적용 진행 중 |
+
+---|---|
 | 시크릿 | 전부 `.env`(600) 단일 보관 · config.yaml 금지 · 스킬은 값 재출력 금지 |
 | 게이트 값 | 검증 즉시 저장, 채팅·로그·문서에 미기재 |
 | 서비스 바인딩 | Local Bot API·Dashboard·DB는 127.0.0.1 고정, 공인 노출 금지 |
@@ -356,4 +369,4 @@ open-agent-os/
 |---|---|---|
 | v2.0 | 2026-09-25 | 3-에디션·URL 부트스트랩 재설계 최초본 |
 | v2.0.x | 2026-09-26~27 | 무Docker·systemd 정합, Personal 지원 OS(Ubuntu·macOS·Windows 11) 반영 |
-| v2.1 | 2026-11-16 | 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
+| v2.1 | 2026-11-16 | 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
