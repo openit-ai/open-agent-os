@@ -66,7 +66,7 @@ platform_linux_check_os() {
   fi
 }
 
-platform_linux_hermes_home() { platform_linux platform_hermes_home || return 3; printf '%s/.hermes\n' "${HOME:?}"; }
+platform_linux_hermes_home() { platform_linux platform_hermes_home || return 3; printf '%s\n' "${HERMES_HOME:-${HOME:?}/.hermes}"; }
 platform_linux_oaos_home() { platform_linux platform_oaos_home || return 3; printf '%s\n' "${HOME:?}"; }
 platform_linux_path() {
   platform_linux platform_path || return 3
@@ -76,7 +76,7 @@ platform_linux_path() {
     backups) printf '%s/.oaos/backups\n' "$HOME" ;;
     cache) printf '%s/.oaos/cache\n' "$HOME" ;;
     wiki) printf '%s/data/wiki\n' "$HOME" ;;
-    scripts) printf '%s/.hermes/scripts\n' "$HOME" ;;
+    scripts) printf '%s/scripts\n' "$(platform_hermes_home)" ;;
     *) printf 'Unknown platform path: %s\n' "$1" >&2; return 1 ;;
   esac
 }
@@ -155,7 +155,7 @@ platform_linux_secret_protect() {
 platform_linux_secret_check() {
   platform_linux platform_secret_check || return 3
   local parent mode
-  [[ -f $1 && $(platform_file_mode "$1") == 600 ]] || return 1
+  [[ -f $1 && -O $1 && $(platform_file_mode "$1") == 600 ]] || return 1
   parent=$(dirname "$1")
   [[ -d $parent && -x $parent ]] || return 1
   mode=$(platform_file_mode "$parent") || return 1
