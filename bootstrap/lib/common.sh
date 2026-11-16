@@ -123,7 +123,7 @@ PY
 stage_mark() {
   local name=$1 status=$2 detail=${3:-} file tmp now edition stages
   edition=$(oaos_state_edition)
-  stages=${OAOS_STAGES:-prep hermes llm telegram gateway wiki harness cron verify}
+  stages=${OAOS_STAGES:-prep hermes llm telegram gateway wiki harness cron mail verify}
   [[ $edition =~ ^[a-z]+$ && $stages =~ ^([a-z]+|c(0[1-9]|1[0-7]))(\ ([a-z]+|c(0[1-9]|1[0-7])))*$ ]] || die "Invalid edition stage configuration."
   [[ " $stages " == *" $name "* ]] || die 'Invalid stage name.'
   [[ ${OAOS_DRY_RUN:-0} != 1 ]] || die 'Internal error: state write during dry run.'

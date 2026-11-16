@@ -91,8 +91,8 @@ import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     result = json.load(f)
 rows = result['checks']
-assert len(rows) == 19, len(rows)
-assert [row['number'] for row in rows] == list(range(1, 20))
+assert len(rows) == 20, len(rows)
+assert [row['number'] for row in rows] == list(range(1, 21))
 names = [row['check'] for row in rows]
 assert names[3] == 'Autostart registered' and names[4] == 'Reboot survival', names
 for number in (1, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
@@ -101,7 +101,8 @@ assert rows[1]['status'] == 'SKIP' and rows[7]['status'] == 'SKIP'
 assert rows[4]['status'] == rows[5]['status'] == rows[6]['status'] == 'MANUAL'
 assert rows[18]['status'] in ('PASS', 'FAIL')
 assert int(sys.argv[2]) == (2 if rows[18]['status'] == 'PASS' else 1)
-assert sum(result['summary'].values()) == 19
+assert rows[19]['check'] == 'Personal mail' and rows[19]['status'] == 'SKIP', rows[19]
+assert sum(result['summary'].values()) == 20
 PY
 grep -Fq 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' "$temp_root/result.json" && { printf 'FAIL: token in verifier output\n' >&2; exit 1; }
 backups=("$HOME"/.oaos/backups/hermes-verify-*.zip)
@@ -109,7 +110,7 @@ backups=("$HOME"/.oaos/backups/hermes-verify-*.zip)
 [[ $(head -n 1 "$MOCK_BACKUP_ARGS") == "$HOME"/* ]] || { printf 'FAIL: Linux backup path was not POSIX\n' >&2; exit 1; }
 [[ $(stat -c %a "$HOME/.oaos/backups") == 700 ]] || { printf 'FAIL: backup dir not 700\n' >&2; exit 1; }
 [[ $(stat -c %a "${backups[0]}") == 600 ]] || { printf 'FAIL: verify archive not 600\n' >&2; exit 1; }
-printf 'PASS: Personal verifier has 19 JSON checks, offline SKIPs, MANUAL exit 2, owner-only backup\n'
+printf 'PASS: Personal verifier has 20 JSON checks, offline SKIPs, MANUAL exit 2, owner-only backup\n'
 
 # Exit 0 needs owner-confirmed MANUAL checks and no FAIL; each policy breach FAILs its row.
 code=0

@@ -57,13 +57,13 @@ jobs:
       - name: Run OS-applicable subsystem smoke
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
-            for suite in install-smoke personal-verify-smoke project-smoke personal-to-project-migrate-smoke; do
+            for suite in install-smoke personal-verify-smoke personal-mail-smoke project-smoke personal-to-project-migrate-smoke; do
               printf 'Running %s on Linux\n' "$suite"
               bash "bootstrap/tests/$suite.sh"
             done
           else
             printf 'SKIP: install-smoke, project-smoke and personal-to-project-migrate-smoke use Linux /usr/bin, apt, systemd and rsync fixtures.\n'
-            printf 'SKIP: personal-verify-smoke uses a Linux systemd/loginctl fixture. Platform mocks run above.\n'
+            printf 'SKIP: personal-verify-smoke and personal-mail-smoke use Linux systemd/loginctl and /usr/bin fixtures. Platform mocks run above.\n'
           fi
 
       - name: Check isolated Personal dry-run leaves HOME empty
@@ -112,6 +112,7 @@ jobs:
             bootstrap/tests/platform-smoke.sh \
             bootstrap/tests/install-smoke.sh \
             bootstrap/tests/personal-verify-smoke.sh \
+            bootstrap/tests/personal-mail-smoke.sh \
             bootstrap/tests/personal-to-project-migrate-smoke.sh
 
       - name: ShellCheck Company edition shell files

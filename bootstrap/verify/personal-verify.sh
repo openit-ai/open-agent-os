@@ -8,6 +8,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$repo_root/bootstrap/lib/platform.sh"
 # shellcheck source=bootstrap/lib/secret.sh
 . "$repo_root/bootstrap/lib/secret.sh"
+# shellcheck source=bootstrap/lib/mail.sh
+. "$repo_root/bootstrap/lib/mail.sh"
 
 json=0
 offline=0
@@ -16,10 +18,11 @@ usage() {
   cat <<'EOF'
 Usage: bash bootstrap/verify/personal-verify.sh [--json] [--offline] [--confirm item[,item...]] [--help]
 
---offline  skip checks that need the network (model request, Telegram getMe) as SKIP.
+--offline  skip checks that need the network (model request, Telegram getMe, mail logins) as SKIP.
 --confirm  record human evidence for MANUAL checks you have just observed:
            reboot (gateway answered after a safe reboot or logout/login),
-           chat (allowed account got a reply), allowlist (other account got none).
+           chat (allowed account got a reply), allowlist (other account got none),
+           mail (Himalaya, configured by you, read the optional G5 mailbox).
 Exit: 0 = every check PASS (SKIP allowed); 2 = no FAIL but MANUAL checks pending;
       1 = one or more FAIL; 3 = the verifier could not run on this platform.
 EOF
@@ -30,7 +33,7 @@ while (($#)); do
     --offline) offline=1 ;;
     --confirm)
       (($# >= 2)) || { usage >&2; exit 1; }
-      [[ $2 =~ ^(reboot|chat|allowlist)(,(reboot|chat|allowlist))*$ ]] || { printf 'Unknown --confirm item: %s\n' "$2" >&2; exit 1; }
+      [[ $2 =~ ^(reboot|chat|allowlist|mail)(,(reboot|chat|allowlist|mail))*$ ]] || { printf 'Unknown --confirm item: %s\n' "$2" >&2; exit 1; }
       confirmed+="${2//,/ } "
       shift ;;
     --help|-h) usage; exit 0 ;;
@@ -298,6 +301,39 @@ if [[ $capacity =~ ^[0-9]+$ && $available =~ ^[0-9]+$ && $ram_kb =~ ^[0-9]+$ && 
    ((available * 100 > capacity * 10)) && { ((ram_kb >= 16777216)) || ((swap_count > 0)); }; then
   record 'Host capacity' PASS 'Disk free >10%; swap requirement met'
 else record 'Host capacity' FAIL 'Disk free <=10% or swap absent on host with <16 GB RAM'; fi
+
+# 20: Optional G5 mailbox. Not selected = SKIP; selected = both logins must pass, and
+# Himalaya must read the mailbox (MANUAL while Himalaya is the owner's to install or configure).
+mail_address=$(oaos_env_get OAOS_PERSONAL_MAIL_ADDRESS || true)
+if [[ -z $mail_address ]]; then
+  record 'Personal mail' SKIP 'Optional G5 not selected (OAOS_PERSONAL_MAIL_ADDRESS not stored)'
+elif ! oaos_secret_present OAOS_PERSONAL_MAIL_APP_PASSWORD; then
+  record 'Personal mail' FAIL 'G5 selected but OAOS_PERSONAL_MAIL_APP_PASSWORD is not in the Hermes .env'
+elif ((offline)); then
+  record 'Personal mail' SKIP 'Offline mode: IMAP/SMTP logins not attempted'
+else
+  mail_imap=$(oaos_env_get OAOS_PERSONAL_MAIL_IMAP_HOST || oaos_mail_default_host imap "$mail_address" || true)
+  mail_smtp=$(oaos_env_get OAOS_PERSONAL_MAIL_SMTP_HOST || oaos_mail_default_host smtp "$mail_address" || true)
+  mail_config_code=0
+  mail_config=$(platform_path himalaya) || mail_config_code=$?
+  if [[ -z $mail_imap || -z $mail_smtp ]]; then
+    record 'Personal mail' FAIL 'G5 IMAP/SMTP hosts are not stored for this non-Gmail address'
+  elif ! mail_result=$(oaos_mail_login imap "$mail_address" "$mail_imap" OAOS_PERSONAL_MAIL_APP_PASSWORD); then
+    record 'Personal mail' FAIL "IMAP login failed ($mail_result)"
+  elif ! mail_result=$(oaos_mail_login smtp "$mail_address" "$mail_smtp" OAOS_PERSONAL_MAIL_APP_PASSWORD); then
+    record 'Personal mail' FAIL "SMTP login failed ($mail_result)"
+  elif [[ $confirmed == *' mail '* ]]; then
+    record 'Personal mail' PASS 'IMAP and SMTP logins succeeded; owner confirmed Himalaya reads the mailbox'
+  elif ((mail_config_code == 4)); then
+    record 'Personal mail' MANUAL 'Logins succeeded; configure Himalaya on Windows yourself, then rerun with --confirm mail'
+  elif ! have_cmd himalaya; then
+    record 'Personal mail' MANUAL 'Logins succeeded; install Himalaya 1.x (https://pimalaya.org/himalaya/) and rerun --stage mail --recheck'
+  elif ! grep -Fq '# OAOS Personal managed Himalaya account' "$mail_config" 2>/dev/null; then
+    record 'Personal mail' MANUAL 'Logins succeeded; Himalaya config is not OAOS-managed; check your account, then rerun with --confirm mail'
+  elif oaos_himalaya_account_check "$mail_config" oaos-personal; then
+    record 'Personal mail' PASS 'IMAP and SMTP logins succeeded; Himalaya account oaos-personal reads the mailbox'
+  else record 'Personal mail' FAIL 'Logins succeeded but Himalaya account oaos-personal could not read the mailbox'; fi
+fi
 
 pass=0 fail=0 manual=0 skip=0
 for status in "${statuses[@]}"; do

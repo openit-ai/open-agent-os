@@ -76,6 +76,8 @@ platform_linux_path() {
     backups) printf '%s/.oaos/backups\n' "$HOME" ;;
     cache) printf '%s/.oaos/cache\n' "$HOME" ;;
     wiki) printf '%s/data/wiki\n' "$HOME" ;;
+    relay) printf '%s/data/wiki.git\n' "$HOME" ;;
+    himalaya) printf '%s/.config/himalaya/config.toml\n' "$HOME" ;;
     scripts) printf '%s/scripts\n' "$(platform_hermes_home)" ;;
     bin) printf '%s/.oaos/bin\n' "$HOME" ;;
     *) printf 'Unknown platform path: %s\n' "$1" >&2; return 1 ;;
@@ -313,6 +315,8 @@ platform_macos_path() {
     backups) printf '%s/.oaos/backups\n' "$HOME" ;;
     cache) printf '%s/.oaos/cache\n' "$HOME" ;;
     wiki) printf '%s/data/wiki\n' "$HOME" ;;
+    relay) printf '%s/data/wiki.git\n' "$HOME" ;;
+    himalaya) printf '%s/.config/himalaya/config.toml\n' "$HOME" ;;
     scripts) printf '%s/scripts\n' "$(platform_hermes_home)" ;;
     bin) printf '%s/.oaos/bin\n' "$HOME" ;;
     *) return 1 ;;
@@ -422,6 +426,9 @@ platform_windows_path() {
     backups) printf '%s/.oaos/backups\n' "$HOME" ;;
     cache) printf '%s/.oaos/cache\n' "$HOME" ;;
     wiki) printf '%s/data/wiki\n' "$HOME" ;;
+    relay) printf '%s/data/wiki.git\n' "$HOME" ;;
+    # Himalaya runs password commands through the Windows shell; OAOS leaves its config manual.
+    himalaya) return 4 ;;
     scripts) printf '%s/scripts\n' "$(platform_hermes_home)" ;;
     bin) printf '%s/.oaos/bin\n' "$HOME" ;;
     *) return 1 ;;

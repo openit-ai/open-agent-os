@@ -8,8 +8,10 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$repo_root/bootstrap/lib/platform.sh"
 # shellcheck source=bootstrap/lib/secret.sh
 . "$repo_root/bootstrap/lib/secret.sh"
+# shellcheck source=bootstrap/lib/mail.sh
+. "$repo_root/bootstrap/lib/mail.sh"
 
-stages=(prep hermes llm telegram gateway wiki harness cron verify)
+stages=(prep hermes llm telegram gateway wiki harness cron mail verify)
 export OAOS_STATE_EDITION=personal
 export OAOS_STAGES="${stages[*]}"
 selected=()
@@ -25,9 +27,11 @@ usage() {
 Usage: bash editions/personal/install.sh [--dry-run] [--stage name[,name...]] [--status] [--yes]
                                          [--recheck] [--reverify] [--timezone Area/City] [--skip-verify] [--help]
 
-Stages: prep, hermes, llm, telegram, gateway, wiki, harness, cron, verify.
+Stages: prep, hermes, llm, telegram, gateway, wiki, harness, cron, mail, verify.
 The default runs all stages in order. Completed stages are skipped on rerun,
 except verify, which always runs again.
+mail is the optional G5 personal mailbox: it is recorded as SKIP (not_selected)
+until OAOS_PERSONAL_MAIL_ADDRESS is stored, and then logs in over IMAP and SMTP.
 --recheck   re-run selected stages even when recorded as done (each is idempotent).
 --reverify  run only the verify stage (same as --stage verify).
 --dry-run   prints a plan without writing state or changing the system.
@@ -450,6 +454,122 @@ do_cron() {
   [[ $code == 0 || $code == 4 ]] || return 3
 }
 
+# --- G5 (optional): personal mailbox for Himalaya ------------------------------------------
+# Selected by storing OAOS_PERSONAL_MAIL_ADDRESS; the app password is the secret
+# OAOS_PERSONAL_MAIL_APP_PASSWORD. Exit 4 = not selected (recorded as SKIP).
+mail_password_command() { printf '%s/oaos-mail-password' "$(platform_path bin)"; }
+
+# The password command Himalaya runs (auth.cmd). It reads the Hermes .env at call time,
+# so the app password is never copied into the Himalaya config. The key name is kept
+# apart from the sed expression so the secret-hygiene scan of ~/.oaos sees no assignment.
+write_mail_password_command() {
+  printf '#!/usr/bin/env bash\n# OAOS Personal G5 password command for Himalaya (auth.cmd); managed by editions/personal/install.sh.\n'
+  printf '# Prints the app password from the Hermes .env. Owner-only; never run it where output is logged.\nset -euo pipefail\n'
+  printf 'env_file=%q\nkey=OAOS_PERSONAL_MAIL_APP_PASSWORD\n' "$(oaos_hermes_env_file)"
+  printf '%s\n' 'sed -n "s/^${key}=//p" "$env_file" | tail -n 1'
+}
+
+personal_himalaya_marker='# OAOS Personal managed Himalaya account'
+write_himalaya_config() {
+  local address=$1 imap=$2 smtp=$3 command=$4
+  printf '%s (the app password comes from the password command, never this file).\n' "$personal_himalaya_marker"
+  printf '[accounts.oaos-personal]\ndefault = true\nemail = "%s"\n' "$address"
+  printf 'backend.type = "imap"\nbackend.host = "%s"\nbackend.port = 993\nbackend.encryption.type = "tls"\n' "$imap"
+  printf 'backend.login = "%s"\nbackend.auth.type = "password"\nbackend.auth.cmd = "%s"\n' "$address" "$command"
+  printf 'message.send.backend.type = "smtp"\nmessage.send.backend.host = "%s"\nmessage.send.backend.port = 587\n' "$smtp"
+  printf 'message.send.backend.encryption.type = "start-tls"\nmessage.send.backend.login = "%s"\n' "$address"
+  printf 'message.send.backend.auth.type = "password"\nmessage.send.backend.auth.cmd = "%s"\n' "$command"
+}
+
+# Installs a generated owner-only file: replaced when absent or OAOS-managed (MARKER in
+# its first two lines); otherwise preserved. Exit 0 written or unchanged, 4 preserved.
+install_managed_file() {
+  local candidate=$1 target=$2 marker=$3 mode=$4
+  if [[ -e $target || -L $target ]]; then
+    if cmp -s "$candidate" "$target"; then rm -f -- "$candidate"; return 0; fi
+    case $(sed -n 1,2p "$target" 2>/dev/null) in
+      *"$marker"*) ;;
+      *) rm -f -- "$candidate"; return 4 ;;
+    esac
+  fi
+  if [[ $OAOS_PLATFORM != windows-gitbash ]]; then chmod "$mode" "$candidate" || { rm -f -- "$candidate"; return 1; }; fi
+  mv -f -- "$candidate" "$target" || { rm -f -- "$candidate"; return 1; }
+}
+
+do_mail() {
+  local address imap smtp password result config command tmp code=0 rerun
+  address=$(oaos_gate_value OAOS_PERSONAL_MAIL_ADDRESS || true)
+  if [[ -z $address ]]; then
+    info "G5 mail is optional and not selected. To add it, store the mailbox address with '$(secret_hint OAOS_PERSONAL_MAIL_ADDRESS)' and rerun --stage mail."
+    return 4
+  fi
+  oaos_mail_valid_address "$address" || {
+    warn "G5: use a plain address (letters, digits, dot, underscore, plus, hyphen); store it again with '$(secret_hint OAOS_PERSONAL_MAIL_ADDRESS)'."; return 3; }
+  imap=$(oaos_gate_value OAOS_PERSONAL_MAIL_IMAP_HOST || oaos_mail_default_host imap "$address" || true)
+  smtp=$(oaos_gate_value OAOS_PERSONAL_MAIL_SMTP_HOST || oaos_mail_default_host smtp "$address" || true)
+  [[ -n $imap && -n $smtp ]] || {
+    warn "G5: for a non-Gmail mailbox store the provider's hosts with '$(secret_hint OAOS_PERSONAL_MAIL_IMAP_HOST)' and '$(secret_hint OAOS_PERSONAL_MAIL_SMTP_HOST)' (Gmail defaults to imap.gmail.com / smtp.gmail.com)."; return 3; }
+  { oaos_mail_valid_host "$imap" && oaos_mail_valid_host "$smtp"; } || { warn 'G5: invalid IMAP or SMTP host name.'; return 3; }
+  oaos_env_put OAOS_PERSONAL_MAIL_IMAP_HOST "$imap" || return 1
+  oaos_env_put OAOS_PERSONAL_MAIL_SMTP_HOST "$smtp" || return 1
+  password=$(oaos_secret_value OAOS_PERSONAL_MAIL_APP_PASSWORD || true)
+  [[ -n $password ]] || {
+    warn "G5: turn on 2-Step Verification for the mailbox, create an app password at https://myaccount.google.com/apppasswords (it lets the agent read and send this mailbox without your Google password), and store it without spaces with '$(secret_hint OAOS_PERSONAL_MAIL_APP_PASSWORD)'."; return 3; }
+  if ! oaos_mail_valid_app_password "$password"; then
+    password=''
+    warn "G5: the app password must be one word without spaces; store it again with '$(secret_hint OAOS_PERSONAL_MAIL_APP_PASSWORD)'."
+    return 3
+  fi
+  password=''
+  result=$(oaos_mail_login imap "$address" "$imap" OAOS_PERSONAL_MAIL_APP_PASSWORD) || {
+    warn "G5: IMAP login to $imap failed ($result). Check the address, IMAP access and the app password (https://myaccount.google.com/apppasswords), store it again with '$(secret_hint OAOS_PERSONAL_MAIL_APP_PASSWORD)', and rerun --stage mail."; return 3; }
+  result=$(oaos_mail_login smtp "$address" "$smtp" OAOS_PERSONAL_MAIL_APP_PASSWORD) || {
+    warn "G5: SMTP login to $smtp:587 failed ($result). Check the SMTP host and the app password, then rerun --stage mail."; return 3; }
+  info 'G5: IMAP and SMTP logins succeeded.'
+  rerun="rerun 'bash editions/personal/install.sh --stage mail --recheck'"
+  config=$(platform_path himalaya) || code=$?
+  if ((code == 4)); then
+    warn "G5 MANUAL: on Windows configure Himalaya yourself (https://pimalaya.org/himalaya/) with a password command that reads OAOS_PERSONAL_MAIL_APP_PASSWORD from the Hermes .env, never a plain-text password; then confirm with 'bash bootstrap/verify/personal-verify.sh --confirm mail'."
+    return 0
+  fi
+  ((code == 0)) || return 1
+  if ! have_cmd himalaya; then
+    warn "G5 MANUAL: install Himalaya 1.x from https://pimalaya.org/himalaya/ (verify the release before installing), then $rerun."
+    return 0
+  fi
+  if ! oaos_himalaya_version_ok; then
+    warn "G5 MANUAL: OAOS configures Himalaya 1.x only; install a verified 1.x release from https://pimalaya.org/himalaya/ and $rerun, or configure this version yourself."
+    return 0
+  fi
+  command=$(mail_password_command)
+  if [[ ! $command =~ ^[A-Za-z0-9._/@+-]+$ ]]; then
+    warn "G5 MANUAL: the password command path $command needs quoting; configure Himalaya yourself with that command."
+    return 0
+  fi
+  private_dir "$(platform_path bin)"
+  tmp=$(mktemp "$command.tmp.XXXXXX")
+  write_mail_password_command > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  code=0
+  install_managed_file "$tmp" "$command" 'OAOS Personal G5 password command' 700 || code=$?
+  if ((code == 4)); then warn "G5: $command was changed by the owner; preserving it."
+  elif ((code != 0)); then return 1; fi
+  private_dir "$(dirname "$config")"
+  tmp=$(mktemp "$config.tmp.XXXXXX")
+  write_himalaya_config "$address" "$imap" "$smtp" "$command" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  code=0
+  install_managed_file "$tmp" "$config" "$personal_himalaya_marker" 600 || code=$?
+  if ((code == 4)); then
+    warn "G5 MANUAL: $config is your own Himalaya config and was preserved. Add an account for $address whose auth.cmd is $command, then confirm with 'bash bootstrap/verify/personal-verify.sh --confirm mail'."
+    return 0
+  fi
+  ((code == 0)) || return 1
+  if ! oaos_himalaya_account_check "$config" oaos-personal; then
+    warn 'G5: Himalaya could not read the mailbox with the generated account oaos-personal; review the config, then rerun --stage mail.'
+    return 3
+  fi
+  info 'G5: Himalaya account oaos-personal reads the mailbox.'
+}
+
 # personal-verify.sh exit: 0 all PASS; 2 MANUAL pending, no FAIL; 1 FAIL; 3 blocked.
 do_verify() { bash "$repo_root/bootstrap/verify/personal-verify.sh"; }
 
@@ -458,7 +578,7 @@ run_stage() {
   case $1 in
     prep) do_prep ;; hermes) do_hermes ;; llm) do_llm ;;
     telegram) do_telegram ;; gateway) do_gateway ;; wiki) do_wiki ;;
-    harness) do_harness ;; cron) do_cron ;; verify) do_verify ;;
+    harness) do_harness ;; cron) do_cron ;; mail) do_mail ;; verify) do_verify ;;
   esac
 }
 
@@ -492,6 +612,7 @@ for stage in "${stages[@]}"; do
   fi
   case $code in
     0) stage_mark "$stage" 'done' 'Completed'; info "$stage done." ;;
+    4) stage_mark "$stage" SKIP 'not_selected: optional G5 mail; store OAOS_PERSONAL_MAIL_ADDRESS to select it'; info "$stage SKIP (not selected)." ;;
     3) stage_mark "$stage" blocked 'Needs a gate, prerequisite, or permission'; warn "$stage blocked."; note_result 3 ;;
     *) stage_mark "$stage" failed 'Command failed; review the install log'; warn "$stage failed."; note_result 1 ;;
   esac

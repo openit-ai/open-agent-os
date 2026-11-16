@@ -47,7 +47,7 @@ import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     state = json.load(f)
 assert state['edition'] == 'personal'
-assert set(state['stages']) == {'prep', 'hermes', 'llm', 'telegram', 'gateway', 'wiki', 'harness', 'cron', 'verify'}
+assert set(state['stages']) == {'prep', 'hermes', 'llm', 'telegram', 'gateway', 'wiki', 'harness', 'cron', 'mail', 'verify'}
 assert state['stages']['wiki']['status'] == 'done'
 assert state['stages']['harness']['status'] == 'done'
 assert set(state['editions']) == {'personal'}
@@ -60,7 +60,7 @@ printf 'sk-THISISATESTSECRETVALUE\n' > "$first/data/wiki/leak.md"
 git -C "$first/data/wiki" add leak.md
 if git -C "$first/data/wiki" -c user.name=T -c user.email=t@localhost commit -qm leak >/dev/null 2>&1; then fail 'wiki hook accepted a secret'; fi
 git -C "$first/data/wiki" rm -q --cached leak.md && rm -f "$first/data/wiki/leak.md"
-printf 'PASS: no-jq first write created nine-stage edition-scoped state, wiki secret hook, and MEMORY host facts\n'
+printf 'PASS: no-jq first write created ten-stage edition-scoped state, wiki secret hook, and MEMORY host facts\n'
 
 HOME="$first" PATH="$mirror" bash "$install" --stage wiki,harness >"$temp_root/second.out" 2>"$temp_root/second.err" || fail 'second no-jq install failed'
 grep -Fq 'Skipping wiki (done).' "$temp_root/second.out" || fail 'wiki did not skip on rerun'
@@ -87,7 +87,7 @@ python3 - "$corrupt/.oaos-install/state.json" <<'PY' || fail 'new state after re
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     state = json.load(f)
-assert len(state['stages']) == 9
+assert len(state['stages']) == 10
 assert state['stages']['harness']['status'] == 'done'
 PY
 printf 'PASS: corrupt state reported, preserved, and replaced on resume\n'
