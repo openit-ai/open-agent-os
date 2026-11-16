@@ -1,7 +1,7 @@
 ---
 name: oaos-bootstrap
 description: "Bootstrap an Open Agent OS edition: install, gates, verify."
-version: 0.1.3
+version: 0.2.0
 author: OpenIT (openit-ai), Hermes Agent
 license: Apache-2.0
 platforms: [linux, macos, windows]
@@ -24,15 +24,17 @@ Orchestrates the "one URL" setup of an Open Agent OS edition: recon → edition 
 ## Prerequisites
 
 - Personal: Ubuntu LTS, Apple Silicon macOS, or Windows 11 with Git Bash; an account permitted to install Hermes and inspect OS settings; internet access. Project / Company: Ubuntu LTS server with administrator rights.
-- Hermes Agent installed and working (`hermes --version`; `hermes doctor`).
+- Hermes Agent installed and working (`hermes --version`; health is judged by the verifier, which reads `hermes doctor` without printing it). On Personal the installer can install Hermes for you.
+- A clone of the official repository (`git clone https://github.com/openit-ai/open-agent-os.git`). Installers stop unless `origin` is `github.com/openit-ai/open-agent-os`; a fork the user has reviewed needs `OAOS_ALLOW_FORK=1`.
 - The user is present — this skill runs in their chat and needs them at the gates.
-- Access to this repository's files: a local clone, or fetch raw files (`raw.githubusercontent.com/openit-ai/open-agent-os/main/...`) as needed.
+- Install this skill from its raw URL: `hermes skills install https://raw.githubusercontent.com/openit-ai/open-agent-os/main/skills/oaos-bootstrap/SKILL.md`.
 
 ## How to Run
 
-1. Follow the Procedure top to bottom; load `references/gates.md` before Phase 3 and `references/verify-checklist.md` before Phase 5.
-2. Installer stage state: `~/.oaos-install/state.json` — on resume, read it and continue from the first incomplete stage. Re-running completed stages must be safe.
-3. Log: `~/.oaos/logs/install-YYYYMMDD.log` — append command summaries and results. **Never write secrets to the log or state file.**
+1. Follow the Procedure top to bottom; load `references/gates.md` before Phase 3 and `references/verify-checklist.md` before Phase 4.
+2. Installer stage state: `~/.oaos-install/state.json`, one namespace per edition (`editions.<edition>.stages`). On resume run the installer's `--status` and continue from the first incomplete stage. Re-running completed stages is safe; `verify` always reruns.
+3. Log: `~/.oaos/logs/install-YYYYMMDD.log` — the installer writes redacted lines. **Never write secrets to the log or state file.**
+4. Secrets: the user types them in their own terminal with `bash bootstrap/bin/oaos-secret-set KEY` (hidden prompt; stores `KEY=value` in the Hermes `.env`, owner-only). Never ask for a secret in chat and never pass one as a command argument (`hermes config set KEY <secret>` puts it in argv and shell history).
 
 ## Quick Reference
 
@@ -41,8 +43,8 @@ Orchestrates the "one URL" setup of an Open Agent OS edition: recon → edition 
 | 0 — Recon | OS, resources, existing install; recommend an edition | — |
 | 1 — Edition | User picks Personal / Project / Company | Choice |
 | 2 — Prep | Packages, timezone, swap, directories | — |
-| 3 — Install | Personal: Hermes → LLM → Telegram → gateway → wiki → harness → cron; Project: Hermes → LLM → Telegram → wiki → harness → cron → stack → ingress → mail → team → gateway | G0·G1–G9 (by edition) |
-| 4 — Verify | The full verify checklist — every check must run | — |
+| 3 — Install | Personal stages: prep → hermes → llm → telegram → gateway → wiki → harness → cron → verify; Project: prep → hermes → llm → telegram → wiki → harness → cron → stack → ingress → mail → team → gateway → verify | Hermes-install approval · G0·G1–G9 (by edition) |
+| 4 — Verify | The edition verifier — every check must run; MANUAL items need human evidence | — |
 | 5 — Report | What was built, addresses, first things to try | — |
 
 ## Procedure
@@ -60,10 +62,12 @@ sysctl -n hw.memsize; sysctl vm.swapusage; df -h "$HOME"
 printf 'MSYSTEM=%s\n' "$MSYSTEM"; command -v bash git curl hermes
 powershell.exe -NoProfile -NonInteractive -Command '[Environment]::OSVersion.Version; (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory; Get-CimInstance Win32_PageFileUsage | Select-Object AllocatedBaseSize; Get-Volume | Select-Object DriveLetter,SizeRemaining'
 # All lanes: inspect the resolved Hermes home, then CLI and gateway status
-hermes --version; hermes doctor; hermes gateway status
+hermes --version; hermes gateway status
+# Health without printing configuration: only the exit code is shown
+hermes doctor >/dev/null 2>&1; printf 'hermes doctor exit=%s\n' "$?"
 ```
 
-On Windows, also confirm Windows 11 and x86_64/aarch64 from system information, and that `python3` or `python` is accessible to the Personal installer. On macOS, check `command -v bash git curl python3`. Resolve `HERMES_HOME` before checking files: Linux/macOS default to `~/.hermes`, Windows to `%LOCALAPPDATA%\hermes` (convert with `cygpath -u` in Git Bash); an explicit `HERMES_HOME` takes precedence. Do not print `hermes doctor` output that may contain secrets. Recommend an edition from the README table (default: Personal). The selected installer creates stage state when it runs.
+On Windows, also confirm Windows 11 and x86_64/aarch64 from system information, and that `python3` or `python` is accessible to the Personal installer. On macOS, check `command -v bash git curl python3`. Resolve `HERMES_HOME` before checking files: Linux/macOS default to `~/.hermes`, Windows to `%LOCALAPPDATA%\hermes` (convert with `cygpath -u` in Git Bash); an explicit `HERMES_HOME` takes precedence on every lane. Never print raw `hermes doctor` output or `.env`/`config.yaml` contents; they may contain secrets. Recommend an edition from the README table (default: Personal). The selected installer creates stage state when it records its first stage.
 
 Completion: the user has seen a 3–5 line summary; a recommended edition is on the table.
 
@@ -81,11 +85,11 @@ Project and Company prep remains on Ubuntu LTS; follow the edition's Ubuntu apt/
 
 ### Phase 3 — Install
 
-For Personal, run `bash editions/personal/install.sh` **from the selected lane's Bash** (Git Bash on Windows). It owns the official Hermes installer download, syntax/hash check, approval gate, stage application, and `hermes gateway install` delegation; use `--status` to inspect `~/.oaos-install/state.json`. `--dry-run` reports a plan and does not prove installation. Project / Company stay on their Ubuntu LTS server procedures.
+For Personal, run `bash editions/personal/install.sh` **from the selected lane's Bash** (Git Bash on Windows). It owns the official Hermes installer download, syntax/hash check, approval gate, stage application, gate checks, and `hermes gateway install` delegation; use `--status` to inspect the Personal stages. `--dry-run` reports a plan and does not prove installation. A blocked stage exits 3 with the next action; rerun after the user completes it (`--stage <name>`; `--recheck` reruns stages already done). Project / Company stay on their Ubuntu LTS server procedures.
 
 #### 3a. Hermes Agent
 
-- Personal uses official `install.sh` on Ubuntu/macOS and official `install.ps1` on Windows. The Personal installer saves it, checks Bash or PowerShell syntax and SHA-256, then asks for approval before execution. On Windows it invokes PowerShell for this official install from Git Bash; a new Git Bash session may be needed for the updated PATH. Do not run the Personal installer in PowerShell.
+- Personal uses official `install.sh` on Ubuntu/macOS and official `install.ps1` on Windows. The Personal installer saves it (a cached copy older than a day is downloaded again), checks Bash or PowerShell syntax, prints its SHA-256, then stops for approval. **Choice gate:** show the user the SHA-256 and the saved path; add `--yes` only after the user approves. Setting `OAOS_HERMES_INSTALLER_SHA256` pins the expected hash; on Windows it is required, and `install.ps1` is refused without it. On Windows it invokes PowerShell for this official install from Git Bash; a new Git Bash session may be needed for the updated PATH. Do not run the Personal installer in PowerShell.
 - For Project / Company on Ubuntu, if Hermes is absent, download the official installer, inspect it, then run it:
 
   ```bash
@@ -96,38 +100,30 @@ For Personal, run `bash editions/personal/install.sh` **from the selected lane's
 
   Then open a new shell session so the updated PATH applies.
 - Verify: `hermes --version` and `hermes doctor` run on the selected host.
-- **Gate G1 — LLM plan.** Ask the user to pick their plan; present 2–3 options (a low-cost flat plan such as OpenCode Go is the recommended default for Personal; Nous Portal via `hermes setup --portal` is the one-command path). Walk them through the signup link; have them provide the key. Set it with `hermes config set <PROVIDER>_API_KEY <value>` (UPPER_SNAKE names go to the resolved Hermes `.env`; check mode 600 on Linux/macOS or protected NTFS ACL on Windows) or use the `hermes model` wizard. Verify immediately with a one-shot call (`hermes chat -q "Reply with exactly: OK"`).
+- **Gate G1 — LLM plan.** Ask the user to pick their plan; present 2–3 options (a low-cost flat plan such as OpenCode Go is the recommended default for Personal; Nous Portal via `hermes setup --portal` is the one-command OAuth path). Walk them through the signup link. For a key, the user runs `bash bootstrap/bin/oaos-secret-set <EXACT_VARIABLE>` (names in `references/gates.md`) and picks the model with `hermes model`. Rerun `--stage llm`: it passes only when a bounded test request (`hermes chat -q "Reply with exactly: OK"`) answers, so OAuth/portal logins count and a stored key alone does not.
 
 #### 3b. Chat platform (Personal default: Telegram)
 
-- **Gates G2–G3 — bot token + user ID.** Guide: open `t.me/BotFather` → `/newbot` → copy the token. Then `t.me/userinfobot` → copy the numeric user ID.
-- Configure:
+- **Gates G2–G3 — bot token + user ID.** Guide: open `t.me/BotFather` → `/newbot` → copy the token. Then `t.me/userinfobot` → copy the numeric user ID. The user stores both in their own terminal:
   ```bash
-  hermes config set TELEGRAM_BOT_TOKEN <token>
-  hermes config set TELEGRAM_ALLOWED_USERS <numeric-id>
+  bash bootstrap/bin/oaos-secret-set TELEGRAM_BOT_TOKEN
+  bash bootstrap/bin/oaos-secret-set TELEGRAM_ALLOWED_USERS   # numbers only, comma-separated
   ```
-- Ask Hermes to register and start the gateway; OAOS uses OS service commands only to diagnose registration:
-  ```bash
-  hermes gateway install
-  hermes gateway status
-  ```
-- On Linux, check the systemd user service and linger (or the explicit system service). On macOS, check launchd registration and current status. On Windows, check the Hermes ONLOGON task or its official Startup fallback and current status. A real logout/login or safe reboot check remains MANUAL on macOS and Windows until done on a device. Verify separately that the user sends a message to the bot and gets a reply.
+- Rerun `--stage telegram`: it calls Telegram `getMe` (token on curl's stdin, never in argv) and accepts only a numeric ID list.
+- The `gateway` stage waits until `telegram` is done, sets `approvals.cron_mode` and `approvals.unattended_mode` to `deny` when unset, then delegates to `hermes gateway install`; OAOS uses OS service commands only to diagnose registration. If the gateway was already running when Telegram changes, the telegram stage restarts it.
+- On Linux, check the systemd user service and linger (or the explicit system service). On macOS, check launchd registration and current status. On Windows, check the Hermes ONLOGON task or its official Startup fallback and current status. Registration is read back automatically; surviving a safe reboot or logout/login stays MANUAL on every lane until observed. Verify separately that the user sends a message to the bot and gets a reply.
 
 #### 3c. Knowledge wiki (all editions)
 
-```bash
-mkdir -p ~/data/wiki && cd ~/data/wiki && git init -b main
-# create index.md (seed: title, purpose, top-level sections), then:
-git add index.md && git commit -m "wiki: seed index"
-```
+The installer's `wiki` stage creates `~/data/wiki` as a git repository with a seed `index.md` commit and a pre-commit hook that blocks secret-like values. An existing wiki is preserved (a non-git directory or one without commits blocks the stage). Do not create it by hand.
 
 #### 3d. Scheduled jobs (all editions)
 
-Register the daily backup of the resolved `HERMES_HOME` + the wiki with the Hermes cron system (see Hermes docs → Scheduled automations). Project uses this backup job only; Personal retains its existing backup and watchdog jobs. Confirm the applicable jobs appear in the cron list.
+The installer's `cron` stage registers the daily backup of the resolved `HERMES_HOME` + the wiki as a no-agent Hermes cron job (`oaos-daily-backup`; archives under `~/.oaos/backups`, directory 700, archives 600). Personal also installs a gateway watchdog as an **OS timer** (systemd user timer on Linux, launchd agent on macOS), because Hermes cron runs inside the gateway and cannot restart it; Windows has no OAOS watchdog and relies on the Hermes ONLOGON task. Remove a legacy `oaos-gateway-watchdog` Hermes cron job if the stage reports one.
 
 #### 3e. Harness seeding (all editions)
 
-Run the seeding conversation from this repository's `harness/seeding.md`: draft `SOUL.md` and `USER.md` with the user; pre-fill `MEMORY.md` with environment facts (the agent maintains it automatically afterward — the user reviews, not authors). Write to the resolved `HERMES_HOME/SOUL.md` and `HERMES_HOME/memories/` (use the lane's default when unset). Use the templates in `harness/templates/` as starting points; mention `AGENTS.md` only when the user has project workspaces.
+The installer's `harness` stage drafts `SOUL.md`, `memories/USER.md` and `memories/MEMORY.md` in the resolved `HERMES_HOME` from `harness/templates/`, writing the host facts it knows (OS, paths, gateway service) into MEMORY.md. Then run the seeding conversation from `harness/seeding.md` to replace the remaining `{{...}}` placeholders in SOUL and USER with the user (the agent maintains MEMORY.md afterward — the user reviews, not authors). The verifier reports leftover placeholders as MANUAL. Mention `AGENTS.md` only when the user has project workspaces.
 
 #### 3f. Project edition (P1)
 
@@ -144,7 +140,7 @@ On the Project VPS, follow `editions/project/README.md` and run `bash editions/p
 
 Outline is pinned to v1.10.1. Its source receives exactly one loopback bind change before build. On every tag update, reapply and verify that single change, check the built server module and the live `127.0.0.1:3000` listener, and stop if any check fails. If upstream adds a supported bind-host setting, remove the patch after verifying that setting. The source build compiles `server/main.ts` into `build/server/main.js`; `build/server/index.js` is the service entry point.
 
-Run `bash bootstrap/verify/project-verify.sh` (or `--json`) after the gates as the same non-root administrator who ran the installer. `sudo -n true` must succeed; the verifier uses non-interactive sudo for certificate and nginx checks. DNS, certificates, nginx, HTTPS, systemd services, Outline loopback binding, Mattermost, Outline, IMAP and Personal checks are reported separately as PASS/FAIL/MANUAL/SKIP. A real VPS end-to-end run is still required to claim P1 completion. To move a Personal wiki and harness, run `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`, then repeat without `--dry-run`; use `--include-config` only if its `config.yaml` should be copied. `.env` is excluded and credentials must be re-entered.
+Run `bash bootstrap/verify/project-verify.sh` (or `--json`) after the gates as the same non-root administrator who ran the installer. `sudo -n true` must succeed; the verifier uses non-interactive sudo for certificate and nginx checks. DNS, certificates, nginx, HTTPS, systemd services, Outline loopback binding, Mattermost, Outline, IMAP and Personal checks are reported separately as PASS/FAIL/MANUAL/SKIP. A real VPS end-to-end run is still required to claim P1 completion. To move a Personal wiki and harness, run `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run` (add `--source-hermes-home PATH` when the Personal `HERMES_HOME` is not the default, or use `--source-root DIR` for a local copy), then repeat without `--dry-run`. It copies the wiki, SOUL/AGENTS, `memories/`, and merges `skills/` and `scripts/`; `--include-config` also copies `config.yaml`. The gateway is stopped during the swap, and the wiki's Personal relay remote is removed (or replaced with `--wiki-remote URL`). `.env` is excluded and credentials must be re-entered.
 
 #### Company edition (P2)
 
@@ -152,7 +148,7 @@ Company extends Project with the governance layer (admin console, policy, audit,
 
 ### Phase 4 — Verify
 
-Run the full checklist in `references/verify-checklist.md`. Every check must actually run; report only what actually passed.
+Run the edition verifier and the checklist in `references/verify-checklist.md`. Every check must actually run; report only what actually passed. Personal (`bash bootstrap/verify/personal-verify.sh`, also the installer's last stage) exits 0 when all checks PASS, 2 when no check FAILs but MANUAL checks are pending, and 1 on any FAIL; the installer then records `verify` as `verified`, `applied` or `failed`. After the user has observed a safe reboot, a chat reply and an ignored non-allowed account, rerun with `--confirm reboot,chat,allowlist`.
 
 ### Phase 5 — Report & handoff
 
@@ -176,12 +172,12 @@ Report the installer stage state, then point the user to `oaos-ops` for day-2.
 
 ## Pitfalls
 
-- `hermes config set` routes `UPPER_SNAKE` names to `.env` and dotted keys to `config.yaml` — use the right form.
+- `hermes config set` routes `UPPER_SNAKE` names to `.env` and dotted keys to `config.yaml`. Use it for non-secret settings only (for example `approvals.cron_mode deny`); secrets go through `bootstrap/bin/oaos-secret-set`.
 - Telegram is default-deny: the user must be in `TELEGRAM_ALLOWED_USERS` or paired (`hermes pairing approve telegram <code>`), or the bot will silently ignore them.
 - Check Linux swap, macOS OS-managed swap, or Windows pagefile **before** heavy installs on small hosts (OOM risk); only the Linux lane creates a swapfile.
 - Do not reboot without explicit approval. Registration read-back alone does not prove boot/login survival; report a pending MANUAL check when a safe reboot or logout/login was not performed.
 - If `hermes skills install` is unavailable in this build, read this SKILL.md from the repository and follow it manually.
-- Large files (>20 MB uploads) need the Telegram local Bot API — optional, note only if asked.
+- Large files (>20 MB uploads) would need the Telegram local Bot API; OAOS does not set it up (deferred). Mention it only if asked.
 
 ## Verification
 

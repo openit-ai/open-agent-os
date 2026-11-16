@@ -2,6 +2,8 @@
 
 Expands each gate referenced by the bootstrap procedure. Apply the gate policy from SKILL.md at all times: one gate at a time, never echo secrets, verify every value before moving on.
 
+Every secret below is entered by the user in their own terminal with `bash bootstrap/bin/oaos-secret-set KEY` (hidden prompt, or stdin from a script). It writes `KEY=value` into the resolved Hermes `.env` atomically and reads back owner-only protection (mode 600 + owner on Linux/macOS, protected NTFS ACL on Windows). The value never appears in chat, argv, logs or state. Do not use `hermes config set KEY <secret>`.
+
 ## Edition choice (before the gates)
 
 Present a condensed table and your recommendation:
@@ -18,37 +20,43 @@ Recommendation logic: one person on a mini PC → **Personal**; team chat and sh
 
 Goal: a model provider the agent can call.
 
-| Option | How | Notes |
-|---|---|---|
-| Nous Portal | `hermes setup --portal` | One OAuth covers a model + tool gateway. Fastest path. |
-| Low-cost flat plan | e.g. OpenCode Go — https://opencode.ai/go | ≈ $10/month (first month ≈ $5, verified 2026-09). Sign up → create API key → paste. |
-| Any OpenAI-compatible endpoint | Provider docs | Set the provider's key + base URL via `hermes config set`. |
+| Option | How | Exact variable | Notes |
+|---|---|---|---|
+| Nous Portal | `hermes setup --portal` | none (OAuth login) | One OAuth covers a model + tool gateway. Fastest path. |
+| OpenCode Go (low-cost flat plan) | https://opencode.ai/go → create API key | `OPENCODE_GO_API_KEY` | ≈ $10/month (first month ≈ $5, verified 2026-09). |
+| OpenCode Zen | https://opencode.ai → API key | `OPENCODE_ZEN_API_KEY` | Pay-as-you-go. |
+| OpenRouter | https://openrouter.ai/keys | `OPENROUTER_API_KEY` | Many models behind one key. |
+| Vercel AI Gateway | Vercel dashboard → AI Gateway → API keys | `AI_GATEWAY_API_KEY` | Not `VERCEL_AI_GATEWAY_API_KEY`. |
+| OpenAI / Anthropic | Provider console | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | |
+| Other OpenAI-compatible endpoint | Provider docs | as `hermes model` names it | Enter the base URL in `hermes model`; the key through the helper. |
+
+Names follow Hermes v0.23 (`hermes_cli/auth.py` provider table); when `hermes model` names a different variable, use that name.
 
 Steps:
 
-1. Give the user the signup link; ask them to create an API key.
-2. They provide the key through the gate. Write it with `hermes config set <PROVIDER>_API_KEY <value>` (UPPER_SNAKE → `.env` under the resolved `HERMES_HOME`). Do not echo it back or put it in logs/state. Linux/macOS: owner-only mode 600; Windows: protected NTFS ACL read-back, not a `chmod 600` assumption.
-3. Verify immediately: `hermes chat -q "Reply with exactly: OK"` must return OK. If not, run `hermes model` to check provider/model selection.
+1. Give the user the signup link; ask them to create an API key (or run `hermes setup --portal` for Nous Portal OAuth).
+2. The user runs `bash bootstrap/bin/oaos-secret-set <EXACT_VARIABLE>` in their own terminal, then `hermes model` to pick provider and model.
+3. Verify immediately: `bash editions/personal/install.sh --stage llm`. It passes only when a bounded `hermes chat -q "Reply with exactly: OK"` answers within 30 s; a stored key with no working model blocks (exit 3).
 
 Common failures: `401` → key wrong or truncated (ask for a re-paste, never re-display); `model not found` → run the `hermes model` wizard.
 
 ## G2 — Telegram bot token
 
-Open `t.me/BotFather` → send `/newbot` → choose a display name and a username ending in `bot` → copy the token (format `123456789:ABC...`). Store it with `hermes config set TELEGRAM_BOT_TOKEN <token>` in the resolved Hermes `.env`; never echo the value. Check mode/owner on Linux/macOS or protected NTFS ACL on Windows. If it leaks, revoke it in BotFather (`/revoke`) and repeat this gate.
+Open `t.me/BotFather` → send `/newbot` → choose a display name and a username ending in `bot` → copy the token (format `123456789:ABC...`). The user stores it with `bash bootstrap/bin/oaos-secret-set TELEGRAM_BOT_TOKEN`. Verify: `--stage telegram` calls Telegram `getMe` with the token on curl's stdin config (never argv) and blocks with the HTTP code on failure. If it leaks, revoke it in BotFather (`/revoke`) and repeat this gate.
 
 ## G3 — Telegram user ID
 
-Open `t.me/userinfobot` → copy the numeric user ID (not the username). Store it with `hermes config set TELEGRAM_ALLOWED_USERS <numeric-id>`; never echo the value. Install and check the gateway with `hermes gateway install` and `hermes gateway status`. On Linux, read back the systemd user unit and linger; on macOS, launchd registration and status; on Windows, the ONLOGON task or Hermes Startup fallback and status. A macOS/Windows logout/login check still needs real device evidence. Ask the user to message the bot and confirm a reply.
+Open `t.me/userinfobot` → copy the numeric user ID (not the username). The user stores it with `bash bootstrap/bin/oaos-secret-set TELEGRAM_ALLOWED_USERS`; format is numbers only, comma-separated for several people (`12345,67890`). The telegram stage rejects anything else. The `gateway` stage then installs and checks the gateway (`hermes gateway install`, `hermes gateway status`). On Linux, it reads back the systemd user unit and linger; on macOS, launchd registration and status; on Windows, the ONLOGON task or Hermes Startup fallback and status. Reboot or logout/login survival needs real device evidence on every lane. Ask the user to message the bot and confirm a reply.
 
 Groups: bots only see `/commands` and replies by default. To let the bot read group messages, disable privacy mode in BotFather (`/mybots` → Bot Settings → Group Privacy → Turn off) **and re-add the bot to the group**, or promote it to group admin.
 
-## G4 — (Optional) Large files
+## G4 — (Deferred) Large files
 
-Open `https://my.telegram.org` to obtain `api_id` and `api_hash` for optional large-file support. Copy both values only into the agent's secret configuration; never put them in logs or the wiki.
+Not implemented. The Telegram local Bot API (needs `api_id`/`api_hash` from `https://my.telegram.org` and a separate server) is deferred; do not offer it as part of the Personal install. If the user asks, explain that files over 20 MB are not supported yet.
 
-## G5 — (Optional) Email
+## G5 — (Optional, manual) Email
 
-Enable two-factor authentication for Gmail, then create and copy an app password for optional email access. Store it in the secret configuration and do not display it again.
+The Personal installer has no mail stage yet. If the user wants mail now: enable two-factor authentication for the mailbox (Gmail: https://myaccount.google.com/apppasswords), create an app password, and store it with `bash bootstrap/bin/oaos-secret-set <VARIABLE>` under a variable name you choose (for example `OAOS_MAIL_PASSWORD`), and configure the mail tool (for example Himalaya) to read it from the environment or a password command — never as plain text in the tool's config file. Confirm one IMAP login without printing the password. Record it as a manual, optional step.
 
 ## G0 · G6 — VPS + domain (Project / Company)
 
@@ -85,6 +93,6 @@ Company expansion gates G10 (admin console) and G13 (optional multi-LLM) belong 
 
 ## Safety reminders (all gates)
 
-- Secrets go into the resolved Hermes `.env` via `hermes config set` — owner-only mode 600 on Linux/macOS; protected NTFS ACL on Windows. Never put raw values into chat replies, logs, state files, or docs.
+- Secrets go into the resolved Hermes `.env` via `bash bootstrap/bin/oaos-secret-set KEY` — owner-only mode 600 on Linux/macOS; protected NTFS ACL on Windows. Never put raw values into chat replies, argv, logs, state files, or docs.
 - Verify every pasted value immediately; a gate is not done until the check passes.
 - When a gate cannot pass (e.g. user cannot create an account right now), record it in state as blocked and continue with what can proceed — do not fake success.

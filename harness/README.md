@@ -11,7 +11,7 @@ The files that shape your agent — identity, memory, project instructions — p
 | `memories/MEMORY.md` | The agent's notes — environment, conventions, lessons | **the agent** — written and maintained automatically; you can correct | every turn |
 | `AGENTS.md` | Project instructions, per workspace | **you** | while working in that project |
 | `config.yaml` | Settings — model, providers, gateway, personalities | you / `hermes config set` | on start |
-| `.env` | Secrets — keys and tokens | you / `hermes config set` (mode `600`) | on start |
+| `.env` | Secrets — keys and tokens | you / `bash bootstrap/bin/oaos-secret-set KEY` (hidden input, mode `600`) | on start |
 | `skills/` | Procedures the agent can load | the agent + you | on demand |
 | `cron/` | Scheduled jobs | the agent + you | scheduler |
 
