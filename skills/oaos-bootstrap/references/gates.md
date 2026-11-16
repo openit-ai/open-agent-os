@@ -54,9 +54,22 @@ Groups: bots only see `/commands` and replies by default. To let the bot read gr
 
 Not implemented. The Telegram local Bot API (needs `api_id`/`api_hash` from `https://my.telegram.org` and a separate server) is deferred; do not offer it as part of the Personal install. If the user asks, explain that files over 20 MB are not supported yet.
 
-## G5 — (Optional, manual) Email
+## G5 — (Optional) Personal mail
 
-The Personal installer has no mail stage yet. If the user wants mail now: enable two-factor authentication for the mailbox (Gmail: https://myaccount.google.com/apppasswords), create an app password, and store it with `bash bootstrap/bin/oaos-secret-set <VARIABLE>` under a variable name you choose (for example `OAOS_MAIL_PASSWORD`), and configure the mail tool (for example Himalaya) to read it from the environment or a password command — never as plain text in the tool's config file. Confirm one IMAP login without printing the password. Record it as a manual, optional step.
+Choice gate first: ask whether the owner wants the agent to read and draft mail. Not selected is a normal outcome — the Personal `mail` stage records `SKIP(not_selected)`, contacts no mail server, and the install completes without it.
+
+When selected:
+
+| Why | Link | Exact variable |
+|---|---|---|
+| The mailbox the agent reads and sends from (selects G5; not secret, may be given in chat) | — | `OAOS_PERSONAL_MAIL_ADDRESS` |
+| An app password lets the agent log in without the account password | https://myaccount.google.com/apppasswords (Gmail; 2-Step Verification must be on) | `OAOS_PERSONAL_MAIL_APP_PASSWORD` (secret, one word, no spaces) |
+| Only for non-Gmail mailboxes (Gmail defaults to `imap.gmail.com` / `smtp.gmail.com`) | provider's IMAP/SMTP settings page | `OAOS_PERSONAL_MAIL_IMAP_HOST`, `OAOS_PERSONAL_MAIL_SMTP_HOST` |
+
+1. The user stores each value in their own terminal with `bash bootstrap/bin/oaos-secret-set <VARIABLE>`. A password passed as a process environment variable is ignored.
+2. Verify immediately: `bash editions/personal/install.sh --stage mail`. It logs in over IMAP (993, TLS) and SMTP (587, STARTTLS) with the password on Python's stdin; either failure blocks the stage with the link and the variable again.
+3. With Himalaya 1.x installed (Linux, macOS) the stage writes `~/.config/himalaya/config.toml` (600, account `oaos-personal`) whose `auth.cmd` is `~/.oaos/bin/oaos-mail-password` (700), a command that reads the app password from the Hermes `.env` at call time — the password is never written into the Himalaya config — and checks that Himalaya lists the inbox. An existing Himalaya config the owner wrote is preserved.
+4. MANUAL cases: Himalaya not installed (link: https://pimalaya.org/himalaya/ — install a verified 1.x release, then `--stage mail --recheck`), a non-1.x version, the owner's own config, and the Windows lane (configure Himalaya by hand with a password command; never a plain-text password). After checking such a setup, record it with `bash bootstrap/verify/personal-verify.sh --confirm mail`.
 
 ## G0 — Server (Project / Company)
 
@@ -67,7 +80,7 @@ The Personal installer has no mail stage yet. If the user wants mail now: enable
 
 ## G4 · G5 in Project
 
-Not offered. Large files (G4) are deferred for every edition, and Project's mail is the G9 bot mailbox only — never a person's mailbox.
+Not offered. Large files (G4) are deferred for every edition, and Project's mail is the G9 bot mailbox only — never a person's mailbox. A Personal G5 mailbox is not migrated to Project.
 
 ## G6 — Domain DNS (Project / Company)
 
@@ -96,7 +109,7 @@ Principle: the AI agent writes and maintains the wiki under its **own** Outline 
 2. The admin enables e-mail sign-in (Settings → Security) and invites the AI-agent account — its e-mail is the G9 bot address — as a member or editor, not admin.
 3. The agent account signs in through the link delivered to the bot mailbox (G9 SMTP must work), opens Settings → API Keys and creates a token (`ol_api_…`).
 4. The user stores it: `bash bootstrap/bin/oaos-secret-set OUTLINE_API_TOKEN`.
-5. Verify immediately: `--stage team` calls `POST /api/auth.info` (token on curl's stdin config) and blocks unless the account e-mail equals `OAOS_MAIL_ADDRESS` and the role is not admin; it stores `OUTLINE_URL`. Hermes has no built-in Outline skill yet, so Outline recipes need a skill that reads `OUTLINE_URL` and `OUTLINE_API_TOKEN`.
+5. Verify immediately: `--stage team` calls `POST /api/auth.info` (token on curl's stdin config) and blocks unless the account e-mail equals `OAOS_MAIL_ADDRESS` and the role is not admin; it stores `OUTLINE_URL`. Once the check passes, `team` installs the `outline-wiki` skill (`skills/outline-wiki`) into `$HERMES_HOME/skills`; its stdlib helper reads `OUTLINE_URL` and `OUTLINE_API_TOKEN` from the Hermes `.env` and searches, reads, creates and updates documents as the agent account through member endpoints only. `project-verify.sh` runs its `auth.info` and a read-only search (row "Outline skill").
 
 ## G9 — Bot mailbox (Project / Company)
 

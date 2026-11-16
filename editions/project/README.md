@@ -56,7 +56,7 @@ Personal의 선택 게이트 G4(대용량 파일)·G5(개인 메일)는 Project�
 
 스테이지 순서는 `prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify`입니다.
 
-- `team`은 Mattermost·Outline 자격 증명을 검증해 Hermes `.env`에 저장합니다. 게이트웨이가 **이미 설치되어 실행 중일 때만** 재시작해 새 설정을 반영합니다. 새 서버에서는 아직 게이트웨이가 없으므로 재시작하지 않습니다.
+- `team`은 Mattermost·Outline 자격 증명을 검증해 Hermes `.env`에 저장하고, G8이 통과하면 Outline 스킬 `outline-wiki`를 Hermes 스킬 폴더(`~/.hermes/skills/outline-wiki`)에 설치합니다(아래 "Outline 스킬"). 게이트웨이가 **이미 설치되어 실행 중일 때만** 재시작해 새 설정을 반영합니다. 새 서버에서는 아직 게이트웨이가 없으므로 재시작하지 않습니다.
 - `gateway`는 `telegram`이 끝난 뒤 게이트웨이를 처음 설치·기동합니다. `team`이 먼저 끝났다면 Telegram과 Mattermost가 모두 들어간 상태로 첫 기동합니다. 그 전에 `approvals.cron_mode`·`single_query_mode`·`unattended_mode`를 `deny`로 설정합니다(무인 실행 승인 거부).
 - `cron`은 일일 백업 작업 하나(`oaos-daily-backup`)를 등록합니다.
 
@@ -74,7 +74,7 @@ Mattermost의 [서명 APT 방식](https://docs.mattermost.com/deployment-guide/s
 
 Outline 3000 포트는 고정 태그의 `server/main.ts` 한 줄만 수정하여 `127.0.0.1`에 바인딩합니다. 소스·빌드 산출물·실제 리스너 검사를 통과하지 못하면 설치를 중단합니다. 태그를 업데이트할 때는 패치를 다시 적용하고 전부 재검증해야 합니다. upstream이 공식 바인딩 설정을 추가하면 검증 후 패치를 제거합니다. 실제 소스 빌드에서 바인딩 코드는 `build/server/main.js`에 들어가고 `build/server/index.js`가 이를 불러옵니다.
 
-Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`으로 계획을 확인하고, 같은 명령을 `--dry-run` 없이 실행합니다. 시크릿 `.env`는 이전되지 않으므로 게이트 값을 다시 입력합니다.
+Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/personal-to-project.sh --source user@host --dry-run`으로 계획을 확인하고, 같은 명령을 `--dry-run` 없이 실행합니다. 시크릿 `.env`는 이전되지 않으므로 게이트 값을 다시 입력합니다. Personal 위키의 원격(로컬 중계 `~/data/wiki.git`을 가리키는 `origin`·`oaos-relay` 포함)은 모두 제거되고 중계 저장소 자체는 복사하지 않습니다 — 위키 `.git`에 전체 기록이 있으므로 Project에서 새 원격이 필요하면 `--wiki-remote URL`을 지정합니다. Personal의 G5 개인 메일 설정(Himalaya·앱 비밀번호)도 이전하지 않습니다.
 
 ### 게이트 값 (모두 `bash bootstrap/bin/oaos-secret-set KEY`로 입력)
 
@@ -99,6 +99,17 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 - **G7 Mattermost**: 사람이 `https://chat.<도메인>`에서 첫 관리자 계정을 만듭니다. 그 관리자가 System Console → Integrations → Bot Accounts에서 Hermes용 **봇 계정**을 만들고(시스템 관리자 역할 없음) 봇 토큰을 발급합니다. `team`은 `/api/v4/users/me`로 토큰이 봇(`is_bot=true`)이고 `system_admin` 역할이 없는지 확인하며, 사람 계정 토큰이나 관리자 봇 토큰은 거부합니다. 확인한 `mmctl --local` 버전은 봇·토큰을 만들지 못하므로 관리자 존재와 SiteURL 확인에만 씁니다.
 - **G8 Outline**: wiki 작성·관리의 주체는 AI 에이전트입니다. 사람 관리자가 **먼저** 가입합니다(첫 계정 = 워크스페이스 관리자). 그 관리자가 Settings → Security에서 이메일 로그인을 켜고, **AI 에이전트 전용 계정**(이메일 = G9 봇 메일함)을 멤버 또는 편집자로 초대합니다. 에이전트 계정은 봇 메일함으로 온 로그인 링크로 들어가 Settings → API Keys에서 토큰(`ol_api_`로 시작)을 발급합니다. `team`은 `POST /api/auth.info`로 토큰 계정의 이메일이 봇 메일함과 같고 관리자가 아닌지 확인합니다. 봇이 만드는 문서는 이 계정 명의로 남고, 사람이 직접 고친 경우에만 그 사람의 기록이 남습니다.
 
+### Outline 스킬 (`skills/outline-wiki`)
+
+G8이 통과하면 `team`이 저장소의 [`skills/outline-wiki`](../../skills/outline-wiki/SKILL.md)를 `$HERMES_HOME/skills/outline-wiki`로 복사합니다(표시 파일 `.oaos-managed`가 있는 사본은 다음 `team` 실행 때 갱신, 사용자가 직접 둔 사본은 보존). 에이전트는 이 스킬로 G8 에이전트 계정 명의로 Outline 문서를 **검색·읽기·생성·수정**합니다. 헬퍼 `scripts/outline.py`(Python 표준 라이브러리만 사용)는 `OUTLINE_URL`·`OUTLINE_API_TOKEN`을 Hermes `.env`에서 직접 읽고, 토큰은 HTTPS `Authorization` 헤더로만 보냅니다(명령행 인자·출력·로그에 남지 않음, 리디렉션 미추적, 루프백이 아닌 곳으로는 평문 http 거부). 호출하는 엔드포인트는 멤버 권한용 `auth.info`·`collections.list`·`documents.search`·`documents.info`·`documents.create`·`documents.update`뿐이며 관리자 API는 쓰지 않습니다. Outline MCP 서버는 제공하지 않습니다.
+
+```text
+OW=${HERMES_HOME:-$HOME/.hermes}/skills/outline-wiki/scripts/outline.py
+python3 "$OW" whoami
+python3 "$OW" search --query "온보딩"
+python3 "$OW" create --title "주간 노트" --collection <컬렉션 id> --text-file notes.md
+```
+
 ### Outline 첫 관리자 로그인과 신원 제공자(IdP)
 
 실측한 v1.10.1은 아직 팀이 없을 때 이메일 매직링크 로그인을 제공하지 않습니다(`/api/auth.config`가 빈 목록). 첫 관리자는 다음 중 하나로 만듭니다.
@@ -116,7 +127,7 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 
 ### 검증
 
-`bash bootstrap/verify/project-verify.sh`(`--json`, `--offline`)는 Personal과 같은 Hermes 항목에 더해 DNS·TLS·HTTPS, nginx, 서비스 상태, 5432·6379·8065·3000 루프백 전용 리스너, PostgreSQL `listen_addresses`, 서비스 시크릿 파일 권한, UFW(활성 + 22·80·443), 무인 실행 승인 거부, Telegram getMe, 게이트웨이의 Telegram·Mattermost 연결, Mattermost 봇·허용 목록, Outline 에이전트 토큰·`OUTLINE_URL`, 봇 메일함 IMAP·SMTP 로그인, 백업·복원 dry-run을 확인합니다. 값이 있는데 메일 로그인이 실패하면 FAIL입니다. 사람이 확인해야 하는 항목(재부팅 후 생존, Telegram 허용·비허용, Mattermost 허용·비허용, 에이전트의 Outline 문서 작성, 메일 송수신)은 MANUAL이며, 확인 후 `--confirm reboot,chat,allowlist,mm-chat,mm-deny,outline-page,mail-flow`로 기록합니다. 종료 코드는 0 PASS / 2 MANUAL 대기 / 1 FAIL입니다.
+`bash bootstrap/verify/project-verify.sh`(`--json`, `--offline`)는 Personal과 같은 Hermes 항목에 더해 DNS·TLS·HTTPS, nginx, 서비스 상태, 5432·6379·8065·3000 루프백 전용 리스너, PostgreSQL `listen_addresses`, 서비스 시크릿 파일 권한, UFW(활성 + 22·80·443), 무인 실행 승인 거부, Telegram getMe, 게이트웨이의 Telegram·Mattermost 연결, Mattermost 봇·허용 목록, Outline 에이전트 토큰·`OUTLINE_URL`·Outline 스킬(설치된 헬퍼로 `auth.info`와 읽기 전용 검색, 127.0.0.1:3000 경유), 봇 메일함 IMAP·SMTP 로그인, 백업·복원 dry-run을 확인합니다. 값이 있는데 메일 로그인이 실패하면 FAIL입니다. 사람이 확인해야 하는 항목(재부팅 후 생존, Telegram 허용·비허용, Mattermost 허용·비허용, 에이전트의 Outline 문서 작성, 메일 송수신)은 MANUAL이며, 확인 후 `--confirm reboot,chat,allowlist,mm-chat,mm-deny,outline-page,mail-flow`로 기록합니다. 종료 코드는 0 PASS / 2 MANUAL 대기 / 1 FAIL입니다.
 
 ## 비용
 
@@ -137,7 +148,7 @@ Personal에서 이전하려면 Project 서버에서 `bash bootstrap/migrate/pers
 
 ## 상태
 
-Project 설치·검증·백업/복원·Personal 이전 스크립트가 제공됩니다. 신규 VPS에서 전체 게이트와 실제 서비스 동작을 검증해야 P1 완료로 판정합니다. Mattermost 봇(G7), Outline 에이전트 계정·API 토큰(G8), 봇 메일함(G9)은 사용자 게이트입니다. Hermes에는 아직 Outline 전용 스킬·MCP가 없으므로, 에이전트가 Outline API를 쓰려면 `OUTLINE_URL`·`OUTLINE_API_TOKEN`을 사용하는 스킬을 별도로 구성해야 합니다.
+Project 설치·검증·백업/복원·Personal 이전 스크립트가 제공됩니다. 신규 VPS에서 전체 게이트와 실제 서비스 동작을 검증해야 P1 완료로 판정합니다. Mattermost 봇(G7), Outline 에이전트 계정·API 토큰(G8), 봇 메일함(G9)은 사용자 게이트입니다. Outline API는 `team`이 설치하는 `outline-wiki` 스킬로 사용합니다(검색·읽기·생성·수정). Outline MCP 서버는 제공하지 않습니다.
 
 ## 라이선스
 

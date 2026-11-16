@@ -1,6 +1,6 @@
 # Personal 크로스플랫폼 지원 설계 v1.0
 
-> **상태(2026-11-16 갱신)**: 설계 정본. 2026-11 보안·정책 보정(시크릿 헬퍼, 에디션별 상태, 게이트 즉시 검증, 검증기 19항목·종료 코드 0/2/1, OS 타이머 워치독)을 반영했다. 이하 2026-09-27 기록: Personal P1~P3의 Ubuntu(Linux)·macOS Apple Silicon·Windows 11 Git Bash 스크립트 구현과 로컬 모의 검증 완료. P4 CI 매트릭스·스킬·문서를 추가했고 호스티드 러너 3종(ubuntu-latest·macos-latest·windows-latest) 매트릭스를 통과했다(2026-09-27). 실기기 설치·키/메시지·로그인/재부팅 검증 P5는 미완이다. Project·Company는 Ubuntu LTS 서버 경로를 유지한다.
+> **상태(2026-11-16 갱신)**: 설계 정본. 2026-11 보안·정책 보정(시크릿 헬퍼, 에디션별 상태, 게이트 즉시 검증, 검증기 19항목·종료 코드 0/2/1, OS 타이머 워치독)을 반영했다. 2026-11-17: 선택 단계 `mail`(G5)·위키 bare 중계와 검증기 20·21번 항목을 추가했다. 이하 2026-09-27 기록: Personal P1~P3의 Ubuntu(Linux)·macOS Apple Silicon·Windows 11 Git Bash 스크립트 구현과 로컬 모의 검증 완료. P4 CI 매트릭스·스킬·문서를 추가했고 호스티드 러너 3종(ubuntu-latest·macos-latest·windows-latest) 매트릭스를 통과했다(2026-09-27). 실기기 설치·키/메시지·로그인/재부팅 검증 P5는 미완이다. Project·Company는 Ubuntu LTS 서버 경로를 유지한다.
 
 ## 0. 범위·근거
 
@@ -78,7 +78,7 @@ Windows Git Bash 명령 가용성은 **설치 전 탐지 계약**이다. Git Bas
 
 ## 2. 설치 파이프라인·상태 계약
 
-단계 순서와 공개 CLI는 유지한다: `prep → hermes → llm → telegram → gateway → wiki → harness → cron → verify`; `--stage`, `--status`, `--dry-run`, `--yes`, `--timezone`, `--skip-verify`에 `--recheck`(완료 단계 재실행), `--reverify`(verify만)를 더했다. 종료 코드는 `0=선택 단계 완료·verify 전부 PASS`, `2=FAIL·차단 없음, MANUAL 대기`, `3=게이트/전제 차단`, `1=실패 또는 verify FAIL`이다. verify는 재실행마다 다시 돈다. G1은 제한 시간 모델 응답(OAuth 포함), G2는 Telegram `getMe`(토큰은 curl stdin 설정으로 전달, argv 금지), G3는 숫자 ID 목록 형식으로 즉시 확인하며, 실제 Telegram 왕복은 verify의 MANUAL 항목이다. gateway는 telegram 완료 전에는 차단되고, telegram이 나중에 바뀌면 실행 중인 gateway를 재시작한다. 각 단계는 errexit가 실제로 켜진 서브셸에서 실행되어 실패한 명령이 단계를 `failed`로 만든다. 시크릿은 `bootstrap/bin/oaos-secret-set KEY`(숨김 입력/stdin → Hermes `.env` 원자적 쓰기·소유자 전용 read-back)로만 저장한다. `--dry-run`은 무변경 계획 출력이며 완료 증거가 아니다.
+단계 순서와 공개 CLI는 유지한다: `prep → hermes → llm → telegram → gateway → wiki → harness → cron → mail → verify`(2026-11-17 선택 단계 `mail` 추가 — 미선택이면 `SKIP(not_selected)`); `--stage`, `--status`, `--dry-run`, `--yes`, `--timezone`, `--skip-verify`에 `--recheck`(완료 단계 재실행), `--reverify`(verify만)를 더했다. 종료 코드는 `0=선택 단계 완료·verify 전부 PASS`, `2=FAIL·차단 없음, MANUAL 대기`, `3=게이트/전제 차단`, `1=실패 또는 verify FAIL`이다. verify는 재실행마다 다시 돈다. G1은 제한 시간 모델 응답(OAuth 포함), G2는 Telegram `getMe`(토큰은 curl stdin 설정으로 전달, argv 금지), G3는 숫자 ID 목록 형식으로 즉시 확인하며, 실제 Telegram 왕복은 verify의 MANUAL 항목이다. gateway는 telegram 완료 전에는 차단되고, telegram이 나중에 바뀌면 실행 중인 gateway를 재시작한다. 각 단계는 errexit가 실제로 켜진 서브셸에서 실행되어 실패한 명령이 단계를 `failed`로 만든다. 시크릿은 `bootstrap/bin/oaos-secret-set KEY`(숨김 입력/stdin → Hermes `.env` 원자적 쓰기·소유자 전용 read-back)로만 저장한다. `--dry-run`은 무변경 계획 출력이며 완료 증거가 아니다.
 
 현재 `common.sh` 상태 파일은 `pending/done/blocked/failed`이고 성공 시 바로 `done`을 쓴다. 후속 구현에서는 **기존 `done`을 설치 적용 기록으로 보존**하고, 신규 결과는 `applied`(구성 적용), `verified`(OS별 read-back 및 필요한 수동 증거 완료), `SKIP`(명시적으로 허용된 선택 항목의 사유 기록), `blocked`, `failed`로 분리한다. `applied`는 재실행 시 read-back을 다시 하고, `verified`도 OS·Hermes 홈·서비스 등록이 바뀌면 재검증한다. 기존 `done`을 새 OS에서 자동 `verified`로 승격하지 않는다. 필수 `prep/hermes/llm/telegram/gateway/wiki/harness/cron/verify`의 무증거 SKIP은 금지한다. `--skip-verify`는 verify 수행을 미루며 설치 전체를 verified로 만들지 않는다. 상태 형식 변경 시 기존 Linux 상태 파일을 읽는 마이그레이션과 재개 테스트를 포함한다. 구현 현황(2026-11): 상태 값 `pending/done/applied/verified/SKIP/blocked/failed`를 모두 지원하고, Personal 설치기는 일반 단계에 `done`, verify에 `verified`(전부 PASS)·`applied`(MANUAL 대기)·`failed`를 쓴다. 상태 파일은 에디션별 네임스페이스 `editions.<edition>.stages`를 가지며, 평면 `stages`는 마지막으로 쓴 에디션(`edition`)의 보기로만 유지된다(구 파일·직접 편집 호환). `applied` 단계의 재실행 시 read-back 재수행은 verify에만 적용된다.
 
@@ -95,7 +95,7 @@ Hermes 설치 다운로드의 SHA-256 출력·선택적 `OAOS_HERMES_INSTALLER_S
 
 ## 3. Personal 검증 계약
 
-`bootstrap/verify/personal-verify.sh`는 19개 항목과 `PASS/FAIL/MANUAL/SKIP`, `--json`, `--offline`, `--confirm reboot,chat,allowlist` 형식이다(2026-11 갱신; 이전 12항목). 종료 코드 0=전부 PASS(SKIP 허용), 2=FAIL 없음·MANUAL 대기, 1=FAIL. OS별 서비스·자원·파일 기준만 플랫폼 계층으로 교체한다. `--offline`의 모델·getMe SKIP은 명시적 검사 생략이며 최종 실증 PASS가 아니다. 자동 검사 PASS와 사용자 메시지·재로그온/재부팅 MANUAL 증거를 구분한다. 항목 목록과 OS별 판정은 `skills/oaos-bootstrap/references/verify-checklist.md`가 정본이며 아래 표는 2026-09 기준 원래 12항목의 설계 근거다.
+`bootstrap/verify/personal-verify.sh`는 21개 항목과 `PASS/FAIL/MANUAL/SKIP`, `--json`, `--offline`, `--confirm reboot,chat,allowlist,mail` 형식이다(2026-11-17 갱신: 20 개인 메일·21 위키 중계 추가; 이전 19·12항목). 아래 표는 2026-09 설계 당시의 번호다. 종료 코드 0=전부 PASS(SKIP 허용), 2=FAIL 없음·MANUAL 대기, 1=FAIL. OS별 서비스·자원·파일 기준만 플랫폼 계층으로 교체한다. `--offline`의 모델·getMe SKIP은 명시적 검사 생략이며 최종 실증 PASS가 아니다. 자동 검사 PASS와 사용자 메시지·재로그온/재부팅 MANUAL 증거를 구분한다. 항목 목록과 OS별 판정은 `skills/oaos-bootstrap/references/verify-checklist.md`가 정본이며 아래 표는 2026-09 기준 원래 12항목의 설계 근거다.
 
 | 현재 항목 | 공통 통과 근거 | Linux | macOS | Windows 11 |
 |---|---|---|---|---|
@@ -119,7 +119,7 @@ Hermes 설치 다운로드의 SHA-256 출력·선택적 `OAOS_HERMES_INSTALLER_S
 | `SKILL.md` Phase 0 recon | OS 식별 후 Linux: `/etc/os-release`, `free`, `df`, `swapon`; macOS: Apple Silicon 판정, 시스템 메모리·swap·디스크 조회; Windows: **Git Bash에서 실행**하고 Windows 11/아키텍처, Git Bash·`hermes` PATH, RAM·pagefile·볼륨을 조회. OS별 정확한 명령은 P2/P3 실측 후 기재 |
 | `SKILL.md` Phase 2/3/4 | OS별 prep·공식 Hermes 설치 경로·`hermes gateway` 위임·Personal 검증기 실행을 서술. Windows PowerShell은 공식 Hermes 설치와 필요한 시스템 조회/ACL 프리미티브에서만 사용 |
 | `references/gates.md` | G1–G3 동일; Windows 키 저장 위치와 ACL 확인, macOS·Windows 로그인 후 게이트웨이 확인 문구. 토큰 원문 비출력 유지 |
-| `references/verify-checklist.md` | 19개 항목(2026-11; 이전 12개)의 OS별 서비스·부팅·자원·파일 권한 판정표; 실기기 MANUAL 증거와 미실행 SKIP 구분 |
+| `references/verify-checklist.md` | 21개 항목(2026-11-17; 이전 19·12개)의 OS별 서비스·부팅·자원·파일 권한 판정표; 실기기 MANUAL 증거와 미실행 SKIP 구분 |
 | `README.md`, `README.ko.md` | Personal 설치 표의 “host packages and systemd”를 Linux 한정으로 바꾸고 macOS/Windows 공식 설치·서비스 경로, 구현/검증 상태를 반영. 번역 쌍 동기화 |
 | `docs/faq.md`, `docs/architecture.md`, `START-HERE.md`, `editions/personal/README.md` | Linux 전용 하드웨어·apt/systemd·recon·재부팅 설명의 범위를 세 레인으로 갱신. Project·Company Ubuntu 서버 설명 유지 |
 

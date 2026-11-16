@@ -4,7 +4,7 @@
 > **관계**: 본 문서가 OAOS 제품 설계의 **단일 최종본**이다. 구 플랫폼(비공개 `open-agent-os-platform`, 아키텍처 v1.7.5·제품 0.1.10)은 Company 에디션 흡수 원천으로만 참조한다. 버전별 사본 파일을 두지 않고 변경 이력은 git과 아래 개정 이력으로 관리한다.
 > **목표**: Hermes Agent 설치 후 **저장소 URL 하나를 알려주면** README 설명부터 대부분의 설치, 최종 테스트까지 에이전트가 자동 진행 — 사용자는 **링크 확인·선택·최소 복사/붙여넣기**만 한다.
 > **입력**: 3-에디션 설계 요구(2026-09-25) · 구축 실측 가이드 2종(개인용·프로젝트용, 2026-09-22)
-> **버전**: v2.1 (2026-11-16) — 현행 최종본 · 개정 이력은 부록 D
+> **버전**: v2.1.1 (2026-11-17) — 현행 최종본 · 개정 이력은 부록 D
 > **수치 원칙**: 금액·제품명·경로·구성 값은 공식 출처로 검증해 기재(§0-1, 부록 C)
 
 ---
@@ -88,13 +88,13 @@ flowchart TD
 1. 모든 게이트는 **① 클릭 가능한 링크 ② 왜 필요한지 1줄 ③ 저장할 변수 이름(정확한 키)** 순서로 안내한다.
 2. 비밀값은 사용자가 **자기 터미널의 숨김 입력**(`bash bootstrap/bin/oaos-secret-set KEY`)으로 넣는다. 채팅에 붙여넣지 않게 안내하고, 명령행 인자(`hermes config set KEY <값>` 등)로 넘기는 경로는 금지한다. 비밀이 아닌 값(숫자 ID·도메인 등)은 채팅으로 받아도 된다.
 3. 저장 직후 단계 재실행에서 **즉시 검증**한다(게이트별 검증 방법은 §2.4). 실패하면 값은 저장된 채로 단계를 BLOCKED로 두고 원인·재입력 링크를 다시 안내한다.
-4. 값은 Hermes `.env`에만 저장한다(예외: Project 서비스 내부 파일 `~/oaos/stack/.env`·`/etc/oaos/outline.env`(root 600)·Mattermost `config.json`(600) — 게이트 값이 아닌 서비스 내부 값만, verify가 권한 확인. Outline IdP 값은 Hermes `.env`에 `OUTLINE_<KEY>`로 저장) — 원자적 쓰기, 소유자 전용(Linux·macOS 600+소유자 확인, Windows NTFS ACL), 단일 도우미(`bootstrap/lib/secret.sh`)만 쓴다. 스킬·스크립트는 값을 재출력하지 않으며 로그·문서·위키·상태 파일에 남기지 않는다.
+4. 값은 Hermes `.env`에만 저장한다(예외: Project 서비스 내부 파일 `~/oaos/stack/.env`·`/etc/oaos/outline.env`(root 600)·Mattermost `config.json`(600) — 게이트 값이 아닌 서비스 내부 값만, verify가 권한 확인. Outline IdP 값은 Hermes `.env`에 `OUTLINE_<KEY>`로 저장). 외부 도구 설정에는 값을 복사하지 않는다 — 예: Personal G5의 Himalaya 설정은 실행 시점에 `.env`를 읽는 소유자 전용 비밀번호 명령(`~/.oaos/bin/oaos-mail-password`, 700)만 가리킨다 — 원자적 쓰기, 소유자 전용(Linux·macOS 600+소유자 확인, Windows NTFS ACL), 단일 도우미(`bootstrap/lib/secret.sh`)만 쓴다. 스킬·스크립트는 값을 재출력하지 않으며 로그·문서·위키·상태 파일에 남기지 않는다.
 5. 게이트는 "선택"과 "제공(필수)" 두 종류만 존재한다. 그 외(설정 파일 편집·명령 타이핑)는 전부 에이전트 몫이다. 설치기를 `--yes`로 실행하는 것은 사용자가 해당 선택 게이트를 승인한 뒤에만 한다.
 6. 게이트가 발생하기 전까지는 **무인 진행**을 원칙으로 하고, 진행 상황은 시작·게이트·검증·완료 시점에만 보고한다.
 
 ### 2.4 개입 지점 (에디션별)
 
-**Personal — 필수 3 + 선택 1 (G4 보류)**
+**Personal — 필수 3 + 선택 2(Hermes 설치 승인·G5) · G4 보류**
 
 | # | 게이트 | 사용자 액션(최소) | 저장 키 | 즉시 검증 |
 |---|---|---|---|---|
@@ -103,7 +103,7 @@ flowchart TD
 | G2 | Telegram 봇 | BotFather `/newbot` → 토큰 입력 | `TELEGRAM_BOT_TOKEN` | `getMe`(토큰은 curl 표준입력 설정으로 전달) |
 | G3 | Telegram 사용자 ID | @userinfobot → 숫자 ID | `TELEGRAM_ALLOWED_USERS` | 숫자 ID 목록 형식 |
 | G4 | (보류) 대용량 파일·Local Bot API | — | — | 구현 보류 — 필요 시 별도 설계 |
-| G5 | (선택·수동) 이메일 | Gmail 앱 비밀번호 | 도우미로 저장 | 자동 검증 없음(수동 단계) |
+| G5 | (선택) 개인 메일 | 메일 주소 저장(= 선택) → Gmail 앱 비밀번호 숨김 입력. 미선택이면 `mail` 단계 `SKIP(not_selected)` | `OAOS_PERSONAL_MAIL_ADDRESS`(비밀 아님) · `OAOS_PERSONAL_MAIL_APP_PASSWORD` (Gmail 외: `OAOS_PERSONAL_MAIL_IMAP_HOST`·`OAOS_PERSONAL_MAIL_SMTP_HOST`) | IMAP(993)·SMTP(587) 로그인 둘 다(비밀번호는 Python 표준입력으로만 전달, 실패 = BLOCKED) → Himalaya 1.x 설정(미설치·Windows는 MANUAL) |
 
 **Project — 필수 8 (G0–G3·G6–G9) · G4/G5 미제공**
 
@@ -134,10 +134,11 @@ flowchart TD
 | OS 준비 | Ubuntu: apt·swapfile(여유 10 GiB·10% 이상일 때만)·시간대·절전 마스킹/logind 드롭인(변경한 호스트 설정으로 보고); macOS: 도구 확인·OS 관리 swap·시간대/절전 수동 판정; Windows Git Bash: 도구 확인·pagefile 조회·시간대/전원 수동 판정 | 불확실한 OS 설정은 수동 확인 |
 | Hermes 설정 | `.env`는 비밀값 도우미로만 기록 · 승인 정책 `approvals.cron_mode`·`single_query_mode`·`unattended_mode`를 미설정 시 deny로 설정(명시적 approve면 gateway 단계 차단) · `gateway install`(Ubuntu systemd/linger, macOS launchd, Windows ONLOGON 태스크/Startup 폴백) — 모델 선택은 Hermes 설정 마법사 | G1 |
 | Telegram | `getMe`·숫자 허용 목록 확인 → gateway는 telegram 단계 완료 후에만 기동(변경 시 재시작) | G2·G3 |
-| 위키(세컨드 브레인) | git repo·색인 시드·비밀값 차단 pre-commit 훅 (bare 중계·7축 스키마는 미구현) | — |
+| 위키(세컨드 브레인) | git repo·색인 시드·비밀값 차단 pre-commit 훅 · 로컬 bare 중계 `~/data/wiki.git`(700, 위키의 `origin` — 기존 `origin`이 있으면 `oaos-relay`) 생성 후 push · 위키 부재 시 중계에서 복원 (7축 스키마는 미구현) | — |
+| 개인 메일(선택) | 주소가 저장된 경우에만 실행: IMAP·SMTP 로그인 검증 → Himalaya 1.x 계정 `oaos-personal` 설정(비밀번호 명령 참조, 사용자 설정은 보존) · 미선택은 `SKIP(not_selected)` | G5(선택) — 링크·앱 비밀번호 숨김 입력, Himalaya 미설치·Windows는 수동 |
 | 하네스 | SOUL/USER/MEMORY 초안 + 설치기가 아는 호스트 정보를 MEMORY에 기입 → 대화로 확인·보정 | 문구 확인(대화) |
-| 자동화 | 일일 백업 = Hermes cron(에이전트 비호출) · gateway watchdog = OS 타이머(systemd user timer / launchd — Hermes cron은 gateway 안에서 돌아 gateway 정지 시 동작 불가) · Windows는 watchdog 없음 | — |
-| 최종 테스트 | `personal-verify.sh` 19항목 · 종료코드 0 PASS / 2 MANUAL 대기 / 1 FAIL · 사람 확인은 `--confirm reboot,chat,allowlist`로 기록 | 재부팅·대화·허용 목록 확인 |
+| 자동화 | 일일 백업 = Hermes cron(에이전트 비호출, 아카이브 후 위키를 중계로 push — 이전 릴리스 스크립트는 일치할 때만 자동 갱신) · gateway watchdog = OS 타이머(systemd user timer / launchd — Hermes cron은 gateway 안에서 돌아 gateway 정지 시 동작 불가) · Windows는 watchdog 없음 | — |
+| 최종 테스트 | `personal-verify.sh` 21항목(20 개인 메일: 미선택 SKIP·로그인 실패 FAIL, 21 위키 중계: 최신 커밋 보유) · 종료코드 0 PASS / 2 MANUAL 대기 / 1 FAIL · 사람 확인은 `--confirm reboot,chat,allowlist`(+직접 구성한 Himalaya는 `mail`)로 기록 | 재부팅·대화·허용 목록 확인 |
 
 - 원칙: **자동이 기본값, 개입은 예외**. 개입 지점 수를 늘리는 설계 변경은 이 문서에 반영해 승인받는다.
 - Project·Company도 같은 구조(도우미·상태·종료코드)를 쓴다.
@@ -170,7 +171,7 @@ flowchart TD
 
 ### 4.1 Personal — 개인 1인 · 미니PC
 
-- **구성**: Hermes Agent + Telegram + md 세컨드 브레인(git 위키 + Obsidian) + 개인 추천 스킬 + 개인 메일(Himalaya·Gmail 앱 비밀번호)
+- **구성**: Hermes Agent + Telegram + md 세컨드 브레인(git 위키 + 로컬 bare 중계 + Obsidian) + 개인 추천 스킬 + 개인 메일(선택 G5 — Himalaya·Gmail 앱 비밀번호)
 - **자원**: 기존 Ubuntu 미니PC 사례는 N100급 4코어 / 16GB / 256~512GB SSD — 24시간 상시. macOS·Windows의 하드웨어/절전·로그인 조건은 실기기 확인 필요
 - **비용**: 월 $10(LLM 정액 — OpenCode Go, 2026-09-25 확인) + 전력. 소프트웨어 전부 무료/오픈소스
 - **기존 Ubuntu 기준 실측**(2026-09-22): 무중단 17일+, load 0.44. macOS·Windows 동일 동작의 근거는 아님
@@ -181,7 +182,7 @@ flowchart TD
 - **구성**: Hermes Agent + **Mattermost**(팀 허브) + **Outline**(프로젝트 위키) + PostgreSQL/Redis + Telegram(개인 창구) + nginx/TLS(3도메인) — **Docker 미사용, 네이티브 systemd**
 - **바인딩**: PostgreSQL(`listen_addresses=localhost`)·Redis·Mattermost·Outline 모두 127.0.0.1, 외부는 nginx 443만
 - **백업·복구**: 두 DB `pg_dump` + 서비스 데이터·설정 + Hermes/위키 → 700/600, 최근 7개 보관 · `restore.sh --dry-run|--yes` · verify가 실제 백업 작업과 복구 dry-run 실행
-- **Outline 연동 범위**: `OUTLINE_URL`·`OUTLINE_API_TOKEN`만 저장 — 전용 Outline 스킬/MCP는 아직 미제공(후속)
+- **Outline 연동 범위**: `OUTLINE_URL`·`OUTLINE_API_TOKEN` 저장 + **`outline-wiki` 스킬 제공** — G8 통과 후 `team` 단계가 `$HERMES_HOME/skills/outline-wiki`로 설치. 표준 라이브러리 헬퍼가 `.env`에서 토큰을 읽어 HTTPS 헤더로만 보내며 멤버 엔드포인트(`auth.info`·`collections.list`·`documents.search/info/create/update`)만 호출(관리자 API 없음) · verify가 헬퍼로 `auth.info`·읽기 검색 확인 · Outline MCP 서버는 미제공
 - **자원**: 4 vCPU / 16GB / 200GB급 VPS 1대(예: Hostinger KVM 4). 요금은 프로모션 변동 — 공식 KR 페이지 기준 KVM 전 플랜 월 ₩10,059~₩40,259(2026-09-25 확인, 구매 시점 확인)
 - **메일 분리 원칙**: 외부 소통은 **봇 전용 Gmail + Himalaya** — 개인 Google 계정 연동 시 정보보안 문제를 구조적으로 차단
 - **기준 실측**(2026-09-22): 5개 서비스 동시 구동, 메모리 여유 12 GiB(4 vCPU/15 GiB)
@@ -242,17 +243,17 @@ flowchart TB
 open-agent-os/
 ├── README.md / README.ko.md     # 진입점(사람+에이전트). 에디션 소개 + 부트스트랩 블록
 ├── START-HERE.md                # 에이전트용 정밀 절차(스킬 설치→선택→설치→검증)
-├── skills/                      # oaos-bootstrap(오케스트레이터)·oaos-ops + 선택 스킬
+├── skills/                      # oaos-bootstrap(오케스트레이터)·oaos-ops·outline-wiki(Project, scripts/outline.py) + 선택 스킬
 ├── harness/templates/           # SOUL/USER/MEMORY/AGENTS 초안 템플릿
 ├── editions/
 │   ├── personal/  install.sh · computer-use-policy.sh · README
 │   ├── project/   install.sh · lib.sh · native-stack.sh · backup.sh · restore.sh · render-outline-env.py · systemd/ · ingress/ · README
 │   └── company/   install.sh · cNN.sh · cNN-verify.sh · cNN-readback.sql · migrations/ · *.py · README
 ├── bootstrap/
-│   ├── lib/                     # common.sh(점검·시크릿·로그·체크포인트) · platform.sh(OS 레인)
+│   ├── lib/                     # common.sh(점검·로그·체크포인트) · platform.sh(OS 레인) · secret.sh(.env 도우미) · mail.sh(IMAP·SMTP·Himalaya 점검)
 │   ├── verify/                  # personal·project·company 최종 테스트
 │   ├── migrate/                 # personal-to-project · project-to-company
-│   └── tests/                   # 스모크(무DB + pg_virtualenv DB 스모크) — CI 실행
+│   └── tests/                   # 스모크(무DB + pg_virtualenv DB 스모크) · fixtures/(모의 Outline API) — CI 실행
 ├── docs/                        # 최종본 설계 문서(버전 없는 파일명)
 └── .github/workflows/           # Personal 3-OS 매트릭스 · Company/Project 스모크
 ```
@@ -283,7 +284,7 @@ open-agent-os/
 
 | 항목 | 규칙 | 강제·검증 |
 |---|---|---|
-| 시크릿 | Personal·Project: Hermes `.env` 단일 보관 · Company 구성원 개인 토큰은 PostgreSQL Vault에 AES-GCM 암호문으로 보관 · 원자적 쓰기 · 소유자 전용(600+소유자 / NTFS ACL) · 명령행 인자 금지 · config.yaml 금지 · 값 재출력 금지 | `oaos-secret-set` 도우미 · Personal verify `.env` 보호·config.yaml 무비밀 항목 |
+| 시크릿 | Personal·Project: Hermes `.env` 단일 보관(외부 도구 설정은 `.env`를 읽는 명령만 참조 — Personal G5 Himalaya) · Company 구성원 개인 토큰은 PostgreSQL Vault에 AES-GCM 암호문으로 보관 · 원자적 쓰기 · 소유자 전용(600+소유자 / NTFS ACL) · 명령행 인자 금지 · config.yaml 금지 · 값 재출력 금지 | `oaos-secret-set` 도우미 · Personal verify `.env` 보호·config.yaml 무비밀 항목 |
 | 게이트 값 | **저장 → 즉시 검증** 순서. 실패 시 값은 남기고 단계 BLOCKED, 재입력 요청 · 채팅·로그·문서에 미기재 | 단계 재실행 검증(§2.4) |
 | 서비스 바인딩 | Dashboard·PostgreSQL·Redis·Mattermost·Outline은 127.0.0.1 고정, 원격 접근은 SSH 터널/nginx 443 | Personal: Dashboard 루프백 항목(기본 9119) · Project: 5432/6379/8065/3000 리스너·`SHOW listen_addresses` |
 | 계정 원칙 | 팀 서비스 토큰은 비관리자 봇/에이전트 계정만(Mattermost 봇·`system_admin` 아님, Outline 비관리자 에이전트 계정) | Project G7·G8 즉시 검증 |
@@ -380,3 +381,4 @@ open-agent-os/
 | v2.0 | 2026-09-25 | 3-에디션·URL 부트스트랩 재설계 최초본 |
 | v2.0.x | 2026-09-26~27 | 무Docker·systemd 정합, Personal 지원 OS(Ubuntu·macOS·Windows 11) 반영 |
 | v2.1 | 2026-11-16 | Project 게이트·봇 계정 원칙·백업/복구·바인딩·무Docker 반영(PR #35) · Company 보안 강화 반영(§4.3 과금 승인·DB 수준 거버넌스, §6 역할 분리·보존·백업 — PR #34) · 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
+| v2.1.1 | 2026-11-17 | Personal G5를 선택 설치 단계 `mail`로 구현(§2.4 G5 행: 주소 저장 = 선택, 미선택 `SKIP(not_selected)`, IMAP·SMTP 저장 후 검증, Himalaya 비밀번호 명령 · verify 20번 행) · 위키 로컬 bare 중계 `~/data/wiki.git` 구현(§2.5 — 시드·일일 백업 push, 중계 복원, verify 21번 행, Personal→Project 이전 시 중계 원격 제거) · Project `outline-wiki` 스킬 제공(§4.2 — G8 후 `team` 설치, verify "Outline skill" 행) · 메일 점검·`.env` 도우미를 `bootstrap/lib/mail.sh`·`secret.sh`로 공용화(§5.2) |
