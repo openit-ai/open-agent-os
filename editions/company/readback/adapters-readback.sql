@@ -84,6 +84,7 @@ BEGIN
     END IF;
   END IF;
 
+  RAISE NOTICE 'oaos-check: selection_admin';
   -- Organization app configuration and read-only scope enforcement.
   scopes := CASE v_provider
     WHEN 'google_workspace' THEN ARRAY['https://www.googleapis.com/auth/gmail.readonly']
@@ -110,6 +111,7 @@ BEGIN
     RAISE EXCEPTION 'organization app configuration failed: %', decision;
   END IF;
 
+  RAISE NOTICE 'oaos-check: app_scopes';
   -- A member needs an active assistant before credentials can be bound.
   PERFORM set_config('company.member_id', owner_a::text, true);
   SELECT r.assistant_id INTO assistant_a FROM company.register_personal_assistant() r;
@@ -216,6 +218,7 @@ BEGIN
     END IF;
   END IF;
 
+  RAISE NOTICE 'oaos-check: owner_isolation';
   -- Deselecting the provider (SKIP) revokes the app and every delegation.
   PERFORM set_config('company.member_id', admin_a::text, true);
   IF company.set_integration_state(v_provider, 'skip', 'not_selected')
@@ -262,6 +265,8 @@ BEGIN
       AND (metadata ? 'token' OR metadata ? 'secret' OR metadata ? 'client_secret')) THEN
     RAISE EXCEPTION 'integration audit contained credential material';
   END IF;
+  RAISE NOTICE 'oaos-check: revocation_audit';
 END;
 $verify$;
 ROLLBACK;
+\echo oaos-check: rolled_back

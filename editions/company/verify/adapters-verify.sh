@@ -53,19 +53,19 @@ company_adapters_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   }
-  if ! psql -X -q -v ON_ERROR_STOP=1 -v provider="$provider" \
-      -f "$repo_root/editions/company/readback/adapters-readback.sql" >/dev/null 2>&1; then
-    printf '%-28s FAIL\n' 'Integration response queries'
-    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+  local pass=1 fail=0
+  company_readback "$repo_root/editions/company/readback/adapters-readback.sql" -v provider="$provider" || true
+  # The SQL proves the DB contract with fixtures; it is not evidence that the
+  # organization's real service answered.
+  printf '%-28s PASS\n' 'Migration SHA-256/version 7'
+  company_readback_check 28 'DB contract: selection/admin' selection_admin
+  company_readback_check 28 'DB contract: app and scopes' app_scopes
+  company_readback_check 28 'DB contract: owner isolation' owner_isolation
+  company_readback_check 28 'DB contract: revocation/audit' revocation_audit rolled_back
+  if ((fail)); then
+    printf 'Summary: PASS=%s FAIL=%s MANUAL=0 SKIP=0\n' "$pass" "$fail"
     return 1
   fi
-  # The SQL above proves the DB contract with fixtures; it is not evidence that
-  # the organization's real service answered.
-  printf '%-28s PASS\n' 'Migration SHA-256/version 7'
-  printf '%-28s PASS\n' 'DB contract: selection/admin'
-  printf '%-28s PASS\n' 'DB contract: app and scopes'
-  printf '%-28s PASS\n' 'DB contract: owner isolation'
-  printf '%-28s PASS\n' 'DB contract: revocation/audit'
   if [[ $state != selected ]]; then
     # Not selected: SKIP(reason=not_selected) with no credential anywhere.
     if ! company_adapters_keys_absent "$provider" "$env_file"; then

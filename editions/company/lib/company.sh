@@ -136,3 +136,15 @@ company_readback_line() {
     printf '%-3s %-24s %-7s %s\n' "$1" "$2" FAIL "$4"; fail=$((fail + 1))
   fi
 }
+# company_readback_check <width> <label> <marker...>
+# "<label> PASS" only when every marker was emitted; counts pass/fail.
+company_readback_check() {
+  local width=$1 label=$2 marker ok=1
+  shift 2
+  for marker in "$@"; do company_readback_passed "$marker" || ok=0; done
+  if ((ok)); then
+    printf "%-${width}s PASS\n" "$label"; pass=$((pass + 1))
+  else
+    printf "%-${width}s FAIL\n" "$label"; fail=$((fail + 1))
+  fi
+}

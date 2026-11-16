@@ -1,5 +1,6 @@
 -- C09 real SQL responses. Fixtures, sessions and audit rows are discarded with
--- this transaction; no credential material is ever selected.
+-- this transaction; no credential material is ever selected. Each passed
+-- section emits "oaos-check: <name>" for c09-verify.sh.
 BEGIN;
 DO $verify$
 DECLARE
@@ -162,6 +163,7 @@ BEGIN
      OR snapshot::text LIKE '%' || hash_admin || '%' THEN
     RAISE EXCEPTION 'administrator snapshot exposed credential material';
   END IF;
+  RAISE NOTICE 'oaos-check: secret_masking';
 
   snapshot := company.console_snapshot('integrations');
   IF snapshot->>'decision' <> 'allow'
@@ -235,6 +237,7 @@ BEGIN
   IF (SELECT count(*) FROM company.approvals) <> 1 THEN
     RAISE EXCEPTION 'member approval scope leaked another requester';
   END IF;
+  RAISE NOTICE 'oaos-check: member_scope';
 
   -- The administrator sees organization-wide policy and secret metadata.
   PERFORM set_config('company.member_id', admin_a::text, true);
@@ -247,6 +250,7 @@ BEGIN
   IF company.console_snapshot('unknown-tab')->>'decision' <> 'invalid' THEN
     RAISE EXCEPTION 'unknown console tab was accepted';
   END IF;
+  RAISE NOTICE 'oaos-check: admin_tabs';
 
   -- Token lookup honours expiry and revocation and never returns a plaintext.
   IF (SELECT count(*) FROM company.console_authenticate(hash_admin)) <> 1 THEN
@@ -290,6 +294,7 @@ BEGIN
   IF (SELECT count(*) FROM company.console_authenticate(hash_created)) <> 0 THEN
     RAISE EXCEPTION 'revoked console session still resolved';
   END IF;
+  RAISE NOTICE 'oaos-check: session_lifecycle';
 
   -- Tenant B sees only itself.
   PERFORM set_config('company.org_id', org_b::text, true);
@@ -302,6 +307,8 @@ BEGIN
   IF snapshot::text LIKE '%c09-member-a%' THEN
     RAISE EXCEPTION 'organization B snapshot leaked organization A';
   END IF;
+  RAISE NOTICE 'oaos-check: tenant_isolation';
 END;
 $verify$;
 ROLLBACK;
+\echo oaos-check: rolled_back

@@ -158,3 +158,16 @@ if grep -nE '%\{http_code\}' "$repo_root/editions/company/stages/c02.sh" "$repo_
   fail 'Company HTTPS check must not rely on a bare status code'
 fi
 printf 'PASS: Company HTTPS evidence is anchored to this instance\n'
+
+# Read-back rows follow the sections that really passed, not fixed PASS lines.
+(
+  # shellcheck source=bootstrap/lib/common.sh
+  . "$repo_root/bootstrap/lib/common.sh"
+  # shellcheck source=editions/company/lib/company.sh
+  . "$repo_root/editions/company/lib/company.sh"
+  pass=0 fail=0 COMPANY_READBACK=$'owner_isolation\nrolled_back'
+  company_readback_check 20 'Owner isolation' owner_isolation >/dev/null
+  company_readback_check 20 'Fixture cleanup' tenant_isolation rolled_back >/dev/null
+  [[ $pass == 1 && $fail == 1 ]]
+) || fail 'read-back check rows'
+printf 'PASS: read-back rows reflect emitted section markers\n'

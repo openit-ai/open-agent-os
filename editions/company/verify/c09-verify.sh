@@ -49,19 +49,17 @@ company_c09_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
-  if ! psql -X -q -v ON_ERROR_STOP=1 -f "$repo_root/editions/company/readback/c09-readback.sql" >/dev/null 2>&1; then
-    printf '%-32s FAIL\n' 'Console tab and permission queries'
-    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
-    return 1
-  fi
+  local pass=3 fail=0
+  company_readback "$repo_root/editions/company/readback/c09-readback.sql" || true
   printf '%-32s PASS\n' 'Migration SHA-256/version 10'
   printf '%-32s PASS\n' 'Console service active'
   printf '%-32s PASS\n' 'Console health endpoint'
-  printf '%-32s PASS\n' 'Admin four-tab snapshots'
-  printf '%-32s PASS\n' 'Member scope limited'
-  printf '%-32s PASS\n' 'Secret metadata masking'
-  printf '%-32s PASS\n' 'Session token expiry and revocation'
-  printf '%-32s PASS\n' 'Tenant isolation and fixture rollback'
-  printf 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0\n'
+  company_readback_check 32 'Admin four-tab snapshots' admin_tabs
+  company_readback_check 32 'Member scope limited' member_scope
+  company_readback_check 32 'Secret metadata masking' secret_masking
+  company_readback_check 32 'Session token expiry and revocation' session_lifecycle
+  company_readback_check 32 'Tenant isolation and fixture rollback' tenant_isolation rolled_back
+  printf 'Summary: PASS=%s FAIL=%s MANUAL=0 SKIP=0\n' "$pass" "$fail"
+  ((fail == 0)) || return 1
   stage_mark c09 verified 'C09 E console tab, role, masking and service responses passed; fixture rolled back'
 }
