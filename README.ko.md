@@ -180,6 +180,8 @@ flowchart TB
 | **P1 — Project** | Project install/verify·Personal→Project 이전 스크립트 제공 | 신규 VPS E2E 완주 + 이전 실증 필요 |
 | **P2 — Company** | 기존 플랫폼 흡수, 선택 연동(Slack/Notion), 멀티 LLM 라우팅, 거버넌스 | 전체 테스트 green + 런타임 read-back + 회귀 통과 |
 
+**현황(2026-11-16):** Company C01~C17 단계(설치 단계·검증기·마이그레이션 001~012)가 `main`에 병합됐고, Company 스모크 전체가 CI의 임시 PostgreSQL 클러스터에서 실행됩니다. 실제 Ubuntu LTS 서버에서의 C01~C17 전체 실행·런타임 read-back이 남아 있어 P2 완료로 판정하지 않습니다.
+
 ## 라이선스
 
 에디션별로 적용됩니다:

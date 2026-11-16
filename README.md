@@ -180,6 +180,8 @@ Full detail: [`docs/architecture-v2.0.md`](docs/architecture-v2.0.md).
 | **P1 — Project** | Project install/verify and Personal→Project migration scripts are available | End-to-end run on a fresh VPS + migration proof pending |
 | **P2 — Company** | absorb existing platform, optional integrations (Slack/Notion), multi-LLM routing, governance | Full test suite green + runtime read-back + regression pass |
 
+**Status (2026-11-16):** Company phases C01–C17 (installer stages, verifiers, migrations 001–012) are merged on `main`, and every Company smoke suite runs in CI against temporary PostgreSQL clusters. P2 is not yet declared done: the full C01–C17 run with runtime read-back on a real Ubuntu LTS server is still pending.
+
 ## License
 
 Licensing is per edition:
