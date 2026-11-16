@@ -110,7 +110,7 @@ For Personal, run `bash editions/personal/install.sh` **from the selected lane's
   bash bootstrap/bin/oaos-secret-set TELEGRAM_ALLOWED_USERS   # numbers only, comma-separated
   ```
 - Rerun `--stage telegram`: it calls Telegram `getMe` (token on curl's stdin, never in argv) and accepts only a numeric ID list.
-- The `gateway` stage waits until `telegram` is done, sets `approvals.cron_mode` and `approvals.unattended_mode` to `deny` when unset, then delegates to `hermes gateway install`; OAOS uses OS service commands only to diagnose registration. If the gateway was already running when Telegram changes, the telegram stage restarts it.
+- The `gateway` stage waits until `telegram` is done, sets `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` to `deny` when unset, then delegates to `hermes gateway install`; OAOS uses OS service commands only to diagnose registration. If the gateway was already running when Telegram changes, the telegram stage restarts it.
 - On Linux, check the systemd user service and linger (or the explicit system service). On macOS, check launchd registration and current status. On Windows, check the Hermes ONLOGON task or its official Startup fallback and current status. Registration is read back automatically; surviving a safe reboot or logout/login stays MANUAL on every lane until observed. Verify separately that the user sends a message to the bot and gets a reply.
 
 #### 3c. Knowledge wiki (all editions)

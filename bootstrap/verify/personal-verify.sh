@@ -216,10 +216,11 @@ else record 'Config secret-free' PASS 'No secret-like values in config.yaml'; fi
 if ((have_hermes == 0)); then record 'Unattended approvals' FAIL 'Hermes is unavailable'
 else
   cron_mode=$(config_value approvals.cron_mode)
+  single_mode=$(config_value approvals.single_query_mode)
   unattended_mode=$(config_value approvals.unattended_mode)
-  if [[ $cron_mode == deny && $unattended_mode == deny ]]; then
-    record 'Unattended approvals' PASS 'approvals.cron_mode and approvals.unattended_mode are deny'
-  else record 'Unattended approvals' FAIL "approvals.cron_mode=${cron_mode:-unset}, approvals.unattended_mode=${unattended_mode:-unset}; expected deny"; fi
+  if [[ $cron_mode == deny && $single_mode == deny && $unattended_mode == deny ]]; then
+    record 'Unattended approvals' PASS 'approvals.cron_mode, single_query_mode and unattended_mode are deny'
+  else record 'Unattended approvals' FAIL "approvals cron_mode=${cron_mode:-unset} single_query_mode=${single_mode:-unset} unattended_mode=${unattended_mode:-unset}; expected deny"; fi
 fi
 
 # 17: The Dashboard, when running, listens on loopback only (use an SSH tunnel to reach it).

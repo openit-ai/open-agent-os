@@ -41,7 +41,7 @@ case $1 in
     case $4 in
       TELEGRAM_BOT_TOKEN) printf '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' ;;
       TELEGRAM_ALLOWED_USERS) printf '%s\n' "${MOCK_USERS:-12345,67890}" ;;
-      approvals.cron_mode|approvals.unattended_mode) printf '%s\n' "${MOCK_APPROVAL:-deny}" ;;
+      approvals.cron_mode|approvals.single_query_mode|approvals.unattended_mode) printf '%s\n' "${MOCK_APPROVAL:-deny}" ;;
     esac
     exit 0; } ;;
   backup) [[ $2 == --output ]] && {

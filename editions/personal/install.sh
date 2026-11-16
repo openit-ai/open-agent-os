@@ -228,10 +228,10 @@ do_telegram() {
   fi
 }
 
-# Architecture §6: unattended surfaces (cron, webhooks) must deny flagged actions.
+# Architecture §6: unattended surfaces (cron, single-query -q runs, webhooks) deny flagged actions.
 ensure_unattended_deny() {
   local key value blocked=0
-  for key in approvals.cron_mode approvals.unattended_mode; do
+  for key in approvals.cron_mode approvals.single_query_mode approvals.unattended_mode; do
     value=$(config_value "$key")
     case $value in
       deny) ;;

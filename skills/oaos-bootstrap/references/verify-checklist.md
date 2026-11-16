@@ -19,7 +19,7 @@ Personal: run `bash bootstrap/verify/personal-verify.sh --json` (or table output
 | 13 | Secret hygiene | No raw secret-like values in OAOS logs/state (backups excluded) | Same | Same | Same |
 | 14 | Hermes .env protected | `.env` exists and is owner-only | Owner + mode 600 | Owner + mode 600 | NTFS owner + protected ACL; `chmod` alone is insufficient |
 | 15 | Config secret-free | `config.yaml` holds no secret-like values (`${VAR}` references are fine) | Same | Same | Same |
-| 16 | Unattended approvals | `approvals.cron_mode` and `approvals.unattended_mode` are `deny` | Same | Same | Same |
+| 16 | Unattended approvals | `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` are `deny` | Same | Same | Same |
 | 17 | Dashboard loopback | Port 9119 (or `OAOS_DASHBOARD_PORT`) has no listener, or only loopback ones | `ss` | `lsof` | `netstat`; MANUAL if unavailable |
 | 18 | Backup works | Fresh `hermes backup` archive under `~/.oaos/backups`; directory 700, archives 600 | Mode check | Mode check | Git Bash paths; NTFS profile ACLs |
 | 19 | Host capacity | Target volume >10% free; RAM ≥16 GiB or swap/pagefile present | `df`, `/proc` RAM/swap | `df`, `sysctl hw.memsize`, `sysctl vm.swapusage` | `df` plus PowerShell CIM RAM/pagefile |

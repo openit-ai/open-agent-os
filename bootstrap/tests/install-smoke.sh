@@ -188,7 +188,9 @@ env "${tg_env[@]}" MOCK_TG_TOKEN='987654321:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
 env "${tg_env[@]}" MOCK_TG_TOKEN='123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' MOCK_TG_USERS='12345, 67890' \
   bash "$install" --stage telegram,gateway > "$temp_root/tg3.out" 2> "$temp_root/tg3.err" || fail 'valid telegram + gateway'
 grep -Fq 'install' "$temp_root/gw.log" || fail 'gateway was not installed'
-grep -Fxq 'approvals.cron_mode=deny' "$temp_root/approvals" && grep -Fxq 'approvals.unattended_mode=deny' "$temp_root/approvals" || fail 'unattended-deny policy not set'
+for key in cron_mode single_query_mode unattended_mode; do
+  grep -Fxq "approvals.$key=deny" "$temp_root/approvals" || fail "unattended-deny policy not set ($key)"
+done
 env "${tg_env[@]}" MOCK_TG_TOKEN='123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' MOCK_TG_USERS='12345' \
   bash "$install" --stage telegram --recheck > "$temp_root/tg4.out" 2> "$temp_root/tg4.err" || fail 'telegram recheck'
 grep -Fxq 'restart' "$temp_root/gw.log" || fail 'running gateway was not restarted after telegram changed'
