@@ -33,20 +33,16 @@ company_c16_verify() {
     if ((result == 3)); then warn 'C16 migration is pending.'; return 3; fi
     warn 'C16 migration checksum or version read-back failed.'; return 1
   fi
-  read -r org admin < <(company_c16_admin_context) || true
+  read -r org admin < <(company_admin_context) || true
   [[ -n $org && -n $admin ]] || {
     warn 'C16 read-back needs a single organization with an active administrator.'; return 3;
   }
   state=$(company_c16_current_state "$org") || state=''
   env_file="$HOME/.config/oaos-company/.env"
   if [[ $state == selected ]]; then
-    key_name=$(run_root env -u PGOPTIONS -u PGHOSTADDR -u PGHOST -u PGUSER \
-      -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-      runuser -u postgres -- psql --host="${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}" \
-      --port="${PGPORT:-5432}" --dbname="$PGDATABASE" -X -q -A -t \
-      -c "SELECT provider FROM company.llm_models
+    key_name=$(company_maint_query "SELECT provider FROM company.llm_models
            WHERE org_id = '$org'::uuid AND tier = 'premium' AND state = 'active'
-           ORDER BY created_at LIMIT 1" 2>/dev/null) || key_name=''
+           ORDER BY created_at LIMIT 1") || key_name=''
     key_name=$(company_c16_key_name "${key_name%%$'\n'*}")
     if [[ ! $key_name =~ ^[A-Z0-9_]+$ ]] || ! company_c16_env_has_key "$env_file" "$key_name"; then
       printf '%-28s FAIL\n' 'G13 provider key presence'
@@ -74,7 +70,7 @@ company_c16_verify() {
   printf '%-28s PASS\n' 'Audit trail and fixture rollback'
   if [[ $state != selected ]]; then
     # G13 not selected: the default model only, no premium model or route.
-    premium=$(company_c16_sql "$org" "$admin" \
+    premium=$(company_sql "$org" "$admin" \
       "SELECT count(*) FROM company.llm_models WHERE org_id = '$org'::uuid AND tier = 'premium' AND state = 'active'") || premium=''
     if [[ $premium != 0 ]]; then
       printf '%-28s FAIL\n' 'SKIP has no premium model'

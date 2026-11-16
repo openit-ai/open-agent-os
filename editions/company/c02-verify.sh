@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Sourced by company-verify.sh. Never prints EnvironmentFile values.
+repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+# shellcheck source=editions/company/lib/company.sh
+. "$repo_root/editions/company/lib/company.sh"
 
 company_c02_check() {
   local label=$1
@@ -79,9 +82,6 @@ company_c02_backup_job() {
   ! find "$dir" "$key_dir" -maxdepth 1 -type f ! -perm 0600 | grep -q .
 }
 company_c02_linger() { [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null) == yes ]]; }
-company_c02_env_mode() {
-  [[ $(stat -c %a "$HOME/.config/oaos-company") == 700 && $(stat -c %a "$HOME/.config/oaos-company/.env") == 600 ]]
-}
 company_c02_loopback() {
   local sockets
   sockets=$(ss -ltn 2>/dev/null) || return 1
@@ -131,15 +131,11 @@ company_c02_verify() {
   company_c02_check 'Loopback port 8765' company_c02_loopback
   company_c02_check 'DB/Redis/Company private' company_c02_private_ports
   company_c02_check 'HTTPS Company health' company_c02_https
-  company_c02_check 'Environment permissions' company_c02_env_mode
+  company_c02_check 'Environment permissions' company_env_mode_ok
   host=${OAOS_COMPANY_HTTPS_ORIGIN#https://}
   cert="/etc/letsencrypt/live/$host/fullchain.pem"
   company_c02_check 'TLS expiry (30 days)' run_root openssl x509 -checkend 2592000 -noout -in "$cert"
-  if { [[ $(systemctl is-enabled certbot.timer 2>/dev/null || true) == enabled && $(systemctl is-active certbot.timer 2>/dev/null || true) == active ]] || [[ $(systemctl is-enabled snap.certbot.renew.timer 2>/dev/null || true) == enabled && $(systemctl is-active snap.certbot.renew.timer 2>/dev/null || true) == active ]]; }; then
-    printf '%-27s PASS\n' 'TLS renewal timer'; pass=$((pass + 1))
-  else
-    printf '%-27s FAIL\n' 'TLS renewal timer'; fail=$((fail + 1))
-  fi
+  company_c02_check 'TLS renewal timer' company_certbot_timer_ok
   company_c02_check 'Installer rerun stable' company_c02_idempotent
   if ((fail)); then printf 'Summary: PASS=%s FAIL=%s MANUAL=1 SKIP=0\n' "$pass" "$fail"; return 1; fi
   if ! company_c02_rebooted; then

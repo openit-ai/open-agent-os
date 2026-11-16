@@ -33,7 +33,7 @@ company_adapters_verify() {
     if ((result == 3)); then warn 'Integration migration is pending.'; return 3; fi
     warn 'Integration migration checksum or version read-back failed.'; return 1
   fi
-  read -r org admin < <(company_adapters_admin_context) || true
+  read -r org admin < <(company_admin_context) || true
   [[ -n $org && -n $admin ]] || {
     warn 'Integration read-back needs a single organization with an active administrator.'; return 3;
   }
@@ -48,7 +48,7 @@ company_adapters_verify() {
       return 1
     fi
   done
-  [[ $(stat -c %a "$HOME/.config/oaos-company/.env") == 600 ]] || {
+  company_env_file_ok || {
     printf '%-28s FAIL\n' 'EnvironmentFile permissions'
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
@@ -123,12 +123,12 @@ company_adapters_verify_c15() {
     if ((result == 3)); then warn 'Integration migration is pending.'; return 3; fi
     warn 'Integration migration checksum or version read-back failed.'; return 1
   fi
-  read -r org admin < <(company_adapters_admin_context) || true
+  read -r org admin < <(company_admin_context) || true
   [[ -n $org && -n $admin ]] || {
     warn 'C15 read-back needs a single organization with an active administrator.'; return 3;
   }
   for provider in slack notion google_workspace microsoft_365; do
-    state=$(company_adapters_sql "$org" "$admin" \
+    state=$(company_sql "$org" "$admin" \
       "SELECT company.integration_selection('$provider')") || return 1
     if [[ $state == selected ]]; then
       case $provider in
@@ -140,7 +140,7 @@ company_adapters_verify_c15() {
           fi
           suite=$provider ;;
       esac
-      check=$(company_adapters_sql "$org" "$admin" \
+      check=$(company_sql "$org" "$admin" \
         "SELECT count(*) FROM company.integration_apps WHERE provider = '$provider' AND state = 'active'") || return 1
       if [[ ! $check =~ ^[1-9][0-9]*$ ]]; then
         printf '%-28s FAIL\n' 'Selected app present'
@@ -148,7 +148,7 @@ company_adapters_verify_c15() {
         return 1
       fi
     else
-      check=$(company_adapters_sql "$org" "$admin" \
+      check=$(company_sql "$org" "$admin" \
         "SELECT count(*) FROM company.integration_apps WHERE provider = '$provider' AND state = 'active'
            UNION ALL SELECT count(*) FROM company.integration_delegations WHERE provider = '$provider' AND state = 'active'") || return 1
       if [[ ! $check =~ ^0?$ ]] || ! company_adapters_keys_absent "$provider" "$env_file"; then

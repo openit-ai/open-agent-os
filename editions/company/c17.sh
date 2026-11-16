@@ -8,21 +8,8 @@ repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 
 company_c17_block() { warn "C17 BLOCKED: $1"; return 3; }
 
-# Like company_c16_sql, but always returns exactly one non-empty line so an
-# empty result cannot be confused with the preceding set_config output.
-company_c17_sql_value() {
-  local org=$1 admin=$2 statement=$3 output last
-  output=$(psql -X -q -A -t -v ON_ERROR_STOP=1 \
-    -c "SELECT set_config('company.org_id', '$org', false);" \
-    -c "SELECT set_config('company.member_id', '$admin', false);" \
-    -c "SELECT '__C17__' || COALESCE(($statement)::text, '')" 2>/dev/null) || return 1
-  last=${output##*$'\n'}
-  [[ $last == __C17__* ]] || return 1
-  printf '%s' "${last#__C17__}"
-}
-
 company_c17_providers() {
-  company_c17_sql_value "$1" "$2" \
+  company_sql_value "$1" "$2" \
     "SELECT string_agg(provider, ',' ORDER BY provider)
        FROM company.integration_settings
       WHERE org_id = '$1'::uuid AND state = 'selected'"
@@ -61,7 +48,7 @@ company_c17_check_roundtrip() {
 }
 
 company_c17_latest_backup() {
-  company_c17_sql_value "$1" "$2" \
+  company_sql_value "$1" "$2" \
     "SELECT id::text || '|' || location || '|' || checksum || '|' || size_bytes
        FROM company.backup_runs
       WHERE org_id = '$1'::uuid AND state = 'verified'
@@ -69,7 +56,7 @@ company_c17_latest_backup() {
 }
 
 company_c17_latest_recovery() {
-  company_c17_sql_value "$1" "$2" \
+  company_sql_value "$1" "$2" \
     "SELECT id::text
        FROM company.recovery_drills
       WHERE org_id = '$1'::uuid AND backup_id = '$3'::uuid AND state = 'passed'
@@ -85,19 +72,9 @@ company_c17_file_ok() {
 }
 
 company_c17_write_backup() {
-  local target=$1 socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
-  local tmp="$target.tmp.$$"
-  [[ ${PGPORT:-5432} =~ ^[0-9]{1,5}$ ]] || return 3
-  company_c02_valid_path "$socket_dir" || return 3
-  [[ -d $socket_dir ]] || return 3
-  (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
-    -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-    pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
-    --dbname="$PGDATABASE" --format=custom > "$tmp" 2>/dev/null) || {
-    rm -f -- "$tmp"; return 1
-  }
-  [[ -s $tmp ]] || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  local target=$1 tmp="$1.tmp.$$"
+  company_maint_socket_ok || return 3
+  company_maint_dump "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -- "$tmp" "$target" || { rm -f -- "$tmp"; return 1; }
 }
 
@@ -107,9 +84,7 @@ company_c17_restore_drill() {
   [[ $scratch =~ ^oaos_company_c17_restore_[0-9]{14}_[0-9]+$ ]] || return 1
   owner=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT current_user' 2>/dev/null) || return 1
   [[ $owner =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
-  run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR -u PGHOST \
-    -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-    createdb --host="$socket_dir" --port="${PGPORT:-5432}" \
+  company_maint createdb --host="$socket_dir" --port="${PGPORT:-5432}" \
     --owner="$owner" "$scratch" >/dev/null 2>&1 || return 1
   if ! pg_restore --no-owner --no-privileges --dbname="$scratch" "$backup" \
       >/dev/null 2>&1; then
@@ -123,9 +98,7 @@ company_c17_restore_drill() {
       -c "SELECT string_agg(version::text || ':' || checksum, ',' ORDER BY version) FROM company.schema_migrations" 2>/dev/null) || rc=1
     [[ -n $live && $version == "$live" && ,$live, == *,12:* ]] || rc=1
   fi
-  run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR -u PGHOST \
-    -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-    dropdb --host="$socket_dir" --port="${PGPORT:-5432}" \
+  company_maint dropdb --host="$socket_dir" --port="${PGPORT:-5432}" \
     --if-exists "$scratch" >/dev/null 2>&1 || true
   return "$rc"
 }
@@ -173,7 +146,7 @@ EOF
 company_c17_apply() {
   local org='' admin='' selected='' confirmed='' roundtrip='' evidence=''
   local boot_id='' previous_boot_id='' reboot_verified=false service_state=''
-  local check_code=0 snapshot socket_dir stamp target location checksum size
+  local stamp target location checksum size
   local latest backup_id recovery_id drill_scratch record evidence_json
   local decision
 
@@ -182,55 +155,19 @@ company_c17_apply() {
      ( $(stage_status c16) == verified || $(stage_status c16) == SKIP ) ]] || {
     company_c17_block 'C01, C02, C10 and C15 must be verified and C16 verified or SKIP on E.'; return 3;
   }
-  company_c02_load_settings || { company_c17_block 'C02 E deployment settings are invalid.'; return 3; }
-  company_c02_preflight || return 3
-  export PGHOSTADDR=127.0.0.1 PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-5}
-  if ! have_cmd psql || ! have_cmd pg_dump || ! have_cmd pg_restore || \
-     ! have_cmd createdb || ! have_cmd dropdb || ! have_cmd sha256sum || \
-     ! have_cmd python3; then
+  company_stage_ready c17 || return $?
+  if ! have_cmd pg_restore || ! have_cmd createdb || ! have_cmd dropdb; then
     company_c17_block 'PostgreSQL backup/restore tools and Python are required.'; return 3
   fi
 
-  local ready role_safe
-  ready=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT 1' 2>/dev/null) || {
-    company_c17_block 'E database connection failed.'; return 3;
-  }
-  [[ $ready == 1 ]] || { company_c17_block 'E database did not answer.'; return 3; }
-  role_safe=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c \
-    'SELECT NOT (rolsuper OR rolbypassrls) FROM pg_roles WHERE rolname = current_user' 2>/dev/null) || {
-    company_c17_block 'database role check failed.'; return 3;
-  }
-  [[ $role_safe == t ]] || { company_c17_block 'database role bypasses RLS.'; return 3; }
-
-  read -r org admin < <(company_c16_admin_context) || {
+  read -r org admin < <(company_admin_context) || {
     company_c17_block 'a single organization with an active G10 administrator is required.'; return 3;
   }
   [[ -n $org && -n $admin ]] || {
     company_c17_block 'a single organization with an active G10 administrator is required.'; return 3;
   }
 
-  bash "$repo_root/editions/company/migrate.sh" --check --through 12 >/dev/null 2>&1 || check_code=$?
-  case $check_code in
-    0) ;;
-    3)
-      snapshot=$(mktemp -d "$OAOS_COMPANY_ROLLBACK_DIR/c17-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || return 1
-      chmod 700 "$snapshot"
-      socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
-      if ! company_c02_valid_path "$socket_dir" || [[ ! -d $socket_dir ]] ||
-         [[ ! ${PGPORT:-5432} =~ ^[0-9]{1,5}$ ]]; then
-        company_c17_block 'local PostgreSQL backup socket or port is invalid.'; return 3
-      fi
-      if ! (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
-          -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-          pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
-          --dbname="$PGDATABASE" --format=custom > "$snapshot/company.dump" 2>/dev/null) ||
-          [[ ! -s $snapshot/company.dump ]]; then
-        company_c17_block 'E database backup failed or is empty.'; return 3
-      fi
-      chmod 600 "$snapshot/company.dump"
-      bash "$repo_root/editions/company/migrate.sh" --through 12 || return 1 ;;
-    *) warn 'C17 migration history or checksum is invalid.'; return 1 ;;
-  esac
+  company_stage_migrate c17 12 || return $?
 
   company_c17_install_maintenance || {
     warn 'C17 retention timer could not be installed or its first run failed.'; return 1;
@@ -281,7 +218,7 @@ company_c17_apply() {
     pg_restore --list "$location" >/dev/null 2>&1 || {
       warn 'C17 backup archive read-back failed.'; return 1
     }
-    record=$(company_c17_sql_value "$org" "$admin" \
+    record=$(company_sql_value "$org" "$admin" \
       "SELECT decision || '|' || backup_id FROM company.c17_record_backup('pre_handover', '$location', '$checksum', $size)") || return 1
     [[ $record == recorded\|* ]] || { warn 'C17 BLOCKED: backup evidence was rejected.'; return 1; }
     backup_id=${record#*|}
@@ -299,7 +236,7 @@ company_c17_apply() {
       warn 'C17 recovery drill failed; the backup was not verified.'; return 1
     }
     evidence_json="{\"schema_version\":12,\"target\":\"$drill_scratch\"}"
-    record=$(company_c17_sql_value "$org" "$admin" \
+    record=$(company_sql_value "$org" "$admin" \
       "SELECT decision || '|' || recovery_id FROM company.c17_record_recovery('$backup_id'::uuid, '$drill_scratch', true, '$evidence_json'::jsonb)") || return 1
     [[ $record == recorded\|* ]] || { warn 'C17 BLOCKED: recovery evidence was rejected.'; return 1; }
     recovery_id=${record#*|}
@@ -308,7 +245,7 @@ company_c17_apply() {
   fi
 
   evidence="{\"service\":\"$service_state\",\"boot_id\":\"$boot_id\",\"previous_boot_id\":\"$previous_boot_id\",\"backup\":\"$location\",\"checksum\":\"$checksum\",\"recovery_id\":\"$recovery_id\"}"
-  record=$(company_c17_sql_value "$org" "$admin" \
+  record=$(company_sql_value "$org" "$admin" \
     "SELECT decision FROM company.c17_record_handover('$service_state', '$boot_id', '$previous_boot_id', $reboot_verified, '$roundtrip'::jsonb, '$evidence'::jsonb)") || return 1
   decision=${record%%$'\n'*}
   case $decision in

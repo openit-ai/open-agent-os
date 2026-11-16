@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Shared C11-C15 logic. Sourced by c11.sh..c15.sh. No credential is echoed.
 repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
-# shellcheck source=editions/company/c02.sh
-. "$repo_root/editions/company/c02.sh"
-# shellcheck source=editions/company/c02-verify.sh
-. "$repo_root/editions/company/c02-verify.sh"
+# shellcheck source=editions/company/lib/stage.sh
+. "$repo_root/editions/company/lib/stage.sh"
 
 company_adapters_prefix() {
   case $1 in
@@ -94,7 +92,7 @@ company_adapters_keys_absent() {
 # real event/read with the organization's service (event_type integration,
 # action external_roundtrip, resource_ref = provider). Nothing else counts.
 company_adapters_roundtrip_count() {
-  company_adapters_sql "$1" "$2" \
+  company_sql "$1" "$2" \
     "SELECT count(*) FROM company.audit_events
       WHERE org_id = '$1'::uuid AND event_type = 'integration'
         AND action = 'external_roundtrip' AND resource_ref = '$3' AND decision = 'allow'"
@@ -104,46 +102,10 @@ company_adapters_write_key() {
   printf '%s' "$3" | python3 "$repo_root/editions/company/env-key.py" "$1" "$2"
 }
 
-company_adapters_admin_context() {
-  local rows row org='' admin='' first_org=''
-  rows=$(run_root env -u PGOPTIONS -u PGHOSTADDR -u PGHOST -u PGUSER \
-    -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-    runuser -u postgres -- psql --host="${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}" \
-    --port="${PGPORT:-5432}" --dbname="$PGDATABASE" -X -q -A -t \
-    -c "SELECT m.org_id::text || '|' || m.id::text
-          FROM company.members m
-          JOIN company.organizations o ON o.id = m.org_id
-         WHERE m.role = 'admin' AND m.state = 'active' AND o.state = 'active'
-         ORDER BY o.created_at, m.created_at, m.id LIMIT 2" 2>/dev/null) || return 1
-  while IFS= read -r row; do
-    [[ -n $row ]] || continue
-    org=${row%%|*}
-    [[ -n $admin ]] || admin=${row#*|}
-    [[ -z $first_org ]] && first_org=$org
-    [[ $org != "$first_org" ]] && return 1
-  done <<< "$rows"
-  [[ $first_org =~ ^[0-9a-f-]{36}$ && $admin =~ ^[0-9a-f-]{36}$ ]] || return 1
-  printf '%s %s\n' "$first_org" "$admin"
-}
-
-company_adapters_sql() {
-  local org=$1 admin=$2 statement=$3 output line last=''
-  output=$(psql -X -q -A -t -v ON_ERROR_STOP=1 \
-    -c "SELECT set_config('company.org_id', '$org', false);" \
-    -c "SELECT set_config('company.member_id', '$admin', false);" \
-    -c "$statement" 2>/dev/null) || return 1
-  while IFS= read -r line; do [[ -n $line ]] && last=$line; done <<< "$output"
-  printf '%s' "$last"
-}
-
 company_adapters_current_state() {
   local org=$1 provider=$2 value=''
-  value=$(run_root env -u PGOPTIONS -u PGHOSTADDR -u PGHOST -u PGUSER \
-    -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-    runuser -u postgres -- psql --host="${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}" \
-    --port="${PGPORT:-5432}" --dbname="$PGDATABASE" -X -q -A -t \
-    -c "SELECT state FROM company.integration_settings
-          WHERE org_id = '$org'::uuid AND provider = '$provider'" 2>/dev/null) || return 1
+  value=$(company_maint_query "SELECT state FROM company.integration_settings
+          WHERE org_id = '$org'::uuid AND provider = '$provider'") || return 1
   printf '%s' "${value%%$'\n'*}"
 }
 
@@ -166,68 +128,26 @@ company_adapters_required_stages() {
   esac
 }
 
+# Prints the required phase list and fails when one of them is not verified.
 company_adapters_dependencies_met() {
   local stage required
   required=$(company_adapters_required_stages "$1")
   for stage in $required; do
-    [[ $(stage_status "$stage") == verified ]] || {
-      printf '%s' "$(printf '%s' "$required" | tr '[:lower:]' '[:upper:]' | sed 's/ /, /g; s/, \([^,]*\)$/ and \1/')"
-      return 1
-    }
+    # shellcheck disable=SC2086 # fixed phase names
+    [[ $(stage_status "$stage") == verified ]] || { company_phase_list $required; return 1; }
   done
 }
 
 company_adapters_preflight() {
-  local provider=$1 ready role_safe missing
-  missing=$(company_adapters_dependencies_met "$provider") || {
-    warn "Integration BLOCKED: $missing must be verified on E."; return 3;
-  }
-  company_c02_load_settings || { warn 'Integration BLOCKED: C02 E deployment settings are invalid.'; return 3; }
-  company_c02_preflight || return 3
-  export PGHOSTADDR=127.0.0.1
-  if ! have_cmd psql || ! have_cmd pg_dump || ! have_cmd sha256sum || ! have_cmd python3; then
-    warn 'Integration BLOCKED: PostgreSQL tools and Python are required.'; return 3
-  fi
-  export PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-5}
-  ready=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT 1' 2>/dev/null) || {
-    warn 'Integration BLOCKED: E database connection failed.'; return 3;
-  }
-  [[ $ready == 1 ]] || { warn 'Integration BLOCKED: E database did not answer.'; return 3; }
-  role_safe=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c \
-    'SELECT NOT (rolsuper OR rolbypassrls) FROM pg_roles WHERE rolname = current_user' 2>/dev/null) || {
-    warn 'Integration BLOCKED: database role check failed.'; return 3;
-  }
-  [[ $role_safe == t ]] || { warn 'Integration BLOCKED: database role bypasses RLS.'; return 3; }
+  local provider=$1
+  # shellcheck disable=SC2046 # the dependency list is a fixed set of phase names
+  company_stage_ready adapters $(company_adapters_required_stages "$provider") || return $?
   [[ $provider =~ ^(slack|notion|google_workspace|microsoft_365)$ ]] || {
     warn 'Integration BLOCKED: unknown provider.'; return 3;
   }
 }
 
-company_adapters_migrate() {
-  local check_code=0 snapshot socket_dir
-  bash "$repo_root/editions/company/migrate.sh" --check --through 7 >/dev/null 2>&1 || check_code=$?
-  case $check_code in
-    0) return 0 ;;
-    3) ;;
-    *) warn 'Integration migration history or checksum is invalid.'; return 1 ;;
-  esac
-  snapshot=$(mktemp -d "$OAOS_COMPANY_ROLLBACK_DIR/adapters-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || return 1
-  chmod 700 "$snapshot"
-  socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
-  if ! company_c02_valid_path "$socket_dir" || [[ ! -d $socket_dir ]] ||
-     [[ ! ${PGPORT:-5432} =~ ^[0-9]{1,5}$ ]]; then
-    warn 'Integration BLOCKED: local PostgreSQL backup socket or port is invalid.'; return 3
-  fi
-  if ! (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
-      -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-      pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
-      --dbname="$PGDATABASE" --format=custom > "$snapshot/company.dump" 2>/dev/null) ||
-      [[ ! -s $snapshot/company.dump ]]; then
-    warn 'Integration BLOCKED: E database backup failed or is empty.'; return 3
-  fi
-  chmod 600 "$snapshot/company.dump"
-  bash "$repo_root/editions/company/migrate.sh" --through 7 || return 1
-}
+company_adapters_migrate() { company_stage_migrate adapters 7; }
 
 company_adapters_store_keys() {
   local provider=$1 mapping entry name source value env_file="$HOME/.config/oaos-company/.env"
@@ -253,7 +173,7 @@ company_adapters_apply() {
   workspace_var="OAOS_COMPANY_${prefix}_WORKSPACE_ID"
 
   company_adapters_preflight "$provider" || return $?
-  read -r org admin < <(company_adapters_admin_context) || true
+  read -r org admin < <(company_admin_context) || true
   [[ -n $org && -n $admin ]] || {
     warn 'Integration BLOCKED: a single organization with an active G10 administrator is required.'; return 3;
   }
@@ -268,7 +188,7 @@ company_adapters_apply() {
   }
 
   if [[ $state == skip ]]; then
-    decision=$(company_adapters_sql "$org" "$admin" \
+    decision=$(company_sql "$org" "$admin" \
       "SELECT company.set_integration_state('$provider', 'skip', 'not_selected')") || return 1
     [[ $decision == configured ]] || { warn 'Integration BLOCKED: SKIP state was rejected.'; return 3; }
     info "Integration $provider SKIP(reason=not_selected); no credential or service call."
@@ -302,7 +222,7 @@ company_adapters_apply() {
     scopes_sql='NULL'
   fi
 
-  decision=$(company_adapters_sql "$org" "$admin" \
+  decision=$(company_sql "$org" "$admin" \
     "SELECT company.set_integration_state('$provider', 'selected', 'operator_selected')") || return 1
   if [[ $decision == conflict ]]; then
     warn 'Integration BLOCKED: the productivity suite is already chosen; Google Workspace and Microsoft 365 are mutually exclusive.'
@@ -310,7 +230,7 @@ company_adapters_apply() {
   fi
   [[ $decision == configured ]] || { warn 'Integration BLOCKED: selection was rejected.'; return 3; }
 
-  decision=$(company_adapters_sql "$org" "$admin" \
+  decision=$(company_sql "$org" "$admin" \
     "SELECT r.decision FROM company.configure_integration_app('$provider', '$sql_workspace', $sql_tenant, $sql_redirect, $scopes_sql) r") || return 1
   [[ $decision == configured ]] || {
     warn "Integration BLOCKED: organization app configuration was rejected ($decision)."; return 3;

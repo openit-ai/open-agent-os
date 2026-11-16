@@ -38,12 +38,12 @@ company_c17_verify() {
     if ((result == 3)); then warn 'C17 migration is pending.'; return 3; fi
     warn 'C17 migration checksum or version read-back failed.'; return 1
   fi
-  read -r org admin < <(company_c16_admin_context) || true
+  read -r org admin < <(company_admin_context) || true
   [[ -n $org && -n $admin ]] || {
     warn 'C17 read-back needs a single organization with an active administrator.'; return 3;
   }
 
-  handover=$(company_c17_sql_value "$org" "$admin" \
+  handover=$(company_sql_value "$org" "$admin" \
     "SELECT state || '|' || service_state || '|' || reboot_verified || '|'
             || COALESCE(boot_id, '') || '|' || COALESCE(previous_boot_id, '')
        FROM company.handover_state WHERE org_id = '$org'::uuid") || handover=''
@@ -94,10 +94,10 @@ company_c17_verify() {
     return 1
   fi
 
-  selected_count=$(company_c17_sql_value "$org" "$admin" \
+  selected_count=$(company_sql_value "$org" "$admin" \
     "SELECT count(*) FROM company.integration_settings
       WHERE org_id = '$org'::uuid AND state = 'selected'") || selected_count='0'
-  missing=$(company_c17_sql_value "$org" "$admin" \
+  missing=$(company_sql_value "$org" "$admin" \
     "SELECT count(*) FROM company.integration_settings s
       WHERE s.org_id = '$org'::uuid AND s.state = 'selected'
         AND COALESCE((SELECT h.external_roundtrip->>s.provider
@@ -133,7 +133,7 @@ PY
   fi
   # Retention: the maintenance timer is on and purged within the last 48 hours.
   local retention
-  retention=$(company_c17_sql_value "$org" "$admin" \
+  retention=$(company_sql_value "$org" "$admin" \
     "SELECT count(*) FROM company.audit_events
       WHERE org_id = '$org'::uuid AND event_type = 'maintenance'
         AND action = 'retention_purged' AND at > now() - interval '48 hours'") || retention=0

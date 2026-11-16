@@ -110,9 +110,7 @@ company_c10_verify() {
   rm -f -- "$https_body"
   # Real G10 state of this single-organization E (maintenance path, read-only).
   local evidence complete=f login=f mapped=0
-  evidence=$(run_root env -u PGOPTIONS -u PGHOSTADDR -u PGHOST -u PGUSER \
-    -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-    runuser -u postgres -- psql --host="${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}" \
+  evidence=$(company_maint psql --host="$(company_maint_socket)" \
     --port="${PGPORT:-5432}" --dbname="$PGDATABASE" -X -q -A -t -F '|' -c "
       SELECT EXISTS (SELECT 1 FROM company.console_setup WHERE state = 'complete'),
              EXISTS (SELECT 1 FROM company.audit_events e

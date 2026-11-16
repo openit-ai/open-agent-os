@@ -34,7 +34,7 @@ company_c07_verify() {
     warn 'C07 migration checksum or version read-back failed.'; return 1
   fi
   if ! company_db_runtime_boundary; then
-    printf '%%-28s FAIL\n' 'Runtime role boundary'
+    printf '%-28s FAIL\n' 'Runtime role boundary'
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi

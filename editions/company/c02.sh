@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Sourced by install.sh. C02 runs as the dedicated, unprivileged Company account.
+repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+# shellcheck source=editions/company/lib/company.sh
+. "$repo_root/editions/company/lib/company.sh"
 
 company_c02_block() { warn "C02 BLOCKED: $1"; return 3; }
-company_c02_valid_path() { [[ $1 =~ ^/[A-Za-z0-9_./-]+$ && $1 != / && $1 != *'//'* && $1 != *'/../'* && $1 != *'/./'* ]]; }
 company_c02_write_vhost() {
   if [[ -w $1 ]]; then cp -- "$2" "$1"; else run_root cp -- "$2" "$1"; fi
 }
@@ -27,7 +29,7 @@ company_c02_preflight() {
   [[ ${OAOS_COMPANY_HTTPS_ORIGIN:-} =~ ^https://[A-Za-z0-9.-]+$ ]] || { company_c02_block 'Set an existing HTTPS origin.'; return 3; }
   local path
   for path in "${OAOS_COMPANY_BACKUP_DIR:-}" "${OAOS_COMPANY_KEY_BACKUP_DIR:-}" "${OAOS_COMPANY_ROLLBACK_DIR:-}" "${OAOS_COMPANY_NGINX_VHOST:-}"; do
-    company_c02_valid_path "$path" || { company_c02_block 'Set absolute backup, key backup, rollback and nginx vhost paths.'; return 3; }
+    company_valid_path "$path" || { company_c02_block 'Set absolute backup, key backup, rollback and nginx vhost paths.'; return 3; }
   done
   [[ -d $OAOS_COMPANY_BACKUP_DIR && -w $OAOS_COMPANY_BACKUP_DIR && -d $OAOS_COMPANY_KEY_BACKUP_DIR && -w $OAOS_COMPANY_KEY_BACKUP_DIR && -d $OAOS_COMPANY_ROLLBACK_DIR && -w $OAOS_COMPANY_ROLLBACK_DIR && -f $OAOS_COMPANY_NGINX_VHOST ]] || { company_c02_block 'Backup/rollback paths must exist and be writable; TLS vhost must exist.'; return 3; }
   [[ $OAOS_COMPANY_BACKUP_DIR != "$OAOS_COMPANY_KEY_BACKUP_DIR" && $OAOS_COMPANY_BACKUP_DIR != "$OAOS_COMPANY_ROLLBACK_DIR" && $OAOS_COMPANY_KEY_BACKUP_DIR != "$OAOS_COMPANY_ROLLBACK_DIR" ]] || { company_c02_block 'Backup, key backup and rollback need separate directories.'; return 3; }
@@ -45,7 +47,7 @@ company_c02_preflight() {
   if systemctl --user list-unit-files hermes-gateway.service --no-legend 2>/dev/null | grep -Fq hermes-gateway.service; then
     company_c02_block 'Company account must be separate from the gateway account.'; return 3
   fi
-  if ! { [[ $(systemctl is-enabled certbot.timer 2>/dev/null || true) == enabled && $(systemctl is-active certbot.timer 2>/dev/null || true) == active ]] || [[ $(systemctl is-enabled snap.certbot.renew.timer 2>/dev/null || true) == enabled && $(systemctl is-active snap.certbot.renew.timer 2>/dev/null || true) == active ]]; }; then
+  if ! company_certbot_timer_ok; then
     company_c02_block 'Certificate renewal timer is not enabled and active.'; return 3
   fi
   host=${OAOS_COMPANY_HTTPS_ORIGIN#https://}
@@ -65,15 +67,8 @@ company_c02_apply() {
   # C01 already created FORCE RLS tables, so an app-role pg_dump fails; dump
   # through the local postgres maintenance account like every later phase.
   if [[ ! -e $snapshot/company.dump ]]; then
-    local socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
-    company_c02_valid_path "$socket_dir" && [[ -d $socket_dir && ${PGPORT:-5432} =~ ^[0-9]{1,5}$ ]] ||
-      { warn 'Local PostgreSQL backup socket or port is invalid.'; return 3; }
-    (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
-      -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-      pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
-      --dbname="$PGDATABASE" --format=custom > "$snapshot/company.dump" 2>/dev/null) ||
-      { warn 'Pre-install E database backup failed.'; return 3; }
-    [[ -s $snapshot/company.dump ]] || { warn 'Pre-install E database backup is empty.'; return 3; }
+    company_maint_socket_ok || { warn 'Local PostgreSQL backup socket or port is invalid.'; return 3; }
+    company_maint_dump "$snapshot/company.dump" || { warn 'Pre-install E database backup failed or is empty.'; return 3; }
   fi
   chmod 600 "$snapshot/company.dump"
   cp -- "$OAOS_COMPANY_NGINX_VHOST" "$snapshot/nginx.conf" || return 1
@@ -203,7 +198,7 @@ EOF
   host=${OAOS_COMPANY_HTTPS_ORIGIN#https://}
   cert="/etc/letsencrypt/live/$host/fullchain.pem"
   run_root openssl x509 -checkend 2592000 -noout -in "$cert" >/dev/null 2>&1 || { warn 'TLS certificate is missing or expires within 30 days.'; return 3; }
-  if ! { [[ $(systemctl is-enabled certbot.timer 2>/dev/null || true) == enabled && $(systemctl is-active certbot.timer 2>/dev/null || true) == active ]] || [[ $(systemctl is-enabled snap.certbot.renew.timer 2>/dev/null || true) == enabled && $(systemctl is-active snap.certbot.renew.timer 2>/dev/null || true) == active ]]; }; then return 3; fi
+  if ! company_certbot_timer_ok; then return 3; fi
   if [[ ! -e $config_dir/initial-boot-id ]]; then cp -- /proc/sys/kernel/random/boot_id "$config_dir/initial-boot-id"; chmod 600 "$config_dir/initial-boot-id"; fi
   info 'C02 resources applied. Run E read-back after a safe reboot; snapshot retained in rollback directory.'
 }

@@ -22,14 +22,14 @@ company_c15_apply() {
     }
   done
   company_adapters_preflight slack || return $?
-  read -r org admin < <(company_adapters_admin_context) || true
+  read -r org admin < <(company_admin_context) || true
   [[ -n $org && -n $admin ]] || {
     warn 'C15 BLOCKED: a single organization with an active G10 administrator is required.'; return 3;
   }
   company_adapters_migrate || return $?
   providers='slack notion google_workspace microsoft_365'
   for provider in $providers; do
-    state=$(company_adapters_sql "$org" "$admin" \
+    state=$(company_sql "$org" "$admin" \
       "SELECT company.integration_selection('$provider')") || return 1
     if [[ $state == selected ]]; then
       selected_count=$((selected_count + 1))
@@ -40,13 +40,13 @@ company_c15_apply() {
           }
           suite=$provider ;;
       esac
-      check=$(company_adapters_sql "$org" "$admin" \
+      check=$(company_sql "$org" "$admin" \
         "SELECT count(*) FROM company.integration_apps WHERE provider = '$provider' AND state = 'active'") || return 1
       [[ $check =~ ^[1-9][0-9]*$ ]] || {
         warn "C15 BLOCKED: selected provider $provider has no active organization app."; return 3;
       }
     else
-      check=$(company_adapters_sql "$org" "$admin" \
+      check=$(company_sql "$org" "$admin" \
         "SELECT count(*) FROM company.integration_apps WHERE provider = '$provider' AND state = 'active'
            UNION ALL SELECT count(*) FROM company.integration_delegations WHERE provider = '$provider' AND state = 'active'") || return 1
       [[ $check =~ ^0?$ ]] || {
