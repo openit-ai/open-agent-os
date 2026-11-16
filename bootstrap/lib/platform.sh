@@ -198,7 +198,11 @@ platform_linux_gateway_install() {
 platform_linux_gateway_status() {
   platform_linux platform_gateway_status || return 3
   [[ -f $HOME/.config/systemd/user/hermes-gateway.service ]] || return 1
-  hermes gateway status 2>/dev/null | grep -Ei 'running|active' >/dev/null
+  local status
+  status=$(hermes gateway status 2>/dev/null) || return 1
+  # "not running" / "inactive" contain the positive words, so reject them explicitly.
+  printf '%s\n' "$status" | grep -Ei '(^|[[:space:]:])(running|active)([[:space:]]|$)' >/dev/null || return 1
+  ! printf '%s\n' "$status" | grep -Ei 'not running|inactive|stopped' >/dev/null
 }
 platform_linux_gateway_service_present() {
   platform_linux platform_gateway_service_present || return 3
