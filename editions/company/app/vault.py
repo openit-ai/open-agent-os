@@ -8,6 +8,7 @@ This module has no plaintext-printing command-line interface.
 """
 
 import base64
+import hmac
 import os
 import stat
 import sys
@@ -16,7 +17,8 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
-KEY_NAME = "OAOS_COMPANY_VAULT_KEY_V1"
+KEY_PREFIX = "OAOS_COMPANY_VAULT_KEY_V"
+KEY_NAME = KEY_PREFIX + "1"
 
 
 class VaultAccessDenied(Exception):
@@ -103,6 +105,63 @@ def ensure_key(env_path):
         os.close(fd)
 
 
+def _secure_lines(env_path):
+    """Lines of a 0600 file owned by this account in a 0700 directory."""
+    directory = os.path.dirname(env_path)
+    if stat.S_IMODE(os.stat(directory).st_mode) != 0o700:
+        raise VaultAccessDenied("vault directory permissions are invalid")
+    fd = os.open(env_path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        mode = os.fstat(fd)
+        if not stat.S_ISREG(mode.st_mode) or stat.S_IMODE(mode.st_mode) != 0o600:
+            raise VaultAccessDenied("vault file permissions are invalid")
+        if mode.st_uid != os.getuid():
+            raise VaultAccessDenied("vault file ownership is invalid")
+        with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as env_file:
+            return env_file.read().splitlines()
+    finally:
+        os.close(fd)
+
+
+def load_keys(env_path):
+    """Every OAOS_COMPANY_VAULT_KEY_V<n> of the file as {n: 32-byte key}."""
+    keys = {}
+    for line in _secure_lines(env_path):
+        name, sep, value = line.partition("=")
+        if not sep or not name.startswith(KEY_PREFIX):
+            continue
+        suffix = name[len(KEY_PREFIX):]
+        if not suffix.isdigit() or int(suffix) < 1 or str(int(suffix)) != suffix:
+            raise VaultAccessDenied("vault key name is invalid")
+        version = int(suffix)
+        if version in keys:
+            raise VaultAccessDenied("vault key is duplicated")
+        keys[version] = _key(value.strip())
+    return keys
+
+
+def check_backup(live_env, restored_env):
+    """C17 recovery drill: the restored key backup holds every live key.
+
+    Compares key bytes in constant time and proves the restored newest key
+    with an AES-GCM canary. Prints nothing about the keys themselves.
+    """
+    live = load_keys(live_env)
+    restored = load_keys(restored_env)
+    if not live:
+        raise VaultAccessDenied("vault key is missing")
+    for version, key in live.items():
+        if not hmac.compare_digest(restored.get(version, b""), key):
+            raise VaultAccessDenied("key backup does not hold every vault key")
+    newest = max(restored)
+    canary = os.urandom(32)
+    sealed, nonce = seal(canary, restored[newest], "drill", "drill", "drill", "drill")
+    if open_envelope(sealed, nonce, restored[newest], "drill", "drill", "drill",
+                     "drill") != canary:
+        raise VaultAccessDenied("restored vault key failed the canary")
+    return sorted(live)
+
+
 def check_key(env_path):
     directory = os.path.dirname(env_path)
     if stat.S_IMODE(os.stat(directory).st_mode) != 0o700:
@@ -125,6 +184,14 @@ def check_key(env_path):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "check-backup":
+        try:
+            versions = check_backup(sys.argv[2], sys.argv[3])
+        except (OSError, ValueError, VaultAccessDenied):
+            print("Vault key backup restore check failed.", file=sys.stderr)
+            sys.exit(3)
+        print("key versions restored: " + ",".join(str(v) for v in versions))
+        sys.exit(0)
     if len(sys.argv) != 3 or sys.argv[1] not in ("ensure-key", "check-key"):
         sys.exit(1)
     try:

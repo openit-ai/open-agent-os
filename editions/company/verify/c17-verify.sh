@@ -89,9 +89,17 @@ company_c17_verify() {
     return 1
   fi
 
+  # O4: the drill restored the DB and the vault key backup, re-ran isolation,
+  # audit and ACL read-backs on the copy, and stayed within the 4-hour RTO; the
+  # handover evidence carries the same measured time.
   recovery_id=$(company_c17_latest_recovery "$org" "$admin" "$backup_id") || recovery_id=''
-  if [[ -z $recovery_id ]]; then
-    printf '%-30s FAIL\n' 'Passing recovery drill'
+  local rto='' handover_rto=''
+  [[ -z $recovery_id ]] || rto=$(company_c17_recovery_rto "$org" "$admin" "$recovery_id") || rto=''
+  handover_rto=$(company_sql_value "$org" "$admin" \
+    "SELECT evidence->>'rto_seconds' FROM company.handover_state WHERE org_id = '$org'::uuid") || handover_rto=''
+  if [[ -z $recovery_id || ! $rto =~ ^[0-9]+$ || $handover_rto != "$rto" ]] ||
+     ((rto > COMPANY_C17_RTO_LIMIT)); then
+    printf '%-30s FAIL\n' 'Recovery drill (keys, RTO 4h)'
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
@@ -181,7 +189,8 @@ PY
   printf '%-30s PASS\n' 'Migration SHA-256/version 12'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Persisted handover evidence'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Backup file and archive'; pass=$((pass + 1))
-  printf '%-30s PASS\n' 'Recovery drill'; pass=$((pass + 1))
+  printf '%-30s PASS\n' 'Recovery drill (keys, RTO 4h)'; pass=$((pass + 1))
+  info "Measured recovery time: ${rto}s of ${COMPANY_C17_RTO_LIMIT}s."
   printf '%-30s PASS\n' 'Reboot survival'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Service and backup timer'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Daily backup within 24h'; pass=$((pass + 1))

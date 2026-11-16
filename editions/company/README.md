@@ -86,7 +86,7 @@ bash editions/company/install.sh --status
 
 **DB 역할 분리.** C03부터 마이그레이션은 로컬 postgres 유지보수 경로에서 NOLOGIN 소유 역할 `oaos_company_owner`로 적용됩니다(`OAOS_COMPANY_DB_OWNER`로 이름 변경 가능). 설치기·콘솔·서비스가 쓰는 libpq 역할(`PGUSER`)은 Company 객체를 소유하지 않고 `oaos_company_runtime` 그룹을 통해 RLS 아래 DML만, 감사 행은 SELECT/INSERT만 가집니다. 이미 설치된 E는 다음 Phase 실행 시 `db-roles.sql`이 기존 객체 소유권을 넘기고 보정 마이그레이션 013이 권한을 정리합니다. 013 이후 번호의 마이그레이션은 기준 버전을 고치는 **보정(amendment)**이며, 그 기준 버전을 적용하는 Phase와 이후 Phase가 함께 적용합니다.
 
-원복이 필요하면 해당 실행의 `rollback/c02-날짜.난수` 스냅샷에서 nginx vhost와 기존 유닛·앱 파일을 복원하고 `nginx -t` 뒤 reload합니다. DB 덤프는 E의 분리된 복구 대상에만 복원하며, 자동 역마이그레이션이나 운영 Project DB 덮어쓰기는 하지 않습니다. DB 복구 시험과 24시간 이내 백업은 C17 read-back이 확인합니다. 암호화 키 백업으로의 실제 복원과 RTO 시간 측정은 아직 자동화되지 않았습니다.
+원복이 필요하면 해당 실행의 `rollback/c02-날짜.난수` 스냅샷에서 nginx vhost와 기존 유닛·앱 파일을 복원하고 `nginx -t` 뒤 reload합니다. DB 덤프는 E의 분리된 복구 대상에만 복원하며, 자동 역마이그레이션이나 운영 Project DB 덮어쓰기는 하지 않습니다. DB 복구 시험(키 백업 복원·RTO 4시간 실측 포함)과 24시간 이내 백업은 C17 read-back이 확인합니다.
 
 nginx는 지정한 **기존 HTTPS server block**에 `/company/`와 `/company/oauth/callback`만 추가합니다. `nginx -t` 또는 reload가 실패하면 설치 전 vhost를 복원합니다. 인증서 만료와 갱신 타이머, linger 상태를 read-back합니다. DB·Redis·Company 포트가 외부 주소에 바인딩되어 있으면 차단합니다. 외부 방화벽 허용 범위는 E 운영자가 기존 80/443 설정과 함께 확인해야 합니다.
 
@@ -261,13 +261,20 @@ bash editions/company/install.sh --stage c17
 bash bootstrap/verify/company-verify.sh --phase c17 --read-back
 ```
 
-012는 `backup_runs`(백업 경로·SHA-256·크기), `recovery_drills`(별도 임시 DB 복원 결과), `member_revocations`(퇴사 회수 건수)와 조직별 단일 `handover_state`를 만듭니다. 설치기는 E DB를 `pg_dump`로 백업하고 SHA-256·크기·아카이브 목록을 확인한 뒤, 임시 복원 DB(`oaos_company_c17_restore_*`)에 실제로 복원해 스키마 버전 12를 read-back하고 즉시 삭제합니다. 이미 검증된 백업·복구 기록이 있으면 재실행 시 재사용합니다.
+012는 `backup_runs`(백업 경로·SHA-256·크기), `recovery_drills`(별도 임시 DB 복원 결과), `member_revocations`(퇴사 회수 건수)와 조직별 단일 `handover_state`를 만듭니다. 설치기는 E DB를 `pg_dump`로 백업하고 SHA-256·크기·아카이브 목록을 확인한 뒤 **복구 드릴**을 실행합니다(O4).
+
+1. 덤프를 Company 계정이 읽어 유지보수 계정의 `pg_restore`에 표준 입력으로 넘겨 임시 DB(`oaos_company_c17_restore_*`)에 소유권·권한·정책 그대로 복원하고, 마이그레이션 이력이 운영 DB와 같은지 확인합니다.
+2. 키 백업 디렉터리의 가장 새로운 키 백업(일일 `company-env-<시각>`, C05·키 회전 스냅샷의 `company.env`)을 `0700` 임시 디렉터리에 복원하고 `vault.py check-backup`으로 운영 `.env`의 모든 Vault 키 버전이 같은 값으로 들어 있는지(상수 시간 비교)와 AES-GCM 카나리를 확인합니다. 키 백업이 없으면 종료 코드 `3`, 키가 다르면 `1`입니다.
+3. 복원된 DB에서 런타임 역할로 C04(두 비서 격리)·C07(감사 조회)·C08(ACL 검색) read-back을 다시 실행합니다.
+4. 1~3의 경과 시간을 RTO로 기록하고 **4시간(14400초)을 넘으면 실패**합니다. 임시 DB와 복원한 키 사본은 즉시 지웁니다.
+
+드릴 결과는 성공·실패 모두 `recovery_drills.evidence`(`rto_seconds`·`rto_limit_seconds`·`key_restored`·`key_source`(파일 이름)·`isolation`·`failed_step`)에 남고, 인계 판정 `handover_state.evidence`에도 측정 `rto_seconds`가 들어갑니다. 재실행은 이 증거를 모두 갖춘 통과 드릴만 재사용하므로 O4 이전 드릴은 새로 실행됩니다.
 
 인계 판정은 최신 검증 백업, 통과한 복구 드릴, `oaos-company.service`·`oaos-company-backup.timer`의 enabled/active, C02 설치 시점과 다른 부팅 ID, 그리고 **선택한 모든 연동의 실제 외부 왕복 확인**을 요구합니다. 선택 연동이 있으면 `OAOS_COMPANY_C17_ROUNDTRIP=<provider,...>`에 실제 왕복을 확인한 공급자를 지정해야 하며, 누락 시 종료 코드 `3`으로 차단됩니다. 연동을 하나도 선택하지 않은 설치는 `SKIP`으로 통과합니다.
 
 퇴사·정지 회수는 관리자만 실행하는 `company.c17_revoke_member(member_id, reason)` 한 트랜잭션으로 콘솔 세션, 개인비서, Vault 자격, 위임 연동, 외부 계정을 모두 철회하고 구성원을 `departed`로 고정한 뒤 감사 행과 회수 건수를 남깁니다. 마지막 활성 관리자는 회수할 수 없고, 다른 조직의 구성원은 조회·회수되지 않습니다.
 
-read-back은 012 SHA-256, 저장된 인계 판정, 백업 파일·체크섬, 복구 드릴, 재부팅 생존, 서비스·백업 타이머, 선택 연동 왕복과 퇴사 회수·교차 조직 거부를 실제 SQL 응답으로 검사하고 픽스처 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·게이트·수동 확인 대기 `3`, 검사 실패 `1`입니다.
+read-back은 012 SHA-256, 저장된 인계 판정, 백업 파일·체크섬, 복구 드릴(키 복원·격리 재검사·RTO 4시간 이내, 인계 증거의 같은 측정값), 작업·정의자 역할 경계와 백업·보존 유닛 강화, 재부팅 생존, 서비스·백업 타이머, 선택 연동 왕복과 퇴사 회수·교차 조직 거부를 실제 SQL 응답으로 검사하고 픽스처 트랜잭션을 롤백합니다. 결과 `0`은 `verified`, 선행·게이트·수동 확인 대기 `3`, 검사 실패 `1`입니다.
 
 ## Project→Company 데이터 이전
 
