@@ -676,6 +676,37 @@ write_onboarding() {
 EOF2
 }
 
+# The outline-wiki skill (search/read/create/update through the Outline API as the G8 agent
+# account) is copied into the Hermes skills directory once G8 passes. A copy carrying the
+# .oaos-managed marker is replaced on change; an owner's own copy is preserved.
+install_outline_skill() {
+  local source="$repo_root/skills/outline-wiki" skills target staged old
+  skills="$(platform_hermes_home)/skills"
+  target="$skills/outline-wiki"
+  [[ -f $source/SKILL.md && -f $source/scripts/outline.py ]] || { warn 'skills/outline-wiki is missing from this checkout.'; return 1; }
+  if [[ -e $target ]]; then
+    diff -rq -x .oaos-managed -x __pycache__ "$source" "$target" >/dev/null 2>&1 && return 0
+    if [[ ! -f $target/.oaos-managed ]]; then
+      warn "An outline-wiki skill not installed by OAOS exists at $target; preserving it (verify runs its helper)."
+      return 0
+    fi
+  fi
+  mkdir -p "$skills"
+  staged=$(mktemp -d "$skills/.outline-wiki.tmp.XXXXXX")
+  cp -R "$source/." "$staged/" || { rm -rf -- "$staged"; return 1; }
+  printf 'Installed by editions/project/install.sh (team stage) from skills/outline-wiki; local edits are replaced on the next team run.\n' > "$staged/.oaos-managed"
+  chmod -R go-w "$staged"
+  if [[ -e $target ]]; then
+    old="$skills/.outline-wiki.old.$$"
+    mv -- "$target" "$old" || { rm -rf -- "$staged"; return 1; }
+    mv -- "$staged" "$target" || { mv -- "$old" "$target"; return 1; }
+    rm -rf -- "$old"
+  else
+    mv -- "$staged" "$target" || { rm -rf -- "$staged"; return 1; }
+  fi
+  info "Installed the outline-wiki skill at $target (Outline search, read, create, update as the agent account)."
+}
+
 do_team() {
   local chat note output token users result mailbox outline_token admin=0 mmctl=/opt/mattermost/bin/mmctl
   need_hermes || return 3
@@ -728,6 +759,7 @@ do_team() {
   fi
   outline_token=''
   project_env_put OUTLINE_URL "https://$note" || return 1
+  install_outline_skill || return 1
   restart_gateway_if_running 'Mattermost and Outline'
 }
 
