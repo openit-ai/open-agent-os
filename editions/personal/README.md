@@ -23,27 +23,32 @@
 **선택**
 
 - Obsidian — 위키를 그래프 뷰로 보기
-- 메일 연동 (Himalaya) — 메일 확인·초안
-- 예약 작업 — 아침 브리핑, 백업, 감시
+- 메일 연동 (Himalaya) — 메일 확인·초안 (설치 스크립트 미포함, 수동 구성)
+- 예약 작업 추가 — 아침 브리핑 등 (일일 백업과 게이트웨이 워치독은 설치 스크립트가 기본 등록)
 
 **기존 Ubuntu 구동 예시:** N100급 미니PC · 16GB RAM · Ubuntu LTS. macOS·Windows의 자원·절전 조건은 실기기 확인이 필요합니다.
 
 **Personal 설치 스크립트 대상:** Ubuntu(Linux)·Apple Silicon macOS·Windows 11 Git Bash. 3개 레인 구현 및 Linux 스모크/macOS·Windows 모의 검증 완료; CI 3-러너 매트릭스 통과(2026-09-27). 실기기 설치·로그인·백업 검증은 아직 대기 중입니다. Project·Company는 Ubuntu LTS 서버 경로입니다.
 
-## 설치 흐름 — 게이트 3개
+## 설치 흐름 — 선택 게이트 2개 + 값 게이트 3개(G1~G3)
 
 ```text
-선택  에디션 선택          "Personal로 진행할까요?"
-G1  LLM 플랜             가입 링크 → 키 붙여넣기 (즉시 검증)
-G2·G3  Telegram          @BotFather 봇 토큰 + 내 사용자 ID 붙여넣기
+선택  에디션 선택           "Personal로 진행할까요?"
+선택  Hermes 설치 승인      내려받은 공식 설치기의 SHA-256 확인 후 승인 (승인 뒤에만 --yes)
+G1   LLM 플랜              가입 링크 → 키를 숨김 입력 또는 hermes setup --portal(OAuth)
+                          → 모델 테스트 응답이 와야 통과
+G2   Telegram 봇 토큰       @BotFather → 숨김 입력 → getMe 성공해야 통과
+G3   내 사용자 ID           @userinfobot → 숨김 입력 → 숫자 ID 목록이어야 통과
 ────────────────────────
-이후: 설치 → 위키 시딩 → 하네스 시딩 → 검증 12항목 → 보고
+스테이지 순서: prep → hermes → llm → telegram → gateway → wiki → harness → cron → verify
 ```
 
-에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
+키·토큰은 사용자가 자기 터미널에서 `bash bootstrap/bin/oaos-secret-set KEY`로 입력합니다(화면·채팅·로그·명령행 인자에 값이 남지 않고, Hermes `.env`에 소유자 전용 600으로 저장). 에이전트가 읽고·설치하고·검증합니다. 사용자는 게이트만 처리합니다.
+
+`cron` 스테이지는 일일 백업을 Hermes cron(`oaos-daily-backup`)에, 게이트웨이 워치독을 OS 타이머(Linux systemd 사용자 타이머, macOS launchd 에이전트)에 등록합니다. Hermes cron은 게이트웨이 안에서 돌기 때문에 게이트웨이가 죽으면 cron 워치독도 멈추기 때문입니다. Windows는 별도 워치독 없이 Hermes ONLOGON 태스크에 의존합니다.
 
 에이전트는 저장소에서 `bash editions/personal/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/personal/install.sh`를 실행합니다(Windows는 **Git Bash에서 실행**). Ubuntu는 공식 Hermes `install.sh`·systemd, macOS는 공식 `install.sh`·launchd, Windows는 공식 `install.ps1`·ONLOGON 태스크/Startup 폴백을 사용하도록 구현했습니다. apt·swapfile·systemd·`/proc` 명령은 Ubuntu 경로에만 적용됩니다. macOS·Windows 시간대와 절전/로그인 정책은 필요 시 수동 확인합니다.
-최종 확인은 `bash bootstrap/verify/personal-verify.sh`로 실행하며, 실제 메시지 왕복과 재부팅 또는 로그아웃·로그인 생존은 별도의 사람/실기기 증거가 필요합니다.
+최종 확인은 `bash bootstrap/verify/personal-verify.sh`(19항목)로 실행합니다. 종료 코드는 0 = 모두 PASS, 2 = FAIL 없음·MANUAL 대기, 1 = FAIL입니다. 재부팅(또는 로그아웃·로그인) 생존, 허용 계정 메시지 왕복, 비허용 계정 무응답은 사람이 확인한 뒤 `--confirm reboot,chat,allowlist`로 기록합니다. 하네스의 `{{...}}` 자리표시자는 시딩 대화로 채울 때까지 MANUAL입니다. 설치기는 MANUAL이 남아 있으면 verify를 `applied`로 기록하고 2로 끝납니다.
 
 ## 비용
 
@@ -65,32 +70,36 @@ G2·G3  Telegram          @BotFather 봇 토큰 + 내 사용자 ID 붙여넣기
 
 다음 원격 대시보드 예시는 **Ubuntu/systemd 서버 구성**입니다. Personal을 macOS·Windows에 네이티브 설치한 경우의 대시보드 자동 시작·원격 연결은 별도 실기기 확인이 필요합니다. 쓰는 PC에 Hermes 데스크탑 앱을 설치하면 그래픽 화면에서 연결할 수 있습니다. 앱 내려받기: [Hermes 데스크탑](https://hermes-agent.nousresearch.com/desktop) (Windows·macOS·Linux)
 
-**1. 서버 준비 — 대시보드에 로그인을 설정하고 내부망에 열기**
+**1. 서버 준비 — 대시보드는 루프백(127.0.0.1)에만 열기 (기본값)**
 
-`~/.hermes/.env`에 계정을 설정합니다.
-
-```text
-HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
-HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<강한 비밀번호>
-HERMES_DASHBOARD_BASIC_AUTH_SECRET=<openssl rand -base64 32 결과>
-```
-
-Ubuntu 서버의 대시보드를 내부망에 열어 상시 구동합니다(systemd 서비스 권장).
+대시보드 로그인 계정을 Hermes `.env`에 숨김 입력으로 저장합니다(값이 화면·인자에 남지 않음).
 
 ```text
-hermes dashboard --host 0.0.0.0 --port 9119 --no-open
+bash bootstrap/bin/oaos-secret-set HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+bash bootstrap/bin/oaos-secret-set HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+openssl rand -base64 32 | bash bootstrap/bin/oaos-secret-set HERMES_DASHBOARD_BASIC_AUTH_SECRET
 ```
 
-> 대시보드를 루프백 밖에 열면 로그인이 강제됩니다(미설정 시 시작 거부) — 내부망 전용 사용을 권장합니다.
+대시보드는 기본 바인딩(127.0.0.1)으로 구동합니다. `--host 0.0.0.0`은 쓰지 않습니다 — 검증기의 `Dashboard loopback` 항목이 비루프백 리스너를 FAIL로 판정합니다.
 
-**2. 앱에서 연결 — Settings → Gateways → Add connection → Remote gateway**
+```text
+hermes dashboard --port 9119 --no-open
+```
 
-- Remote URL에 `http://<서버 IP>:9119` 입력 → **Sign in**에서 위 사용자 이름·비밀번호로 로그인
+**2. 쓰는 PC에서 SSH 터널 열기**
+
+```text
+ssh -N -L 9119:127.0.0.1:9119 <사용자>@<서버 IP>
+```
+
+**3. 앱에서 연결 — Settings → Gateways → Add connection → Remote gateway**
+
+- Remote URL에 `http://127.0.0.1:9119`(터널 끝) 입력 → **Sign in**에서 위 사용자 이름·비밀번호로 로그인
 - **Test**로 연결을 확인합니다 — 로그인은 한 번만 하면 세션이 유지됩니다
 
-**3. 인터넷에서도 쓰려면 (선택)**
+**4. 인터넷에서도 쓰려면 (선택)**
 
-대시보드를 HTTPS 리버스 프록시(예: `https://<도메인>/hermes`) 뒤에 두고, 같은 방식으로 Remote URL에 그 주소를 입력합니다.
+포트를 직접 열지 말고 SSH 터널이나 VPN(예: Tailscale)으로 접속합니다. HTTPS 리버스 프록시가 꼭 필요하면 같은 호스트의 프록시가 127.0.0.1:9119로 전달하게 하고, 노출 범위를 별도로 검토합니다.
 
 **이렇게 활용합니다**
 

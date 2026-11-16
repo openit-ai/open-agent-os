@@ -47,7 +47,7 @@ jobs:
           syntax_bash=$(command -v bash)
           if [[ "$RUNNER_OS" == macOS ]]; then syntax_bash=/bin/bash; fi
           printf 'Syntax parser: %s\n' "$syntax_bash"
-          git ls-files -z '*.sh' | xargs -0 -n 1 "$syntax_bash" -n
+          git ls-files -z '*.sh' 'bootstrap/bin/*' | xargs -0 -n 1 "$syntax_bash" -n
 
       - name: Run Personal platform smoke with and without HERMES_HOME
         run: |
@@ -57,12 +57,12 @@ jobs:
       - name: Run OS-applicable subsystem smoke
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
-            for suite in install-smoke personal-verify-smoke project-smoke; do
+            for suite in install-smoke personal-verify-smoke project-smoke personal-to-project-migrate-smoke; do
               printf 'Running %s on Linux\n' "$suite"
               bash "bootstrap/tests/$suite.sh"
             done
           else
-            printf 'SKIP: install-smoke and project-smoke use Linux /usr/bin, apt, and systemd fixtures.\n'
+            printf 'SKIP: install-smoke, project-smoke and personal-to-project-migrate-smoke use Linux /usr/bin, apt, systemd and rsync fixtures.\n'
             printf 'SKIP: personal-verify-smoke uses a Linux systemd/loginctl fixture. Platform mocks run above.\n'
           fi
 
@@ -70,14 +70,15 @@ jobs:
         run: |
           isolated_home=$(mktemp -d)
           trap 'rm -rf -- "$isolated_home"' EXIT
-          HOME="$isolated_home" bash editions/personal/install.sh --dry-run
+          # The repository-owner check is covered by install-smoke; forks run this step too.
+          HOME="$isolated_home" OAOS_ALLOW_FORK=1 bash editions/personal/install.sh --dry-run
           if [[ -n $(ls -A "$isolated_home") ]]; then
             printf 'FAIL: dry-run changed isolated HOME: %s\n' "$isolated_home" >&2
             exit 1
           fi
           printf 'PASS: dry-run exited 0 and left isolated HOME empty\n'
 
-      - name: ShellCheck selected Personal shell files
+      - name: ShellCheck selected Personal and Project shell files
         run: |
           if [[ "$RUNNER_OS" == macOS ]] && ! command -v shellcheck >/dev/null 2>&1; then
             brew install shellcheck
@@ -94,9 +95,23 @@ jobs:
           shellcheck --severity=warning -x \
             bootstrap/lib/common.sh \
             bootstrap/lib/platform.sh \
+            bootstrap/lib/secret.sh \
+            bootstrap/bin/oaos-secret-set \
             bootstrap/verify/personal-verify.sh \
+            bootstrap/migrate/personal-to-project.sh \
             editions/personal/install.sh \
-            bootstrap/tests/platform-smoke.sh
+            editions/personal/computer-use-policy.sh \
+            editions/project/install.sh \
+            editions/project/lib.sh \
+            editions/project/native-stack.sh \
+            editions/project/backup.sh \
+            editions/project/restore.sh \
+            bootstrap/verify/project-verify.sh \
+            bootstrap/tests/project-smoke.sh \
+            bootstrap/tests/platform-smoke.sh \
+            bootstrap/tests/install-smoke.sh \
+            bootstrap/tests/personal-verify-smoke.sh \
+            bootstrap/tests/personal-to-project-migrate-smoke.sh
 
       - name: ShellCheck Company edition shell files
         if: runner.os == 'Linux'

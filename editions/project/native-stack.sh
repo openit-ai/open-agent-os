@@ -2,10 +2,17 @@
 # Sourced by install.sh after stack_dir, stack_get and project_domain are defined.
 repo_root=${repo_root:?native stack requires the Project installer}
 
+# Capture before matching: under pipefail a grep that quits early (-q) fails the pipeline.
+native_installed() {
+  local status
+  status=$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)
+  [[ $status == *'install ok installed'* ]]
+}
+
 native_package() {
   local package missing=()
   for package in "$@"; do
-    dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed' || missing+=("$package")
+    native_installed "$package" || missing+=("$package")
   done
   ((${#missing[@]} == 0)) && return 0
   if ! run_root apt-get update >/dev/null ||
@@ -30,7 +37,10 @@ native_seed_env() {
   for key in CHAT_DOMAIN NOTE_DOMAIN PORTAL_DOMAIN; do
     case $key in CHAT_DOMAIN) value=$chat;; NOTE_DOMAIN) value=$note;; PORTAL_DOMAIN) value=$portal;; esac
     if [[ -n $(stack_get "$key") && $(stack_get "$key") != "$value" ]]; then
-      warn "Existing $key differs; preserving stack configuration."; return 3
+      if [[ ${OAOS_ACCEPT_DOMAIN_CHANGE:-0} != 1 ]]; then
+        warn "Existing $key differs from the G6 value; preserving it. Rerun with OAOS_ACCEPT_DOMAIN_CHANGE=1 to move Mattermost, Outline and nginx to the new domain."; return 3
+      fi
+      warn "Changing $key to the new G6 domain (OAOS_ACCEPT_DOMAIN_CHANGE=1)."
     fi
     [[ $(stack_get "$key") == "$value" ]] || stack_put "$key" "$value" || return 3
   done
@@ -43,6 +53,19 @@ native_seed_env() {
   chmod 600 "$dir/.env" || return 3
 }
 
+# Architecture §6: PostgreSQL listens on loopback only, pinned by an OAOS conf.d drop-in.
+native_postgres_loopback() {
+  local dir="/etc/postgresql/$1/main/conf.d" file expected="listen_addresses = 'localhost'" actual
+  file="$dir/oaos-listen.conf"
+  if [[ $(run_root cat "$file" 2>/dev/null || true) != "$expected" ]]; then
+    run_root install -d -o postgres -g postgres -m 755 "$dir" || return 3
+    printf '%s\n' "$expected" | run_root tee "$file" >/dev/null || return 3
+    run_root systemctl restart postgresql || return 3
+  fi
+  actual=$(run_root runuser -u postgres -- psql -X -Atqc 'SHOW listen_addresses' 2>/dev/null || true)
+  [[ $actual == localhost ]] || { warn 'PostgreSQL listen_addresses is not localhost; another setting overrides the OAOS drop-in.'; return 3; }
+}
+
 native_postgres() {
   local mm_password outline_password pg_major
   native_package postgresql postgresql-client || return 3
@@ -51,6 +74,7 @@ native_postgres() {
     warn 'PostgreSQL 14 or later is required.'; return 3
   fi
   native_enable postgresql || return 3
+  native_postgres_loopback "$pg_major" || return 3
   pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1 || { warn 'PostgreSQL does not accept local connections.'; return 3; }
   mm_password=$(stack_get MM_DB_PASSWORD)
   outline_password=$(stack_get OUTLINE_DB_PASSWORD)
@@ -186,11 +210,19 @@ PY
   }
 }
 
+# Outline v1.10.1 release commit (peeled tag), pinned in full.
+OAOS_OUTLINE_COMMIT=4a5a616a21be800257dc11cef4263d0dd0412156
+
 native_node() {
   local arch source expected
-  if have_cmd node && [[ $(node --version) =~ ^v22\. ]] && have_cmd corepack; then
-    run_root corepack enable >/dev/null || return 3
+  # The oaos-outline unit runs /usr/bin/node and /usr/bin/yarn (NodeSource + Corepack shims).
+  if [[ -x /usr/bin/node && $(/usr/bin/node --version 2>/dev/null) =~ ^v22\. && -x /usr/bin/corepack ]]; then
+    run_root /usr/bin/corepack enable --install-directory /usr/bin >/dev/null || return 3
+    [[ -x /usr/bin/yarn ]] || { warn 'Corepack did not create /usr/bin/yarn.'; return 3; }
     return 0
+  fi
+  if have_cmd node && [[ $(command -v node) != /usr/bin/node ]]; then
+    warn "Node.js on PATH is $(command -v node); the Outline unit needs NodeSource Node.js 22 at /usr/bin/node. Installing it from NodeSource."
   fi
   native_package gnupg || return 3
   arch=$(dpkg --print-architecture)
@@ -204,45 +236,24 @@ native_node() {
     printf '%s\n' "$expected" | run_root tee "$source" >/dev/null || return 3
   fi
   run_root apt-get update >/dev/null && run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs >/dev/null || return 3
-  if [[ ! $(node --version) =~ ^v22\. ]] || ! have_cmd corepack; then
-    warn 'Node.js 22 or Corepack unavailable after install.'; return 3
+  if [[ ! -x /usr/bin/node || ! $(/usr/bin/node --version) =~ ^v22\. || ! -x /usr/bin/corepack ]]; then
+    warn 'Node.js 22 or Corepack unavailable at /usr/bin after install.'; return 3
   fi
-  run_root corepack enable >/dev/null || return 3
+  run_root /usr/bin/corepack enable --install-directory /usr/bin >/dev/null || return 3
+  [[ -x /usr/bin/yarn ]] || { warn 'Corepack did not create /usr/bin/yarn.'; return 3; }
 }
 
+# /etc/oaos/outline.env (root, 600) is the approved per-service secret file for Outline.
+# OAOS-managed keys are rewritten from ~/oaos/stack/.env and the Hermes .env (G9 SMTP);
+# identity-provider keys stored in the Hermes .env as OUTLINE_<KEY> (for example
+# OUTLINE_OIDC_CLIENT_ID) are copied as <KEY>; any other key already in the file
+# (an operator addition) is preserved.
 native_outline_config() {
-  local changed
+  local changed hermes_env
+  hermes_env=$(oaos_hermes_env_file) || return 3
   run_root install -d -m 700 /etc/oaos || return 3
-  changed=$(run_root python3 - "$(stack_dir)/.env" /etc/oaos/outline.env <<'PY'
-import os, pathlib, tempfile, sys
-source, target = map(pathlib.Path, sys.argv[1:])
-values = dict(line.split('=', 1) for line in source.read_text().splitlines() if '=' in line)
-data = {
-    'NODE_ENV': 'production', 'URL': 'https://' + values['NOTE_DOMAIN'],
-    'PORT': '3000', 'WEB_CONCURRENCY': '1',
-    'DATABASE_URL': 'postgres://outline:' + values['OUTLINE_DB_PASSWORD'] + '@127.0.0.1:5432/outline',
-    'PGSSLMODE': 'disable', 'REDIS_URL': 'redis://127.0.0.1:6379',
-    'SECRET_KEY': values['OUTLINE_SECRET_KEY'], 'UTILS_SECRET': values['OUTLINE_UTILS_SECRET'],
-    'FILE_STORAGE': 'local', 'FILE_STORAGE_LOCAL_ROOT_DIR': '/var/lib/outline/data',
-    'FORCE_HTTPS': 'false', 'PROXY_HEADERS_TRUSTED': 'true',
-}
-if all(values.get(key) for key in ('OAOS_MAIL_ADDRESS', 'OAOS_MAIL_PASSWORD', 'OAOS_MAIL_SMTP_HOST')):
-    data.update(SMTP_HOST=values['OAOS_MAIL_SMTP_HOST'], SMTP_PORT='587',
-                SMTP_USERNAME=values['OAOS_MAIL_ADDRESS'], SMTP_PASSWORD=values['OAOS_MAIL_PASSWORD'],
-                SMTP_FROM_EMAIL=values['OAOS_MAIL_ADDRESS'], SMTP_SECURE='false')
-content = ''.join(f'{key}={value}\n' for key, value in data.items())
-if target.exists() and target.read_text() == content:
-    print('unchanged')
-else:
-    with tempfile.NamedTemporaryFile(mode='w', dir=target.parent, prefix='.outline-oaos-', delete=False) as tmp:
-        os.fchmod(tmp.fileno(), 0o600)
-        tmp.write(content)
-        name = tmp.name
-    os.replace(name, target)
-    print('changed')
-PY
-  ) || return 3
-  run_root chmod 600 /etc/oaos/outline.env || return 3
+  changed=$(run_root python3 "$repo_root/editions/project/render-outline-env.py" "$(stack_dir)/.env" "$hermes_env" /etc/oaos/outline.env) || return 3
+  run_root chown root:root /etc/oaos/outline.env && run_root chmod 600 /etc/oaos/outline.env || return 3
   native_outline_changed=$changed
 }
 
@@ -258,7 +269,7 @@ native_outline() {
     run_root git clone --quiet --depth 1 --branch v1.10.1 https://github.com/outline/outline.git "$path" || return 3
   fi
   run_root chown -R outline:outline "$path" || return 3
-  [[ $(run_root runuser -u outline -- git -C "$path" rev-parse --short=7 HEAD 2>/dev/null) == 4a5a616 ]] || {
+  [[ $(run_root runuser -u outline -- git -C "$path" rev-parse HEAD 2>/dev/null) == "$OAOS_OUTLINE_COMMIT" ]] || {
     warn 'Outline checkout does not match the pinned v1.10.1 release commit.'; return 3;
   }
   # A system service user cannot traverse a 0750 home directory, so stage the
@@ -316,7 +327,7 @@ native_health() {
     if ((healthy)) && [[ $redis_listener == '127.0.0.1:6379' && $mm_listener == '127.0.0.1:8065' && $outline_listener == '127.0.0.1:3000' ]] &&
        pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1 &&
        [[ $(redis-cli -h 127.0.0.1 ping 2>/dev/null) == PONG ]] &&
-       curl -fsS --max-time 3 http://127.0.0.1:8065/api/v4/system/ping 2>/dev/null | grep -Fq '"status":"OK"' &&
+       [[ $(curl -fsS --max-time 3 http://127.0.0.1:8065/api/v4/system/ping 2>/dev/null || true) == *'"status":"OK"'* ]] &&
        [[ $(curl -fsS --max-time 3 http://127.0.0.1:3000/_health 2>/dev/null) == OK ]]; then return 0; fi
     remaining=$((deadline - SECONDS))
     ((remaining > 0)) || break
@@ -341,7 +352,8 @@ do_stack() {
     warn 'Native Project stack requires Ubuntu 22.04 or 24.04 LTS with PostgreSQL 14+.'; return 3;
   }
   for key in OAOS_CHAT_DOMAIN OAOS_NOTE_DOMAIN OAOS_PORTAL_DOMAIN; do
-    domain=$(project_domain "$key") || { warn 'G6: set the Project domains before stack.'; return 3; }
+    domain=$(project_domain "$key") || {
+      warn "G6: store the base domain with 'bash bootstrap/bin/oaos-secret-set OAOS_BASE_DOMAIN' (A records chat, note and portal point to this server), or OAOS_CHAT_DOMAIN, OAOS_NOTE_DOMAIN and OAOS_PORTAL_DOMAIN separately."; return 3; }
     case $key in OAOS_CHAT_DOMAIN) chat=$domain;; OAOS_NOTE_DOMAIN) note=$domain;; OAOS_PORTAL_DOMAIN) portal=$domain;; esac
   done
   dir=$(stack_dir)
@@ -353,7 +365,7 @@ do_stack() {
   native_health || return 3
   mm_version=$(dpkg-query -W -f='${Version}' mattermost 2>/dev/null) || mm_version=unknown
   [[ -n $mm_version ]] || mm_version=unknown
-  printf 'PostgreSQL: %s\nRedis: %s\nMattermost: %s\nNode.js: %s\nOutline: v1.10.1 (4a5a616)\n' \
-    "$(psql --version)" "$(redis-server --version)" "$mm_version" "$(node --version)" > "$dir/versions.txt" || return 3
+  printf 'PostgreSQL: %s\nRedis: %s\nMattermost: %s\nNode.js: %s\nOutline: v1.10.1 (%s)\n' \
+    "$(psql --version)" "$(redis-server --version)" "$mm_version" "$(/usr/bin/node --version)" "$OAOS_OUTLINE_COMMIT" > "$dir/versions.txt" || return 3
   chmod 600 "$dir/versions.txt" || return 3
 }

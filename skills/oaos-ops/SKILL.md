@@ -1,7 +1,7 @@
 ---
 name: oaos-ops
 description: "Day-2 operations for an OAOS host: check, backup, update."
-version: 0.1.0
+version: 0.1.1
 author: OpenIT (openit-ai), Hermes Agent
 license: Apache-2.0
 platforms: [linux]
@@ -73,7 +73,7 @@ Completion: version before/after recorded; post-update checks pass; rollback pat
 
 1. Check the gateway first (`hermes gateway status`, then service logs).
 2. Common causes: token revoked, allowlist changed, provider key expired (401s in logs), network/proxy change.
-3. Provider key rotation: have the user re-paste the new key; write via `hermes config set`; verify with a one-shot call. Never echo the value.
+3. Provider key rotation: the user enters the new key in their own terminal with `bash bootstrap/bin/oaos-secret-set <VARIABLE>` (hidden prompt; never paste it into chat or pass it as an argument); verify with a one-shot call (`bash editions/personal/install.sh --stage llm --recheck` on Personal). Never echo the value.
 4. Full restore only with explicit approval: stop the gateway, `hermes import <backup>`, start, verify.
 
 Completion: root cause stated with evidence (log lines), or restore verified end-to-end.
