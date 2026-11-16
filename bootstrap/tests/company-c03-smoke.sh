@@ -151,3 +151,16 @@ bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c03 --read-back > "
 [[ $code == 1 ]] || fail 'read-back accepted broken authorization function'
 printf 'PASS: real query read-back rejects changed authorization behavior\n'
 
+# Writing migrate runs serialize on a session advisory lock; --check takes none.
+psql -X -q -v ON_ERROR_STOP=1 -c "SELECT pg_advisory_lock(hashtext('oaos-company-migrate'))" \
+  -c 'SELECT pg_sleep(6)' >/dev/null 2>&1 &
+holder=$!
+sleep 1
+code=0
+OAOS_COMPANY_MIGRATE_LOCK_TIMEOUT=1 bash "$repo_root/editions/company/lib/migrate.sh" --through 1 \
+  > "$temp_root/locked" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -F 'holds the migration lock' "$temp_root/locked" >/dev/null || fail 'concurrent migrate run was not refused'
+bash "$repo_root/editions/company/lib/migrate.sh" --check --through 1 >/dev/null 2>&1 || fail 'check blocked by the migration lock'
+wait "$holder" || true
+bash "$repo_root/editions/company/lib/migrate.sh" --through 1 >/dev/null 2>&1 || fail 'migrate after the lock was released'
+printf 'PASS: concurrent migration runs serialize on the advisory lock\n'

@@ -28,6 +28,40 @@ export PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-5}
 db_query() { psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null; }
 if ! db_query 'SELECT 1' >/dev/null; then warn 'Company database connection failed.'; exit 3; fi
 
+# Concurrent installer runs (a retried phase, two operators) must not race
+# between reading the history and applying a version. A writing run holds a
+# session advisory lock on a dedicated connection until it exits; --check only
+# reads and takes no lock.
+lock_dir='' lock_pid=''
+release_lock() {
+  if [[ -n $lock_pid ]]; then
+    exec 9>&-
+    # A connection still waiting for the lock is dropped; the server then
+    # releases whatever it holds.
+    kill "$lock_pid" 2>/dev/null || true
+    wait "$lock_pid" 2>/dev/null || true
+    lock_pid=''
+  fi
+  if [[ -n $lock_dir ]]; then rm -rf -- "$lock_dir"; lock_dir=''; fi
+}
+acquire_lock() {
+  local timeout=${OAOS_COMPANY_MIGRATE_LOCK_TIMEOUT:-300} waited=0
+  [[ $timeout =~ ^[0-9]{1,5}$ ]] || die 'OAOS_COMPANY_MIGRATE_LOCK_TIMEOUT must be seconds.'
+  lock_dir=$(mktemp -d) || die 'Cannot create the migration lock directory.'
+  trap release_lock EXIT
+  mkfifo "$lock_dir/in" || die 'Cannot create the migration lock channel.'
+  psql -X -q -A -t -v ON_ERROR_STOP=1 < "$lock_dir/in" > "$lock_dir/out" 2>/dev/null &
+  lock_pid=$!
+  exec 9>"$lock_dir/in"
+  printf '%s\n' "SELECT pg_advisory_lock(hashtext('oaos-company-migrate'));" '\echo locked' >&9
+  until grep -x locked "$lock_dir/out" >/dev/null 2>&1; do
+    kill -0 "$lock_pid" 2>/dev/null || die 'Company migration lock connection failed.'
+    ((waited < timeout * 10)) || die 'Another Company migration run holds the migration lock.'
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+}
+
 files=("$repo_root"/editions/company/migrations/[0-9][0-9][0-9]_*.sql)
 [[ -f ${files[0]} ]] || die 'Company migration files are missing.'
 
@@ -107,6 +141,8 @@ for file in "${files[@]}"; do
   fi
 done
 ((first_amendment)) || first_amendment=$((last_seen_version + 1))
+
+((check_only)) || acquire_lock
 
 last_file_version=0
 expected_versions=()

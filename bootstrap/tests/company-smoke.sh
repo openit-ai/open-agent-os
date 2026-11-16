@@ -38,7 +38,11 @@ cat > "$temp_root/bin/psql" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 [[ ${OAOS_FAKE_DB_FAIL:-0} != 1 ]] || exit 2
-if [[ $* == *--single-transaction* ]]; then
+if [[ $* != *' -c '* && $* != *' -f '* && $* != *--single-transaction* ]]; then
+  # migrate.sh advisory lock connection: statements arrive on stdin.
+  while IFS= read -r line; do [[ $line == '\echo locked' ]] && printf 'locked\n'; done
+  exit 0
+elif [[ $* == *--single-transaction* ]]; then
   if [[ $* == *'001_company_schema.sql'* ]]; then version=1
   elif [[ $* == *'002_member_mapping.sql'* ]]; then version=2
   else exit 2; fi
@@ -148,7 +152,7 @@ for file in "$repo_root"/editions/company/stages/c02.sh "$repo_root"/editions/co
   fi
   grep -Fq 'OAOS_COMPANY_HTTPS_ORIGIN/company/health' "$file" || fail "Company HTTPS check missing in ${file##*/}"
 done
-if grep -nE '%\{http_code\}' "$repo_root/editions/company/stages/c02.sh" "$repo_root/editions/company/verify/c02-verify.sh" | grep -F 'company/health' >/dev/null; then
+if grep -nE '%\{http_code\}' "$repo_root/editions/company/stages/c02.sh" "$repo_root/editions/company/verify/c02-verify.sh" | grep -Fq 'company/health'; then
   fail 'Company HTTPS check must not rely on a bare status code'
 fi
 printf 'PASS: Company HTTPS evidence is anchored to this instance\n'
