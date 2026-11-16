@@ -12,6 +12,9 @@ DECLARE
   admin_a uuid := gen_random_uuid();
   owner_a uuid := gen_random_uuid();
   other_a uuid := gen_random_uuid();
+  suspended_a uuid := gen_random_uuid();
+  assistant_s uuid;
+  secret_s uuid;
   admin_b uuid := gen_random_uuid();
   assistant_a uuid;
   secret_a uuid;
@@ -227,6 +230,38 @@ BEGIN
   IF (SELECT r.decision FROM company.c17_revoke_member(admin_a, 'fixture_last') r)
      IS DISTINCT FROM 'last_admin' THEN
     RAISE EXCEPTION 'last administrator was revoked';
+  END IF;
+
+  -- Revocation does not depend on the member's state (P1-4): suspension
+  -- already revoked the credential (migration 014) and the procedure still
+  -- revokes and records a suspended member.
+  INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+    (suspended_a, org_a, 'c17-suspended-' || suspended_a::text, 'member', 'active');
+  PERFORM set_config('company.member_id', suspended_a::text, true);
+  SELECT r.assistant_id INTO assistant_s FROM company.register_personal_assistant() r;
+  SELECT r.secret_id INTO secret_s FROM company.store_personal_secret('fixture', 'personal',
+    decode(repeat('ab', 40), 'hex'), decode(repeat('01', 12), 'hex'), 1) r;
+  PERFORM set_config('company.member_id', admin_a::text, true);
+  UPDATE company.members SET state = 'suspended' WHERE id = suspended_a;
+  IF NOT EXISTS (SELECT 1 FROM company.secret_status s
+                  WHERE s.secret_id = secret_s AND s.state = 'revoked') THEN
+    RAISE EXCEPTION 'suspension left the credential active';
+  END IF;
+  SELECT r.decision INTO decision
+    FROM company.c17_revoke_member(suspended_a, 'fixture_suspended') r;
+  IF decision IS DISTINCT FROM 'revoked'
+     OR (SELECT state FROM company.members WHERE id = suspended_a) <> 'departed'
+     OR NOT EXISTS (SELECT 1 FROM company.member_revocations WHERE member_id = suspended_a) THEN
+    RAISE EXCEPTION 'suspended member was not revoked and recorded: %', decision;
+  END IF;
+  -- Nested or differently cased secret keys are refused as evidence (P1-10).
+  IF (SELECT r.decision FROM company.c17_record_recovery(backup_id, 'c17_nested',
+        true, '{"drill": {"Api-Key": "x"}}'::jsonb) r) IS DISTINCT FROM 'denied' THEN
+    RAISE EXCEPTION 'nested secret evidence was accepted';
+  END IF;
+  -- Retention is maintenance-only: the runtime role cannot purge audit rows.
+  IF has_function_privilege('company.maintenance_purge(integer, integer)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'runtime role can execute the retention purge';
   END IF;
 
   -- A second organization cannot read or revoke organization A's members.

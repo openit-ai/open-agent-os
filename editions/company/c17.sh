@@ -130,6 +130,46 @@ company_c17_restore_drill() {
   return "$rc"
 }
 
+# Daily retention (migration 018): a user oneshot unit + timer running
+# maintenance.sh through the postgres maintenance path. Like the backup unit it
+# omits NoNewPrivileges because that path needs the C02 non-interactive root.
+company_c17_install_maintenance() {
+  local unit_dir="$HOME/.config/systemd/user" app_dir="$HOME/.local/lib/oaos-company"
+  local config_dir="$HOME/.config/oaos-company" unit
+  install -d -m 700 "$app_dir" "$unit_dir" || return 1
+  install -m 700 "$repo_root/editions/company/maintenance.sh" "$app_dir/maintenance.sh" || return 1
+  cat > "$unit_dir/oaos-company-maintenance.service" <<EOF
+[Unit]
+Description=OAOS Company retention (180-day audit, 30-day departed personal content)
+
+[Service]
+Type=oneshot
+EnvironmentFile=$config_dir/.env
+ExecStart=$app_dir/maintenance.sh
+UMask=0077
+EOF
+  cat > "$unit_dir/oaos-company-maintenance.timer" <<'EOF'
+[Unit]
+Description=OAOS Company daily retention timer
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+Unit=oaos-company-maintenance.service
+
+[Install]
+WantedBy=timers.target
+EOF
+  chmod 600 "$unit_dir/oaos-company-maintenance.service" "$unit_dir/oaos-company-maintenance.timer"
+  systemctl --user daemon-reload || return 1
+  systemctl --user enable --now oaos-company-maintenance.timer >/dev/null || return 1
+  unit=oaos-company-maintenance.timer
+  [[ $(systemctl --user is-enabled "$unit" 2>/dev/null) == enabled &&
+     $(systemctl --user is-active "$unit" 2>/dev/null) == active ]] || return 1
+  # Run once now so the handover carries retention evidence.
+  systemctl --user start oaos-company-maintenance.service >/dev/null 2>&1
+}
+
 company_c17_apply() {
   local org='' admin='' selected='' confirmed='' roundtrip='' evidence=''
   local boot_id='' previous_boot_id='' reboot_verified=false service_state=''
@@ -191,6 +231,10 @@ company_c17_apply() {
       bash "$repo_root/editions/company/migrate.sh" --through 12 || return 1 ;;
     *) warn 'C17 migration history or checksum is invalid.'; return 1 ;;
   esac
+
+  company_c17_install_maintenance || {
+    warn 'C17 retention timer could not be installed or its first run failed.'; return 1;
+  }
 
   selected=$(company_c17_providers "$org" "$admin") || return 1
   confirmed=${OAOS_COMPANY_C17_ROUNDTRIP:-}

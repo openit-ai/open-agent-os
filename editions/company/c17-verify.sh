@@ -117,6 +117,34 @@ company_c17_verify() {
     return 1
   fi
 
+  # RPO: the daily backup job succeeded within the last 24 hours.
+  local last_success age
+  last_success=$(cat "${OAOS_COMPANY_BACKUP_DIR:-/nonexistent}/last-success" 2>/dev/null || true)
+  age=$(python3 - "$last_success" <<'PY' 2>/dev/null || true
+import datetime, sys
+stamp = datetime.datetime.strptime(sys.argv[1].strip(), '%Y%m%dT%H%M%SZ').replace(tzinfo=datetime.timezone.utc)
+print(int((datetime.datetime.now(datetime.timezone.utc) - stamp).total_seconds()))
+PY
+)
+  if [[ ! $age =~ ^[0-9]+$ ]] || ((age > 86400)); then
+    printf '%-30s FAIL\n' 'Daily backup within 24h'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
+  # Retention: the maintenance timer is on and purged within the last 48 hours.
+  local retention
+  retention=$(company_c17_sql_value "$org" "$admin" \
+    "SELECT count(*) FROM company.audit_events
+      WHERE org_id = '$org'::uuid AND event_type = 'maintenance'
+        AND action = 'retention_purged' AND at > now() - interval '48 hours'") || retention=0
+  if [[ $(systemctl --user is-enabled oaos-company-maintenance.timer 2>/dev/null || true) != enabled ||
+        $(systemctl --user is-active oaos-company-maintenance.timer 2>/dev/null || true) != active ||
+        ! $retention =~ ^[1-9][0-9]*$ ]]; then
+    printf '%-30s FAIL\n' 'Retention timer and last purge'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
+
   local readback_error readback_code=0
   readback_error=$(mktemp)
   if ! psql -X -q -v ON_ERROR_STOP=1 -v org="$org" -v admin="$admin" \
@@ -139,6 +167,8 @@ company_c17_verify() {
   printf '%-30s PASS\n' 'Recovery drill'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Reboot survival'; pass=$((pass + 1))
   printf '%-30s PASS\n' 'Service and backup timer'; pass=$((pass + 1))
+  printf '%-30s PASS\n' 'Daily backup within 24h'; pass=$((pass + 1))
+  printf '%-30s PASS\n' 'Retention timer and purge'; pass=$((pass + 1))
   if [[ $selected_count == 0 ]]; then
     printf '%-30s SKIP\n' 'External round-trip'; skip=$((skip + 1))
   else
