@@ -58,27 +58,52 @@ Not implemented. The Telegram local Bot API (needs `api_id`/`api_hash` from `htt
 
 The Personal installer has no mail stage yet. If the user wants mail now: enable two-factor authentication for the mailbox (Gmail: https://myaccount.google.com/apppasswords), create an app password, and store it with `bash bootstrap/bin/oaos-secret-set <VARIABLE>` under a variable name you choose (for example `OAOS_MAIL_PASSWORD`), and configure the mail tool (for example Himalaya) to read it from the environment or a password command — never as plain text in the tool's config file. Confirm one IMAP login without printing the password. Record it as a manual, optional step.
 
-## G0 · G6 — VPS + domain (Project / Company)
+## G0 — Server (Project / Company)
 
-- Sizing target: 4 vCPU / 16 GB RAM / 200 GB disk. Example: Hostinger KVM 4 — ≈ ₩16,095/month on the 24-month promo (verified 2026-09; renewal pricing is higher — check current). Any equivalent VPS works.
-- Steps: user purchases → provides the IP + root/SSH access → agent installs packages and adds OpenSSH/80/443 to existing `ufw` rules → three domain A records (`chat`, `note`, `portal`) → nginx + TLS (certbot). Confirm SSH key login, whether `ufw` is active, and unattended upgrades separately; the installer does not enable or configure those policies.
-- Project installs the bot mailbox (G9), then handles the Mattermost and Outline admin gates (G7/G8), then starts the gateway for the first time.
-- Project runs PostgreSQL, Redis, Mattermost and Outline as host services. Confirm the Outline listener is only on `127.0.0.1:3000` before completing G6.
-- Gate result: IP + domain reachable over HTTPS.
+- Sizing target: 4 vCPU / 16 GB RAM / 200 GB disk, Ubuntu 22.04 or 24.04 LTS. Example: Hostinger KVM 4 — ≈ ₩16,095/month on the 24-month promo (verified 2026-09; renewal pricing is higher — check current). Any equivalent VPS works.
+- Flow: the user purchases the VPS and logs in with an SSH key → installs Hermes **on the VPS** (official installer) → hands this repository URL to the agent running there. Everything after this runs on the VPS as one non-root administrator with non-interactive sudo; nothing runs from the user's laptop.
+- The Project `prep` stage then reports capacity (WARN below the target; BLOCKED below 2 vCPU / 8 GB / 60 GB unless `OAOS_ALLOW_SMALL_HOST=1`), blocks when ports 80, 443, 3000, 5432, 6379 or 8065 are already taken by another program, reports whether SSH key login is set up and whether password login is still enabled, and adds UFW rules for SSH (22 and the port of the current SSH session), 80 and 443 **before** enabling UFW, so the current session is not cut off. `OAOS_UFW_ENABLE=0` leaves UFW inactive (verify reports FAIL). Unattended upgrades are not configured.
+- Gate result: `prep` done; the capacity line is in the install log.
 
-## G7 — Mattermost admin (Project)
+## G4 · G5 in Project
 
-Open the initial Mattermost URL provided by the agent and create the first administrator account in the browser. Create the Hermes bot and token in System Console, then let the agent store and verify the token. The checked `mmctl --local` release cannot create bots or tokens; the agent uses it for administrator and SiteURL checks.
+Not offered. Large files (G4) are deferred for every edition, and Project's mail is the G9 bot mailbox only — never a person's mailbox.
 
-## G8 — Outline API token (Project)
+## G6 — Domain DNS (Project / Company)
 
-Sign in as the Outline administrator, issue an API token, and paste it to the agent. The agent stores it as a secret and verifies it without echoing it.
+- Why: Mattermost, Outline and the portal need HTTPS names. A domain is required for Project.
+- Give the user a record table: `chat`, `note`, `portal` → A → the VPS public IPv4 (the agent reads it with `curl https://api.ipify.org`). The user stores the base domain with `bash bootstrap/bin/oaos-secret-set OAOS_BASE_DOMAIN` (or `OAOS_CHAT_DOMAIN`, `OAOS_NOTE_DOMAIN`, `OAOS_PORTAL_DOMAIN` for other names).
+- The certificate e-mail defaults to the G9 bot address; store `OAOS_ACME_EMAIL` only to use a different one.
+- `stack` installs PostgreSQL, Redis, Mattermost and Outline as host services bound to 127.0.0.1. `ingress` polls DNS until all three names resolve to the server (up to `OAOS_DNS_TIMEOUT` seconds, default 600), then configures nginx and requests certificates. On timeout it names the records still wrong; rerun `--stage ingress` after fixing them.
+- Changing a domain later: store the new value, then run `OAOS_ACCEPT_DOMAIN_CHANGE=1 bash editions/project/install.sh --recheck --stage stack,ingress`. Managed vhosts are re-rendered and the certificate reinstalled.
+- Gate result: all three names answer over HTTPS.
+
+## G7 — Mattermost bot (Project)
+
+Principle: the agent uses a **bot account**, never a person's account and never an administrator.
+
+1. A person opens `https://chat.<domain>` and creates the first administrator account in the browser.
+2. That administrator opens System Console → Integrations → Bot Accounts, creates a bot for Hermes (do not give it the System Admin role) and copies its token.
+3. The user stores it: `bash bootstrap/bin/oaos-secret-set MATTERMOST_TOKEN`.
+4. The user collects the Mattermost user IDs (26 characters; System Console → Users) of the members the bot may answer and stores them, comma-separated: `bash bootstrap/bin/oaos-secret-set MATTERMOST_ALLOWED_USERS`.
+5. Verify immediately: `bash editions/project/install.sh --stage team`. It reads `/api/v4/users/me` with the token on curl's stdin config and blocks unless `is_bot` is true and the roles do not include `system_admin`; it checks that every allowlisted ID exists and stores `MATTERMOST_URL`. The checked `mmctl --local` release cannot create bots or tokens; the agent uses it for administrator and SiteURL checks only.
+
+## G8 — Outline AI-agent account and API token (Project)
+
+Principle: the AI agent writes and maintains the wiki under its **own** Outline account; documents it creates carry that account's name, and only direct human edits carry a person's name. The agent account's identity is the G9 bot mailbox.
+
+1. A person signs up first at `https://note.<domain>`; the first account becomes the workspace admin. Outline v1.10.1 offers no e-mail sign-in before a workspace exists, so this first sign-in uses an identity provider (store its values as `OUTLINE_OIDC_CLIENT_ID`, `OUTLINE_OIDC_CLIENT_SECRET`, … — the installer writes them into `/etc/oaos/outline.env`) or, for test servers only, `POST /api/installation.create`.
+2. The admin enables e-mail sign-in (Settings → Security) and invites the AI-agent account — its e-mail is the G9 bot address — as a member or editor, not admin.
+3. The agent account signs in through the link delivered to the bot mailbox (G9 SMTP must work), opens Settings → API Keys and creates a token (`ol_api_…`).
+4. The user stores it: `bash bootstrap/bin/oaos-secret-set OUTLINE_API_TOKEN`.
+5. Verify immediately: `--stage team` calls `POST /api/auth.info` (token on curl's stdin config) and blocks unless the account e-mail equals `OAOS_MAIL_ADDRESS` and the role is not admin; it stores `OUTLINE_URL`. Hermes has no built-in Outline skill yet, so Outline recipes need a skill that reads `OUTLINE_URL` and `OUTLINE_API_TOKEN`.
 
 ## G9 — Bot mailbox (Project / Company)
 
-- Create a dedicated mailbox for the bot (any provider; app password if 2FA). Keep it separate from personal mail so the bot cannot access a person's inbox.
-- Configure mail access (e.g. Himalaya for IMAP/SMTP) with the app password stored in `.env`.
-- Verify: send + receive one test message through the agent.
+- Why: the agent reads and sends team mail through a mailbox of its own, so it never holds a person's account (information-security separation).
+- Create a dedicated mailbox (for Gmail: a new account, 2-step verification on, then https://myaccount.google.com/apppasswords). The user stores `OAOS_MAIL_ADDRESS` and `OAOS_MAIL_PASSWORD` (app password without spaces); for providers other than Gmail also `OAOS_MAIL_IMAP_HOST` and `OAOS_MAIL_SMTP_HOST` (Gmail defaults to `imap.gmail.com` / `smtp.gmail.com`).
+- Verify immediately: `--stage mail` logs in over IMAP (993) and SMTP (587, STARTTLS) without printing the password, then configures Himalaya 1.x (password read from the Hermes `.env`) and Outline SMTP.
+- Confirm one real send + receive through the agent, then record it with `project-verify.sh --confirm mail-flow`.
 
 ## G11 · G12 — Optional integrations (Company)
 
