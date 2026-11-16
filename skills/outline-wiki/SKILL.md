@@ -9,6 +9,15 @@ metadata:
   hermes:
     tags: [outline, wiki, documents, knowledge, oaos, project]
     related_skills: [oaos-ops]
+required_environment_variables:
+  - name: OUTLINE_URL
+    prompt: "Outline base URL (https://note.<your-domain>)"
+    help: "Set by the OAOS Project installer at gate G8"
+    required_for: "all Outline calls"
+  - name: OUTLINE_API_TOKEN
+    prompt: "Outline API token of the non-admin AI-agent account"
+    help: "Store it in your own terminal: bash bootstrap/bin/oaos-secret-set OUTLINE_API_TOKEN"
+    required_for: "all Outline calls"
 ---
 
 # Outline Wiki
@@ -25,7 +34,7 @@ Work with the team's Outline wiki through the Outline API, as the **AI-agent acc
 ## Prerequisites
 
 - OAOS Project edition with gate G8 complete: `OUTLINE_URL` and `OUTLINE_API_TOKEN` are in the Hermes `.env` (owner-only). The installer copies this skill to `$HERMES_HOME/skills/outline-wiki/` (default `~/.hermes/skills/outline-wiki/`).
-- Python 3 (standard library only). Helper: `scripts/outline.py`. It reads both values itself and sends the token only in an HTTPS `Authorization` header — never pass the token as an argument, never print it, never copy it into chat, files or memory.
+- Python 3 (standard library only). Helper: `scripts/outline.py`. It reads both values from its process environment (Hermes passes the declared `required_environment_variables` through to the terminal sandbox; the helper never opens secret files) and sends the token only in an HTTPS `Authorization` header — never pass the token as an argument, never print it, never copy it into chat, files or memory.
 - If a value is missing, ask the owner to store it in their own terminal: `bash bootstrap/bin/oaos-secret-set OUTLINE_API_TOKEN` (from the OAOS repository), then rerun the Project `team` stage.
 
 ## Procedure

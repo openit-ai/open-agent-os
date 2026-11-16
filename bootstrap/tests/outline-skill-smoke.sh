@@ -51,7 +51,7 @@ mkdir -p "$home/.hermes"
 chmod 700 "$home/.hermes"
 printf 'OUTLINE_URL=https://note.example.invalid\nOUTLINE_API_TOKEN=%s\n' "$token" > "$home/.hermes/.env"
 chmod 600 "$home/.hermes/.env"
-run() { env HOME="$home" OUTLINE_API_BASE="http://127.0.0.1:$port" python3 "$helper" "$@"; }
+run() { env HOME="$home" OUTLINE_URL=https://note.example.invalid OUTLINE_API_TOKEN="$token" OUTLINE_API_BASE="http://127.0.0.1:$port" python3 "$helper" "$@"; }
 field() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {}, {"d": d}))' "$1" "$2"; }
 
 run whoami > "$temp_root/whoami.json" 2> "$temp_root/whoami.err" || fail 'whoami'
@@ -75,14 +75,13 @@ code=0
 run info --id missing > "$temp_root/missing.json" || code=$?
 [[ $code == 1 && $(field "$temp_root/missing.json" "d['ok'], d['status'], d['error']") == "(False, 404, 'not_found')" ]] || fail 'API error is not exit 1 with JSON'
 code=0
-env HOME="$home" OUTLINE_API_BASE="http://127.0.0.1:$port" OUTLINE_API_TOKEN='ol_api_wrongtoken0123456789' python3 "$helper" whoami > "$temp_root/bad.json" || code=$?
+env HOME="$home" OUTLINE_URL=https://note.example.invalid OUTLINE_API_BASE="http://127.0.0.1:$port" OUTLINE_API_TOKEN='ol_api_wrongtoken0123456789' python3 "$helper" whoami > "$temp_root/bad.json" || code=$?
 [[ $code == 1 && $(field "$temp_root/bad.json" "d['status']") == 401 ]] || fail 'rejected token is not exit 1 / 401'
 code=0
-env HOME="$home" OUTLINE_API_BASE='http://note.example.invalid' python3 "$helper" whoami > "$temp_root/plain.json" || code=$?
+env HOME="$home" OUTLINE_URL=https://note.example.invalid OUTLINE_API_TOKEN="$token" OUTLINE_API_BASE='http://note.example.invalid' python3 "$helper" whoami > "$temp_root/plain.json" || code=$?
 [[ $code == 2 ]] && grep -Fq 'loopback addresses only' "$temp_root/plain.json" || fail 'plain http to a non-loopback host was not refused'
-printf 'OUTLINE_URL=https://note.example.invalid\n' > "$temp_root/no-token.env"
 code=0
-env HOME="$home" python3 "$helper" --env-file "$temp_root/no-token.env" whoami > "$temp_root/no-token.json" || code=$?
+env HOME="$home" OUTLINE_URL=https://note.example.invalid python3 "$helper" whoami > "$temp_root/no-token.json" || code=$?
 [[ $code == 2 ]] && grep -Fq 'oaos-secret-set OUTLINE_API_TOKEN' "$temp_root/no-token.json" || fail 'missing token is not a configuration error with the helper hint'
 code=0
 run update --id doc-1 > "$temp_root/noop.json" || code=$?

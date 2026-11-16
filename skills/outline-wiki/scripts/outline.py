@@ -8,8 +8,8 @@ Exit codes: 0 success; 1 the API refused or could not be reached; 2 usage or con
 Configuration (non-admin AI-agent account, stored by the OAOS Project installer, gate G8):
   OUTLINE_URL        workspace URL, e.g. https://note.example.com
   OUTLINE_API_TOKEN  API token of the agent account (secret)
-Both are read from the process environment when present, otherwise from the Hermes .env
-($HERMES_HOME/.env, default ~/.hermes/.env). The token is sent only in the Authorization
+Both are read from the process environment only: Hermes passes the skill's declared
+required_environment_variables through to the terminal sandbox. The token is sent only in the Authorization
 header of HTTPS requests to OUTLINE_URL; it is never printed, logged or put on a command line.
 OUTLINE_API_BASE (optional, non-secret) points the helper at a local listener such as
 http://127.0.0.1:3000 on the Outline host itself. Plain http is accepted for loopback only.
@@ -44,36 +44,11 @@ def emit(payload, code):
     return code
 
 
-def env_file_values(path):
-    """Parse KEY=value lines the way the OAOS secret helper writes them."""
-    values = {}
-    try:
-        with open(path, encoding="utf-8") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        return values
-    for line in lines:
-        text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
-            continue
-        key, value = text.split("=", 1)
-        key = key.strip()
-        if key.startswith("export "):
-            key = key[len("export "):].strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] == '"':
-            value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
-        elif len(value) >= 2 and value[0] == value[-1] == "'":
-            value = value[1:-1]
-        values[key] = value
-    return values
-
-
-def settings(env_path):
-    home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
-    stored = env_file_values(env_path or os.path.join(home, ".env"))
-    url = os.environ.get("OUTLINE_URL") or stored.get("OUTLINE_URL", "")
-    token = os.environ.get("OUTLINE_API_TOKEN") or stored.get("OUTLINE_API_TOKEN", "")
+def settings():
+    # Hermes passes the skill's declared required_environment_variables through
+    # to the terminal/execute_code environment; this helper never opens secret files.
+    url = os.environ.get("OUTLINE_URL", "")
+    token = os.environ.get("OUTLINE_API_TOKEN", "")
     base = os.environ.get("OUTLINE_API_BASE") or url
     if not base:
         raise ConfigError("OUTLINE_URL is not set; complete the Project team stage (gate G8)")
@@ -161,7 +136,6 @@ def summarize_document(doc, with_text=False):
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="outline.py", description="Outline wiki helper (non-admin agent account).")
-    parser.add_argument("--env-file", help="Hermes .env path (default: $HERMES_HOME/.env or ~/.hermes/.env)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("whoami", help="show the account behind the token (auth.info)")
     collections = sub.add_parser("collections", help="list collections the agent can read")
@@ -189,7 +163,7 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        api, token = settings(args.env_file)
+        api, token = settings()
         body = {}
         if args.command == "collections":
             body = {"limit": max(1, min(args.limit, 100))}
