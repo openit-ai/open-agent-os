@@ -79,7 +79,7 @@ company_c02_backup_job() {
   latest="$dir/company-$stamp.dump"
   [[ -s $latest ]] && pg_restore --list "$latest" >/dev/null 2>&1 || return 1
   [[ $(stat -c %a "$dir") == 700 && $(stat -c %a "$key_dir") == 700 ]] || return 1
-  ! find "$dir" "$key_dir" -maxdepth 1 -type f ! -perm 0600 | grep -q .
+  ! find "$dir" "$key_dir" -maxdepth 1 -type f ! -perm 0600 | grep . >/dev/null
 }
 company_c02_linger() { [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null) == yes ]]; }
 company_c02_loopback() {

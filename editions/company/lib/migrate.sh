@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+# Company runs log to ~/.oaos/logs/company-<date>.log, not the shared install log.
+export OAOS_LOG_NAME=${OAOS_LOG_NAME:-company}
 # shellcheck source=bootstrap/lib/common.sh
 . "$repo_root/bootstrap/lib/common.sh"
 

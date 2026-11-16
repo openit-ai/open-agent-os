@@ -44,7 +44,7 @@ company_c02_preflight() {
     company_c02_block 'DB, Redis or Company port is publicly bound.'; return 3
   fi
   # Avoid sharing the existing gateway's user manager with the Company service.
-  if systemctl --user list-unit-files hermes-gateway.service --no-legend 2>/dev/null | grep -Fq hermes-gateway.service; then
+  if systemctl --user list-unit-files hermes-gateway.service --no-legend 2>/dev/null | grep -F hermes-gateway.service >/dev/null; then
     company_c02_block 'Company account must be separate from the gateway account.'; return 3
   fi
   if ! company_certbot_timer_ok; then

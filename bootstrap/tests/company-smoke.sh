@@ -9,12 +9,12 @@ verify="$repo_root/bootstrap/verify/company-verify.sh"
 runner="$repo_root/editions/company/lib/migrate.sh"
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/bin"
 
-HOME="$temp_root/home" bash "$install" --help | grep -Fq 'c01 through c17' || fail 'install help'
+HOME="$temp_root/home" bash "$install" --help | grep -F 'c01 through c17' >/dev/null || fail 'install help'
 env -u HOME bash "$install" --help > /dev/null || fail 'install help without HOME'
 HOME="$temp_root/home" bash "$install" --status > "$temp_root/status"
 [[ $(grep -Ec '^c[0-9][0-9] +pending ' "$temp_root/status") == 17 ]] || fail 'empty status'
 [[ ! -e $temp_root/home/.oaos-install/company-state.json ]] || fail 'status changed state'
-HOME="$temp_root/home" bash "$verify" --help | grep -Fq -- '--read-back' || fail 'verify help'
+HOME="$temp_root/home" bash "$verify" --help | grep -F -- '--read-back' >/dev/null || fail 'verify help'
 env -u HOME bash "$verify" --help > /dev/null || fail 'verify help without HOME'
 code=0
 HOME="$temp_root/home" bash "$install" --stage c03 > /dev/null 2>&1 || code=$?
@@ -91,6 +91,8 @@ HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test OAOS_
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/first"
 [[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'only C01 migration should be applied'
 [[ $(find "$temp_root/rollback" -name company.dump | wc -l) == 1 ]] || fail 'C01 pre-migration backup'
+[[ -n $(find "$temp_root/home/.oaos/logs" -name 'company-*.log' 2>/dev/null) &&
+   -z $(find "$temp_root/home/.oaos/logs" -name 'install-*.log' 2>/dev/null) ]] || fail 'Company log name'
 python3 - "$temp_root/home/.oaos-install/company-state.json" <<'PY' || fail 'applied state'
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
@@ -152,7 +154,7 @@ for file in "$repo_root"/editions/company/stages/c02.sh "$repo_root"/editions/co
   fi
   grep -Fq 'OAOS_COMPANY_HTTPS_ORIGIN/company/health' "$file" || fail "Company HTTPS check missing in ${file##*/}"
 done
-if grep -nE '%\{http_code\}' "$repo_root/editions/company/stages/c02.sh" "$repo_root/editions/company/verify/c02-verify.sh" | grep -Fq 'company/health'; then
+if grep -nE '%\{http_code\}' "$repo_root/editions/company/stages/c02.sh" "$repo_root/editions/company/verify/c02-verify.sh" | grep -F 'company/health' >/dev/null; then
   fail 'Company HTTPS check must not rely on a bare status code'
 fi
 printf 'PASS: Company HTTPS evidence is anchored to this instance\n'

@@ -165,7 +165,7 @@ env -i HOME="$HOME" PATH="$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" \
   OAOS_COMPANY_PG_SOCKET_DIR=/tmp OAOS_COMPANY_BACKUP_DIR="$OAOS_COMPANY_BACKUP_DIR" \
   OAOS_COMPANY_KEY_BACKUP_DIR="$OAOS_COMPANY_KEY_BACKUP_DIR" bash "$temp_root/backup.sh" || fail 'daily backup job under FORCE RLS'
 latest=$(< "$OAOS_COMPANY_BACKUP_DIR/last-success")
-pg_restore --list "$OAOS_COMPANY_BACKUP_DIR/company-$latest.dump" | grep -Fq 'audit_events' || fail 'daily dump lacks Company tables'
+pg_restore --list "$OAOS_COMPANY_BACKUP_DIR/company-$latest.dump" | grep -F 'audit_events' >/dev/null || fail 'daily dump lacks Company tables'
 [[ $(stat -c %a "$OAOS_COMPANY_BACKUP_DIR/company-$latest.dump") == 600 ]] || fail 'daily dump mode'
 
 if ! OAOS_C17_VERIFY_DEBUG=1 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/verified-skip" 2>&1; then
