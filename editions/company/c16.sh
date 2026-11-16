@@ -71,7 +71,7 @@ company_c16_usage_model() {
 BEGIN;
 SELECT set_config('company.org_id', :'org', true) AS org_ctx \gset
 SELECT set_config('company.member_id', :'requester', true) AS member_ctx \gset
--- The organization's C07 bundle (idempotent) carries the llm.billing.usage rule.
+-- The C07 bundle of the organization (idempotent) carries the llm.billing.usage rule.
 SELECT r.decision AS bundle FROM company.install_default_policies() r \gset
 SELECT company.g13_billing_digest(:'provider', :'model', :'cap'::numeric) AS digest \gset
 SELECT COALESCE(r.approval_id::text, '') AS approval FROM company.request_approval(
