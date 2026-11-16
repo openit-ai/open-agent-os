@@ -28,18 +28,30 @@ For checks 5–7, attach real device evidence (OS/architecture, timestamp, obser
 
 ## Project extension
 
-Run with `bash bootstrap/verify/project-verify.sh` on the Project VPS, in addition to its Personal-equivalent checks. A MANUAL result needs recorded human evidence before final completion.
+Run `bash bootstrap/verify/project-verify.sh` (`--json`, `--offline`) on the Project VPS as the non-root administrator who ran the installer; the installer's `verify` stage runs it on every rerun. It reuses Personal's decisions for Hermes health, model, gateway service and autostart, Telegram token and allowlist, wiki, harness files, secret hygiene, Hermes `.env` protection, `config.yaml` and unattended approvals, and adds the rows below. Exit codes match Personal: **0** all PASS, **2** no FAIL but MANUAL pending, **1** any FAIL. `--offline` turns the model request, Telegram `getMe`, public DNS, HTTPS and mail logins into SKIP. Non-interactive sudo is used only for root-only reads (certificates, `nginx -t`, `ufw status`, file modes, `SHOW listen_addresses`) and the backup job's database dump.
 
-| # | Check | Command / method | Pass criteria |
-|---|---|---|---|
-| P1 | DNS | `getent ahostsv4` for chat/note/portal; compare with server public IPv4 | All three A records match |
-| P2 | TLS | `openssl x509 -checkend 604800` for each certificate; certbot timer | >7 days valid; auto-renew enabled |
-| P3 | nginx + HTTPS | `nginx -t`; HTTPS request to each vhost | Config valid; all three respond |
-| P4 | Native services | `systemctl is-active` for PostgreSQL, Redis, Mattermost, Outline; `pg_isready`; `redis-cli ping`; `ss -ltn` | Four services active; local dependencies respond; Outline listens only on `127.0.0.1:3000` |
-| P5 | Apps | Mattermost `/api/v4/system/ping`; Outline `/_health` | Both return OK |
-| P6 | Bot mailbox | IMAP login using G9 values, without displaying them | Login succeeds; send/receive confirmed separately |
-| P7 | Team | Allowed and denied Mattermost account interaction | Allowlist enforced; bot replies only to allowed accounts |
-| P8 | Outline | Admin creates a page and verifies G8 API token | Page and API request succeed |
+| Row | Check | Pass criteria |
+|---|---|---|
+| Gateway telegram / mattermost | Hermes `gateway_state.json` platform state | Both `connected` |
+| Scheduled jobs | `oaos-daily-backup` in the cron list; script equals `editions/project/backup.sh` | Registered and current |
+| Backup works | Runs the real backup job | Archive 600 in a 700 directory; manifest lists both databases and `/etc/oaos` + service data |
+| Restore dry run | `editions/project/restore.sh --dry-run` on that archive | Every part readable |
+| Host capacity | `df`, `/proc`, G0 sizing | Disk >10% free, swap rule met, not below 2 vCPU / 8 GB / 60 GB (below 4/16/200 is PASS with a WARN note) |
+| Firewall | `ufw status` | Active; 22 (or OpenSSH), 80, 443 allowed |
+| DNS / TLS / HTTPS ×3 | `getent ahostsv4` vs public IPv4; `openssl x509 -checkend 604800`; HTTPS request | Each of chat, note, portal |
+| TLS auto-renew, nginx config | certbot timer; `nginx -t` | Enabled; valid |
+| Native services | `systemctl is-active` PostgreSQL, Redis, Mattermost, Outline; `pg_isready`; `redis-cli ping` | All respond |
+| Loopback :5432 / :6379 / :8065 / :3000 | `ss -ltn` | Listener present and loopback only |
+| PostgreSQL bind | `SHOW listen_addresses` | `localhost` |
+| Mattermost ping, Outline health | `/api/v4/system/ping`; `/_health` | OK |
+| Service secret files | `stat` | `~/oaos/stack/.env` 600 (installer user), `/etc/oaos/outline.env` 600 root, Mattermost `config.json` 600 mattermost |
+| Stack gate secrets | `~/oaos/stack/.env` | No `MATTERMOST_TOKEN`, `OUTLINE_API_TOKEN`, `OAOS_MAIL_PASSWORD` copy |
+| Mattermost bot | `/api/v4/users/me` with `MATTERMOST_TOKEN` (stdin config) | `is_bot` true, no `system_admin` |
+| Mattermost allowlist | `MATTERMOST_ALLOWED_USERS`; `/api/v4/users/ids` | 26-character IDs that all exist |
+| Outline agent token | `POST /api/auth.info` with `OUTLINE_API_TOKEN` | Account e-mail = `OAOS_MAIL_ADDRESS`; role not admin |
+| Outline URL | `OUTLINE_URL` in the Hermes `.env` | `https://<note domain>` |
+| Bot mailbox IMAP / SMTP | Login with the G9 values, password never printed | Login succeeds; a failed login with values present is FAIL; absent values are FAIL |
+| MANUAL: Reboot survival, Telegram chat / allowlist, Mattermost chat / deny, Outline page, Mail flow | Human evidence | Rerun with `--confirm reboot,chat,allowlist,mm-chat,mm-deny,outline-page,mail-flow` after observing each |
 
 ## Report template
 

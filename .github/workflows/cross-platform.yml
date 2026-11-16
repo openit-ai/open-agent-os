@@ -78,7 +78,7 @@ jobs:
           fi
           printf 'PASS: dry-run exited 0 and left isolated HOME empty\n'
 
-      - name: ShellCheck selected Personal shell files
+      - name: ShellCheck selected Personal and Project shell files
         run: |
           if [[ "$RUNNER_OS" == macOS ]] && ! command -v shellcheck >/dev/null 2>&1; then
             brew install shellcheck
@@ -101,6 +101,13 @@ jobs:
             bootstrap/migrate/personal-to-project.sh \
             editions/personal/install.sh \
             editions/personal/computer-use-policy.sh \
+            editions/project/install.sh \
+            editions/project/lib.sh \
+            editions/project/native-stack.sh \
+            editions/project/backup.sh \
+            editions/project/restore.sh \
+            bootstrap/verify/project-verify.sh \
+            bootstrap/tests/project-smoke.sh \
             bootstrap/tests/platform-smoke.sh \
             bootstrap/tests/install-smoke.sh \
             bootstrap/tests/personal-verify-smoke.sh \
