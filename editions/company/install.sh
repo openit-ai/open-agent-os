@@ -284,6 +284,37 @@ if [[ $project_ready != true ]]; then
   exit 3
 fi
 
+# Like every later phase, C01 keeps a pre-migration dump of E as its rollback
+# point, taken through the local postgres maintenance account (no credential
+# is passed) into a 0700 rollback directory. Nothing is dumped when the
+# checksummed migration is already applied.
+check_code=0
+bash "$repo_root/editions/company/migrate.sh" --check --through 1 >/dev/null 2>&1 || check_code=$?
+if ((check_code == 3)); then
+  rollback_dir=${OAOS_COMPANY_ROLLBACK_DIR:-}
+  socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
+  if [[ ! $rollback_dir =~ ^/[A-Za-z0-9_./-]+$ || ! -d $rollback_dir || ! -w $rollback_dir ||
+        $(stat -c %a "$rollback_dir" 2>/dev/null) != 700 ]]; then
+    stage_mark c01 blocked 'Pre-migration backup directory is missing'
+    warn 'Set OAOS_COMPANY_ROLLBACK_DIR to an existing 0700 directory for the C01 rollback dump.'
+    show_table
+    exit 3
+  fi
+  snapshot=$(mktemp -d "$rollback_dir/c01-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || die 'Cannot create the C01 rollback snapshot.'
+  chmod 700 "$snapshot"
+  if [[ ! ${PGDATABASE:-} =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ! $socket_dir =~ ^/[A-Za-z0-9_./-]+$ ]] ||
+     ! (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
+        -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
+        pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
+        --dbname="$PGDATABASE" --format=custom > "$snapshot/company.dump" 2>/dev/null) ||
+     [[ ! -s $snapshot/company.dump ]]; then
+    stage_mark c01 blocked 'Pre-migration E database backup failed'
+    warn 'c01 blocked: the pre-migration E database backup failed or is empty.'
+    show_table
+    exit 3
+  fi
+  chmod 600 "$snapshot/company.dump"
+fi
 code=0
 bash "$repo_root/editions/company/migrate.sh" --through 1 || code=$?
 case $code in

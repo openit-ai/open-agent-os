@@ -62,8 +62,17 @@ company_c02_apply() {
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   snapshot=$(mktemp -d "$OAOS_COMPANY_ROLLBACK_DIR/c02-$stamp.XXXXXX") || return 1
   # A consistent pre-install E database dump and original TLS file are the rollback point.
+  # C01 already created FORCE RLS tables, so an app-role pg_dump fails; dump
+  # through the local postgres maintenance account like every later phase.
   if [[ ! -e $snapshot/company.dump ]]; then
-    pg_dump --format=custom --file="$snapshot/company.dump" "$PGDATABASE" >/dev/null 2>&1 || { warn 'Pre-install E database backup failed.'; return 3; }
+    local socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
+    company_c02_valid_path "$socket_dir" && [[ -d $socket_dir && ${PGPORT:-5432} =~ ^[0-9]{1,5}$ ]] ||
+      { warn 'Local PostgreSQL backup socket or port is invalid.'; return 3; }
+    (umask 077; run_root runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR \
+      -u PGHOST -u PGUSER -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
+      pg_dump --host="$socket_dir" --port="${PGPORT:-5432}" \
+      --dbname="$PGDATABASE" --format=custom > "$snapshot/company.dump" 2>/dev/null) ||
+      { warn 'Pre-install E database backup failed.'; return 3; }
     [[ -s $snapshot/company.dump ]] || { warn 'Pre-install E database backup is empty.'; return 3; }
   fi
   chmod 600 "$snapshot/company.dump"
