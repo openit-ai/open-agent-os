@@ -129,7 +129,7 @@ grep -Fq 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c04-regression" ||
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c06 --read-back > "$temp_root/c06-regression" || fail 'C06 identity read-back after C07'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c06-regression" || fail 'C06 regression summary'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c07 --read-back > "$temp_root/verified" || fail 'C07 real DB read-back'
-grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
+grep -Fq 'Summary: PASS=10 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified" || fail 'read-back summary'
 grep '^Summary:' "$temp_root/verified"
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c07-%'") == 0 ]] || fail 'fixture rollback'
 [[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'

@@ -43,14 +43,16 @@ company_c07_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
-  printf '%-28s PASS\n' 'Migration SHA-256/version 8'
+  printf '%-28s PASS\n' 'Migration SHA-256/8 + 013-015'
   printf '%-28s PASS\n' 'Runtime role boundary'
   printf '%-28s PASS\n' 'Default deny and explicit allow'
   printf '%-28s PASS\n' 'Non-admin and self-approval denied'
   printf '%-28s PASS\n' 'Binding, expiry and single-use reuse'
   printf '%-28s PASS\n' 'Policy version invalidation'
+  printf '%-28s PASS\n' 'Forged/long request rejected'
+  printf '%-28s PASS\n' 'Policy change approval/audit'
   printf '%-28s PASS\n' 'Admin/member audit boundary'
   printf '%-28s PASS\n' 'Sensitive metadata and tenant isolation'
-  printf 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0\n'
+  printf 'Summary: PASS=10 FAIL=0 MANUAL=0 SKIP=0\n'
   stage_mark c07 verified 'C07 E policy, JIT approval and audit SQL responses passed; fixture rolled back'
 }
