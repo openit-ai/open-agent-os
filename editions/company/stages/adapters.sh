@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# Shared C11-C15 logic. Sourced by c11.sh..c15.sh. No credential is echoed.
+repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
+# shellcheck source=editions/company/lib/stage.sh
+. "$repo_root/editions/company/lib/stage.sh"
+
+company_adapters_prefix() {
+  case $1 in
+    slack) printf 'SLACK' ;;
+    notion) printf 'NOTION' ;;
+    google_workspace) printf 'GWS' ;;
+    microsoft_365) printf 'M365' ;;
+    *) return 1 ;;
+  esac
+}
+
+company_adapters_stage() {
+  case $1 in
+    c11) printf 'slack' ;;
+    c12) printf 'notion' ;;
+    c13) printf 'google_workspace' ;;
+    c14) printf 'microsoft_365' ;;
+    *) return 1 ;;
+  esac
+}
+
+company_adapters_config_var() {
+  case $1 in
+    slack) printf 'OAOS_COMPANY_SLACK_STATE OAOS_COMPANY_SLACK_WORKSPACE_ID OAOS_COMPANY_SLACK_BOT_TOKEN OAOS_COMPANY_SLACK_SIGNING_SECRET' ;;
+    notion) printf 'OAOS_COMPANY_NOTION_STATE OAOS_COMPANY_NOTION_WORKSPACE_ID OAOS_COMPANY_NOTION_TOKEN' ;;
+    google_workspace) printf 'OAOS_COMPANY_GWS_STATE OAOS_COMPANY_GWS_WORKSPACE_ID OAOS_COMPANY_GWS_CLIENT_ID OAOS_COMPANY_GWS_CLIENT_SECRET OAOS_COMPANY_GWS_REDIRECT_URI' ;;
+    microsoft_365) printf 'OAOS_COMPANY_M365_STATE OAOS_COMPANY_M365_WORKSPACE_ID OAOS_COMPANY_M365_TENANT_ID OAOS_COMPANY_M365_CLIENT_ID OAOS_COMPANY_M365_CLIENT_SECRET OAOS_COMPANY_M365_REDIRECT_URI' ;;
+    *) return 1 ;;
+  esac
+}
+
+company_adapters_scopes() {
+  case $1 in
+    google_workspace) printf '%s\n' 'https://www.googleapis.com/auth/gmail.readonly' 'https://www.googleapis.com/auth/drive.readonly' 'https://www.googleapis.com/auth/calendar.readonly' ;;
+    microsoft_365) printf '%s\n' 'Mail.Read' 'Files.Read' 'Calendars.Read' ;;
+    *) : ;;
+  esac
+}
+
+company_adapters_map_files() {
+  case $1 in
+    slack) printf 'SLACK_BOT_TOKEN:OAOS_COMPANY_SLACK_BOT_TOKEN SLACK_SIGNING_SECRET:OAOS_COMPANY_SLACK_SIGNING_SECRET' ;;
+    notion) printf 'NOTION_TOKEN:OAOS_COMPANY_NOTION_TOKEN' ;;
+    google_workspace) printf 'GOOGLE_WORKSPACE_CLIENT_ID:OAOS_COMPANY_GWS_CLIENT_ID GOOGLE_WORKSPACE_CLIENT_SECRET:OAOS_COMPANY_GWS_CLIENT_SECRET' ;;
+    microsoft_365) printf 'MICROSOFT_365_CLIENT_ID:OAOS_COMPANY_M365_CLIENT_ID MICROSOFT_365_CLIENT_SECRET:OAOS_COMPANY_M365_CLIENT_SECRET' ;;
+    *) return 1 ;;
+  esac
+}
+
+company_adapters_env_has_key() { grep -Eq "^${2}=.+" "$1" 2>/dev/null; }
+
+# Remove a SKIP provider's organization app keys from the EnvironmentFile
+# atomically (0600); values are never read into the shell.
+company_adapters_remove_keys() {
+  local provider=$1 env_file="$HOME/.config/oaos-company/.env" mapping entry names=()
+  mapping=$(company_adapters_map_files "$provider") || return 1
+  for entry in $mapping; do names+=("${entry%%:*}"); done
+  [[ -f $env_file ]] || return 0
+  python3 - "$env_file" "${names[@]}" <<'PY'
+import os, sys, tempfile
+path, names = sys.argv[1], sys.argv[2:]
+with open(path, encoding='utf-8') as source:
+    lines = source.read().splitlines()
+kept = [line for line in lines if not any(line.startswith(name + '=') for name in names)]
+if kept != lines:
+    descriptor, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.env-')
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as target:
+            target.write('\n'.join(kept) + ('\n' if kept else ''))
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+PY
+}
+
+company_adapters_keys_absent() {
+  local mapping entry
+  mapping=$(company_adapters_map_files "$1") || return 1
+  for entry in $mapping; do
+    ! grep -Eq "^${entry%%:*}=" "$2" 2>/dev/null || return 1
+  done
+}
+
+# External round-trip evidence: an audit row the runtime adapter writes after a
+# real event/read with the organization's service (event_type integration,
+# action external_roundtrip, resource_ref = provider). Nothing else counts.
+company_adapters_roundtrip_count() {
+  company_sql "$1" "$2" \
+    "SELECT count(*) FROM company.audit_events
+      WHERE org_id = '$1'::uuid AND event_type = 'integration'
+        AND action = 'external_roundtrip' AND resource_ref = '$3' AND decision = 'allow'"
+}
+
+company_adapters_write_key() {
+  printf '%s' "$3" | python3 "$repo_root/editions/company/app/env-key.py" "$1" "$2"
+}
+
+company_adapters_current_state() {
+  local org=$1 provider=$2 value=''
+  value=$(company_maint_query "SELECT state FROM company.integration_settings
+          WHERE org_id = '$org'::uuid AND provider = '$provider'") || return 1
+  printf '%s' "${value%%$'\n'*}"
+}
+
+company_adapters_quote_list() {
+  local out='' item
+  for item in "$@"; do
+    out+="${out:+,}'$item'"
+  done
+  printf 'ARRAY[%s]' "$out"
+}
+
+# Phase dependencies from the Company plan: C11 Slack needs C06+C07, C12 Notion
+# C06-C08, C13/C14 C05+C06, each on top of the C01-C05 base.
+company_adapters_required_stages() {
+  case $1 in
+    slack) printf 'c01 c02 c03 c04 c05 c06 c07' ;;
+    notion) printf 'c01 c02 c03 c04 c05 c06 c07 c08' ;;
+    google_workspace|microsoft_365) printf 'c01 c02 c03 c04 c05 c06' ;;
+    *) printf 'c01 c02 c03 c04 c05' ;;
+  esac
+}
+
+# Prints the required phase list and fails when one of them is not verified.
+company_adapters_dependencies_met() {
+  local stage required
+  required=$(company_adapters_required_stages "$1")
+  for stage in $required; do
+    # shellcheck disable=SC2086 # fixed phase names
+    [[ $(stage_status "$stage") == verified ]] || { company_phase_list $required; return 1; }
+  done
+}
+
+company_adapters_preflight() {
+  local provider=$1
+  # shellcheck disable=SC2046 # the dependency list is a fixed set of phase names
+  company_stage_ready adapters $(company_adapters_required_stages "$provider") || return $?
+  [[ $provider =~ ^(slack|notion|google_workspace|microsoft_365)$ ]] || {
+    warn 'Integration BLOCKED: unknown provider.'; return 3;
+  }
+}
+
+company_adapters_migrate() { company_stage_migrate adapters 7; }
+
+company_adapters_store_keys() {
+  local provider=$1 mapping entry name source value env_file="$HOME/.config/oaos-company/.env"
+  mapping=$(company_adapters_map_files "$provider")
+  for entry in $mapping; do
+    name=${entry%%:*}
+    source=${entry#*:}
+    value=${!source:-}
+    if [[ -n $value ]]; then
+      company_adapters_write_key "$env_file" "$name" "$value" || return 1
+    fi
+    company_adapters_env_has_key "$env_file" "$name" || return 3
+  done
+  chmod 600 "$env_file" || return 1
+}
+
+company_adapters_apply() {
+  local provider=$1 prefix state_var workspace_var workspace redirect tenant scopes_sql
+  local org='' admin='' current_state state decision sql_workspace sql_tenant sql_redirect
+  local scope_lines=() scope
+  prefix=$(company_adapters_prefix "$provider") || { warn 'Integration BLOCKED: unknown provider.'; return 3; }
+  state_var="OAOS_COMPANY_${prefix}_STATE"
+  workspace_var="OAOS_COMPANY_${prefix}_WORKSPACE_ID"
+
+  company_adapters_preflight "$provider" || return $?
+  read -r org admin < <(company_admin_context) || true
+  [[ -n $org && -n $admin ]] || {
+    warn 'Integration BLOCKED: a single organization with an active G10 administrator is required.'; return 3;
+  }
+
+  company_adapters_migrate || return $?
+
+  current_state=$(company_adapters_current_state "$org" "$provider") || current_state=''
+  state=${!state_var:-$current_state}
+  [[ -n $state ]] || state=skip
+  [[ $state == skip || $state == selected ]] || {
+    warn "Integration BLOCKED: ${state_var} must be skip or selected."; return 3;
+  }
+
+  if [[ $state == skip ]]; then
+    decision=$(company_sql "$org" "$admin" \
+      "SELECT company.set_integration_state('$provider', 'skip', 'not_selected')") || return 1
+    [[ $decision == configured ]] || { warn 'Integration BLOCKED: SKIP state was rejected.'; return 3; }
+    info "Integration $provider SKIP(reason=not_selected); no credential or service call."
+    return 0
+  fi
+
+  workspace=${!workspace_var:-}
+  [[ $workspace =~ ^[A-Za-z0-9._:@-]{1,120}$ ]] || {
+    warn "Integration BLOCKED: set $workspace_var for the selected provider."; return 3;
+  }
+  sql_workspace=$workspace
+  sql_tenant=NULL
+  sql_redirect=NULL
+  if [[ $provider == google_workspace || $provider == microsoft_365 ]]; then
+    redirect=$(company_adapters_redirect_var "$provider")
+    [[ $redirect =~ ^https://[A-Za-z0-9./_-]+$ ]] || {
+      warn 'Integration BLOCKED: a valid HTTPS OAuth redirect URI is required.'; return 3;
+    }
+    sql_redirect="'$redirect'"
+    while IFS= read -r scope; do [[ -n $scope ]] && scope_lines+=("$scope"); done < <(company_adapters_scopes "$provider")
+    ((${#scope_lines[@]})) || { warn 'Integration BLOCKED: read-only scopes are required.'; return 3; }
+    scopes_sql=$(company_adapters_quote_list "${scope_lines[@]}")
+    if [[ $provider == microsoft_365 ]]; then
+      tenant=${OAOS_COMPANY_M365_TENANT_ID:-}
+      [[ $tenant =~ ^[A-Za-z0-9._:-]{1,120}$ ]] || {
+        warn 'Integration BLOCKED: OAOS_COMPANY_M365_TENANT_ID is required.'; return 3;
+      }
+      sql_tenant="'$tenant'"
+    fi
+  else
+    scopes_sql='NULL'
+  fi
+
+  decision=$(company_sql "$org" "$admin" \
+    "SELECT company.set_integration_state('$provider', 'selected', 'operator_selected')") || return 1
+  if [[ $decision == conflict ]]; then
+    warn 'Integration BLOCKED: the productivity suite is already chosen; Google Workspace and Microsoft 365 are mutually exclusive.'
+    return 3
+  fi
+  [[ $decision == configured ]] || { warn 'Integration BLOCKED: selection was rejected.'; return 3; }
+
+  decision=$(company_sql "$org" "$admin" \
+    "SELECT r.decision FROM company.configure_integration_app('$provider', '$sql_workspace', $sql_tenant, $sql_redirect, $scopes_sql) r") || return 1
+  [[ $decision == configured ]] || {
+    warn "Integration BLOCKED: organization app configuration was rejected ($decision)."; return 3;
+  }
+
+  company_adapters_store_keys "$provider" || {
+    warn 'Integration BLOCKED: organization app credentials are missing from the Company EnvironmentFile.'; return 3;
+  }
+  info "Integration $provider selected; organization app configured and credentials stored in the Company EnvironmentFile."
+}
+
+company_adapters_redirect_var() {
+  case $1 in
+    google_workspace) printf '%s' "${OAOS_COMPANY_GWS_REDIRECT_URI:-}" ;;
+    microsoft_365) printf '%s' "${OAOS_COMPANY_M365_REDIRECT_URI:-}" ;;
+    *) printf '' ;;
+  esac
+}

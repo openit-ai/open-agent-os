@@ -113,7 +113,7 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c04 > "$t
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=c04_test'
-bash "$repo_root/editions/company/migrate.sh" --through 2 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 2 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c04 > "$temp_root/installed" || fail 'C04 install'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 3 ]] || fail 'migration 3 missing'

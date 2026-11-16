@@ -10,10 +10,10 @@
 repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
 # shellcheck source=editions/company/lib/company.sh
 . "$repo_root/editions/company/lib/company.sh"
-# shellcheck source=editions/company/c02.sh
-. "$repo_root/editions/company/c02.sh"
-# shellcheck source=editions/company/c02-verify.sh
-. "$repo_root/editions/company/c02-verify.sh"
+# shellcheck source=editions/company/stages/c02.sh
+. "$repo_root/editions/company/stages/c02.sh"
+# shellcheck source=editions/company/verify/c02-verify.sh
+. "$repo_root/editions/company/verify/c02-verify.sh"
 
 # Message prefix: "C03" for a phase, "Integration" for the C11-C14 adapters.
 company_stage_label() {
@@ -62,7 +62,7 @@ company_stage_migrate() {
   label=$(company_stage_label "$phase")
   # shellcheck disable=SC2034 # read by the sourcing phase scripts
   COMPANY_STAGE_MIGRATED=0 COMPANY_STAGE_SNAPSHOT=''
-  bash "$repo_root/editions/company/migrate.sh" --check --through "$through" >/dev/null 2>&1 || check_code=$?
+  bash "$repo_root/editions/company/lib/migrate.sh" --check --through "$through" >/dev/null 2>&1 || check_code=$?
   case $check_code in
     0) info "$label migration checksum confirmed; no database change needed."; return 0 ;;
     3) ;;
@@ -76,7 +76,7 @@ company_stage_migrate() {
   company_maint_dump "$snapshot/company.dump" || {
     company_stage_block "$phase" 'E database backup failed or is empty.'; return 3;
   }
-  bash "$repo_root/editions/company/migrate.sh" --through "$through" || return 1
+  bash "$repo_root/editions/company/lib/migrate.sh" --through "$through" || return 1
   # shellcheck disable=SC2034 # read by the sourcing phase scripts
   COMPANY_STAGE_MIGRATED=1 COMPANY_STAGE_SNAPSHOT=$snapshot
 }

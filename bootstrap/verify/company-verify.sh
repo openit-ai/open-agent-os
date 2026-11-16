@@ -37,15 +37,15 @@ if ! state_valid; then die 'Company state file is invalid JSON.'; fi
 # with company_<phase>_verify.
 case $phase in
   c1[1-4])
-    # shellcheck source=editions/company/adapters-verify.sh
-    . "$repo_root/editions/company/adapters-verify.sh"
+    # shellcheck source=editions/company/verify/adapters-verify.sh
+    . "$repo_root/editions/company/verify/adapters-verify.sh"
     company_adapters_verify "$(company_adapters_stage "$phase")" "$phase" ;;
   c15)
-    # shellcheck source=editions/company/adapters-verify.sh
-    . "$repo_root/editions/company/adapters-verify.sh"
+    # shellcheck source=editions/company/verify/adapters-verify.sh
+    . "$repo_root/editions/company/verify/adapters-verify.sh"
     company_adapters_verify_c15 ;;
   *)
     # shellcheck source=/dev/null
-    . "$repo_root/editions/company/$phase-verify.sh"
+    . "$repo_root/editions/company/verify/$phase-verify.sh"
     "company_${phase}_verify" ;;
 esac

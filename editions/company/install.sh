@@ -113,7 +113,7 @@ fi
 # Every phase script defines company_<phase>_apply (0 = done, 3 = blocked,
 # other = failed) and may set COMPANY_STAGE_NOTE to a more specific note.
 # shellcheck source=/dev/null
-. "$repo_root/editions/company/$selected.sh"
+. "$repo_root/editions/company/stages/$selected.sh"
 COMPANY_STAGE_NOTE=''
 code=0
 "company_${selected}_apply" || code=$?

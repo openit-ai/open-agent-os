@@ -150,3 +150,4 @@ code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c03 --read-back > "$temp_root/drift" 2>&1 || code=$?
 [[ $code == 1 ]] || fail 'read-back accepted broken authorization function'
 printf 'PASS: real query read-back rejects changed authorization behavior\n'
+

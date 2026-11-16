@@ -117,13 +117,13 @@ env -u PGOPTIONS bash "$repo_root/editions/company/install.sh" --stage c05 > "$t
 [[ $code == 3 ]] || fail 'RLS bypass role gate'
 grep -Fq 'database role bypasses RLS' "$temp_root/bypass-role" || fail 'RLS bypass gate reason'
 export PGOPTIONS='-c role=c05_test'
-bash "$repo_root/editions/company/migrate.sh" --through 3 >/dev/null
+bash "$repo_root/editions/company/lib/migrate.sh" --through 3 >/dev/null
 
 bash "$repo_root/editions/company/install.sh" --stage c05 > "$temp_root/installed" || fail 'C05 install'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 4 ]] || fail 'migration 4 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ $(find "$OAOS_COMPANY_KEY_BACKUP_DIR" -name company.env | wc -l) == 1 ]] || fail 'restricted key backup'
-bash -e -o pipefail -c 'python3 "$1" check-key "$2"' _ "$repo_root/editions/company/vault.py" "$HOME/.config/oaos-company/.env" || fail 'AES-GCM key presence'
+bash -e -o pipefail -c 'python3 "$1" check-key "$2"' _ "$repo_root/editions/company/app/vault.py" "$HOME/.config/oaos-company/.env" || fail 'AES-GCM key presence'
 mv "$HOME/.config/oaos-company/.env" "$HOME/.config/oaos-company/.env.saved"
 printf 'PGDATABASE=%s\n' "$PGDATABASE" > "$HOME/.config/oaos-company/.env"
 chmod 600 "$HOME/.config/oaos-company/.env"
@@ -156,7 +156,7 @@ export OAOS_C05_REPO_ROOT="$repo_root"
 python3 - <<'PY'
 import os
 import sys
-sys.path.insert(0, os.path.join(os.environ['OAOS_C05_REPO_ROOT'], 'editions', 'company'))
+sys.path.insert(0, os.path.join(os.environ['OAOS_C05_REPO_ROOT'], 'editions', 'company', 'app'))
 from vault import VaultAccessDenied, open_envelope, seal
 key = os.urandom(32)
 value = os.urandom(40)

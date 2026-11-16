@@ -6,7 +6,7 @@ trap 'rm -rf -- "$temp_root"' EXIT
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 install="$repo_root/editions/company/install.sh"
 verify="$repo_root/bootstrap/verify/company-verify.sh"
-runner="$repo_root/editions/company/migrate.sh"
+runner="$repo_root/editions/company/lib/migrate.sh"
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/bin"
 
 HOME="$temp_root/home" bash "$install" --help | grep -Fq 'c01 through c17' || fail 'install help'
@@ -142,13 +142,13 @@ printf 'PASS: SQL table, partial index, FK, owner trigger and RLS structure\n'
 # evidence must be anchored to this instance's loopback and check the payload.
 resolve_helper="--resolve \"\$host:443:127.0.0.1\""
 resolve_backup="--resolve \"\$health_host:443:127.0.0.1\""
-for file in "$repo_root"/editions/company/c02.sh "$repo_root"/editions/company/c02-verify.sh; do
+for file in "$repo_root"/editions/company/stages/c02.sh "$repo_root"/editions/company/verify/c02-verify.sh; do
   if ! grep -Fq -- "$resolve_helper" "$file" && ! grep -Fq -- "$resolve_backup" "$file"; then
     fail "Company HTTPS check in ${file##*/} is not anchored to loopback"
   fi
   grep -Fq 'OAOS_COMPANY_HTTPS_ORIGIN/company/health' "$file" || fail "Company HTTPS check missing in ${file##*/}"
 done
-if grep -nE '%\{http_code\}' "$repo_root/editions/company/c02.sh" "$repo_root/editions/company/c02-verify.sh" | grep -F 'company/health' >/dev/null; then
+if grep -nE '%\{http_code\}' "$repo_root/editions/company/stages/c02.sh" "$repo_root/editions/company/verify/c02-verify.sh" | grep -F 'company/health' >/dev/null; then
   fail 'Company HTTPS check must not rely on a bare status code'
 fi
 printf 'PASS: Company HTTPS evidence is anchored to this instance\n'

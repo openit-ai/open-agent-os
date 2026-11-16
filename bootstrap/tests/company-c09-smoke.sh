@@ -13,7 +13,7 @@ trap cleanup EXIT
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 install="$repo_root/editions/company/install.sh"
 verify="$repo_root/bootstrap/verify/company-verify.sh"
-runner="$repo_root/editions/company/migrate.sh"
+runner="$repo_root/editions/company/lib/migrate.sh"
 port=18765
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/home/.config/oaos-company" \
   "$temp_root/bin" "$temp_root/backup" "$temp_root/key-backup" "$temp_root/rollback"
