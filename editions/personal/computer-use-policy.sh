@@ -14,9 +14,19 @@
 #   bash editions/personal/computer-use-policy.sh enable    # warns, requires YES on stdin
 #   bash editions/personal/computer-use-policy.sh disable
 #
-# Exit codes: 0 = done; 3 = blocked (declined / gate); 1 = error.
+# Exit codes: 0 = done; 3 = blocked (declined / gate / not a local Personal host); 1 = error.
+#
+# enable refuses over SSH (SSH_CONNECTION / SSH_CLIENT / SSH_TTY set) and unless
+# the install state shows a Personal-only host (no Project or Company stages).
 #
 set -Eeuo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=bootstrap/lib/common.sh
+. "$repo_root/bootstrap/lib/common.sh"
+# shellcheck source=bootstrap/lib/platform.sh
+. "$repo_root/bootstrap/lib/platform.sh"
+export OAOS_NO_LOG_FILE=1
 
 KEY='computer_use.allow_credential_typing'
 CONSENT_FILE="${OAOS_COMPUTER_USE_CONSENT:-$HOME/.oaos/computer-use-consent}"
@@ -32,6 +42,36 @@ EOF
 }
 
 have_hermes() { command -v hermes >/dev/null 2>&1; }
+
+# Prints the editions recorded in the install state, one per line.
+state_editions() {
+  local file
+  file=$(oaos_state_file)
+  [[ -f $file ]] || return 0
+  oaos_python - "$(oaos_native_path "$file")" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    state = json.load(f)
+names = set((state.get("editions") or {}).keys())
+if state.get("stages") is not None:
+    names.add(state.get("edition", "personal"))
+for name in sorted(names):
+    print(name)
+PY
+}
+
+local_personal_host() {
+  local editions
+  if [[ -n ${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-} ]]; then
+    printf 'Refused: run this on the machine itself, not over SSH. Credential typing is a local-owner decision.\n' >&2
+    return 3
+  fi
+  editions=$(state_editions) || { printf 'Refused: the install state could not be read.\n' >&2; return 3; }
+  if [[ $editions != personal ]]; then
+    printf 'Refused: the install state must show a Personal-only host (found: %s). Project and Company hosts keep the upstream default.\n' "${editions:-none}" >&2
+    return 3
+  fi
+}
 
 current_value() {
   local v
@@ -49,6 +89,7 @@ cmd_status() {
 
 cmd_enable() {
   have_hermes || { printf 'Hermes is unavailable; install it first (personal stage: hermes).\n' >&2; return 1; }
+  local_personal_host || return 3
   if [[ $(current_value) == true ]]; then
     printf 'Already opted in. Use "disable" to restore the default.\n'
     return 0
@@ -83,8 +124,8 @@ EOF
     return 1
   fi
   mkdir -p "$(dirname "$CONSENT_FILE")"
-  printf 'opted-in %s host=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname 2>/dev/null || printf unknown)" > "$CONSENT_FILE"
-  chmod 600 "$CONSENT_FILE" 2>/dev/null || true
+  (umask 077; printf 'opted-in %s host=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname 2>/dev/null || printf unknown)" > "$CONSENT_FILE")
+  platform_secret_protect "$CONSENT_FILE" >/dev/null || { printf 'Opt-in stored, but the consent record could not be protected; check %s.\n' "$CONSENT_FILE" >&2; return 3; }
   printf 'Opted in. Consent recorded at %s (no secrets stored).\n' "$CONSENT_FILE"
 }
 
@@ -96,6 +137,8 @@ cmd_disable() {
 }
 
 [[ $# == 1 ]] || { usage >&2; exit 1; }
+[[ -n ${HOME:-} ]] || { printf 'HOME is not set.\n' >&2; exit 1; }
+os_detect >/dev/null || exit 3
 case $1 in
   status) cmd_status ;;
   enable) cmd_enable ;;

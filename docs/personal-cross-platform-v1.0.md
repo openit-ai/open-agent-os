@@ -1,6 +1,6 @@
 # Personal 크로스플랫폼 지원 설계 v1.0
 
-> **상태(2026-09-27)**: 설계 정본. Personal P1~P3의 Ubuntu(Linux)·macOS Apple Silicon·Windows 11 Git Bash 스크립트 구현과 로컬 모의 검증 완료. P4 CI 매트릭스·스킬·문서를 추가했고 호스티드 러너 3종(ubuntu-latest·macos-latest·windows-latest) 매트릭스를 통과했다(2026-09-27). 실기기 설치·키/메시지·로그인/재부팅 검증 P5는 미완이다. Project·Company는 Ubuntu LTS 서버 경로를 유지한다.
+> **상태(2026-11-16 갱신)**: 설계 정본. 2026-11 보안·정책 보정(시크릿 헬퍼, 에디션별 상태, 게이트 즉시 검증, 검증기 19항목·종료 코드 0/2/1, OS 타이머 워치독)을 반영했다. 이하 2026-09-27 기록: Personal P1~P3의 Ubuntu(Linux)·macOS Apple Silicon·Windows 11 Git Bash 스크립트 구현과 로컬 모의 검증 완료. P4 CI 매트릭스·스킬·문서를 추가했고 호스티드 러너 3종(ubuntu-latest·macos-latest·windows-latest) 매트릭스를 통과했다(2026-09-27). 실기기 설치·키/메시지·로그인/재부팅 검증 P5는 미완이다. Project·Company는 Ubuntu LTS 서버 경로를 유지한다.
 
 ## 0. 범위·근거
 
@@ -9,8 +9,8 @@ OAOS(Open Agent OS) Personal의 지원 OS는 Hermes Agent의 네이티브 설치
 | OAOS Personal 대상 | 아키텍처 | Hermes 설치 경로 | 게이트웨이 지속성 | 현재 OAOS 구현·검증 |
 |---|---|---|---|---|
 | Ubuntu LTS | x86_64·aarch64(Hermes Linux Tier 1) | 공식 `install.sh` | `hermes gateway install` → systemd 사용자 서비스; 부팅 전 상주가 필요하면 linger | Linux 설치·검증 스크립트 있음. 해당 Ubuntu 버전·아키텍처별 실설치 증거는 별도 확인 필요 |
-| macOS | Apple Silicon(arm64) | 공식 `install.sh` 또는 Hermes Desktop | `hermes gateway install` → launchd 사용자 에이전트, 로그인 후 시작 | 미구현·미검증 |
-| Windows 11 네이티브 | x86_64·aarch64 | 공식 `install.ps1` 또는 Hermes Desktop/MSIX(해당 패키지의 OS 요건 확인) | `hermes gateway install` → 로그온 태스크 `Hermes_Gateway`; 등록 실패 시 Hermes의 Startup 폴백 가능 | 미구현·미검증 |
+| macOS | Apple Silicon(arm64) | 공식 `install.sh` 또는 Hermes Desktop | `hermes gateway install` → launchd 사용자 에이전트, 로그인 후 시작; OAOS 워치독은 launchd 에이전트 | 설치·검증 스크립트 구현, 모의 smoke·CI(macos-latest) 통과. 실기기 미검증 |
+| Windows 11 네이티브 | x86_64·aarch64 | 공식 `install.ps1`(SHA-256 고정 필수) 또는 Hermes Desktop/MSIX(해당 패키지의 OS 요건 확인) | `hermes gateway install` → 로그온 태스크 `Hermes_Gateway`; 등록 실패 시 Hermes의 Startup 폴백 가능; OAOS 워치독 없음 | 설치·검증 스크립트 구현, 모의 smoke·CI(windows-latest) 통과. 실기기 미검증 |
 
 Hermes Desktop 경로에서는 OAOS가 호출할 `hermes` CLI와 Git Bash가 실제 제공되는지 먼저 read-back한다. Windows MSIX는 공식 문서상 Windows 11 **22H2 이상** 요건이 있으므로 Windows 11 전체에 MSIX를 무조건 적용하지 않는다. Windows ARM64 선택 기능의 제한도 공식 매트릭스에 따르며 Personal 필수 기능에 영향이 있는지 실기기에서 확인한다. [Hermes 플랫폼 지원](https://hermes-agent.nousresearch.com/docs/getting-started/platform-support), [Windows 네이티브 가이드](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native)
 
@@ -37,14 +37,16 @@ Hermes Desktop 경로에서는 OAOS가 호출할 `hermes` CLI와 Git Bash가 실
 | 프리미티브(제안 API) | Linux | macOS | Windows Git Bash |
 |---|---|---|---|
 | `os_detect`, `platform_arch`, `platform_require_tools` | 커널·아키텍처 확인; Ubuntu 권장/지원 범위 검사 | Darwin + arm64 확인 | Windows/MSYS 식별 + x86_64/aarch64 확인; 실제 Git Bash·CLI 접근 검사 |
-| `platform_hermes_home`, `platform_oaos_home`, `platform_path` | Hermes 기본 `~/.hermes`; OAOS `$HOME` | Hermes 기본 `~/.hermes`; OAOS `$HOME` | Hermes는 `HERMES_HOME` 우선, 기본 `%LOCALAPPDATA%\hermes`; OAOS는 Git Bash `$HOME`. Windows 네이티브 경로와 MSYS 경로 변환을 한 함수에 제한 |
+| `platform_hermes_home`, `platform_oaos_home`, `platform_path` | Hermes는 `HERMES_HOME` 우선, 기본 `~/.hermes`; OAOS `$HOME` | Hermes는 `HERMES_HOME` 우선, 기본 `~/.hermes`; OAOS `$HOME` | Hermes는 `HERMES_HOME` 우선, 기본 `%LOCALAPPDATA%\hermes`; OAOS는 Git Bash `$HOME`. Windows 네이티브 경로와 MSYS 경로 변환을 한 함수에 제한 |
 | `platform_package_prereqs`, `platform_install_hermes` | 기존 apt 검사·공식 `install.sh` | 필요한 도구만 검사하고 공식 `install.sh`로 연결; OS 패키지 설치 정책 확인 필요 | Git for Windows Bash·필수 도구 검사; 공식 `install.ps1`은 PowerShell에서 실행. 관리자 권한을 기본 요구하지 않음 |
 | `platform_memory_kib`, `platform_swap_state`, `platform_disk_kib` | `/proc/meminfo`, `/proc/swaps`, `df -Pk` | 시스템 메모리·swap 사용량은 macOS 시스템 조회로, 디스크는 `df -Pk`; 정확한 호출·단위는 P2 실측 | Windows 시스템 조회로 총 RAM·pagefile·대상 볼륨 여유량 확인; PowerShell/CIM 호출·단위는 P3 실측 |
 | `platform_timezone_get`, `platform_timezone_set` | `timedatectl` | macOS 시스템 시간대 조회·변경; 권한과 호출은 P2 확인 | Windows 시간대 조회·변경; Windows ID와 IANA `Area/City` 매핑은 P3 확인. 모호한 매핑은 자동 적용 금지 |
 | `platform_swap_prepare`, `platform_sleep_policy` | 기존 16 GiB 미만/스왑 없음 → 8 GiB swapfile·`fstab`; logind·sleep mask | OS 관리 가상메모리 사용. Linux swapfile 생성·sleep mask 적용 금지; 절전 정책은 안내/수동 검증 | OS 관리 pagefile 사용. Linux swapfile 생성·sleep mask 적용 금지; 전원·로그온 정책은 안내/수동 검증 |
-| `platform_secret_protect`, `platform_secret_check` | 파일 mode 600·디렉터리 접근 확인 | POSIX mode 600·소유자 확인 | NTFS ACL에서 현재 사용자와 필수 시스템 주체 외 접근을 제한·read-back. MSYS `chmod 600` 표시만으로 PASS 금지; 정책·파일시스템 제약 시 BLOCKED |
+| `platform_secret_protect`, `platform_secret_check` | 파일 mode 600·소유자, 상위 디렉터리 group/other 쓰기 금지 확인 | POSIX mode 600·소유자 확인 | NTFS ACL에서 현재 사용자와 필수 시스템 주체 외 접근을 제한·read-back. MSYS `chmod 600` 표시만으로 PASS 금지; 정책·파일시스템 제약 시 BLOCKED |
 | `platform_sha256`, `platform_file_mode`, `platform_atomic_write` | `sha256sum`, `stat -c`, 기존 원자적 rename | `shasum -a 256`, `stat -f`, 동일 파일시스템의 임시 파일·rename | 가용 해시 도구 확인 후 검증; ACL·rename 동작 실측. 고정 GNU 유틸 가정 금지 |
 | `platform_gateway_install`, `platform_gateway_status`, `platform_gateway_autostart` | `hermes gateway install/status`; 필요 시 systemd enabled·linger read-back | `hermes gateway install/status`; launchd 등록·실행 및 로그인 후 read-back | `hermes gateway install/status`; schtasks 또는 공식 Startup 폴백 등록·실행 및 로그온 후 read-back |
+| `platform_watchdog_install`, `platform_watchdog_check` | systemd 사용자 타이머 `oaos-gateway-watchdog.timer`(5분) | launchd 에이전트 `ai.openit.oaos.gateway-watchdog`(StartInterval 300) | 미제공(5분마다 Git Bash 창이 뜨는 문제) — check는 4(해당 없음) |
+| `platform_listeners` | `ss -Hltn` | `lsof -iTCP -sTCP:LISTEN` | `netstat -ano`; 없으면 MANUAL |
 
 게이트웨이 설치·시작·중단의 소유자는 Hermes다. OAOS는 `hermes gateway install`, `hermes gateway start`, `hermes gateway status`를 우선 사용하고, `systemctl`·`launchctl`·`schtasks`는 OS별 **등록 진단·교차 확인**에만 쓴다. Windows에서 `hermes gateway install`은 관리자 권한 없이 schtasks ONLOGON 태스크를 등록하고, 등록 실패 시 Hermes의 Startup 폴더 폴백을 사용한다. **스크립트·비TTY에서 `hermes gateway start`만 실행하면 로그인 자동시작은 등록되지 않으므로 OAOS는 `hermes gateway install`을 명시적으로 호출한다**(필요 시 `HERMES_GATEWAY_INSTALL_START_ON_LOGIN=1`). 상태 문자열의 `running|active` grep만으로 등록·재시작 정책을 판정하지 않는다. Windows 태스크 이름은 기본 프로필 `Hermes_Gateway`이며 프로필별 이름은 Hermes status가 보고한 실제 값을 따른다. 태스크 생성이 정책상 막혀 Hermes가 Startup 폴백을 쓴 경우도 status와 실제 로그온 테스트로 판정한다. Windows의 외부 강제 종료 후 자동 재시작은 보장되지 않으므로 watchdog의 기대 동작을 별도로 검증한다. [Hermes 게이트웨이 서비스 관리](https://hermes-agent.nousresearch.com/docs/user-guide/messaging), [Windows 네이티브 가이드](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native)
 
@@ -55,12 +57,12 @@ macOS 시스템 Bash 3.2를 최소 문법 대상으로 둔다. 현재 조사 범
 | 차이 | 현재 사용·위험 | 후속 구현 계약 |
 |---|---|---|
 | `seq` | Personal 대상 스크립트에서 현재 호출 없음. Windows Git Bash 구성에 따라 유무 확인 필요 | 새 반복문은 Bash 산술 루프 사용; `seq` 의존 금지 |
-| `sha256sum` / `shasum` | 설치기의 내려받은 파일 SHA-256 검사에 `sha256sum` 고정 | `platform_sha256`이 해시값만 반환. macOS `shasum -a 256`; Windows 도구 탐지·검증. 기대값 비교·승인 흐름 유지 |
+| `sha256sum` / `shasum` | 구현됨: `platform_sha256`이 Linux `sha256sum`, macOS `shasum -a 256`, Windows `sha256sum`→`shasum`→`certutil` 순으로 해시값만 반환 | 기대값 비교·승인 흐름 유지 |
 | `stat -c` / `stat -f` | Personal 현재 직접 호출 없음; 권한·시간 검사를 추가하면 갈라짐 | 플랫폼별 mode/mtime 함수. 출력 형식에 의존하는 호출을 본문에 넣지 않음 |
 | `sed -i` | 현재 Personal 직접 호출 없음; BSD와 GNU 인자 차이 | 임시 파일에 쓰고 원자적 교체; in-place 옵션 회피 |
 | `readlink -f` | 현재 Personal 직접 호출 없음; macOS 기본 구현 차이 | 경로 정규화는 물리 경로 조회/플랫폼 함수로 제한; 없는 옵션 호출 금지 |
-| `find -printf`, `sort -z`, `tail -z` | 검증기의 백업 정리에서 GNU 옵션 사용 | Python 3 또는 이식 가능한 파일 목록 처리로 교체; 공백·개행 경로 테스트 |
-| `timeout 30s` | 모델 응답 검사에 사용; macOS 기본 제공 여부 미확인 | Python 3 timeout 또는 가용 도구 선택; 무한 대기 금지 |
+| `find -printf`, `sort -z`, `tail -z` | 제거됨: 백업 정리는 Python 3(`platform_backup_prune`, 일일 백업 스크립트) | 공백·개행 경로 테스트 유지 |
+| `timeout 30s` | 제거됨: 모델 응답 검사는 Python 3 `subprocess` timeout 30초(`platform_chat_probe`) | 무한 대기 금지 |
 | `df -Pk`, `awk`, `grep`, `tar`, `mktemp`, `git init -b` | 출력·버전·경로 의미가 OS/배포 도구마다 달라질 수 있음 | 파싱 결과를 단위·범위 검증; Git 옵션·tar 기능을 실제 환경에서 smoke 확인 |
 | `/proc`, `apt-get`, `dpkg-query`, `timedatectl`, `systemctl`, `loginctl` | prep·서비스·검증에 직접 사용 | Linux 분기로만 이동; 다른 레인에서 호출되면 테스트 실패 |
 | `/usr/bin/*` PATH 구성 | `bootstrap/tests/install-smoke.sh`의 Linux형 mock 전제 | macOS·Windows 테스트는 실제 PATH와 고립된 mock 디렉터리를 사용 |
@@ -76,32 +78,32 @@ Windows Git Bash 명령 가용성은 **설치 전 탐지 계약**이다. Git Bas
 
 ## 2. 설치 파이프라인·상태 계약
 
-단계 순서와 공개 CLI는 유지한다: `prep → hermes → llm → telegram → gateway → wiki → harness → cron → verify`; `--stage`, `--status`, `--dry-run`, `--yes`, `--timezone`, `--skip-verify`와 종료 코드 `0=선택 단계 완료`, `3=게이트/전제 차단`, `1=실패`를 승계한다. G1 LLM 키·모델, G2/G3 Telegram bot token·allowed users는 OS와 무관한 동일 게이트이며 실제 모델 응답·Telegram 왕복 없이는 검증 완료가 아니다. `--dry-run`은 무변경 계획 출력이며 완료 증거가 아니다.
+단계 순서와 공개 CLI는 유지한다: `prep → hermes → llm → telegram → gateway → wiki → harness → cron → verify`; `--stage`, `--status`, `--dry-run`, `--yes`, `--timezone`, `--skip-verify`에 `--recheck`(완료 단계 재실행), `--reverify`(verify만)를 더했다. 종료 코드는 `0=선택 단계 완료·verify 전부 PASS`, `2=FAIL·차단 없음, MANUAL 대기`, `3=게이트/전제 차단`, `1=실패 또는 verify FAIL`이다. verify는 재실행마다 다시 돈다. G1은 제한 시간 모델 응답(OAuth 포함), G2는 Telegram `getMe`(토큰은 curl stdin 설정으로 전달, argv 금지), G3는 숫자 ID 목록 형식으로 즉시 확인하며, 실제 Telegram 왕복은 verify의 MANUAL 항목이다. gateway는 telegram 완료 전에는 차단되고, telegram이 나중에 바뀌면 실행 중인 gateway를 재시작한다. 각 단계는 errexit가 실제로 켜진 서브셸에서 실행되어 실패한 명령이 단계를 `failed`로 만든다. 시크릿은 `bootstrap/bin/oaos-secret-set KEY`(숨김 입력/stdin → Hermes `.env` 원자적 쓰기·소유자 전용 read-back)로만 저장한다. `--dry-run`은 무변경 계획 출력이며 완료 증거가 아니다.
 
-현재 `common.sh` 상태 파일은 `pending/done/blocked/failed`이고 성공 시 바로 `done`을 쓴다. 후속 구현에서는 **기존 `done`을 설치 적용 기록으로 보존**하고, 신규 결과는 `applied`(구성 적용), `verified`(OS별 read-back 및 필요한 수동 증거 완료), `SKIP`(명시적으로 허용된 선택 항목의 사유 기록), `blocked`, `failed`로 분리한다. `applied`는 재실행 시 read-back을 다시 하고, `verified`도 OS·Hermes 홈·서비스 등록이 바뀌면 재검증한다. 기존 `done`을 새 OS에서 자동 `verified`로 승격하지 않는다. 필수 `prep/hermes/llm/telegram/gateway/wiki/harness/cron/verify`의 무증거 SKIP은 금지한다. `--skip-verify`는 verify 수행을 미루며 설치 전체를 verified로 만들지 않는다. 상태 형식 변경 시 기존 Linux 상태 파일을 읽는 마이그레이션과 재개 테스트를 포함한다. 이 상태 분리는 아직 미구현이다.
+현재 `common.sh` 상태 파일은 `pending/done/blocked/failed`이고 성공 시 바로 `done`을 쓴다. 후속 구현에서는 **기존 `done`을 설치 적용 기록으로 보존**하고, 신규 결과는 `applied`(구성 적용), `verified`(OS별 read-back 및 필요한 수동 증거 완료), `SKIP`(명시적으로 허용된 선택 항목의 사유 기록), `blocked`, `failed`로 분리한다. `applied`는 재실행 시 read-back을 다시 하고, `verified`도 OS·Hermes 홈·서비스 등록이 바뀌면 재검증한다. 기존 `done`을 새 OS에서 자동 `verified`로 승격하지 않는다. 필수 `prep/hermes/llm/telegram/gateway/wiki/harness/cron/verify`의 무증거 SKIP은 금지한다. `--skip-verify`는 verify 수행을 미루며 설치 전체를 verified로 만들지 않는다. 상태 형식 변경 시 기존 Linux 상태 파일을 읽는 마이그레이션과 재개 테스트를 포함한다. 구현 현황(2026-11): 상태 값 `pending/done/applied/verified/SKIP/blocked/failed`를 모두 지원하고, Personal 설치기는 일반 단계에 `done`, verify에 `verified`(전부 PASS)·`applied`(MANUAL 대기)·`failed`를 쓴다. 상태 파일은 에디션별 네임스페이스 `editions.<edition>.stages`를 가지며, 평면 `stages`는 마지막으로 쓴 에디션(`edition`)의 보기로만 유지된다(구 파일·직접 편집 호환). `applied` 단계의 재실행 시 read-back 재수행은 verify에만 적용된다.
 
-OAOS 상태 파일 기본 경로는 **Git Bash에서 보이는** `~/.oaos-install/state.json` (`$HOME/.oaos-install/state.json`)이다. Windows에서 `$HOME`이 사용자 프로필로 해석되는 일반 구성이라면 대응 표기는 `%USERPROFILE%\.oaos-install\state.json`이지만 실제 매핑은 `os_detect`와 `--status`에서 read-back하며 고정 경로로 가정하지 않는다. 로그·백업·위키의 기본 OAOS 경로는 각각 `~/.oaos/logs`, `~/.oaos/backups`, `~/data/wiki`이고 Hermes 파일·하네스의 기준은 `HERMES_HOME`이다. Windows 기본 `HERMES_HOME`은 `%LOCALAPPDATA%\hermes`이므로 현행 `~/.hermes` 하드코딩을 그대로 사용하지 않는다. 상태·로그·백업 파일은 시크릿 원문을 포함하지 않는다. 상태 파일의 원자적 쓰기, 손상 파일 보존, 재실행 멱등성, 기존 데이터 보존을 유지한다.
+OAOS 상태 파일 기본 경로는 **Git Bash에서 보이는** `~/.oaos-install/state.json` (`$HOME/.oaos-install/state.json`)이다. Windows에서 `$HOME`이 사용자 프로필로 해석되는 일반 구성이라면 대응 표기는 `%USERPROFILE%\.oaos-install\state.json`이지만 실제 매핑은 `os_detect`와 `--status`에서 read-back하며 고정 경로로 가정하지 않는다. 로그·백업·위키의 기본 OAOS 경로는 각각 `~/.oaos/logs`, `~/.oaos/backups`, `~/data/wiki`이고 Hermes 파일·하네스의 기준은 `HERMES_HOME`이다. Windows 기본 `HERMES_HOME`은 `%LOCALAPPDATA%\hermes`이고, 세 레인 모두 `HERMES_HOME`을 우선한다(Linux 포함). 상태·로그·백업 파일은 시크릿 원문을 포함하지 않는다. 상태 파일의 원자적 쓰기, 손상 파일 보존, 재실행 멱등성, 기존 데이터 보존을 유지한다.
 
 | prep 항목 | Linux 현행/유지 | macOS 설계 | Windows 11 설계 |
 |---|---|---|---|
 | 패키지·Hermes | apt로 `git curl xz-utils ca-certificates`; 공식 `install.sh` | Bash·Git·curl·Python 등 필수 도구 탐지; 공식 `install.sh`; 필요한 패키지 설치 방식은 확인 필요 | Git for Windows Bash와 필요한 명령 탐지; 공식 `install.ps1`을 PowerShell에서 실행. `hermes` User PATH 새 셸 확인 |
 | RAM·스왑 | 16 GiB 미만·스왑 없음이면 8 GiB swapfile과 `/etc/fstab` | 시스템 관리 swap 상태 확인; Linux 방식 변경 금지. 최소 자원 판정 기준 적용 가능성 확인 필요 | RAM·pagefile 조회; Linux 방식 변경 금지. pagefile 자동 변경 여부·권한은 확인 필요 |
 | 시간대·전원 | `timedatectl`; logind drop-in과 sleep target mask | 시간대는 OS 방식으로 조회/설정; 로그인·절전 조건은 안내 및 수동 확인 | Windows 시간대 ID 매핑을 검증한 경우만 설정; 로그인·절전 조건은 안내 및 수동 확인 |
-| 디렉터리·시크릿 | OAOS 디렉터리 생성; mode 600 | `$HOME`/`HERMES_HOME` 구분; mode 600·소유자 확인 | `$HOME`/`%LOCALAPPDATA%\hermes` 구분; ACL read-back. `chmod 600`만으로 통과 금지 |
+| 디렉터리·시크릿 | OAOS 디렉터리 생성(로그·백업 700); `.env` mode 600·소유자; 8 GiB swapfile 전 여유 공간(10 GiB·잔여 10%) 확인; sleep mask·logind drop-in은 "변경된 호스트 설정"으로 보고 | `$HOME`/`HERMES_HOME` 구분; mode 600·소유자 확인 | `$HOME`/`%LOCALAPPDATA%\hermes` 구분; ACL read-back. `chmod 600`만으로 통과 금지 |
 
-Hermes 설치 다운로드의 SHA-256 출력·선택적 `OAOS_HERMES_INSTALLER_SHA256` 비교와 사용자의 `--yes`/대화 승인 흐름은 유지한다. Windows `install.ps1`은 Bash 문법 검사 대상이 아니므로 다운로드·해시·서명/출처 확인 방법과 PowerShell 실행 정책을 P3에서 공식 설치 안내에 맞춰 확정한다. 이 검사가 완성되기 전에는 다운로드한 스크립트를 자동 실행하지 않는다.
+Hermes 설치 다운로드의 SHA-256 출력·선택적 `OAOS_HERMES_INSTALLER_SHA256` 비교와 사용자의 `--yes`/대화 승인 흐름은 유지한다. 하루가 지난 캐시는 다시 내려받는다(사용자가 검토한 사본이 승인 후 실행되도록 하루 안의 사본은 재사용). Windows `install.ps1`은 PowerShell 파서로 문법만 확인할 수 있으므로 **`OAOS_HERMES_INSTALLER_SHA256`이 설정된 경우에만 실행**하고, 없으면 내려받지도 않고 차단(3)한다. 서명/출처 확인은 여전히 확인 필요다.
 
 ## 3. Personal 검증 계약
 
-`bootstrap/verify/personal-verify.sh`의 현재 12개 항목과 `PASS/FAIL/MANUAL/SKIP`, `--json`, `--offline` 형식을 유지한다. OS별 서비스·자원·파일 기준만 플랫폼 계층으로 교체한다. `--offline`의 모델 SKIP은 명시적 검사 생략이며 최종 실증 PASS가 아니다. 자동 검사 PASS와 사용자 메시지·재로그온/재부팅 MANUAL 증거를 구분한다.
+`bootstrap/verify/personal-verify.sh`는 19개 항목과 `PASS/FAIL/MANUAL/SKIP`, `--json`, `--offline`, `--confirm reboot,chat,allowlist` 형식이다(2026-11 갱신; 이전 12항목). 종료 코드 0=전부 PASS(SKIP 허용), 2=FAIL 없음·MANUAL 대기, 1=FAIL. OS별 서비스·자원·파일 기준만 플랫폼 계층으로 교체한다. `--offline`의 모델·getMe SKIP은 명시적 검사 생략이며 최종 실증 PASS가 아니다. 자동 검사 PASS와 사용자 메시지·재로그온/재부팅 MANUAL 증거를 구분한다. 항목 목록과 OS별 판정은 `skills/oaos-bootstrap/references/verify-checklist.md`가 정본이며 아래 표는 2026-09 기준 원래 12항목의 설계 근거다.
 
 | 현재 항목 | 공통 통과 근거 | Linux | macOS | Windows 11 |
 |---|---|---|---|---|
 | 1 Hermes health · 2 Model responds | `hermes doctor`, 실제 `hermes chat -q` 응답 | 현행 검사 | 동일, timeout 대체 | 동일, CLI PATH·Git Bash 실행 확인 |
-| 3 Gateway service · 4 Boot survival | `hermes gateway status`의 실제 실행·등록 정보, 재시작 후 생존 증거 | systemd 사용자 유닛 enabled/active, 필요 시 linger; 실제 재부팅 | launchd 사용자 에이전트 등록·실행 확인; 로그아웃/로그인 후 재확인 | `schtasks` ONLOGON 태스크 또는 Hermes Startup 폴백 등록 확인; 로그오프/로그온 후 재확인. 태스크 존재만으로 PASS 금지 |
+| 3 Gateway service · 4 Autostart registered · 5 Reboot survival(MANUAL) | `hermes gateway status`의 실제 실행·등록 정보, 재시작 후 생존 증거 | systemd 사용자 유닛 enabled/active, 필요 시 linger; 실제 재부팅 | launchd 사용자 에이전트 등록·실행 확인; 로그아웃/로그인 후 재확인 | `schtasks` ONLOGON 태스크 또는 Hermes Startup 폴백 등록 확인; 로그오프/로그온 후 재확인. 태스크 존재만으로 PASS 금지 |
 | 5 Chat round-trip · 6 Allowlist | 허용 계정 응답, 비허용 계정 무응답 | MANUAL | MANUAL | MANUAL |
 | 7 Wiki repository | `~/data/wiki` seed commit | Git 경로 확인 | Git 경로 확인 | Git Bash 경로·파일명 확인 |
-| 8 Scheduled jobs | Hermes cron 목록의 backup·watchdog 활성 상태와 실제 실행 | 기존 cron + systemd watchdog | cron + `hermes gateway status/start` 기반 watchdog; 중복 실행 방지 | cron + Hermes 상태/시작 기반 watchdog; 외부 종료·로그온 조건 확인 |
+| 8 Scheduled jobs | Hermes cron 목록의 backup 활성 상태 + OS 타이머 watchdog. Hermes cron은 게이트웨이 안에서 돌아 게이트웨이가 죽으면 cron watchdog도 멈추므로 watchdog은 OS 타이머로 옮겼다 | cron backup + systemd 사용자 타이머 watchdog | cron backup + launchd 에이전트 watchdog | cron backup만; watchdog 없음(Hermes ONLOGON 의존) — 외부 강제 종료 후 재시작은 미보장 |
 | 9 Config files · 10 Secret hygiene | `HERMES_HOME`의 SOUL/USER/MEMORY 존재, 로그·상태 시크릿 스캔, 권한 read-back | `~/.hermes`, mode 600 | `~/.hermes`, mode 600 | `%LOCALAPPDATA%\hermes` 기본, NTFS ACL 확인; 경로 변경 존중 |
 | 11 Backup works | 실제 비어 있지 않은 백업 아카이브, 오래된 검증 백업 정리 | 현행 `hermes backup`; GNU 정리 옵션 교체 | 같은 CLI, BSD 도구로 정리 확인 | 같은 CLI, MSYS 경로·잠금·ACL 확인 |
 | 12 Host capacity | 대상 볼륨 여유 >10%; RAM·swap/pagefile 정책 판정 | `df -Pk`, `/proc` | `df -Pk`, macOS RAM/swap 조회 | Windows 볼륨·RAM/pagefile 조회; 경로 단위 정합 확인 |
@@ -110,14 +112,14 @@ Hermes 설치 다운로드의 SHA-256 출력·선택적 `OAOS_HERMES_INSTALLER_S
 
 ## 4. 부트스트랩 스킬·기존 문서 갱신 계약
 
-`skills/oaos-bootstrap/SKILL.md`를 구현 단계에서 **0.1.3**으로 올리고 Personal 세 레인을 본문에서 명시한다. 현재 이 브랜치의 버전은 0.1.1이며, 다른 브랜치의 0.1.2 변경이 합쳐지면 그 내용을 보존해 올린다. `platforms: [linux]` 메타데이터의 허용 표기와 Hermes 스킬 로더 동작을 확인한 뒤 macOS·Windows 메타데이터를 추가한다. Project·Company 경로는 Ubuntu LTS로 남긴다.
+`skills/oaos-bootstrap/SKILL.md`는 0.1.3에서 Personal 세 레인을 명시했고 `platforms: [linux, macos, windows]`를 쓴다. 2026-11 보정으로 **0.2.0**(시크릿 헬퍼, 게이트 즉시 검증, verify 종료 코드, OS 타이머 워치독)이 됐다. Project·Company 경로는 Ubuntu LTS로 남긴다.
 
 | 위치 | 구현 완료 시 변경점 |
 |---|---|
 | `SKILL.md` Phase 0 recon | OS 식별 후 Linux: `/etc/os-release`, `free`, `df`, `swapon`; macOS: Apple Silicon 판정, 시스템 메모리·swap·디스크 조회; Windows: **Git Bash에서 실행**하고 Windows 11/아키텍처, Git Bash·`hermes` PATH, RAM·pagefile·볼륨을 조회. OS별 정확한 명령은 P2/P3 실측 후 기재 |
 | `SKILL.md` Phase 2/3/4 | OS별 prep·공식 Hermes 설치 경로·`hermes gateway` 위임·Personal 검증기 실행을 서술. Windows PowerShell은 공식 Hermes 설치와 필요한 시스템 조회/ACL 프리미티브에서만 사용 |
 | `references/gates.md` | G1–G3 동일; Windows 키 저장 위치와 ACL 확인, macOS·Windows 로그인 후 게이트웨이 확인 문구. 토큰 원문 비출력 유지 |
-| `references/verify-checklist.md` | 12개 공통 항목의 OS별 서비스·부팅·자원·파일 권한 판정표; 실기기 MANUAL 증거와 미실행 SKIP 구분 |
+| `references/verify-checklist.md` | 19개 항목(2026-11; 이전 12개)의 OS별 서비스·부팅·자원·파일 권한 판정표; 실기기 MANUAL 증거와 미실행 SKIP 구분 |
 | `README.md`, `README.ko.md` | Personal 설치 표의 “host packages and systemd”를 Linux 한정으로 바꾸고 macOS/Windows 공식 설치·서비스 경로, 구현/검증 상태를 반영. 번역 쌍 동기화 |
 | `docs/faq.md`, `docs/architecture-v2.0.md`, `START-HERE.md`, `editions/personal/README.md` | Linux 전용 하드웨어·apt/systemd·recon·재부팅 설명의 범위를 세 레인으로 갱신. Project·Company Ubuntu 서버 설명 유지 |
 
