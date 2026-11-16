@@ -198,10 +198,19 @@ def confirm_admin(org_id, project_user_id, code_hash):
     return decision, _text(member_id)
 
 
+# Migration 020 binds the admin console functions to the validated session:
+# company.org_id/company.member_id must name the same organization and actor.
+_SESSION_CONTEXT = ("\\o /dev/null\n"
+                    "SELECT set_config('company.org_id', :'org', false), "
+                    "set_config('company.member_id', :'actor', false);\n"
+                    "\\o\n")
+
+
 def add_member(org_id, actor_id, project_user_id):
     if not _check_uuid(org_id) or not _check_uuid(actor_id):
         raise ConsoleError("Company mapping input is invalid")
     rows = _psql(
+        _SESSION_CONTEXT +
         "SELECT decision, member_id FROM company.console_add_member("
         ":'org'::uuid, :'actor'::uuid, :'project')",
         {"org": org_id, "actor": actor_id, "project": project_user_id})
@@ -212,7 +221,10 @@ def add_member(org_id, actor_id, project_user_id):
 
 
 def complete_setup(org_id, actor_id):
+    if not _check_uuid(org_id) or not _check_uuid(actor_id):
+        raise ConsoleError("Company setup input is invalid")
     rows = _psql(
+        _SESSION_CONTEXT +
         "SELECT decision, mapped_members FROM company.console_complete_setup("
         ":'org'::uuid, :'actor'::uuid)",
         {"org": org_id, "actor": actor_id})

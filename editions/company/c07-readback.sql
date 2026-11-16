@@ -28,8 +28,10 @@ BEGIN
   PERFORM set_config('company.org_id', org_a::text, true);
   PERFORM set_config('company.member_id', admin_a::text, true);
   INSERT INTO company.organizations(id, slug) VALUES (org_a, 'c07-' || org_a::text);
+  -- The session administrator bootstraps the organization first (019).
   INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
-    (admin_a, org_a, 'c07-admin-a-' || admin_a::text, 'admin', 'active'),
+    (admin_a, org_a, 'c07-admin-a-' || admin_a::text, 'admin', 'active');
+  INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
     (admin_b, org_a, 'c07-admin-b-' || admin_b::text, 'admin', 'active'),
     (owner_a, org_a, 'c07-owner-a-' || owner_a::text, 'member', 'active'),
     (owner_b, org_a, 'c07-owner-b-' || owner_b::text, 'member', 'active');
@@ -269,8 +271,9 @@ BEGIN
   END IF;
 
   -- A suspended owner is not authorized.
-  PERFORM set_config('company.member_id', owner_b::text, true);
+  PERFORM set_config('company.member_id', admin_a::text, true);
   UPDATE company.members SET state = 'suspended' WHERE id = owner_b;
+  PERFORM set_config('company.member_id', owner_b::text, true);
   IF (SELECT r.reason_code FROM company.authorize_action('self.chat', 'x', 'y') r)
        IS DISTINCT FROM 'unauthenticated' THEN
     RAISE EXCEPTION 'a suspended owner was authorized';

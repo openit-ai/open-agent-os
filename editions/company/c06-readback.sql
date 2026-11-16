@@ -28,8 +28,10 @@ BEGIN
   PERFORM set_config('company.org_id', org_a::text, true);
   PERFORM set_config('company.member_id', owner_a::text, true);
   INSERT INTO company.organizations(id, slug) VALUES (org_a, 'c06-' || org_a::text);
+  -- The session administrator bootstraps the organization first (019).
   INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
-    (owner_a, org_a, 'c06-' || owner_a::text, 'admin', 'active'),
+    (owner_a, org_a, 'c06-' || owner_a::text, 'admin', 'active');
+  INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
     (owner_b, org_a, 'c06-' || owner_b::text, 'member', 'active');
   SELECT r.assistant_id INTO assistant_a FROM company.register_personal_assistant() r;
   SELECT r.secret_id INTO secret_a

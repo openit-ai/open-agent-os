@@ -30,6 +30,8 @@ DECLARE
   attempt integer;
   locked_count integer;
   status record;
+  other_org uuid;
+  other_admin uuid;
 BEGIN
   SELECT r.decision, r.org_id INTO decision, org
     FROM company.console_start_setup('c10-' || suffix, admin_project,
@@ -64,6 +66,16 @@ BEGIN
     RAISE EXCEPTION 'setup state did not advance to admin_created';
   END IF;
 
+  -- 020: mapping functions are bound to the validated console session.
+  PERFORM set_config('company.member_id', '', true);
+  SELECT r.decision INTO decision
+    FROM company.console_add_member(org, admin_id, member_one_project) r;
+  IF decision IS DISTINCT FROM 'denied' THEN
+    RAISE EXCEPTION 'mapping accepted an actor outside the session context';
+  END IF;
+  PERFORM set_config('company.org_id', org::text, true);
+  PERFORM set_config('company.member_id', admin_id::text, true);
+
   -- One mapping succeeds, a failed retry leaves it intact, and the saved state
   -- can be resumed with the second member.
   SELECT r.decision, r.member_id INTO decision, member_one
@@ -71,6 +83,43 @@ BEGIN
   IF decision IS DISTINCT FROM 'created' OR member_one IS NULL THEN
     RAISE EXCEPTION 'first member mapping was not created';
   END IF;
+  -- 020: a mapped member cannot act as the administrator, mint a session
+  -- without a code, or store a login code or session for the administrator.
+  PERFORM set_config('company.member_id', member_one::text, true);
+  SELECT r.decision INTO decision
+    FROM company.console_add_member(org, admin_id, member_two_project) r;
+  IF decision IS DISTINCT FROM 'denied' THEN
+    RAISE EXCEPTION 'member used the administrator mapping function';
+  END IF;
+  SELECT r.decision INTO decision
+    FROM company.console_complete_setup(org, admin_id) r;
+  IF decision IS DISTINCT FROM 'denied' THEN
+    RAISE EXCEPTION 'member completed G10 as the administrator';
+  END IF;
+  SELECT r.decision INTO decision
+    FROM company.console_open_session(org, member_one, token_two, csrf_two,
+      interval '8 hours') r;
+  IF decision IS DISTINCT FROM 'denied' THEN
+    RAISE EXCEPTION 'a session was opened without a login code';
+  END IF;
+  BEGIN
+    INSERT INTO company.console_login_codes(org_id, member_id, code_hash,
+      expires_at, request_id)
+    VALUES (org, admin_id, wrong_code, now() + interval '5 minutes',
+      gen_random_uuid()::text);
+    RAISE EXCEPTION 'member stored a login code for the administrator';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%belong to the session member%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    INSERT INTO company.console_sessions(org_id, member_id, token_hash, csrf_hash,
+      expires_at)
+    VALUES (org, admin_id, token_two, csrf_two, now() + interval '1 hour');
+    RAISE EXCEPTION 'member stored a session for the administrator';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%belong to the session member%' THEN RAISE; END IF;
+  END;
+  PERFORM set_config('company.member_id', admin_id::text, true);
   SELECT r.decision INTO decision
     FROM company.console_add_member(org, admin_id, '') r;
   IF decision IS DISTINCT FROM 'invalid'
@@ -253,6 +302,20 @@ BEGIN
        OR a.metadata ? 'csrf' OR a.metadata ? 'password')
   ) THEN
     RAISE EXCEPTION 'console audit metadata contains credential material';
+  END IF;
+
+  -- 020: the console_bootstrap marker only works inside the definer functions.
+  other_org := gen_random_uuid();
+  other_admin := gen_random_uuid();
+  PERFORM set_config('company.org_id', other_org::text, true);
+  PERFORM set_config('company.member_id', other_admin::text, true);
+  INSERT INTO company.organizations(id, slug) VALUES (other_org, 'c10-other-' || suffix);
+  INSERT INTO company.members(id, org_id, project_user_id, role, state)
+    VALUES (other_admin, other_org, 'c10-other-admin-' || suffix, 'admin', 'active');
+  PERFORM set_config('company.console_bootstrap', 'on', true);
+  IF EXISTS (SELECT 1 FROM company.members WHERE org_id = org)
+     OR EXISTS (SELECT 1 FROM company.organizations WHERE id = org) THEN
+    RAISE EXCEPTION 'console bootstrap marker exposed another organization';
   END IF;
 END;
 $verify$;

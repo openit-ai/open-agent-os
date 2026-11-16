@@ -160,19 +160,23 @@ DECLARE
   assistant_a uuid := gen_random_uuid();
   secret_a uuid := gen_random_uuid();
   document_a uuid := gen_random_uuid();
+  owner_c uuid := gen_random_uuid();
+  changed integer;
   rejected boolean;
 BEGIN
   PERFORM set_config('company.org_id', org_a::text, true);
   PERFORM set_config('company.member_id', admin_a::text, true);
   INSERT INTO company.organizations(id, slug) VALUES (org_a, 'c01-fixture-a-' || org_a::text);
+  -- The session administrator bootstraps its organization first (019).
   INSERT INTO company.members(id, org_id, project_user_id, role, state)
-    VALUES (admin_a, org_a, 'c01-admin-' || admin_a::text, 'admin', 'active'),
-           (owner_a, org_a, 'c01-owner-' || owner_a::text, 'member', 'active');
+    VALUES (admin_a, org_a, 'c01-admin-' || admin_a::text, 'admin', 'active');
+  INSERT INTO company.members(id, org_id, project_user_id, role, state)
+    VALUES (owner_a, org_a, 'c01-owner-' || owner_a::text, 'member', 'active');
   PERFORM set_config('company.org_id', org_b::text, true);
   PERFORM set_config('company.member_id', owner_b::text, true);
   INSERT INTO company.organizations(id, slug) VALUES (org_b, 'c01-fixture-b-' || org_b::text);
   INSERT INTO company.members(id, org_id, project_user_id, role, state)
-    VALUES (owner_b, org_b, 'c01-owner-' || owner_b::text, 'member', 'active');
+    VALUES (owner_b, org_b, 'c01-owner-' || owner_b::text, 'admin', 'active');
   PERFORM set_config('company.org_id', org_a::text, true);
   PERFORM set_config('company.member_id', owner_a::text, true);
   INSERT INTO company.assistants(id, org_id, owner_id) VALUES (assistant_a, org_a, owner_a);
@@ -222,6 +226,7 @@ BEGIN
   EXCEPTION WHEN unique_violation THEN rejected := true;
   END;
   IF NOT rejected THEN RAISE EXCEPTION 'assistant partial UNIQUE accepted duplicate'; END IF;
+  PERFORM set_config('company.member_id', admin_a::text, true);
   rejected := false;
   BEGIN
     INSERT INTO company.members(org_id, project_user_id, role, state)
@@ -229,6 +234,7 @@ BEGIN
   EXCEPTION WHEN check_violation THEN rejected := true;
   END;
   IF NOT rejected THEN RAISE EXCEPTION 'member CHECK accepted invalid role'; END IF;
+  PERFORM set_config('company.member_id', owner_a::text, true);
 
   rejected := false;
   BEGIN
@@ -277,6 +283,64 @@ BEGIN
   EXCEPTION WHEN raise_exception THEN rejected := true;
   END;
   IF NOT rejected THEN RAISE EXCEPTION 'departed member reactivated'; END IF;
+
+  -- Member write boundary (019, design O1) once a later phase applied it.
+  IF to_regprocedure('company.session_is_org_admin(uuid)') IS NOT NULL THEN
+    PERFORM set_config('company.member_id', admin_a::text, true);
+    INSERT INTO company.members(id, org_id, project_user_id, role, state)
+      VALUES (owner_c, org_a, 'c01-owner-' || owner_c::text, 'member', 'active');
+    PERFORM set_config('company.member_id', owner_c::text, true);
+    UPDATE company.members SET role = 'admin' WHERE id = owner_c;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 0 OR (SELECT role FROM company.members WHERE id = owner_c) <> 'member' THEN
+      RAISE EXCEPTION 'member promoted itself to administrator';
+    END IF;
+    UPDATE company.members SET state = 'suspended' WHERE id = admin_a;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 0 THEN RAISE EXCEPTION 'member suspended an administrator'; END IF;
+    UPDATE company.members SET project_user_id = 'c01-hijack' WHERE id = admin_a;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 0 THEN RAISE EXCEPTION 'member rewrote another member mapping'; END IF;
+    DELETE FROM company.members WHERE id = owner_a;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 0 THEN RAISE EXCEPTION 'member deleted another member'; END IF;
+    rejected := false;
+    BEGIN
+      INSERT INTO company.members(org_id, project_user_id, role, state)
+        VALUES (org_a, 'c01-rogue-' || owner_c::text, 'admin', 'active');
+    EXCEPTION WHEN insufficient_privilege THEN rejected := true;
+    END;
+    IF NOT rejected THEN RAISE EXCEPTION 'member created an administrator'; END IF;
+    -- Cross-organization: org B administrator with org A or org B scope.
+    PERFORM set_config('company.member_id', owner_b::text, true);
+    UPDATE company.members SET role = 'admin' WHERE id = owner_c;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 0 THEN RAISE EXCEPTION 'foreign administrator changed a member'; END IF;
+    PERFORM set_config('company.org_id', org_b::text, true);
+    rejected := false;
+    BEGIN
+      INSERT INTO company.members(org_id, project_user_id, role, state)
+        VALUES (org_a, 'c01-cross-' || owner_b::text, 'admin', 'active');
+    EXCEPTION WHEN insufficient_privilege THEN rejected := true;
+    END;
+    IF NOT rejected THEN RAISE EXCEPTION 'cross-organization member insert accepted'; END IF;
+    UPDATE company.members SET role = 'admin' WHERE id = owner_c;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 0 THEN RAISE EXCEPTION 'cross-organization member update accepted'; END IF;
+    -- Administrators change others, never themselves.
+    PERFORM set_config('company.org_id', org_a::text, true);
+    PERFORM set_config('company.member_id', admin_a::text, true);
+    UPDATE company.members SET role = 'admin' WHERE id = owner_c;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 1 THEN RAISE EXCEPTION 'administrator could not promote a member'; END IF;
+    rejected := false;
+    BEGIN
+      UPDATE company.members SET role = 'member' WHERE id = admin_a;
+    EXCEPTION WHEN raise_exception THEN
+      rejected := SQLERRM LIKE '%own role or state%';
+    END;
+    IF NOT rejected THEN RAISE EXCEPTION 'administrator changed its own role'; END IF;
+  END IF;
 END;
 $verify$;
 ROLLBACK;
@@ -294,7 +358,12 @@ printf '%-3s %-24s %-7s %s\n' 2 'Schema catalog' PASS '11 tables, 3 owner trigge
 printf '%-3s %-24s %-7s %s\n' 3 'Organization isolation' PASS 'Cross-organization rows hidden'
 printf '%-3s %-24s %-7s %s\n' 4 'Owner isolation' PASS 'Foreign assistant, secret, document and chunk hidden'
 printf '%-3s %-24s %-7s %s\n' 5 'Constraint rejection' PASS 'FK, UNIQUE, CHECK and three owner triggers rejected writes'
-printf '%-3s %-24s %-7s %s\n' 6 'Member lifecycle' PASS 'Admin and mapping binding protected; departure revoked mapping'
+lifecycle='Admin and mapping binding protected; departure revoked mapping'
+boundary=$(db_query "SELECT to_regprocedure('company.session_is_org_admin(uuid)') IS NOT NULL") || boundary=''
+if [[ $boundary == t ]]; then
+  lifecycle+='; member self/cross-member/cross-org writes rejected (019)'
+fi
+printf '%-3s %-24s %-7s %s\n' 6 'Member lifecycle' PASS "$lifecycle"
 printf '%-3s %-24s %-7s %s\n' 7 'Fixture cleanup' PASS 'Transaction rolled back'
 printf 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0\n'
 stage_mark c01 verified 'C01 DB read-back passed; fixture transaction rolled back'

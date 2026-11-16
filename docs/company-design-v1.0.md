@@ -169,19 +169,22 @@ bash bootstrap/verify/company-verify.sh --phase cNN --read-back
 | T13 | 오래된 원본 ACL로 장기간 검색 허용 | 017 공유 문서 ACL 만료 ≤ 5분 | `c08-readback.sql` 30일·직접 연장 제한 |
 | T14 | 정책 직접 UPDATE로 버전·감사 없이 기존 승인 유지, 승인 없는 정책 변경 | 015 정책 트리거(버전 증가·감사·같은 트랜잭션에서 소비된 `policy.change` 승인 요구) | `c07-readback.sql` 무승인·직접 UPDATE 거부, 버전 감사 |
 | T15 | 요청 단위 추적 불가(이벤트마다 임의 request_id) | 015 `company.request_id` GUC, 콘솔이 HTTP 요청마다 설정 | `c07-readback.sql` 요청 ID 공유 |
+| T16 | 001 `member_scope`가 조직 내 모든 세션에 `members` 쓰기 허용(구성원 자기 관리자 승격·타 구성원 정지·매핑 변경) — O1 | 019 읽기/쓰기 정책 분리: 쓰기는 조직의 활성 관리자 또는 소유 역할(검증하는 SECURITY DEFINER 함수·유지보수 경로)만, 구성원이 없는 조직의 첫 관리자 자기 등록만 예외; 본인 역할·상태 변경 트리거 거부 | C01 read-back(019 적용 후 매 Phase) 자기 승격·타 구성원 수정·삭제·관리자 생성·조직 간 쓰기 거부, 관리자 자기 강등 거부 |
+| T17 | 011 콘솔 SECURITY DEFINER 함수가 인수의 행위자를 신뢰(`console_add_member`·`console_complete_setup`), 코드 없이 아무 구성원 세션 발급(`console_open_session`), 런타임이 `console_bootstrap` 표지를 직접 켜 타 조직 조회, 구성원이 관리자용 로그인 코드·세션 행 직접 저장 — O6 | 020: 15개 함수 검토, 행위자를 세션 문맥(`company.org_id`/`member_id`)에 결속, `console_open_session`은 G10 `admin_created` 초기 관리자만, 내부 도우미 3개 런타임 EXECUTE 회수, 표지 정책은 소유 역할 안에서만, `console_sessions`·`console_login_codes` 쓰기는 본인·조직 관리자·정의자 함수만 | `c10-readback.sql` 문맥 밖 행위자·구성원 대리 호출·무코드 세션·관리자용 코드/세션 저장·표지로 타 조직 조회 거부 |
 
 **알려진 미해결 위협**(완화 전, 확인 필요):
 
 | # | 위협 | 현재 상태와 다음 조치 |
 |---|---|---|
-| O1 | 001 `member_scope`가 같은 조직의 모든 세션에 `members` UPDATE를 허용(역할 상승 가능) | 미수정. 보정 마이그레이션으로 SELECT/쓰기 정책 분리, 관리자만 역할·매핑 변경, 본인은 정지·퇴사 전이만 허용 |
+| O1 | ~~001 `member_scope`가 같은 조직의 모든 세션에 `members` UPDATE를 허용(역할 상승 가능)~~ | **수정됨(T16, 019).** 본인 정지·퇴사도 다른 관리자가 처리(본인 역할·상태 변경은 일괄 거부) |
 | O2 | 정책·JIT·Vault·라우팅이 DB 수준에서만 강제되고 런타임 비서 요청 경로가 호출하지 않음 | 서비스 API에서 `authorize_action`·`identity_isolation_decision`·`llm_route_decision`을 단일 진입점으로 호출 |
 | O3 | OAuth 콜백·Slack 이벤트 수신 미구현, 왕복 증거를 쓰는 주체 없음 | 런타임 어댑터가 실제 왕복 후 `integration/external_roundtrip` 감사 행 기록 |
 | O4 | 키 백업 복원과 RTO 4시간 실측 미실시 | C17 드릴에 키 복원·시간 측정 추가 |
 | O5 | Vault 키 회전 미구현 | 키 버전별 재암호화 절차와 read-back |
-| O6 | 011 콘솔 함수가 SECURITY DEFINER로 소유 역할 권한 실행 | FORCE RLS 범위 안이지만 소유 역할 DDL 권한을 가짐; INVOKER 전환 또는 최소 권한 소유자 검토 |
+| O6 | 011 콘솔 함수가 SECURITY DEFINER로 소유 역할 권한 실행 | **호출자 검사는 수정됨(T17, 020).** 남은 부분: 소유 역할이 DDL 권한을 가지므로 INVOKER 전환 또는 DDL 없는 함수 소유 역할 분리 검토 |
 | O7 | 백업·보존 유닛이 비대화형 root(sudo)에 의존해 `NoNewPrivileges`를 쓸 수 없음 | 전용 백업 역할(BYPASSRLS 읽기 전용)·전용 자격으로 대체 검토 |
 | O8 | 5/25/50명 성능·큐 실측, Phase 증거 JSON 미구현 | 부하 하네스와 증거 JSON 생성기 |
+| O9 | 런타임 세션이 `console_lockouts`를 직접 삭제(잠금 해제)하거나 `pending` G10에 `console_setup_codes`를 직접 추가 가능 | 두 표 쓰기를 정의자 함수 전용으로 좁히고 C10 read-back 만료/잠금 고정값을 유지보수 경로로 이전 |
 
 ## 11. 착수 순서와 남은 확인
 

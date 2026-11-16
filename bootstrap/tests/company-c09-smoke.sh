@@ -153,10 +153,11 @@ psql -X -q -v ON_ERROR_STOP=1 -v admin_hash="$admin_hash" \
 SELECT set_config('company.org_id', '00000000-0000-0000-0000-000000000001', false);
 INSERT INTO company.organizations(id, slug)
   VALUES ('00000000-0000-0000-0000-000000000001', 'c09-http-org');
-INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
-  ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', 'c09-http-admin', 'admin', 'active'),
-  ('00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001', 'c09-http-member', 'member', 'active');
 SELECT set_config('company.member_id', '00000000-0000-0000-0000-000000000011', false);
+INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+  ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001', 'c09-http-admin', 'admin', 'active');
+INSERT INTO company.members(id, org_id, project_user_id, role, state) VALUES
+  ('00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001', 'c09-http-member', 'member', 'active');
 INSERT INTO company.console_sessions(org_id, member_id, token_hash, csrf_hash, expires_at) VALUES
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000011', :'admin_hash', :'csrf_hash', now() + interval '8 hours'),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000012', :'member_hash', :'csrf_hash', now() + interval '8 hours');
