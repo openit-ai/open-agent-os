@@ -6,7 +6,7 @@ temp_root=$(mktemp -d)
 trap 'rm -rf -- "$temp_root"' EXIT
 for name in ${!OAOS_@}; do unset "$name"; done
 unset HERMES_HOME MSYSTEM LOCALAPPDATA APPDATA
-export OAOS_TEST_MODE=1 OAOS_TEST_PLATFORM=linux
+export OAOS_TEST_MODE=1 OAOS_TEST_PLATFORM=linux OAOS_ALLOW_FORK=1
 real_python=$(command -v python3)
 real_git=$(command -v git)
 export HOME="$temp_root/home"
@@ -16,6 +16,11 @@ ln -s ../../hermes-gateway.service "$HOME/.config/systemd/user/default.target.wa
 for file in "$HOME/.hermes/SOUL.md" "$HOME/.hermes/memories/USER.md" "$HOME/.hermes/memories/MEMORY.md"; do
   printf 'test document\n' > "$file"
 done
+chmod 700 "$HOME/.hermes"
+printf 'TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' > "$HOME/.hermes/.env"
+chmod 600 "$HOME/.hermes/.env"
+printf 'model:\n  default: test\napi_key: ${OPENAI_API_KEY}\nmax_tokens: 4096\n' > "$HOME/.hermes/config.yaml"
+printf '[Timer]\n' > "$HOME/.config/systemd/user/oaos-gateway-watchdog.timer"
 git init -q -b main "$HOME/data/wiki"
 printf 'wiki\n' > "$HOME/data/wiki/index.md"
 git -C "$HOME/data/wiki" add index.md
@@ -31,7 +36,14 @@ case $1 in
       no_summary) printf '⚠ advisory without summary\n' >&2; exit 1 ;;
     esac ;;
   gateway) [[ $2 == status ]] && { printf 'running\n'; exit 0; } ;;
-  cron) [[ $2 == list ]] && { printf 'oaos-daily-backup\noaos-gateway-watchdog\n'; exit 0; } ;;
+  cron) [[ $2 == list ]] && { printf 'oaos-daily-backup\n'; exit 0; } ;;
+  config) [[ $2 == get && $3 == --raw ]] && {
+    case $4 in
+      TELEGRAM_BOT_TOKEN) printf '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' ;;
+      TELEGRAM_ALLOWED_USERS) printf '%s\n' "${MOCK_USERS:-12345,67890}" ;;
+      approvals.cron_mode|approvals.unattended_mode) printf '%s\n' "${MOCK_APPROVAL:-deny}" ;;
+    esac
+    exit 0; } ;;
   backup) [[ $2 == --output ]] && {
     printf '%s\n' "$3" >> "$MOCK_BACKUP_ARGS"
     target=$3
@@ -59,7 +71,16 @@ cat > "$temp_root/bin/loginctl" <<'SH'
 #!/usr/bin/env bash
 printf 'yes\n'
 SH
-chmod 700 "$temp_root/bin/hermes" "$temp_root/bin/loginctl"
+# Host managers are mocked: the verifier must never query the real user session.
+cat > "$temp_root/bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+cat > "$temp_root/bin/ss" <<'SH'
+#!/usr/bin/env bash
+[[ -z ${MOCK_LISTENER:-} ]] || printf 'LISTEN 0 128 %s *:*\n' "$MOCK_LISTENER"
+SH
+chmod 700 "$temp_root/bin/hermes" "$temp_root/bin/loginctl" "$temp_root/bin/systemctl" "$temp_root/bin/ss"
 export PATH="$temp_root/bin:$PATH"
 export MOCK_BACKUP_ARGS="$temp_root/backup.args"
 
@@ -70,20 +91,62 @@ import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     result = json.load(f)
 rows = result['checks']
-assert len(rows) == 12
-assert [row['number'] for row in rows] == list(range(1, 13))
-for number in (1, 3, 4, 7, 8, 9, 10, 11):
+assert len(rows) == 19, len(rows)
+assert [row['number'] for row in rows] == list(range(1, 20))
+names = [row['check'] for row in rows]
+assert names[3] == 'Autostart registered' and names[4] == 'Reboot survival', names
+for number in (1, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
     assert rows[number - 1]['status'] == 'PASS', rows[number - 1]
-assert rows[1]['status'] == 'SKIP'
-assert rows[4]['status'] == rows[5]['status'] == 'MANUAL'
-assert rows[11]['status'] in ('PASS', 'FAIL')
-assert int(sys.argv[2]) == (0 if rows[11]['status'] == 'PASS' else 1)
-assert sum(result['summary'].values()) == 12
+assert rows[1]['status'] == 'SKIP' and rows[7]['status'] == 'SKIP'
+assert rows[4]['status'] == rows[5]['status'] == rows[6]['status'] == 'MANUAL'
+assert rows[18]['status'] in ('PASS', 'FAIL')
+assert int(sys.argv[2]) == (2 if rows[18]['status'] == 'PASS' else 1)
+assert sum(result['summary'].values()) == 19
 PY
+grep -Fq 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' "$temp_root/result.json" && { printf 'FAIL: token in verifier output\n' >&2; exit 1; }
 backups=("$HOME"/.oaos/backups/hermes-verify-*.zip)
 [[ -s ${backups[0]} ]] || { printf 'FAIL: mock backup absent\n' >&2; exit 1; }
 [[ $(head -n 1 "$MOCK_BACKUP_ARGS") == "$HOME"/* ]] || { printf 'FAIL: Linux backup path was not POSIX\n' >&2; exit 1; }
-printf 'PASS: Personal verifier kept 12 JSON checks, offline SKIP, gateway read-back, and backup\n'
+[[ $(stat -c %a "$HOME/.oaos/backups") == 700 ]] || { printf 'FAIL: backup dir not 700\n' >&2; exit 1; }
+[[ $(stat -c %a "${backups[0]}") == 600 ]] || { printf 'FAIL: verify archive not 600\n' >&2; exit 1; }
+printf 'PASS: Personal verifier has 19 JSON checks, offline SKIPs, MANUAL exit 2, owner-only backup\n'
+
+# Exit 0 needs owner-confirmed MANUAL checks and no FAIL; each policy breach FAILs its row.
+code=0
+bash "$repo_root/bootstrap/verify/personal-verify.sh" --json --offline --confirm reboot,chat --confirm allowlist > "$temp_root/confirmed.json" || code=$?
+python3 - "$temp_root/confirmed.json" "$code" <<'PY'
+import json, sys
+result = json.load(open(sys.argv[1]))
+assert result['summary']['MANUAL'] == 0, result['summary']
+assert int(sys.argv[2]) == (0 if result['summary']['FAIL'] == 0 else 1)
+PY
+chmod 644 "$HOME/.hermes/.env"
+printf '{{NAME}}\n' >> "$HOME/.hermes/memories/USER.md"
+printf 'telegram_token: "123456789:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"\n' >> "$HOME/.hermes/config.yaml"
+rm -f "$HOME/.config/systemd/user/oaos-gateway-watchdog.timer"
+code=0
+MOCK_USERS='@someone' MOCK_APPROVAL=approve MOCK_LISTENER='0.0.0.0:9119' \
+  bash "$repo_root/bootstrap/verify/personal-verify.sh" --json --offline > "$temp_root/breach.json" || code=$?
+python3 - "$temp_root/breach.json" "$code" <<'PY'
+import json, sys
+rows = {row['check']: row for row in json.load(open(sys.argv[1]))['checks']}
+for name in ('Allowlist configured', 'Scheduled jobs', 'Hermes .env protected', 'Config secret-free', 'Unattended approvals', 'Dashboard loopback'):
+    assert rows[name]['status'] == 'FAIL', rows[name]
+assert rows['Harness files']['status'] == 'MANUAL', rows['Harness files']
+assert int(sys.argv[2]) == 1
+PY
+grep -Fq 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB' "$temp_root/breach.json" && { printf 'FAIL: config secret printed\n' >&2; exit 1; }
+chmod 600 "$HOME/.hermes/.env"
+printf 'test document\n' > "$HOME/.hermes/memories/USER.md"
+printf 'model:\n  default: test\n' > "$HOME/.hermes/config.yaml"
+printf '[Timer]\n' > "$HOME/.config/systemd/user/oaos-gateway-watchdog.timer"
+MOCK_LISTENER='127.0.0.1:9119' bash "$repo_root/bootstrap/verify/personal-verify.sh" --json --offline > "$temp_root/loopback.json" || true
+python3 - "$temp_root/loopback.json" <<'PY'
+import json, sys
+rows = {row['check']: row for row in json.load(open(sys.argv[1]))['checks']}
+assert rows['Dashboard loopback']['status'] == 'PASS', rows['Dashboard loopback']
+PY
+printf 'PASS: --confirm resolves MANUAL; .env mode, config secrets, allowlist, approvals, watchdog, non-loopback Dashboard FAIL\n'
 
 mkdir -p "$temp_root/verify-tmp"
 for backup_case in success skipped missing unreported; do
@@ -94,9 +157,9 @@ for backup_case in success skipped missing unreported; do
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     result = json.load(f)
-row = result['checks'][10]
+row = result['checks'][17]
 case, code = sys.argv[2], int(sys.argv[3])
-assert code == (0 if result['summary']['FAIL'] == 0 else 1)
+assert code == (2 if result['summary']['FAIL'] == 0 else 1)
 if case == 'success':
     assert row['status'] == 'PASS' and 'nonempty archive' in row['evidence'], row
 elif case == 'skipped':
@@ -121,7 +184,7 @@ with open(sys.argv[1], encoding='utf-8') as f:
     row = json.load(f)['checks'][0]
 case, code = sys.argv[2], int(sys.argv[3])
 if case == 'advisory':
-    assert row['status'] == 'PASS' and 'advisory findings only' in row['evidence'] and code == 0, row
+    assert row['status'] == 'PASS' and 'advisory findings only' in row['evidence'] and code in (1, 2), row
 elif case == 'failed':
     assert row['status'] == 'FAIL' and 'failed check' in row['evidence'] and code == 1, row
 else:
@@ -203,10 +266,11 @@ chmod 700 "$temp_root/native-bin/"*
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     result = json.load(f)
-assert result['checks'][0]['status'] == 'PASS'
-assert result['checks'][6]['status'] == 'PASS', result['checks'][6]
-assert result['checks'][10]['status'] == 'PASS', result['checks'][10]
-assert int(sys.argv[2]) == (0 if result['summary']['FAIL'] == 0 else 1)
+rows = {row['check']: row for row in result['checks']}
+for name in ('Hermes health', 'Wiki repository', 'Backup works', 'Hermes .env protected', 'Scheduled jobs'):
+    assert rows[name]['status'] == 'PASS', rows[name]
+assert 'no OAOS watchdog' in rows['Scheduled jobs']['evidence']
+assert int(sys.argv[2]) == (2 if result['summary']['FAIL'] == 0 else 1)
 PY
   [[ ! -s $temp_root/windows.err ]] || { printf 'FAIL: Windows verifier stderr\n' >&2; exit 1; }
   [[ $(tail -n 1 "$MOCK_BACKUP_ARGS") == C:\\* ]] || { printf 'FAIL: Windows backup output was not native\n' >&2; exit 1; }
@@ -253,21 +317,18 @@ SH
   export MOCK_CRON_JOBS="$temp_root/cron.jobs" MOCK_CRON_ARGS="$temp_root/cron.args"
   unset OAOS_STATE_FILE
   bash "$repo_root/editions/personal/install.sh" --stage cron > "$temp_root/cron.out" 2> "$temp_root/cron.err" || { cat "$temp_root/cron.err" >&2; printf 'FAIL: Windows cron stage\n' >&2; exit 1; }
-  [[ $(wc -l < "$MOCK_CRON_ARGS") == 2 ]] || { printf 'FAIL: Windows cron script argv count\n' >&2; exit 1; }
-  if ! { grep -Fxq 'oaos-daily-backup.sh' "$MOCK_CRON_ARGS" && grep -Fxq 'oaos-gateway-watchdog.sh' "$MOCK_CRON_ARGS"; }; then
-    printf 'FAIL: Windows cron script argv was not a filename\n' >&2; exit 1
-  fi
+  [[ $(cat "$MOCK_CRON_ARGS") == oaos-daily-backup.sh ]] || { printf 'FAIL: Windows cron must register only the backup script by filename\n' >&2; exit 1; }
   bash "$HOME/.hermes/scripts/oaos-daily-backup.sh" || { printf 'FAIL: generated Windows backup script\n' >&2; exit 1; }
   [[ -n $(find "$HOME/.oaos/backups" -maxdepth 1 -name 'oaos-*.tar.gz' -print -quit) ]] || { printf 'FAIL: generated Windows backup archive absent\n' >&2; exit 1; }
 
   backup_script="$HOME/.hermes/scripts/oaos-daily-backup.sh"
-  watchdog_script="$HOME/.hermes/scripts/oaos-gateway-watchdog.sh"
+  watchdog_script="$HOME/.oaos/bin/oaos-gateway-watchdog.sh"
   cp "$backup_script" "$temp_root/original-backup.sh"
   cp "$watchdog_script" "$temp_root/original-watchdog.sh"
   : > "$MOCK_CRON_JOBS"
   export OAOS_STATE_FILE="$temp_root/cron-identical-state.json"
   bash "$repo_root/editions/personal/install.sh" --stage cron > "$temp_root/cron-identical.out" 2> "$temp_root/cron-identical.err" || { cat "$temp_root/cron-identical.err" >&2; printf 'FAIL: identical Windows cron scripts blocked rerun\n' >&2; exit 1; }
-  [[ $(wc -l < "$MOCK_CRON_ARGS") == 4 ]] || { printf 'FAIL: identical Windows cron scripts were not registered\n' >&2; exit 1; }
+  [[ $(wc -l < "$MOCK_CRON_ARGS") == 2 ]] || { printf 'FAIL: identical Windows cron scripts were not registered\n' >&2; exit 1; }
   if ! { cmp -s "$backup_script" "$temp_root/original-backup.sh" && cmp -s "$watchdog_script" "$temp_root/original-watchdog.sh"; }; then
     printf 'FAIL: identical Windows cron scripts changed\n' >&2; exit 1
   fi
@@ -287,7 +348,7 @@ SH
   code=0
   bash "$repo_root/editions/personal/install.sh" --stage cron > "$temp_root/cron-different-watchdog.out" 2> "$temp_root/cron-different-watchdog.err" || code=$?
   [[ $code == 3 && $(cat "$watchdog_script") == 'user-edited watchdog' ]] || { printf 'FAIL: changed Windows watchdog script was not preserved\n' >&2; exit 1; }
-  [[ -z $(find "$HOME/.hermes/scripts" -name '*.tmp.*' -print -quit) ]] || { printf 'FAIL: cron left a temporary script\n' >&2; exit 1; }
+  [[ -z $(find "$HOME/.hermes/scripts" "$HOME/.oaos/bin" -name '*.tmp.*' -print -quit) ]] || { printf 'FAIL: cron left a temporary script\n' >&2; exit 1; }
   unset OAOS_STATE_FILE
 
   rm -rf -- "$HOME/data/wiki"
@@ -309,6 +370,11 @@ printf '# mock PowerShell installer\n' > "$output"
 SH
   chmod 700 "$temp_root/native-bin/curl"
   export MOCK_CURL_ARGV="$temp_root/curl.args"
+  code=0
+  bash "$repo_root/editions/personal/install.sh" --yes --stage hermes > "$temp_root/hermes-nosha.out" 2> "$temp_root/hermes-nosha.err" || code=$?
+  [[ $code == 3 && ! -f $MOCK_HERMES_INSTALLED && ! -e $MOCK_CURL_ARGV ]] || { printf 'FAIL: Windows install.ps1 ran without a pinned checksum\n' >&2; exit 1; }
+  OAOS_HERMES_INSTALLER_SHA256=$("$real_python" -c 'import hashlib; print(hashlib.sha256(b"# mock PowerShell installer\n").hexdigest())')
+  export OAOS_HERMES_INSTALLER_SHA256
   bash "$repo_root/editions/personal/install.sh" --yes --stage hermes > "$temp_root/hermes.out" 2> "$temp_root/hermes.err" || { cat "$temp_root/hermes.err" >&2; printf 'FAIL: Windows Hermes installer stage\n' >&2; exit 1; }
   [[ -f $MOCK_HERMES_INSTALLED ]] || { printf 'FAIL: Windows Hermes installer not invoked\n' >&2; exit 1; }
   grep -Eq '^C:\\.*\\hermes-install.ps1$' "$MOCK_CURL_ARGV" || { printf 'FAIL: Windows curl output path was not native\n' >&2; exit 1; }

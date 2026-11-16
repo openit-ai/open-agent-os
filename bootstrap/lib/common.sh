@@ -211,3 +211,46 @@ check_os() {
     warn "Ubuntu LTS is recommended; detected ${id:-unknown} ${version:-unknown}. Continuing."
   fi
 }
+
+# Architecture §6: run only from the official repository unless the owner opts in.
+# oaos_repo_owner_check REPO_ROOT -> 0 official origin (or OAOS_ALLOW_FORK=1); 3 otherwise.
+# OAOS_TEST_ORIGIN replaces the git read-back only when OAOS_TEST_MODE=1.
+OAOS_OFFICIAL_REPO='openit-ai/open-agent-os'
+oaos_repo_owner_check() {
+  local origin='' path
+  if [[ ${OAOS_TEST_MODE:-0} == 1 && -n ${OAOS_TEST_ORIGIN:-} ]]; then
+    origin=$OAOS_TEST_ORIGIN
+  elif have_cmd git; then
+    origin=$(git -C "$1" remote get-url origin 2>/dev/null || true)
+  fi
+  path=$origin
+  path=${path%/}
+  path=${path%.git}
+  case $path in
+    https://github.com/*) path=${path#https://github.com/} ;;
+    git@github.com:*) path=${path#git@github.com:} ;;
+    ssh://git@github.com/*) path=${path#ssh://git@github.com/} ;;
+    *) path='' ;;
+  esac
+  if [[ $path == "$OAOS_OFFICIAL_REPO" ]]; then return 0; fi
+  if [[ ${OAOS_ALLOW_FORK:-0} == 1 ]]; then
+    warn "Repository origin is not github.com/$OAOS_OFFICIAL_REPO; continuing because OAOS_ALLOW_FORK=1."
+    return 0
+  fi
+  warn "Repository origin could not be confirmed as github.com/$OAOS_OFFICIAL_REPO. Clone the official repository, or set OAOS_ALLOW_FORK=1 to run a fork you have reviewed."
+  return 3
+}
+
+# Telegram getMe without the token in argv: curl reads its URL from a config on stdin.
+# Prints a short result (valid, HTTP <code>, rejected, network error); 0 only when valid.
+oaos_telegram_get_me() {
+  local response
+  have_cmd curl || { printf 'curl unavailable'; return 1; }
+  response=$(printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "$1" |
+    curl -sS --proto '=https' --max-time 15 -K - 2>/dev/null) || { printf 'network error'; return 1; }
+  if [[ $response =~ \"ok\":[[:space:]]*true ]]; then printf 'valid'; return 0; fi
+  if [[ $response =~ \"error_code\":[[:space:]]*([0-9]+) ]]; then printf 'HTTP %s' "${BASH_REMATCH[1]}"; else printf 'rejected'; fi
+  return 1
+}
+# Telegram allowlists are numeric user IDs, comma-separated.
+oaos_valid_user_ids() { [[ ${1//[[:space:]]/} =~ ^[0-9]+(,[0-9]+)*$ ]]; }

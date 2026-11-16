@@ -77,6 +77,7 @@ platform_linux_path() {
     cache) printf '%s/.oaos/cache\n' "$HOME" ;;
     wiki) printf '%s/data/wiki\n' "$HOME" ;;
     scripts) printf '%s/scripts\n' "$(platform_hermes_home)" ;;
+    bin) printf '%s/.oaos/bin\n' "$HOME" ;;
     *) printf 'Unknown platform path: %s\n' "$1" >&2; return 1 ;;
   esac
 }
@@ -126,6 +127,14 @@ platform_linux_swap_prepare() {
   swap_count=$(platform_swap_state) || return 3
   if ((ram_kb < 16777216 && swap_count == 0)); then
     if [[ -e /swapfile ]]; then warn 'An inactive /swapfile exists; preserving it for manual review.'; return 3; fi
+    local capacity available
+    read -r capacity available < <(platform_disk_kib / || true)
+    # 8 GiB swapfile plus 2 GiB headroom, and the root volume must keep >10% free afterwards.
+    if [[ ! $available =~ ^[0-9]+$ || ! $capacity =~ ^[0-9]+$ ]] ||
+       ((available < 10485760 || (available - 8388608) * 10 < capacity)); then
+      warn 'Not enough free space on / for an 8 GiB swapfile (needs 10 GiB free and >10% left afterwards); add swap manually.'
+      return 3
+    fi
     run_root fallocate -l 8G /swapfile && run_root chmod 600 /swapfile &&
       run_root mkswap /swapfile && run_root swapon /swapfile || return 3
     run_root bash -c 'grep -qE "^/swapfile[[:space:]]" /etc/fstab || printf "%s\n" "/swapfile none swap sw 0 0" >> /etc/fstab'
@@ -139,10 +148,18 @@ platform_linux_sleep_policy() {
     if run_root install -d -m 755 /etc/systemd/logind.conf.d; then
       printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nIdleAction=ignore\n' |
         run_root tee /etc/systemd/logind.conf.d/oaos-personal.conf >/dev/null || blocked=1
-      warn 'The logind drop-in takes effect after a safe logind restart or reboot.'
+      [[ ${OAOS_DRY_RUN:-0} == 1 ]] || warn 'Changed host setting: /etc/systemd/logind.conf.d/oaos-personal.conf ignores lid switch and idle actions; it takes effect after a safe logind restart or reboot.'
     else blocked=1; fi
   fi
-  run_root systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target || blocked=1
+  local target to_mask=()
+  for target in sleep.target suspend.target hibernate.target hybrid-sleep.target; do
+    [[ $(systemctl is-enabled "$target" 2>/dev/null || true) == masked ]] || to_mask+=("$target")
+  done
+  if ((${#to_mask[@]})); then
+    if run_root systemctl mask "${to_mask[@]}"; then
+      [[ ${OAOS_DRY_RUN:-0} == 1 ]] || warn "Changed host setting: masked ${to_mask[*]} so the gateway stays reachable. Undo with: sudo systemctl unmask ${to_mask[*]}"
+    else blocked=1; fi
+  fi
   ((blocked == 0))
 }
 
@@ -293,6 +310,7 @@ platform_macos_path() {
     cache) printf '%s/.oaos/cache\n' "$HOME" ;;
     wiki) printf '%s/data/wiki\n' "$HOME" ;;
     scripts) printf '%s/scripts\n' "$(platform_hermes_home)" ;;
+    bin) printf '%s/.oaos/bin\n' "$HOME" ;;
     *) return 1 ;;
   esac
 }
@@ -401,6 +419,7 @@ platform_windows_path() {
     cache) printf '%s/.oaos/cache\n' "$HOME" ;;
     wiki) printf '%s/data/wiki\n' "$HOME" ;;
     scripts) printf '%s/scripts\n' "$(platform_hermes_home)" ;;
+    bin) printf '%s/.oaos/bin\n' "$HOME" ;;
     *) return 1 ;;
   esac
 }
@@ -554,6 +573,88 @@ platform_windows_chat_probe() { platform_portable_chat_probe; }
 platform_macos_backup_prune() { platform_portable_backup_prune "$1"; }
 platform_windows_backup_prune() { platform_portable_backup_prune "$1"; }
 
+# Gateway watchdog. Hermes cron runs inside the gateway process, so a watchdog
+# scheduled by Hermes cron cannot fire while the gateway is down. The watchdog
+# is therefore an OS timer: a systemd user timer on Linux and a launchd agent on
+# macOS. Windows has no OAOS watchdog (a 5-minute Git Bash task would flash a
+# console window); it relies on the Hermes ONLOGON task and reports that.
+#   platform_watchdog_install SCRIPT -> 0 registered, 3 blocked
+#   platform_watchdog_check          -> 0 registered and active, 1 absent, 4 not provided on this lane
+OAOS_WATCHDOG_LABEL=ai.openit.oaos.gateway-watchdog
+platform_systemd_escape_path() { local value=${1//%/%%}; printf '"%s"' "${value//\"/\\\"}"; }
+platform_linux_watchdog_install() {
+  platform_linux platform_watchdog_install || return 3
+  local unit_dir="$HOME/.config/systemd/user" script=$1
+  if [[ ${OAOS_DRY_RUN:-0} == 1 ]]; then info 'Would register the oaos-gateway-watchdog systemd user timer.'; return 0; fi
+  command -v systemctl >/dev/null 2>&1 || { warn 'systemctl is unavailable; gateway watchdog timer not registered.'; return 3; }
+  mkdir -p "$unit_dir" || return 1
+  printf '[Unit]\nDescription=OAOS Hermes gateway watchdog\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/env bash %s\n' \
+    "$(platform_systemd_escape_path "$script")" > "$unit_dir/oaos-gateway-watchdog.service" || return 1
+  printf '[Unit]\nDescription=Run the OAOS Hermes gateway watchdog every 5 minutes\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\nUnit=oaos-gateway-watchdog.service\n\n[Install]\nWantedBy=timers.target\n' \
+    > "$unit_dir/oaos-gateway-watchdog.timer" || return 1
+  systemctl --user daemon-reload >/dev/null 2>&1 || { warn 'systemctl --user is unavailable in this session.'; return 3; }
+  systemctl --user enable --now oaos-gateway-watchdog.timer >/dev/null 2>&1 || { warn 'Could not enable the watchdog timer.'; return 3; }
+}
+platform_linux_watchdog_check() {
+  platform_linux platform_watchdog_check || return 3
+  [[ -f $HOME/.config/systemd/user/oaos-gateway-watchdog.timer ]] || return 1
+  systemctl --user is-enabled oaos-gateway-watchdog.timer >/dev/null 2>&1 &&
+    systemctl --user is-active oaos-gateway-watchdog.timer >/dev/null 2>&1
+}
+platform_xml_escape() { local v=${1//&/&amp;}; v=${v//</&lt;}; v=${v//>/&gt;}; printf '%s' "$v"; }
+platform_macos_watchdog_plist() { printf '%s/Library/LaunchAgents/%s.plist\n' "$HOME" "$OAOS_WATCHDOG_LABEL"; }
+platform_macos_watchdog_install() {
+  local plist uid
+  plist=$(platform_macos_watchdog_plist)
+  if [[ ${OAOS_DRY_RUN:-0} == 1 ]]; then info 'Would register the OAOS gateway watchdog launchd agent.'; return 0; fi
+  mkdir -p "$(dirname "$plist")" || return 1
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+    printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    printf '<plist version="1.0">\n<dict>\n'
+    printf '  <key>Label</key><string>%s</string>\n' "$OAOS_WATCHDOG_LABEL"
+    printf '  <key>ProgramArguments</key><array><string>/bin/bash</string><string>%s</string></array>\n' "$(platform_xml_escape "$1")"
+    printf '  <key>StartInterval</key><integer>300</integer>\n  <key>RunAtLoad</key><true/>\n</dict>\n</plist>\n'
+  } > "$plist" || return 1
+  uid=$(id -u)
+  launchctl bootout "gui/$uid/$OAOS_WATCHDOG_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1 || { warn 'launchctl could not load the watchdog agent.'; return 3; }
+}
+platform_macos_watchdog_check() {
+  [[ -f $(platform_macos_watchdog_plist) ]] || return 1
+  launchctl list 2>/dev/null | grep -Fq "$OAOS_WATCHDOG_LABEL"
+}
+platform_windows_watchdog_install() {
+  info 'Windows: no OAOS gateway watchdog; the Hermes ONLOGON task restarts the gateway at logon.'
+}
+platform_windows_watchdog_check() { return 4; }
+
+# Prints the local address of every TCP listener on the given port (nothing when none).
+platform_linux_listeners() {
+  platform_linux platform_listeners || return 3
+  command -v ss >/dev/null 2>&1 || return 3
+  ss -Hltn "sport = :$1" 2>/dev/null | awk '{print $4}'
+}
+platform_macos_listeners() {
+  command -v lsof >/dev/null 2>&1 || return 3
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 {print $9}'
+}
+platform_windows_listeners() {
+  command -v netstat >/dev/null 2>&1 || return 3
+  netstat -ano -p TCP 2>/dev/null | tr -d '\r' |
+    awk -v port=":$1" '$4 == "LISTENING" && substr($2, length($2) - length(port) + 1) == port {print $2}'
+}
+# 0 when every listed address is loopback (127.0.0.0/8, ::1, localhost).
+platform_listeners_loopback_only() {
+  local address
+  for address in "$@"; do
+    case $address in
+      127.*|'[::1]':*|::1:*|localhost:*) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
 # Public dispatch API; Linux implementation above stays unchanged.
 platform_require_tools() { platform_dispatch require_tools; }
 platform_check_os() { platform_dispatch check_os; }
@@ -581,6 +682,9 @@ platform_gateway_service_present() { platform_dispatch gateway_service_present; 
 platform_gateway_autostart() { platform_dispatch gateway_autostart "$@"; }
 platform_chat_probe() { platform_dispatch chat_probe; }
 platform_backup_prune() { platform_dispatch backup_prune "$@"; }
+platform_watchdog_install() { platform_dispatch watchdog_install "$@"; }
+platform_watchdog_check() { platform_dispatch watchdog_check; }
+platform_listeners() { platform_dispatch listeners "$@"; }
 platform_dispatch() {
   local prefix
   case ${OAOS_PLATFORM:-} in
