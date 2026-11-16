@@ -335,6 +335,44 @@ else
   else record 'Personal mail' FAIL 'Logins succeeded but Himalaya account oaos-personal could not read the mailbox'; fi
 fi
 
+# 21: The wiki relay (bare repository) exists, is owner-only, is a remote of the wiki and
+# holds the wiki's current commit. Seeding and the daily backup push to it.
+relay=$(platform_path relay)
+relay_native=$(oaos_native_path "$relay") || exit 3
+relay_remote=''
+if [[ -d $wiki/.git ]]; then
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    relay_url=$(git -C "$wiki_native" remote get-url "$name" 2>/dev/null || true)
+    if [[ -n $relay_url && ( $relay_url == "$relay_native" || $relay_url == "$relay" ) ]]; then relay_remote=$name; break; fi
+  done < <(git -C "$wiki_native" remote 2>/dev/null)
+fi
+relay_branch=$(git -C "$wiki_native" symbolic-ref --short -q HEAD 2>/dev/null || true)
+if [[ ! -d $wiki/.git ]]; then
+  record 'Wiki relay' FAIL 'Wiki repository absent; relay not checked'
+elif [[ $(git -C "$relay_native" rev-parse --is-bare-repository 2>/dev/null) != true ]]; then
+  record 'Wiki relay' FAIL 'Bare relay ~/data/wiki.git absent; rerun the wiki stage with --recheck'
+elif [[ $OAOS_PLATFORM != windows-gitbash && $(platform_file_mode "$relay") != 700 ]]; then
+  record 'Wiki relay' FAIL 'Wiki relay directory is not owner-only (700)'
+elif [[ -z $relay_remote ]]; then
+  record 'Wiki relay' FAIL 'No wiki remote points at the relay; rerun the wiki stage with --recheck'
+elif [[ -z $relay_branch ]]; then
+  record 'Wiki relay' FAIL 'Wiki HEAD is detached; relay state cannot be compared'
+else
+  wiki_head=$(git -C "$wiki_native" rev-parse -q --verify HEAD 2>/dev/null || true)
+  relay_head=$(git -C "$relay_native" rev-parse -q --verify "refs/heads/$relay_branch" 2>/dev/null || true)
+  if [[ -n $wiki_head && $wiki_head == "$relay_head" ]]; then
+    record 'Wiki relay' PASS "Relay ~/data/wiki.git (remote $relay_remote) holds the wiki's latest commit"
+  elif [[ -z $relay_head ]]; then
+    record 'Wiki relay' FAIL "Relay has no $relay_branch branch; push with: git -C ~/data/wiki push $relay_remote $relay_branch"
+  elif git -C "$wiki_native" merge-base --is-ancestor "$relay_head" "$wiki_head" 2>/dev/null; then
+    behind=$(git -C "$wiki_native" rev-list --count "$relay_head..$wiki_head")
+    record 'Wiki relay' FAIL "Relay is $behind commit(s) behind; push with: git -C ~/data/wiki push $relay_remote $relay_branch (the daily backup also pushes)"
+  else
+    record 'Wiki relay' FAIL 'Relay and wiki have diverged; reconcile them by hand'
+  fi
+fi
+
 pass=0 fail=0 manual=0 skip=0
 for status in "${statuses[@]}"; do
   case $status in PASS) ((pass+=1));; FAIL) ((fail+=1));; MANUAL) ((manual+=1));; SKIP) ((skip+=1));; esac

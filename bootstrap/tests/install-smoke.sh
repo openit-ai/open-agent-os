@@ -54,13 +54,43 @@ assert set(state['editions']) == {'personal'}
 assert state['editions']['personal']['stages']['wiki']['status'] == 'done'
 PY
 [[ -x $first/data/wiki/.git/hooks/pre-commit ]] || fail 'wiki pre-commit secret hook absent'
+[[ $(git --git-dir="$first/data/wiki.git" rev-parse --is-bare-repository) == true ]] || fail 'wiki relay is not a bare repository'
+[[ $(stat -c %a "$first/data/wiki.git") == 700 ]] || fail 'wiki relay is not 700'
+[[ $(git -C "$first/data/wiki" remote get-url origin) == "$first/data/wiki.git" ]] || fail 'wiki origin is not the relay'
+[[ $(git --git-dir="$first/data/wiki.git" rev-parse main) == $(git -C "$first/data/wiki" rev-parse HEAD) ]] || fail 'relay does not hold the seed commit'
 grep -Fq 'Host runs Linux' "$first/.hermes/memories/MEMORY.md" || fail 'MEMORY host facts not filled'
 ! grep -Fq '{{host' "$first/.hermes/memories/MEMORY.md" || fail 'MEMORY host placeholder left'
 printf 'sk-THISISATESTSECRETVALUE\n' > "$first/data/wiki/leak.md"
 git -C "$first/data/wiki" add leak.md
 if git -C "$first/data/wiki" -c user.name=T -c user.email=t@localhost commit -qm leak >/dev/null 2>&1; then fail 'wiki hook accepted a secret'; fi
 git -C "$first/data/wiki" rm -q --cached leak.md && rm -f "$first/data/wiki/leak.md"
-printf 'PASS: no-jq first write created ten-stage edition-scoped state, wiki secret hook, and MEMORY host facts\n'
+printf 'PASS: no-jq first write created ten-stage edition-scoped state, wiki secret hook, pushed bare relay (700), and MEMORY host facts\n'
+
+# An existing wiki whose origin is a remote of the owner keeps it; the relay is added as oaos-relay.
+own_remote="$temp_root/own-remote"
+mkdir -p "$own_remote/data"
+git init -q -b main "$own_remote/data/wiki"
+git -C "$own_remote/data/wiki" -c user.name=T -c user.email=t@localhost commit -q --allow-empty -m own
+git -C "$own_remote/data/wiki" remote add origin 'ssh://git@example.com/me/wiki.git'
+HOME="$own_remote" PATH="$mirror" bash "$install" --stage wiki >"$temp_root/own-remote.out" 2>"$temp_root/own-remote.err" || fail 'existing wiki with its own origin'
+[[ $(git -C "$own_remote/data/wiki" remote get-url origin) == 'ssh://git@example.com/me/wiki.git' ]] || fail 'owner origin was replaced'
+[[ $(git -C "$own_remote/data/wiki" remote get-url oaos-relay) == "$own_remote/data/wiki.git" ]] || fail 'relay not added as oaos-relay'
+[[ $(git --git-dir="$own_remote/data/wiki.git" rev-parse main) == $(git -C "$own_remote/data/wiki" rev-parse HEAD) ]] || fail 'existing wiki not pushed to the relay'
+mkdir -p "$temp_root/not-bare/data/wiki.git"
+git init -q -b main "$temp_root/not-bare/data/wiki"
+git -C "$temp_root/not-bare/data/wiki" -c user.name=T -c user.email=t@localhost commit -q --allow-empty -m own
+code=0
+HOME="$temp_root/not-bare" PATH="$mirror" bash "$install" --stage wiki >"$temp_root/not-bare.out" 2>"$temp_root/not-bare.err" || code=$?
+[[ $code == 3 ]] && grep -Fq 'is not a bare git repository; preserving it' "$temp_root/not-bare.err" || fail 'non-bare relay path was not preserved and blocked'
+seed_head=$(git -C "$first/data/wiki" rev-parse HEAD)
+restore="$temp_root/restore"
+mkdir -p "$restore/data"
+cp -a "$first/data/wiki.git" "$restore/data/wiki.git"
+HOME="$restore" PATH="$mirror" bash "$install" --stage wiki >"$temp_root/restore.out" 2>"$temp_root/restore.err" || fail 'wiki restore from relay'
+[[ $(git -C "$restore/data/wiki" rev-parse HEAD) == "$seed_head" ]] || fail 'missing wiki was reseeded instead of restored from the relay'
+grep -Fq 'Restored the wiki from its relay' "$temp_root/restore.out" || fail 'relay restore not reported'
+[[ -x $restore/data/wiki/.git/hooks/pre-commit ]] || fail 'restored wiki lacks the secret hook'
+printf 'PASS: an existing origin is kept (relay as oaos-relay); a missing wiki is restored from the relay; a non-bare relay path blocks without changes\n'
 
 HOME="$first" PATH="$mirror" bash "$install" --stage wiki,harness >"$temp_root/second.out" 2>"$temp_root/second.err" || fail 'second no-jq install failed'
 grep -Fq 'Skipping wiki (done).' "$temp_root/second.out" || fail 'wiki did not skip on rerun'
@@ -293,8 +323,8 @@ bash -n "$cron_home/.hermes/scripts/oaos-daily-backup.sh" "$cron_home/.oaos/bin/
 
 # The generated backup honours HERMES_HOME and writes an owner-only archive.
 custom_home="$temp_root/cron-custom"
-mkdir -p "$custom_home/data/wiki" "$temp_root/custom-hermes"
-printf 'x\n' > "$custom_home/data/wiki/index.md"
+mkdir -p "$custom_home" "$temp_root/custom-hermes"
+HOME="$custom_home" HERMES_HOME="$temp_root/custom-hermes" PATH="$mirror" bash "$install" --stage wiki > /dev/null 2>&1 || fail 'wiki before custom cron'
 printf 'y\n' > "$temp_root/custom-hermes/SOUL.md"
 HOME="$custom_home" HERMES_HOME="$temp_root/custom-hermes" PATH="$cron_bin:$mirror" env MOCK_CRON_JOBS="$temp_root/custom.jobs" MOCK_CRON_ARGS="$temp_root/custom.args" MOCK_SYSTEMCTL_LOG="$temp_root/custom-systemctl.log" \
   bash "$install" --stage cron > "$temp_root/custom-cron.out" 2> "$temp_root/custom-cron.err" || fail 'cron with HERMES_HOME'
@@ -303,7 +333,23 @@ HOME="$custom_home" PATH="$mirror" bash "$temp_root/custom-hermes/scripts/oaos-d
 archive=$(find "$custom_home/.oaos/backups" -name 'oaos-*.tar.gz' -print -quit)
 [[ -n $archive && $(stat -c %a "$archive") == 600 ]] || fail 'backup archive absent or not 600'
 tar -tzf "$archive" | grep -Fxq 'custom-hermes/SOUL.md' || fail 'backup did not include the custom HERMES_HOME'
-printf 'PASS: Linux backup honours HERMES_HOME with a 700 directory and 600 archive\n'
+printf 'x\n' > "$custom_home/data/wiki/note.md"
+git -C "$custom_home/data/wiki" add note.md
+git -C "$custom_home/data/wiki" -c user.name=T -c user.email=t@localhost commit -qm note
+HOME="$custom_home" PATH="$mirror" bash "$temp_root/custom-hermes/scripts/oaos-daily-backup.sh" || fail 'backup run after a wiki commit'
+[[ $(git --git-dir="$custom_home/data/wiki.git" rev-parse main) == $(git -C "$custom_home/data/wiki" rev-parse HEAD) ]] || fail 'daily backup did not push the wiki relay'
+printf 'PASS: Linux backup honours HERMES_HOME with a 700 directory and 600 archive, and pushes the wiki relay\n'
+
+# A backup script from the previous release (archive only, job registered) is upgraded in place.
+backup_script="$temp_root/custom-hermes/scripts/oaos-daily-backup.sh"
+sed '/^# OAOS wiki relay push/,$d' "$backup_script" > "$temp_root/legacy-backup.sh"
+cp "$temp_root/legacy-backup.sh" "$backup_script"
+HOME="$custom_home" HERMES_HOME="$temp_root/custom-hermes" PATH="$cron_bin:$mirror" env MOCK_CRON_JOBS="$temp_root/custom.jobs" MOCK_CRON_ARGS="$temp_root/custom.args" MOCK_SYSTEMCTL_LOG="$temp_root/custom-systemctl.log" \
+  OAOS_STATE_FILE="$temp_root/custom-upgrade-state.json" bash "$install" --stage cron > "$temp_root/custom-upgrade.out" 2> "$temp_root/custom-upgrade.err" || fail 'cron upgrade of a legacy backup script'
+grep -Fq '# OAOS wiki relay push' "$backup_script" || fail 'legacy backup script was not upgraded'
+grep -Fq 'Upgrading the oaos-daily-backup script' "$temp_root/custom-upgrade.out" || fail 'backup upgrade not reported'
+[[ $(wc -l < "$temp_root/custom.args") == 1 ]] || fail 'upgrade registered the backup job twice'
+printf 'PASS: a previous-release backup script is upgraded in place to push the relay\n'
 
 : > "$cron_jobs"
 HOME="$cron_home" PATH="$cron_bin:$mirror" env "${cron_env[@]}" OAOS_STATE_FILE="$temp_root/linux-cron-identical-state.json" \

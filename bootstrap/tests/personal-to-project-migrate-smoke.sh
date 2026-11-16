@@ -19,7 +19,11 @@ make_source() {
   printf 'index\n' > "$src/data/wiki/index.md"
   git -C "$src/data/wiki" add index.md
   git -C "$src/data/wiki" -c user.name=T -c user.email=t@localhost commit -qm seed
-  git -C "$src/data/wiki" remote add origin 'ssh://relay.example/personal-wiki.git'
+  # The Personal installer's relay: a bare ~/data/wiki.git that is the wiki's origin.
+  git init -q --bare -b main "$src/data/wiki.git"
+  git -C "$src/data/wiki" remote add origin "$src/data/wiki.git"
+  git -C "$src/data/wiki" push -q -u origin main
+  git -C "$src/data/wiki" remote add mirror 'ssh://relay.example/personal-wiki.git'
   printf 'soul\n' > "$src/phermes/SOUL.md"
   printf 'agents\n' > "$src/phermes/AGENTS.md"
   printf 'user\n' > "$src/phermes/memories/USER.md"
@@ -85,12 +89,17 @@ home="$temp_root/project"; make_target "$home"
 HOME="$home" PATH="$temp_root/bin:$PATH" FAKE_SOURCE_HOME="$src" MOCK_GATEWAY_FLAG="$temp_root/gateway.flag" MOCK_GATEWAY_LOG="$temp_root/gateway.log" \
   bash "$script" --source me@personal.example --source-hermes-home '~/phermes' --dry-run > "$temp_root/dry.out" 2> "$temp_root/dry.err" || fail 'dry run'
 grep -Fq 'PLAN dir-replace me@personal.example:' "$temp_root/dry.out" || fail 'dry-run plan'
+grep -Fq 'PLAN Personal relay ~/data/wiki.git stays on the Personal host' "$temp_root/dry.out" || fail 'dry-run plan omits the relay'
 [[ ! -e $home/.hermes/AGENTS.md ]] || fail 'dry run changed target'
 HOME="$home" PATH="$temp_root/bin:$PATH" FAKE_SOURCE_HOME="$src" MOCK_GATEWAY_FLAG="$temp_root/gateway.flag" MOCK_GATEWAY_LOG="$temp_root/gateway.log" \
   bash "$script" --source me@personal.example > "$temp_root/ssh.out" 2> "$temp_root/ssh.err" || fail 'ssh migration'
 check_target "$home" ssh
+grep -Fq 'Removed wiki remote origin (the Personal relay ~/data/wiki.git' "$temp_root/ssh.out" || fail 'relay remote removal not named'
+grep -Fq 'Removed wiki remote mirror (copied from the Personal wiki)' "$temp_root/ssh.out" || fail 'other remote removal not reported'
+[[ ! -e $home/data/wiki.git ]] || fail 'Personal relay was copied to the Project host'
+[[ -z $(git -C "$home/data/wiki" config --get-regexp '^branch\..*\.remote$' || true) ]] || fail 'branch tracking still points at a removed remote'
 [[ $(tr '\n' ' ' < "$temp_root/gateway.log") == 'stop start ' && -f $temp_root/gateway.flag ]] || fail 'gateway not stopped and restarted'
-printf 'PASS: SSH migration copies wiki contents (no nesting), harness, memories, skills, scripts; drops relay remote; restarts gateway\n'
+printf 'PASS: SSH migration copies wiki contents (no nesting), harness, memories, skills, scripts; drops relay and other remotes, never copies the relay; restarts gateway\n'
 
 # Local source root with --include-config and a new wiki remote; gateway not running.
 home2="$temp_root/project2"; make_target "$home2"

@@ -287,8 +287,59 @@ HOOK
   mv -- "$tmp" "$hook"
 }
 
+# The wiki's relay is a local bare repository (default ~/data/wiki.git, owner-only). The
+# wiki pushes to it after seeding and from the daily backup, so another machine can
+# clone or pull it over SSH without touching the working copy. The remote that points at
+# the relay is origin, or oaos-relay when the owner already uses origin for something else.
+# wiki_relay_remote WIKI_NATIVE RELAY RELAY_NATIVE: prints the remote whose URL is the relay
+# (native or Git Bash spelling).
+wiki_relay_remote() {
+  local wiki_native=$1 relay=$2 relay_native=$3 name url
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    url=$(git -C "$wiki_native" remote get-url "$name" 2>/dev/null || true)
+    if [[ -n $url && ( $url == "$relay_native" || $url == "$relay" ) ]]; then
+      printf '%s' "$name"
+      return 0
+    fi
+  done < <(git -C "$wiki_native" remote 2>/dev/null)
+  return 1
+}
+
+ensure_wiki_relay() {
+  local wiki=$1 wiki_native relay relay_native remote branch
+  wiki_native=$(oaos_native_path "$wiki") || return 3
+  relay=$(platform_path relay)
+  relay_native=$(oaos_native_path "$relay") || return 3
+  if [[ -e $relay ]]; then
+    if [[ $(git -C "$relay_native" rev-parse --is-bare-repository 2>/dev/null) != true ]]; then
+      warn "Wiki relay path $relay exists but is not a bare git repository; preserving it."
+      return 3
+    fi
+  else
+    git init -q --bare -b main "$relay_native"
+    info "Created the wiki relay (bare repository) at $relay."
+  fi
+  [[ $OAOS_PLATFORM == windows-gitbash ]] || chmod 700 "$relay"
+  if ! remote=$(wiki_relay_remote "$wiki_native" "$relay" "$relay_native"); then
+    if git -C "$wiki_native" remote get-url origin >/dev/null 2>&1; then
+      remote=oaos-relay
+      warn "Wiki origin already points elsewhere; the relay was added as remote '$remote'."
+    else
+      remote=origin
+    fi
+    git -C "$wiki_native" remote add "$remote" "$relay_native"
+  fi
+  branch=$(git -C "$wiki_native" symbolic-ref --short -q HEAD) || { warn 'Wiki HEAD is detached; check out a branch, then rerun --stage wiki.'; return 3; }
+  if ! git -C "$wiki_native" push -q -u "$remote" "$branch" 2>/dev/null; then
+    warn "Pushing the wiki to its relay ($remote) was rejected; reconcile $relay with the wiki, then rerun --stage wiki."
+    return 3
+  fi
+  git -C "$relay_native" symbolic-ref HEAD "refs/heads/$branch"
+}
+
 do_wiki() {
-  local wiki wiki_native
+  local wiki wiki_native relay relay_native
   wiki=$(platform_path wiki)
   [[ -n $wiki ]] || return 3
   wiki_native=$(oaos_native_path "$wiki") || return 3
@@ -296,9 +347,21 @@ do_wiki() {
     [[ -d $wiki/.git ]] || { warn 'Wiki path already exists but is not a git repository; preserving it.'; return 3; }
     git -C "$wiki_native" log -1 --format=%h >/dev/null 2>&1 || { warn 'Existing wiki has no commit; preserving it.'; return 3; }
     install_wiki_hook "$wiki"
-    return 0
+    ensure_wiki_relay "$wiki"
+    return
   fi
   mkdir -p "$(dirname "$wiki")"
+  relay=$(platform_path relay)
+  relay_native=$(oaos_native_path "$relay") || return 3
+  # A missing wiki whose relay still holds history is restored from the relay, not reseeded.
+  if [[ $(git -C "$relay_native" rev-parse --is-bare-repository 2>/dev/null) == true ]] &&
+     git -C "$relay_native" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    git clone -q "$relay_native" "$wiki_native"
+    info "Restored the wiki from its relay $relay."
+    install_wiki_hook "$wiki"
+    ensure_wiki_relay "$wiki"
+    return
+  fi
   git init -q -b main "$wiki_native"
   install_wiki_hook "$wiki"
   cat > "$wiki/index.md" <<'EOF'
@@ -318,6 +381,7 @@ EOF
   printf '.DS_Store\n*.swp\n' > "$wiki/.gitignore"
   git -C "$wiki_native" add index.md README.md .gitignore
   git -C "$wiki_native" -c user.name='OAOS Bootstrap' -c user.email='bootstrap@localhost' commit -qm 'wiki: seed personal index'
+  ensure_wiki_relay "$wiki"
 }
 
 # Host facts the installer knows are written into MEMORY.md; the rest stays as
@@ -359,11 +423,19 @@ do_harness() {
   info 'Credential typing stays vault-only (upstream default). Owner opt-in: bash editions/personal/computer-use-policy.sh enable — see docs/computer-use-credential-typing.md.'
 }
 
+# install_personal_cron_script CANDIDATE SCRIPT NAME [LEGACY]: an existing script equal to the
+# candidate is kept, one equal to the LEGACY file is upgraded, anything else is preserved.
 install_personal_cron_script() {
-  local candidate=$1 script=$2 name=$3
+  local candidate=$1 script=$2 name=$3 legacy=${4:-}
   if [[ -e $script || -L $script ]]; then
     if cmp -s "$candidate" "$script"; then
       rm -f -- "$candidate"
+      return 0
+    fi
+    if [[ -n $legacy && ! -L $script ]] && cmp -s "$legacy" "$script"; then
+      info "Upgrading the $name script (adds the wiki relay push)."
+      chmod 700 "$candidate" || { rm -f -- "$candidate"; return 1; }
+      mv -f -- "$candidate" "$script" || { rm -f -- "$candidate"; return 1; }
       return 0
     fi
     rm -f -- "$candidate"
@@ -374,7 +446,9 @@ install_personal_cron_script() {
   mv -- "$candidate" "$script" || { rm -f -- "$candidate"; return 1; }
 }
 
-write_backup_script() {
+# The daily backup as generated by earlier releases (archive only); a script that still
+# matches it is upgraded in place to write_backup_script.
+write_backup_script_base() {
   local hermes_home hermes_parent hermes_leaf wiki python
   hermes_home=$(platform_hermes_home)
   hermes_parent=$(dirname "$hermes_home")
@@ -405,6 +479,18 @@ PY
 EOF
 }
 
+write_backup_script() {
+  local wiki
+  wiki=$(platform_path wiki)
+  write_backup_script_base
+  printf '# OAOS wiki relay push: keep the bare relay up to date with the wiki.\n'
+  printf 'wiki_git=%q\nrelay_git=%q\n' "$(oaos_native_path "$wiki")" "$(oaos_native_path "$(platform_path relay)")"
+  cat <<'EOF'
+branch=$(git -C "$wiki_git" symbolic-ref --short HEAD)
+git -C "$wiki_git" push -q "$relay_git" "HEAD:refs/heads/$branch"
+EOF
+}
+
 write_watchdog_script() {
   local hermes_bin
   hermes_bin=$(command -v hermes)
@@ -421,7 +507,7 @@ EOF
 }
 
 do_cron() {
-  local scripts bin jobs script script_tmp code=0
+  local scripts bin jobs script script_tmp legacy_tmp code=0
   need_hermes || return 3
   scripts=$(platform_path scripts)
   bin=$(platform_path bin)
@@ -429,14 +515,22 @@ do_cron() {
   private_dir "$bin"
   private_dir "$(platform_path backups)"
   jobs=$(hermes cron list --all 2>/dev/null) || return 3
-  # Daily backup: a no-agent Hermes cron script (runs while the gateway is up).
+  # Daily backup: a no-agent Hermes cron script (runs while the gateway is up). It also
+  # pushes the wiki to its relay; a script left by an earlier release is upgraded in place.
+  script="$scripts/oaos-daily-backup.sh"
+  script_tmp=$(mktemp "$script.tmp.XXXXXX")
+  legacy_tmp=$(mktemp "$script.legacy.XXXXXX")
+  write_backup_script > "$script_tmp" && write_backup_script_base > "$legacy_tmp" ||
+    { rm -f -- "$script_tmp" "$legacy_tmp"; return 1; }
+  install_personal_cron_script "$script_tmp" "$script" oaos-daily-backup "$legacy_tmp" || code=$?
+  rm -f -- "$legacy_tmp"
   if ! grep -Fq oaos-daily-backup <<< "$jobs"; then
-    script="$scripts/oaos-daily-backup.sh"
-    script_tmp=$(mktemp "$script.tmp.XXXXXX")
-    write_backup_script > "$script_tmp" || { rm -f -- "$script_tmp"; return 1; }
-    install_personal_cron_script "$script_tmp" "$script" oaos-daily-backup || return $?
+    ((code == 0)) || return "$code"
     hermes cron create --name oaos-daily-backup --script "$(basename "$script")" --no-agent --deliver local '0 3 * * *' >/dev/null
+  elif ((code != 0)); then
+    warn 'The existing oaos-daily-backup script was changed by the owner; it may not push the wiki relay (verify checks the relay).'
   fi
+  code=0
   # Gateway watchdog: an OS timer, because Hermes cron cannot fire while the gateway is down.
   script="$bin/oaos-gateway-watchdog.sh"
   script_tmp=$(mktemp "$script.tmp.XXXXXX")
