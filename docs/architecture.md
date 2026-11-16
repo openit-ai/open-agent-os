@@ -1,10 +1,10 @@
-# Open Agent OS 아키텍처 및 구현 설계서 v2.0 — 3-에디션 · "URL 하나로 구축"
+# Open Agent OS 아키텍처 및 구현 설계서 — 3-에디션 · "URL 하나로 구축"
 
-> **대상**: openit-ai/open-agent-os (제품 버전 v0.1.10 · 기존 아키텍처 v1.7.5 → 본 문서 v2.0)
-> **관계**: 기존 v1.7.x 문서 = 현행 플랫폼 구현 기준서 · 본 문서 = 3-에디션 제품 방향 기준서 (제품 방향은 본 문서가 정본)
+> **대상**: openit-ai/open-agent-os (공개 저장소 · 릴리스 v2.x)
+> **관계**: 본 문서가 OAOS 제품 설계의 **단일 최종본**이다. 구 플랫폼(비공개 `open-agent-os-platform`, 아키텍처 v1.7.5·제품 0.1.10)은 Company 에디션 흡수 원천으로만 참조한다. 버전별 사본 파일을 두지 않고 변경 이력은 git과 아래 개정 이력으로 관리한다.
 > **목표**: Hermes Agent 설치 후 **저장소 URL 하나를 알려주면** README 설명부터 대부분의 설치, 최종 테스트까지 에이전트가 자동 진행 — 사용자는 **링크 확인·선택·최소 복사/붙여넣기**만 한다.
 > **입력**: 3-에디션 설계 요구(2026-09-25) · 구축 실측 가이드 2종(개인용·프로젝트용, 2026-09-22)
-> **버전**: v2.0 (2026-09-25) — 최종 검토본
+> **버전**: v2.1 (2026-11-16) — 현행 최종본 · 개정 이력은 부록 D
 > **수치 원칙**: 금액·제품명·경로·구성 값은 공식 출처로 검증해 기재(§0-1, 부록 C)
 
 ---
@@ -78,7 +78,8 @@ flowchart TD
 | `editions/<e>/install.sh` | 에디션별 설치(멱등·체크포인트·로그) | 에이전트 실행 |
 | `bootstrap/verify/<e>-verify.sh` | 최종 테스트(서비스·응답·파일·위키·크론·서비스 등록 확인); 실제 재부팅/로그인 생존은 별도 실기기 증거 | 에이전트 실행 |
 | `bootstrap/lib/*` | 공통: 환경 점검·시크릿 처리(.env 600)·체크포인트·로그 | 공용 |
-| `docs/editions/*.md` | 에디션별 설치·운영 문서(공통 표기 원칙으로 재작성) + Company 문서(예정) | 사람 + 에이전트 |
+| `editions/<e>/README.md` | 에디션별 설치·운영 문서(게이트·검증·원복) | 사람 + 에이전트 |
+| `docs/*.md` | 버전 없는 최종본 설계 문서 — `architecture`·`personal-cross-platform`·`computer-use-credential-typing`·`company-plan`·`company-design`·`cookbook`·`faq` | 사람 + 에이전트 |
 
 **스킬 설치 문법(2026-09-25 실측 확인)**: `hermes skills install <identifier | SKILL.md URL>` — Hermes CLI 도움말에서 "direct HTTP(S) URL to a SKILL.md file" 형식 지원을 확인(Hermes Agent v0.21.5 기준). README에는 `https://raw.githubusercontent.com/openit-ai/open-agent-os/main/skills/oaos-bootstrap/SKILL.md` 형식을 싣고, 저장소 푸시 후 P0에서 실설치로 최종 확인한다.
 
@@ -226,29 +227,28 @@ flowchart TB
 - **런타임 계층 = Hermes 네이티브**. 기존 자체 LLM 런타임·모의 실행부는 삭제·대체하고 Hermes로 일원화한다.
 - **코어**는 플랫폼 무관 자산(지식·위키·정책·컨텍스트 모델)을 담고, 에디션이 필요한 만큼 가져다 쓴다.
 
-### 5.2 저장소 구조(안) — 부트스트랩 자산 포함
+### 5.2 저장소 구조 (현행)
 
 ```
 open-agent-os/
 ├── README.md / README.ko.md     # 진입점(사람+에이전트). 에디션 소개 + 부트스트랩 블록
 ├── START-HERE.md                # 에이전트용 정밀 절차(스킬 설치→선택→설치→검증)
-├── skills/
-│   └── oaos-bootstrap/SKILL.md  # 부트스트랩 스킬(오케스트레이터)
+├── skills/                      # oaos-bootstrap(오케스트레이터)·oaos-ops + 선택 스킬
+├── harness/templates/           # SOUL/USER/MEMORY/AGENTS 초안 템플릿
 ├── editions/
-│   ├── personal/  install.sh · skills/ · README
-│   ├── project/   install.sh · skills/ · README
-│   └── company/   install.sh · skills/ · README   # Company 확장·systemd 설치
+│   ├── personal/  install.sh · computer-use-policy.sh · README
+│   ├── project/   install.sh · native-stack.sh · systemd/ · ingress/ · README
+│   └── company/   install.sh · cNN.sh · cNN-verify.sh · cNN-readback.sql · migrations/ · *.py · README
 ├── bootstrap/
-│   ├── lib/                     # 점검·시크릿·로그·체크포인트 공통
-│   └── verify/                  # personal·project·company 최종 테스트
-├── docs/
-│   ├── architecture-v2.0.md     # v2 정본 설계서(본 문서)
-│   ├── editions/                # 에디션별 설치·운영 문서(공통 표기 원칙으로 재작성)
-│   └── faq.md                   # 온보딩·설치 오류 FAQ(지속 갱신)
-└── (P2 검토) core/runtime 분해·기존 자산 재배치
+│   ├── lib/                     # common.sh(점검·시크릿·로그·체크포인트) · platform.sh(OS 레인)
+│   ├── verify/                  # personal·project·company 최종 테스트
+│   ├── migrate/                 # personal-to-project · project-to-company
+│   └── tests/                   # 스모크(무DB + pg_virtualenv DB 스모크) — CI 실행
+├── docs/                        # 최종본 설계 문서(버전 없는 파일명)
+└── .github/workflows/           # Personal 3-OS 매트릭스 · Company/Project 스모크
 ```
 
-- **P0~P1 원칙**: 기존 디렉터리는 건드리지 않고 **추가만** 한다(README·skills·editions·bootstrap 신설). 대규모 재배치(core/runtime 분해)는 **P2에서 승인 후** 진행.
+- **구조 원칙**: 공개 저장소는 2026-09-25 리포 분리로 v2 표면만 남겼다. 구 플랫폼 코드는 비공개 `open-agent-os-platform`에 보존하고, Company는 필요한 부분만 `editions/company`로 선별 흡수한다(core/runtime 분해 계획은 폐기 — §8 #4).
 - Company 에디션 install.sh는 Project의 apt/시스템 패키지·단일 서버·systemd 운영 패턴을 승계해 무Docker·systemd 단일 경로로 설치한다. 별도 플랫폼의 Docker·Kubernetes 배포 경로는 흡수하지 않는다.
 - 저장소에는 **공유판**(호스트·경로 등 환경 정보 제거)만 싣는다 — 상세 실측 자료는 공개판에 포함하지 않는다.
 
@@ -286,16 +286,21 @@ open-agent-os/
 
 ## 7. 로드맵
 
-| 단계 | 범위 | 완료 판정(증거) |
+개발 트랙(D)과 실설치 검증 트랙(V)을 분리한다(2026-11-16 결정). D는 코드·정책·자동 테스트(CI)로 완료 판정하고, V는 실기기·실서버 증거로 별도 판정한다. V가 끝나지 않았다는 이유로 D를 미완료로 표기하지 않으며, 반대로 D 완료를 실설치 검증 완료로 표기하지도 않는다.
+
+| 단계 | 범위 | D 완료 판정(코드·CI) | 현황(2026-11-16) |
+|---|---|---|---|
+| **P0 — Personal** | README/START-HERE · `skills/oaos-bootstrap` · `editions/personal` · `bootstrap/verify/personal` · 3-OS 레인 | 3-OS CI 매트릭스 + 스모크 PASS | D 완료(CI 통과) |
+| **P1 — Project** | install/verify(project) · 네이티브 systemd 스택 · nginx/TLS · Personal→Project 이전 | Project 스모크 + Personal→Project 이전 스모크 PASS | Project 스모크 PASS · 이전 스모크 미작성(개발 중) |
+| **P2 — Company** | C01~C17 · 선택 연동(G11·G12) · 멀티 LLM 라우팅(G13) · 정책·승인·감사·Vault·ACL 검색·콘솔 | Phase별 DB 스모크 + read-back SQL PASS(CI) | C01~C17 main 병합 · CI 스모크 PASS |
+
+| V 트랙(별도·후속) | 대상 | 완료 판정(증거) |
 |---|---|---|
-| **P0 — 부트스트랩 MVP (Personal)** | README/START-HERE 재작성 · `skills/oaos-bootstrap` · `editions/personal/install.sh` · `bootstrap/verify/personal` | 클린 환경(미니PC/VM)에서 URL 1개로 착수→개입 게이트 ≤5회→verify 전 항목 PASS 실증 |
-| **P1 — Project 적층** | install/verify(project) · 도메인·nginx·TLS 자동화 · Personal→Project 이전 스크립트 · Project 설치·운영 문서 등재 | 신규 VPS에서 E2E 완주 + 확장 경로 실증 |
-| **P2 — Company 에디션** | 필요한 기존 자산 선별 흡수 · 선택형 연동(Slack·Notion — 사용 조직 한정) · 멀티 LLM 라우팅 · 권한·감사 · 대상 테스트 이식 | Phase별 대상 테스트·하위 시스템 회귀 통과 + 별도 전체 회귀(대상 범위는 P2 착수 시 확정) 통과 + 런타임 read-back |
+| V1 | Personal 실기기(Ubuntu 미니PC·macOS·Windows 11) | URL 1개 → 게이트 ≤5 → verify PASS + 재부팅/로그인 생존 |
+| V2 | Project 신규 VPS | 전 게이트 E2E + Personal→Project 이전 실증 |
+| V3 | Company 실설치 환경 E | C01→C17 실행 + `company-verify.sh` read-back + 복구 시험 |
 
-- 모든 단계는 **실측 명령 출력·리드백**으로만 완료 판정(문서·구두 보고 금지).
-- P0 착수 전 승인 필요 항목: 리뉴얼 브랜치 분기 — 완료 · 라이선스 방침 — **확정**(§8).
-
----
+- 모든 판정은 **실측 명령 출력·리드백**으로만 한다(문서·구두 보고 금지).
 
 ## 8. 미결 결정 사항
 
@@ -304,8 +309,10 @@ open-agent-os/
 | 1 | 라이선스 | **해소(2026-09-25)** — Personal·Project: Apache 2.0 / Company: BSL 1.1 유지 | "누구나" 확산 목표와 상용 보호의 균형 |
 | 2 | 제품/에디션 명칭 | OAOS 유지 + Personal/Project/Company 표기 (확정안) | 개인용 카테고리 표기는 별도 검토 |
 | 3 | 스킬 배포 문법 | **해소** — `hermes skills install`이 identifier·SKILL.md 직링크 지원(2026-09-25 실측, v0.21.5) | 저장소 푸시 후 P0 실설치 확인만 잔여 |
-| 4 | 저장소 물리 재배치 | 추가만(P0~P1) → core/runtime 분해(P2) | 대규모 이동은 위험·공수 큼 |
-| 5 | Company 착수 시점 | P2 게이트 | 기존 OAOS 유지보수 병행 범위 확정 필요 |
+| 4 | 저장소 물리 재배치 | **해소(2026-09-25)** — 리포 분리로 대체: 공개 v2 표면 / 비공개 플랫폼 보존 · core/runtime 분해 안 함 | Company는 `editions/company` 선별 흡수 |
+| 5 | Company 착수 시점 | **해소** — 2026-09-27 착수, C01~C17 2026-10-18 병합 | 구 플랫폼은 유지보수만(신규 개발 없음) |
+| 6 | 실설치 검증 시점 | **결정(2026-11-16)** — 개발 트랙과 분리해 V 트랙으로 후속 진행(§7) | — |
+| 7 | 설계 문서 관리 | **결정(2026-11-16)** — 버전 없는 최종본 1개 유지, 이력은 git·부록 D | 위키 사본도 동일 원칙 |
 
 ---
 
@@ -314,7 +321,7 @@ open-agent-os/
 | 자료 | 위치 | 비고 |
 |---|---|---|
 | Hermes Agent 공식 | https://hermes-agent.nousresearch.com/docs | 설치·문서 |
-| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | 저장소 태그 v2.1.0 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
+| Open Agent OS 저장소 | https://github.com/openit-ai/open-agent-os | 최신 릴리스는 GitHub Releases 참조 · Apache 2.0(Personal·Project) · BSL 1.1(Company) |
 | OpenCode Go | https://opencode.ai/go | 요금·모델 |
 | Vercel AI Gateway | https://vercel.com/docs/ai-gateway/pricing | 무료 크레딧·요금 |
 | Telegram Bot API | https://core.telegram.org/bots/api | Local Bot API 서버 |
@@ -342,3 +349,11 @@ open-agent-os/
 | Hermes Agent 버전 | v0.21.5 (2026.9.24) | 로컬 설치 실측 | 2026-09-25 |
 
 > Google Workspace·Microsoft 365·Slack·Notion 등 기존 사용 서비스의 요금은 본 솔루션 비용이 아니므로(§0-1 원칙 3) 이 일람에서 제외한다.
+
+## 부록 D. 개정 이력
+
+| 버전 | 날짜 | 내용 |
+|---|---|---|
+| v2.0 | 2026-09-25 | 3-에디션·URL 부트스트랩 재설계 최초본 |
+| v2.0.x | 2026-09-26~27 | 무Docker·systemd 정합, Personal 지원 OS(Ubuntu·macOS·Windows 11) 반영 |
+| v2.1 | 2026-11-16 | 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |

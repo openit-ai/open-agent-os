@@ -1,6 +1,6 @@
 # OAOS Company(P2) 제품화 계획 v1.0
 
-> 상태: 계획. 이 문서의 Phase와 게이트는 구현·실설치 완료 증거가 아니다. 제품 방향의 정본은 [아키텍처 v2.0](architecture-v2.0.md), 현재 공개 안내는 [Company README](../editions/company/README.md)다.
+> 상태: 계획. 이 문서의 Phase와 게이트는 구현·실설치 완료 증거가 아니다. 제품 방향의 정본은 [아키텍처 v2.0](architecture.md), 현재 공개 안내는 [Company README](../editions/company/README.md)다.
 >
 > **표기**: OAOS = Open Agent OS · `E` = 실설치 대상 환경(Company 검증 인스턴스) · `S` = 검증용 연동 계정(Slack·Notion·Workspace·365).
 
@@ -68,13 +68,13 @@ Company는 5~50인 중소기업을 위한 **Project + 거버넌스 레이어**�
 | C16 | G13과 선택 라우팅; 승인된 정액 모델·실패 대체 | E+기존 LLM 플랜 | `bash editions/company/install.sh --stage c16` → `bash bootstrap/verify/company-verify.sh --phase c16 --read-back`; 실제 기본/선택 모델 응답·실패 대체·owner·비용 설정 출력 | C05·C07 | 1일 |
 | C17 | Company 최종 검증·운영 인계; 백업·복구·회수 절차 | E+선택한 S | `bash editions/company/install.sh --stage c17` → `bash bootstrap/verify/company-verify.sh --phase c17 --read-back`; 설치 상태·systemd·백업 복구·재부팅 생존·외부 왕복의 실제 출력 수집 | C10·C15·C16 | 1일 |
 
-Phase별 대상 테스트와 하위 시스템 회귀를 먼저 돌리고, P2 통합 판정에서는 [아키텍처 v2.0 로드맵](architecture-v2.0.md)의 전체 회귀·런타임 리드백 요구를 별도 수행한다. 설치·유지보수는 Project의 apt/시스템 패키지, 단일 서버와 systemd 운영 패턴을 우선 재사용한다. 별도 플랫폼의 Docker·Kubernetes 배포 경로는 흡수하지 않는다. 아키텍처 v2.0 §5.2의 과거 배포 예시 중 Docker 호출 문구는 이번 Company의 **무Docker·systemd** 결정과 다르다. **C01 착수 전** 정본 문구를 무Docker·systemd로 정합 수정하는 것을 선행 게이트로 둔다(문서 수정은 별도 작업).
+Phase별 대상 테스트와 하위 시스템 회귀를 먼저 돌리고, P2 통합 판정에서는 [아키텍처 v2.0 로드맵](architecture.md)의 전체 회귀·런타임 리드백 요구를 별도 수행한다. 설치·유지보수는 Project의 apt/시스템 패키지, 단일 서버와 systemd 운영 패턴을 우선 재사용한다. 별도 플랫폼의 Docker·Kubernetes 배포 경로는 흡수하지 않는다. 아키텍처 v2.0 §5.2의 과거 배포 예시 중 Docker 호출 문구는 이번 Company의 **무Docker·systemd** 결정과 다르다. **C01 착수 전** 정본 문구를 무Docker·systemd로 정합 수정하는 것을 선행 게이트로 둔다(문서 수정은 별도 작업).
 
 모든 Phase의 완료 기록에는 **대상 환경(E/S), 설치 명령의 종료 코드·상태 출력, 추가 확인 명령의 응답, 실행 시각, 원복 결과**를 남긴다. S가 필요한 Phase에서 실제 서비스 접근이 준비되지 않으면 단위 테스트가 통과해도 `미완료/확인 필요`다. 이미 운영 중인 Project 호스트를 쓰더라도 기존 서비스 중단·데이터 변경이 필요한 경우에는 해당 작업의 영향과 원복을 먼저 검토한다. 새 서버·추가 구독·새 비용이 발생하는 대안은 **승인 필요**다.
 
 ## 5. 설치·개입 게이트 G10~G13
 
-[아키텍처 v2.0 §2.3](architecture-v2.0.md)의 순서인 **① 클릭 가능한 링크 → ② 필요한 이유 한 줄 → ③ 붙여넣을 값의 정확한 지정**을 화면·채팅에 그대로 적용한다. 모든 링크는 실행 시 실제 조직의 HTTPS 주소 또는 아래 공식 콘솔 주소로 제공한다. 제공 값은 즉시 검증하고 조직 앱·API 키는 `.env`(600)에만 보관하며 채팅·로그·문서에는 재출력하지 않는다. 개인 OAuth 토큰은 owner 결속 Secret Vault에 저장하는 상세설계가 필요하다. 실패 시 실패 이유와 같은 재시도 링크를 제공한다. 게이트는 선택 또는 제공뿐이고 파일 편집·명령 실행은 설치기가 맡는다.
+[아키텍처 v2.0 §2.3](architecture.md)의 순서인 **① 클릭 가능한 링크 → ② 필요한 이유 한 줄 → ③ 붙여넣을 값의 정확한 지정**을 화면·채팅에 그대로 적용한다. 모든 링크는 실행 시 실제 조직의 HTTPS 주소 또는 아래 공식 콘솔 주소로 제공한다. 제공 값은 즉시 검증하고 조직 앱·API 키는 `.env`(600)에만 보관하며 채팅·로그·문서에는 재출력하지 않는다. 개인 OAuth 토큰은 owner 결속 Secret Vault에 저장하는 상세설계가 필요하다. 실패 시 실패 이유와 같은 재시도 링크를 제공한다. 게이트는 선택 또는 제공뿐이고 파일 편집·명령 실행은 설치기가 맡는다.
 
 | 게이트 | ① 클릭 링크 | ② 왜 필요한지(표시할 한 줄) | ③ 정확히 받을 값·행동 | 검증·재개 |
 |---|---|---|---|---|

@@ -108,4 +108,4 @@ Project 설치·검증·Personal 이전 스크립트가 제공됩니다. 신규 
 ## 관련 문서
 
 - [부트스트랩 스킬](../../skills/oaos-bootstrap/SKILL.md) · [게이트 레퍼런스](../../skills/oaos-bootstrap/references/gates.md)
-- [FAQ](../../docs/faq.md) · [설계서](../../docs/architecture-v2.0.md)
+- [FAQ](../../docs/faq.md) · [설계서](../../docs/architecture.md)
