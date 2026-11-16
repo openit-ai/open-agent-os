@@ -88,7 +88,7 @@ mkdir -p "$temp_root/rollback" && chmod 700 "$temp_root/rollback"
 export OAOS_COMPANY_ROLLBACK_DIR="$temp_root/rollback" OAOS_COMPANY_PG_SOCKET_DIR=/tmp
 export OAOS_FAKE_DB_STATE="$temp_root/db-checksum" OAOS_FAKE_DB_LOG="$temp_root/db-log"
 code=0
-HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test OAOS_COMPANY_ROLLBACK_DIR= bash "$install" --stage c01 > /dev/null 2>&1 || code=$?
+HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test OAOS_COMPANY_ROLLBACK_DIR='' bash "$install" --stage c01 > /dev/null 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'C01 without a rollback directory must block'
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" PGDATABASE=company_test bash "$install" --stage c01 > "$temp_root/first"
 [[ $(wc -l < "$OAOS_FAKE_DB_LOG") == 1 ]] || fail 'only C01 migration should be applied'

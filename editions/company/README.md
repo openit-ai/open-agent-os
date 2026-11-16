@@ -282,6 +282,58 @@ bash bootstrap/migrate/project-to-company.sh --source user@project-host --includ
 - 기존 대상은 `.backup-<timestamp>`로 보존한 뒤 교체하고, Project 원본은 건드리지 않습니다. 복구 지점은 실행 요약에 출력됩니다.
 - 공용 위키는 출처 ACL이 확인된 문서만 Company 게이트에서 색인하고, 개인 위키는 소유 확인 뒤 개인 namespace로 복사합니다. 테스트: `bash bootstrap/tests/project-to-company-migrate-smoke.sh`.
 
+## 파일 구성
+
+```
+editions/company/
+├── install.sh            # 공개 진입점: --stage cNN / --status / --dry-run (표 기반 분기)
+├── README.md
+├── stages/cNN.sh         # Phase별 company_cNN_apply (C11~C14 공통: stages/adapters.sh)
+├── verify/cNN-verify.sh  # Phase별 read-back (C11~C15: verify/adapters-verify.sh)
+├── readback/*.sql        # read-back SQL (항상 ROLLBACK, 통과한 구간마다 "oaos-check" 표시)
+├── app/                  # E에 설치되는 Python 앱·백업/보존 작업 스크립트
+├── lib/company.sh        # 유지보수 계정 실행·덤프, 세션 문맥 SQL, G10 관리자 조회 등 공용 도우미
+├── lib/stage.sh          # C03+ 공통 골격: 선행 Phase → 설정·사전 점검 → DB·역할 → 스냅샷 덤프 → migrate
+├── lib/migrate.sh        # 체크섬 마이그레이션 실행기 (쓰기 실행은 pg_advisory_lock으로 직렬화)
+└── migrations/           # 001~020 + db-roles.sql (라이선스·이름 변경: migrations/README.md)
+```
+
+`bootstrap/verify/company-verify.sh`와 `bootstrap/migrate/project-to-company.sh`가 공개 진입점입니다. Company 실행 로그는 공용 설치 로그가 아니라 `~/.oaos/logs/company-<날짜>.log`에 남습니다(`OAOS_LOG_NAME`). Project 설치 상태를 읽는 곳은 `stages/c01.sh`의 `company_c01_project_ready` 하나입니다. C09 콘솔(`app/console.py`, 010 함수)은 C10이 `app/console_app.py`(011/020 함수)로 유닛을 교체하는 임시 콘솔이며, 두 앱은 HTTP 경로와 DB 계약이 달라 합치지 않았습니다.
+
+### 마이그레이션 ↔ Phase
+
+| 버전 | 파일 | 적용 Phase | 내용 |
+|---|---|---|---|
+| 001 | `001_company_schema.sql` | C01 (libpq 역할) | 스키마·FORCE RLS |
+| 002 | `002_member_mapping.sql` | C03 | 구성원·외부 계정 매핑 |
+| 003 | `003_personal_assistants.sql` | C04 | 개인비서 |
+| 004 | `004_personal_secrets.sql` | C05 | 개인 자격 봉투 |
+| 005 | `005_llm_routing.sql` | C06 이후 경로(C16 계약) | LLM 라우팅 스키마 |
+| 006 | `006_identity_isolation.sql` | C06 | owner==credential==provider==output |
+| 007 | `007_integration_adapters.sql` | C07 이후 경로, C11~C14 | 연동 어댑터 |
+| 008 | `008_policy_approval_audit.sql` | C07, C16 | 정책·JIT 승인·감사 |
+| 009 | `009_acl_search.sql` | C08 | ACL 검색 |
+| 010 | `010_company_console.sql` | C09 | 최소 콘솔 |
+| 011 | `011_console_g10_setup.sql` (구 `011_company_console.sql`) | C10 | G10·로그인 |
+| 012 | `012_handover_backup_recovery.sql` | C17 | 인계·백업·복구 |
+| 013 | 보정, 기준 2 | C03+ | 런타임 권한 경계 |
+| 014 | 보정, 기준 4 | C05+ | 정지·퇴사 시 자격 철회 |
+| 015 | 보정, 기준 8 | C07+ | 승인·감사·정책 강화 |
+| 016 | 보정, 기준 8 | C07+ | G13 과금 승인 |
+| 017 | 보정, 기준 9 | C08+ | ACL 만료 상한 |
+| 018 | 보정, 기준 12 | C17 | 보존·상태 무관 철회 |
+| 019 | 보정, 기준 1 | C03+ (소유 역할 경로) | 구성원 쓰기 경계(O1) |
+| 020 | 보정, 기준 11 | C10+ | 콘솔 호출자 검사(O6) |
+
+Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C10 11, C11~C14 7, C16 8, C17 12. 버전이 연속이므로 `--through N`은 N 이하의 미적용 기준 버전도 함께 적용하고, 보정은 기준 버전이 N 이하일 때 소유 역할 경로(C02 이후)에서 적용됩니다.
+
+### 역할과 쓰기 경계
+
+- `oaos_company_owner`(NOLOGIN): 스키마와 모든 객체의 소유자. 유지보수 경로의 `SET ROLE`과 검증하는 SECURITY DEFINER 함수 안에서만 동작합니다.
+- `oaos_company_runtime`(NOLOGIN 그룹)과 libpq `PGUSER`: FORCE RLS 아래 DML, 감사는 SELECT/INSERT만.
+- 구성원 행(019): 같은 조직은 읽기만, 쓰기는 그 조직의 활성 관리자 세션 또는 소유 역할만. 구성원이 없는 조직의 첫 관리자 자기 등록만 예외이며, 누구도 자기 역할·상태를 바꾸지 못합니다.
+- 콘솔(020): 매핑·완료 함수는 세션 문맥(`company.org_id`/`company.member_id`)의 관리자와 일치해야 하고, 코드 없는 세션 발급은 G10 초기 관리자에게만, 로그인 코드·세션 행은 본인 또는 조직 관리자만 씁니다.
+
 ## 상태
 
 Company 통합은 **P2 로드맵**입니다 — 필요한 자산 선별 흡수 + 선택 연동 + 멀티 LLM 라우팅 + 최종 검증·운영 인계가 순차 반영됩니다. 현재는 Personal → Project 순서로 구축하며, Company는 같은 코어 위에 거버넌스를 얹는 구조입니다. C01~C17 설치기·마이그레이션·read-back이 공개 트리에 있고, 각 Phase는 E 실설치와 read-back 증거가 있어야 `verified`가 됩니다. 정책·JIT 승인·Secret Vault·ACL 검색·LLM 라우팅은 **DB 수준 강제**(함수·트리거·RLS)로 구현되어 있으며, 이를 실제 비서 요청 경로에 연결하는 런타임 서비스 API·콘솔 승인 화면·OAuth 콜백·Slack 이벤트 수신은 아직 연결 전입니다. 선택 연동은 실제 외부 왕복 증거 없이 `verified`가 되지 않습니다.

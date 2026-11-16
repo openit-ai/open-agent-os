@@ -150,7 +150,7 @@ bash bootstrap/verify/company-verify.sh --phase cNN --read-back
 
 ## 10. 위협·완화·증거 (2026-11 보안 감사 반영)
 
-독립 감사가 지적한 위협과 현재 구현의 완화, 그리고 그 완화를 실제 DB·서비스 응답으로 확인하는 read-back/smoke 증거를 한 표에 둔다. 마이그레이션 013 이후는 기준 버전을 고치는 **보정**이며 `-- oaos-applied-with: N` 머리글의 기준 버전 N을 적용하는 Phase부터 적용된다(적용된 001~012는 수정하지 않는다). 증거 열의 파일은 `editions/company/`와 `bootstrap/tests/` 기준이다.
+독립 감사가 지적한 위협과 현재 구현의 완화, 그리고 그 완화를 실제 DB·서비스 응답으로 확인하는 read-back/smoke 증거를 한 표에 둔다. 마이그레이션 013 이후는 기준 버전을 고치는 **보정**이며 `-- oaos-applied-with: N` 머리글의 기준 버전 N을 적용하는 Phase부터 적용된다(적용된 001~012는 수정하지 않는다). 증거 열의 파일은 `editions/company/`(read-back SQL은 `readback/`, read-back 스크립트는 `verify/`, 마이그레이션은 `migrations/`; 구성과 마이그레이션↔Phase 표는 [Company README](../editions/company/README.md#파일-구성))와 `bootstrap/tests/` 기준이다.
 
 | # | 위협 | 완화 | 증거 |
 |---|---|---|---|
@@ -171,6 +171,7 @@ bash bootstrap/verify/company-verify.sh --phase cNN --read-back
 | T15 | 요청 단위 추적 불가(이벤트마다 임의 request_id) | 015 `company.request_id` GUC, 콘솔이 HTTP 요청마다 설정 | `c07-readback.sql` 요청 ID 공유 |
 | T16 | 001 `member_scope`가 조직 내 모든 세션에 `members` 쓰기 허용(구성원 자기 관리자 승격·타 구성원 정지·매핑 변경) — O1 | 019 읽기/쓰기 정책 분리: 쓰기는 조직의 활성 관리자 또는 소유 역할(검증하는 SECURITY DEFINER 함수·유지보수 경로)만, 구성원이 없는 조직의 첫 관리자 자기 등록만 예외; 본인 역할·상태 변경 트리거 거부 | C01 read-back(019 적용 후 매 Phase) 자기 승격·타 구성원 수정·삭제·관리자 생성·조직 간 쓰기 거부, 관리자 자기 강등 거부 |
 | T17 | 011 콘솔 SECURITY DEFINER 함수가 인수의 행위자를 신뢰(`console_add_member`·`console_complete_setup`), 코드 없이 아무 구성원 세션 발급(`console_open_session`), 런타임이 `console_bootstrap` 표지를 직접 켜 타 조직 조회, 구성원이 관리자용 로그인 코드·세션 행 직접 저장 — O6 | 020: 15개 함수 검토, 행위자를 세션 문맥(`company.org_id`/`member_id`)에 결속, `console_open_session`은 G10 `admin_created` 초기 관리자만, 내부 도우미 3개 런타임 EXECUTE 회수, 표지 정책은 소유 역할 안에서만, `console_sessions`·`console_login_codes` 쓰기는 본인·조직 관리자·정의자 함수만 | `c10-readback.sql` 문맥 밖 행위자·구성원 대리 호출·무코드 세션·관리자용 코드/세션 저장·표지로 타 조직 조회 거부 |
+| T18 | 동시에 실행된 두 설치기가 같은 미적용 버전을 함께 보고 경합 적용 | `lib/migrate.sh` 쓰기 실행은 이력 확인 전부터 끝날 때까지 `pg_advisory_lock` 보유(`--check`는 잠금 없음, 대기 상한 `OAOS_COMPANY_MIGRATE_LOCK_TIMEOUT`) | `company-c03-smoke.sh` 잠금 보유 중 거부·해제 후 적용 |
 
 **알려진 미해결 위협**(완화 전, 확인 필요):
 
