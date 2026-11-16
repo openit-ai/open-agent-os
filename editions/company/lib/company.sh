@@ -112,3 +112,27 @@ company_phase_list() {
   done
   printf '%s' "$out"
 }
+
+# company_readback <sql file> [psql option...]
+# Runs a read-back file as the runtime role. A read-back marks every section
+# that really passed with RAISE NOTICE / \echo "oaos-check: <name>", so the
+# verify scripts print a PASS line only for a check whose query answered.
+# COMPANY_READBACK holds the emitted names; the output itself is discarded.
+COMPANY_READBACK=''
+company_readback() {
+  local file=$1 output rc=0
+  shift
+  output=$(psql -X -q -v ON_ERROR_STOP=1 "$@" -f "$file" 2>&1) || rc=$?
+  COMPANY_READBACK=$(printf '%s\n' "$output" | sed -n 's/^.*oaos-check: \([a-z0-9_]*\).*$/\1/p')
+  return "$rc"
+}
+company_readback_passed() { [[ $'\n'$COMPANY_READBACK$'\n' == *$'\n'"$1"$'\n'* ]]; }
+# company_readback_line <number> <check label> <marker> <evidence>
+# Prints one result row and counts it in the caller's pass/fail variables.
+company_readback_line() {
+  if company_readback_passed "$3"; then
+    printf '%-3s %-24s %-7s %s\n' "$1" "$2" PASS "$4"; pass=$((pass + 1))
+  else
+    printf '%-3s %-24s %-7s %s\n' "$1" "$2" FAIL "$4"; fail=$((fail + 1))
+  fi
+}
