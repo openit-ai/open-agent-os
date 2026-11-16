@@ -295,7 +295,7 @@ editions/company/
 ├── lib/company.sh        # 유지보수 계정 실행·덤프, 세션 문맥 SQL, G10 관리자 조회 등 공용 도우미
 ├── lib/stage.sh          # C03+ 공통 골격: 선행 Phase → 설정·사전 점검 → DB·역할 → 스냅샷 덤프 → migrate
 ├── lib/migrate.sh        # 체크섬 마이그레이션 실행기 (쓰기 실행은 pg_advisory_lock으로 직렬화)
-└── migrations/           # 001~020 + db-roles.sql (라이선스·이름 변경: migrations/README.md)
+└── migrations/           # 001~021 + db-roles.sql (라이선스·이름 변경: migrations/README.md)
 ```
 
 `bootstrap/verify/company-verify.sh`와 `bootstrap/migrate/project-to-company.sh`가 공개 진입점입니다. Company 실행 로그는 공용 설치 로그가 아니라 `~/.oaos/logs/company-<날짜>.log`에 남습니다(`OAOS_LOG_NAME`). Project 설치 상태를 읽는 곳은 `stages/c01.sh`의 `company_c01_project_ready` 하나입니다. C09 콘솔(`app/console.py`, 010 함수)은 C10이 `app/console_app.py`(011/020 함수)로 유닛을 교체하는 임시 콘솔이며, 두 앱은 HTTP 경로와 DB 계약이 달라 합치지 않았습니다.
@@ -324,6 +324,7 @@ editions/company/
 | 018 | 보정, 기준 12 | C17 | 보존·상태 무관 철회 |
 | 019 | 보정, 기준 1 | C03+ (소유 역할 경로) | 구성원 쓰기 경계(O1) |
 | 020 | 보정, 기준 11 | C10+ | 콘솔 호출자 검사(O6) |
+| 021 | 보정, 기준 11 | C10+ | 콘솔 잠금·설정 코드·설정 표 쓰기는 정의자 함수 전용(O9) |
 
 Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C10 11, C11~C14 7, C16 8, C17 12. 버전이 연속이므로 `--through N`은 N 이하의 미적용 기준 버전도 함께 적용하고, 보정은 기준 버전이 N 이하일 때 소유 역할 경로(C02 이후)에서 적용됩니다.
 
@@ -333,6 +334,7 @@ Phase별 `--through`: C01 1, C03 2, C04 3, C05 4, C06 6, C07 8, C08 9, C09 10, C
 - `oaos_company_runtime`(NOLOGIN 그룹)과 libpq `PGUSER`: FORCE RLS 아래 DML, 감사는 SELECT/INSERT만.
 - 구성원 행(019): 같은 조직은 읽기만, 쓰기는 그 조직의 활성 관리자 세션 또는 소유 역할만. 구성원이 없는 조직의 첫 관리자 자기 등록만 예외이며, 누구도 자기 역할·상태를 바꾸지 못합니다.
 - 콘솔(020): 매핑·완료 함수는 세션 문맥(`company.org_id`/`company.member_id`)의 관리자와 일치해야 하고, 코드 없는 세션 발급은 G10 초기 관리자에게만, 로그인 코드·세션 행은 본인 또는 조직 관리자만 씁니다.
+- 콘솔 표(021): `console_lockouts`·`console_setup_codes`·`console_setup`은 런타임이 읽기만 하고, 쓰기는 011/020 정의자 함수만 합니다(잠금 직접 해제·대기 중 G10에 코드 직접 추가 차단). C10 read-back은 유지보수 경로에서 런타임 역할로 `SET ROLE`해 검사하고, 만료된 설정 코드 고정값만 소유 역할로 씁니다.
 
 ## 상태
 

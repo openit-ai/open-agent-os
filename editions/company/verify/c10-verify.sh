@@ -128,8 +128,15 @@ company_c10_verify() {
   printf '%-30s PASS\n' 'Console service and loopback health'
   if [[ $complete != t ]]; then
     # The SQL contract creates a fixture organization, which the single-org
-    # G10 flow only accepts before the real setup completes.
-    if ! psql -X -q -v ON_ERROR_STOP=1 \
+    # G10 flow only accepts before the real setup completes. It runs through
+    # the maintenance path so the fixtures the runtime may no longer write
+    # (021) use the owner role; every check itself runs as the runtime login.
+    local runtime
+    runtime=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT current_user' 2>/dev/null) || runtime=''
+    if [[ ! $runtime =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || ! company_maint_socket_ok ||
+       ! company_maint psql --host="$(company_maint_socket)" --port="${PGPORT:-5432}" \
+        --dbname="$PGDATABASE" -X -q -v ON_ERROR_STOP=1 -v runtime="$runtime" \
+        -v owner="$OAOS_COMPANY_DB_OWNER" \
         -f "$repo_root/editions/company/readback/c10-readback.sql" >/dev/null 2>&1; then
       printf '%-30s FAIL\n' 'G10 setup/login SQL contract'
       printf 'Summary: PASS=3 FAIL=1 MANUAL=0 SKIP=0\n'

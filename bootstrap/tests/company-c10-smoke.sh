@@ -241,6 +241,16 @@ print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c10']['status'])
 PY
 ) == applied ]] || fail 'MANUAL read-back must keep C10 applied'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c10-%'") == 0 ]] || fail 'fixture rollback'
+# O9 (migration 021): the runtime role cannot lift a lockout or store a setup
+# code; the read-back fails when such a write is possible again.
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.schema_migrations WHERE version = 21") == 1 ]] || fail 'migration 021 applied'
+! psql -X -q -v ON_ERROR_STOP=1 -c 'DELETE FROM company.console_lockouts' >/dev/null 2>&1 || fail 'runtime deleted console_lockouts'
+! psql -X -q -v ON_ERROR_STOP=1 -c "INSERT INTO company.console_setup_codes(org_id, project_user_id, code_hash, expires_at, request_id) VALUES (gen_random_uuid(), 'x', repeat('a', 64), now() + interval '1 minute', 'r')" >/dev/null 2>&1 || fail 'runtime inserted console_setup_codes'
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'GRANT DELETE ON company.console_lockouts TO oaos_company_runtime' >/dev/null
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/o9-regressed" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Fq 'G10 setup/login SQL contract' "$temp_root/o9-regressed" || { cat "$temp_root/o9-regressed" >&2; fail 'read-back must fail when the runtime can delete lockouts'; }
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'REVOKE DELETE ON company.console_lockouts FROM oaos_company_runtime' >/dev/null
 # A plain-HTTP-only console (no working HTTPS path) fails the G10 link check.
 code=0
 OAOS_C10_NO_TLS=1 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/no-https" 2>&1 || code=$?
