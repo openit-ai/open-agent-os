@@ -62,10 +62,21 @@ company_db_runtime_boundary() {
 company_c02_unit_ready() {
   [[ $(systemctl --user is-enabled "$1" 2>/dev/null || true) == enabled && $(systemctl --user is-active "$1" 2>/dev/null || true) == active ]]
 }
+# Runs the real job through systemd and checks what it produced: a fresh
+# last-success stamp, a readable custom-format dump, and 0700/0600 modes.
 company_c02_backup_job() {
+  local dir=${OAOS_COMPANY_BACKUP_DIR:-/nonexistent} key_dir=${OAOS_COMPANY_KEY_BACKUP_DIR:-/nonexistent}
+  local started stamp latest
+  started=$(date -u +%Y%m%dT%H%M%SZ)
   systemctl --user start oaos-company-backup.service >/dev/null 2>&1 || return 1
   [[ $(systemctl --user show oaos-company-backup.service -p Result --value 2>/dev/null) == success ]] || return 1
-  [[ -s ${OAOS_COMPANY_BACKUP_DIR:-/nonexistent}/last-success ]]
+  [[ -s $dir/last-success ]] || return 1
+  stamp=$(< "$dir/last-success")
+  [[ $stamp =~ ^[0-9]{8}T[0-9]{6}Z$ && ! $stamp < $started ]] || return 1
+  latest="$dir/company-$stamp.dump"
+  [[ -s $latest ]] && pg_restore --list "$latest" >/dev/null 2>&1 || return 1
+  [[ $(stat -c %a "$dir") == 700 && $(stat -c %a "$key_dir") == 700 ]] || return 1
+  ! find "$dir" "$key_dir" -maxdepth 1 -type f ! -perm 0600 | grep -q .
 }
 company_c02_linger() { [[ $(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null) == yes ]]; }
 company_c02_env_mode() {
@@ -111,7 +122,7 @@ company_c02_verify() {
   local pass=0 fail=0 cert host
   [[ $(stage_status c02) == applied || $(stage_status c02) == verified ]] || { warn 'C02 has not been applied.'; return 3; }
   company_c02_load_settings || { warn 'C02 deployment settings are missing or invalid.'; return 3; }
-  if ! { have_cmd systemctl && have_cmd loginctl && have_cmd ss && have_cmd curl && have_cmd sha256sum; }; then warn 'C02 read-back commands unavailable.'; return 3; fi
+  if ! { have_cmd systemctl && have_cmd loginctl && have_cmd ss && have_cmd curl && have_cmd sha256sum && have_cmd pg_restore; }; then warn 'C02 read-back commands unavailable.'; return 3; fi
   printf '%-27s %s\n' CHECK RESULT
   company_c02_check 'Service enabled/active' company_c02_unit_ready oaos-company.service
   company_c02_check 'Backup timer enabled/active' company_c02_unit_ready oaos-company-backup.timer
