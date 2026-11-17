@@ -33,7 +33,7 @@ mkdir -p "$mirror"
 for command_path in /usr/bin/* /bin/*; do
   [[ -f $command_path || -L $command_path ]] || continue
   name=${command_path##*/}
-  [[ -e $mirror/$name || $name == himalaya || $name == hermes ]] || ln -s -- "$command_path" "$mirror/$name"
+  [[ -e $mirror/$name || -L $mirror/$name || $name == himalaya || $name == hermes ]] || ln -s -- "$command_path" "$mirror/$name"
 done
 for name in systemctl loginctl ss; do rm -f -- "$mirror/$name"; printf '#!/usr/bin/env bash\nexit 0\n' > "$mirror/$name"; chmod 700 "$mirror/$name"; done
 [[ ! -e $mirror/himalaya && -x $mirror/python3 ]] || fail 'PATH mirror invalid'
