@@ -332,7 +332,8 @@ HOME="$custom_home" HERMES_HOME="$temp_root/custom-hermes" PATH="$cron_bin:$mirr
 HOME="$custom_home" PATH="$mirror" bash "$temp_root/custom-hermes/scripts/oaos-daily-backup.sh" || fail 'generated Linux backup run'
 archive=$(find "$custom_home/.oaos/backups" -name 'oaos-*.tar.gz' -print -quit)
 [[ -n $archive && $(stat -c %a "$archive") == 600 ]] || fail 'backup archive absent or not 600'
-tar -tzf "$archive" | grep -Fxq 'custom-hermes/SOUL.md' || fail 'backup did not include the custom HERMES_HOME'
+archive_list=$(tar -tzf "$archive") || fail 'backup archive could not be listed'
+grep -Fxq 'custom-hermes/SOUL.md' <<<"$archive_list" || fail 'backup did not include the custom HERMES_HOME'
 printf 'x\n' > "$custom_home/data/wiki/note.md"
 git -C "$custom_home/data/wiki" add note.md
 git -C "$custom_home/data/wiki" -c user.name=T -c user.email=t@localhost commit -qm note
