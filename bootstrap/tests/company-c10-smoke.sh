@@ -358,3 +358,32 @@ print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c10']['status'])
 PY
 ) == verified ]] || fail 'verified checkpoint'
 printf 'PASS: C10 verified only after a real admin login over the HTTPS link\n'
+
+# O8: every read-back left an evidence JSON (0600 in a 0700 directory) and no
+# EnvironmentFile or job password value appears in any of them.
+evidence_dir="$HOME/.oaos-install/evidence"
+[[ $(stat -c %a "$evidence_dir") == 700 ]] || fail 'evidence directory mode'
+[[ $(find "$evidence_dir" -name 'company-c10-*.json' | wc -l) -ge 3 ]] || fail 'c10 evidence files'
+! find "$evidence_dir" -type f ! -perm 0600 | grep . >/dev/null || fail 'evidence file modes'
+secrets_seen=0
+while IFS='=' read -r name value; do
+  [[ $name =~ (KEY|SECRET|TOKEN|PASSWORD) && ${#value} -ge 6 ]] || continue
+  secrets_seen=$((secrets_seen + 1))
+  ! grep -rFq -- "$value" "$evidence_dir" || fail "secret value of $name reached evidence"
+done < "$HOME/.config/oaos-company/.env"
+((secrets_seen >= 1)) || fail 'no seeded secret to check'
+while IFS=: read -r _ _ _ _ value; do
+  ! grep -rFq -- "$value" "$evidence_dir" || fail 'job password reached evidence'
+done < "$HOME/.config/oaos-company/db-jobs.pgpass"
+python3 - "$evidence_dir" <<'PY' || fail 'verified evidence content'
+import glob, hashlib, json, os, sys
+docs = [json.load(open(p, encoding='utf-8')) for p in glob.glob(os.path.join(sys.argv[1], 'company-c10-*.json'))]
+ok = [d for d in docs if d['verify']['exit_code'] == 0 and d['final_state'] == 'verified']
+assert ok, 'no verified evidence'
+d = ok[0]
+assert d['environment'].startswith('E-') and d['checks'] and all(c['status'] == 'PASS' for c in d['checks'])
+assert d['summary']['fail'] == 0 and d['manual'] == []
+assert hashlib.sha256(d['stdout']['redacted'].encode()).hexdigest() == d['stdout']['sha256']
+assert any(x['verify']['exit_code'] != 0 for x in docs), 'failed or manual runs are recorded too'
+PY
+printf 'PASS: c10 read-back evidence JSON without secrets\n'

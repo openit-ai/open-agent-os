@@ -319,3 +319,32 @@ code=0
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c05 --read-back > "$temp_root/drift" 2>&1 || code=$?
 [[ $code == 1 ]] || fail 'read-back accepted broken authorization function'
 printf 'PASS: real query read-back rejects changed authorization behavior\n'
+
+# O8: every read-back left an evidence JSON (0600 in a 0700 directory) and no
+# EnvironmentFile or job password value appears in any of them.
+evidence_dir="$HOME/.oaos-install/evidence"
+[[ $(stat -c %a "$evidence_dir") == 700 ]] || fail 'evidence directory mode'
+[[ $(find "$evidence_dir" -name 'company-c05-*.json' | wc -l) -ge 3 ]] || fail 'c05 evidence files'
+! find "$evidence_dir" -type f ! -perm 0600 | grep . >/dev/null || fail 'evidence file modes'
+secrets_seen=0
+while IFS='=' read -r name value; do
+  [[ $name =~ (KEY|SECRET|TOKEN|PASSWORD) && ${#value} -ge 6 ]] || continue
+  secrets_seen=$((secrets_seen + 1))
+  ! grep -rFq -- "$value" "$evidence_dir" || fail "secret value of $name reached evidence"
+done < "$HOME/.config/oaos-company/.env"
+((secrets_seen >= 1)) || fail 'no seeded secret to check'
+while IFS=: read -r _ _ _ _ value; do
+  ! grep -rFq -- "$value" "$evidence_dir" || fail 'job password reached evidence'
+done < "$HOME/.config/oaos-company/db-jobs.pgpass"
+python3 - "$evidence_dir" <<'PY' || fail 'verified evidence content'
+import glob, hashlib, json, os, sys
+docs = [json.load(open(p, encoding='utf-8')) for p in glob.glob(os.path.join(sys.argv[1], 'company-c05-*.json'))]
+ok = [d for d in docs if d['verify']['exit_code'] == 0 and d['final_state'] == 'verified']
+assert ok, 'no verified evidence'
+d = ok[0]
+assert d['environment'].startswith('E-') and d['checks'] and all(c['status'] == 'PASS' for c in d['checks'])
+assert d['summary']['fail'] == 0 and d['manual'] == []
+assert hashlib.sha256(d['stdout']['redacted'].encode()).hexdigest() == d['stdout']['sha256']
+assert any(x['verify']['exit_code'] != 0 for x in docs), 'failed or manual runs are recorded too'
+PY
+printf 'PASS: c05 read-back evidence JSON without secrets\n'

@@ -39,17 +39,40 @@ if ! state_valid; then die 'Company state file is invalid JSON.'; fi
 # Phase table: C11-C14 share the adapter read-back per provider, C15 closes the
 # integration gates, every other phase has editions/company/<phase>-verify.sh
 # with company_<phase>_verify.
-case $phase in
-  c1[1-4])
-    # shellcheck source=editions/company/verify/adapters-verify.sh
-    . "$repo_root/editions/company/verify/adapters-verify.sh"
-    company_adapters_verify "$(company_adapters_stage "$phase")" "$phase" ;;
-  c15)
-    # shellcheck source=editions/company/verify/adapters-verify.sh
-    . "$repo_root/editions/company/verify/adapters-verify.sh"
-    company_adapters_verify_c15 ;;
-  *)
-    # shellcheck source=/dev/null
-    . "$repo_root/editions/company/verify/$phase-verify.sh"
-    "company_${phase}_verify" ;;
-esac
+company_verify_phase() {
+  case $phase in
+    c1[1-4])
+      # shellcheck source=editions/company/verify/adapters-verify.sh
+      . "$repo_root/editions/company/verify/adapters-verify.sh"
+      company_adapters_verify "$(company_adapters_stage "$phase")" "$phase" ;;
+    c15)
+      # shellcheck source=editions/company/verify/adapters-verify.sh
+      . "$repo_root/editions/company/verify/adapters-verify.sh"
+      company_adapters_verify_c15 ;;
+    *)
+      # shellcheck source=/dev/null
+      . "$repo_root/editions/company/verify/$phase-verify.sh"
+      "company_${phase}_verify" ;;
+  esac
+}
+# Every read-back leaves one evidence JSON (company-design 9, O8): the rows
+# are printed after the run, then lib/evidence.py writes
+# ~/.oaos-install/evidence/company-<phase>-<UTC>.json (0700/0600) with the
+# redacted output and its SHA-256. A failure to write evidence is reported but
+# never changes the read-back exit code.
+evidence_out=$(mktemp)
+trap 'rm -f -- "$evidence_out"' EXIT
+evidence_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The read-back keeps errexit (a subshell, not a || list), as before.
+set +e
+(set -e; company_verify_phase) > "$evidence_out"
+evidence_code=$?
+set -e
+cat -- "$evidence_out"
+if ! evidence_path=$(python3 "$repo_root/editions/company/lib/evidence.py" "$phase" \
+    "$evidence_code" "$evidence_started" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$evidence_out" 2>/dev/null); then
+  warn 'Read-back evidence JSON could not be written.'
+else
+  info "Evidence: $evidence_path"
+fi
+exit "$evidence_code"

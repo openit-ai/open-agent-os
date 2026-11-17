@@ -225,3 +225,46 @@ code=0
 python3 "$jobs" ensure "$temp_root/jobs/db-jobs.pgpass" 5432 > /dev/null 2>&1 || code=$?
 [[ $code == 3 ]] || fail 'open job credential directory accepted'
 printf 'PASS: job role credentials stay in a 0600 file; only SCRAM verifiers leave it\n'
+
+# O8 evidence JSON: rows, MANUAL items, checkpoint and redacted output with its
+# SHA-256; seeded secret values never reach the file.
+ev_home="$temp_root/evidence-home"
+mkdir -p "$ev_home/.config/oaos-company" "$ev_home/.oaos-install" "$temp_root/ev-rollback/c03-20260101T000000Z.abc123"
+chmod 700 "$ev_home/.config/oaos-company"
+seed_key=$(python3 -c 'import base64,os; print(base64.b64encode(os.urandom(32)).decode())')
+seed_token='seeded-project-token-0123456789'
+seed_pass='a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2'
+printf 'PGDATABASE=company_e\nOAOS_COMPANY_VAULT_KEY_V1=%s\nOAOS_COMPANY_PROJECT_API_TOKEN=%s\n' "$seed_key" "$seed_token" > "$ev_home/.config/oaos-company/.env"
+printf '127.0.0.1:5432:*:oaos_company_backup:%s\n' "$seed_pass" > "$ev_home/.config/oaos-company/db-jobs.pgpass"
+printf 'OAOS_COMPANY_E_ID=E-evidence-test\n' > "$ev_home/.config/oaos-company/deployment.conf"
+printf '{"edition":"company","stages":{"c03":{"status":"applied"}}}\n' > "$ev_home/.oaos-install/company-state.json"
+cat > "$temp_root/ev-out" <<OUT
+Migration SHA-256/version 2  PASS
+1   Owner isolation          PASS    leaked $seed_key
+Real admin login             MANUAL
+Debug token=$seed_token password: $seed_pass
+Summary: PASS=2 FAIL=0 MANUAL=1 SKIP=0
+OUT
+ev_path=$(HOME="$ev_home" OAOS_COMPANY_ROLLBACK_DIR="$temp_root/ev-rollback" \
+  python3 "$repo_root/editions/company/lib/evidence.py" c03 3 2026-01-01T00:00:00Z 2026-01-01T00:00:05Z "$temp_root/ev-out") || fail 'evidence writer'
+[[ $ev_path == "$ev_home/.oaos-install/evidence/company-c03-"*.json ]] || fail 'evidence path'
+[[ $(stat -c %a "$ev_path") == 600 && $(stat -c %a "$ev_home/.oaos-install/evidence") == 700 ]] || fail 'evidence modes'
+for value in "$seed_key" "$seed_token" "$seed_pass"; do
+  ! grep -Fq "$value" "$ev_path" || fail 'seeded secret reached the evidence JSON'
+done
+python3 - "$ev_path" <<'PY' || fail 'evidence content'
+import hashlib, json, sys
+doc = json.load(open(sys.argv[1], encoding='utf-8'))
+assert doc['phase'] == 'c03' and doc['environment'] == 'E-evidence-test'
+assert doc['verify']['exit_code'] == 3 and doc['final_state'] == 'applied'
+assert doc['started_at'] == '2026-01-01T00:00:00Z' and doc['finished_at'] == '2026-01-01T00:00:05Z'
+assert [c['status'] for c in doc['checks']] == ['PASS', 'PASS', 'MANUAL'], doc['checks']
+assert doc['checks'][1]['name'] == 'Owner isolation'
+assert [m['name'] for m in doc['manual']] == ['Real admin login']
+assert doc['summary'] == {'pass': 2, 'fail': 0, 'manual': 1, 'skip': 0}
+assert doc['rollback']['reference'] == 'c03-20260101T000000Z.abc123'
+out = doc['stdout']['redacted']
+assert hashlib.sha256(out.encode('utf-8')).hexdigest() == doc['stdout']['sha256']
+assert '[REDACTED]' in out
+PY
+printf 'PASS: evidence JSON rows, MANUAL, checkpoint, rollback reference, SHA-256 and secret redaction\n'
