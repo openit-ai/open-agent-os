@@ -315,7 +315,7 @@ open-agent-os/
 |---|---|---|---|
 | **P0 — Personal** | README/START-HERE · `skills/oaos-bootstrap` · `editions/personal` · `bootstrap/verify/personal` · 3-OS 레인 | 3-OS CI 매트릭스 + 스모크 PASS | 정책 정합 PR #33(CI 통과, 머지 대기) — 머지 시 D 완료 |
 | **P1 — Project** | install/verify(project) · 네이티브 systemd 스택 · nginx/TLS · Personal→Project 이전 | Project 스모크 + Personal→Project 이전 스모크 PASS | 정책 정합 PR #35 + 이전 스모크(#33) — 머지 시 D 완료 |
-| **P2 — Company** | C01~C17 · 선택 연동(G11·G12) · 멀티 LLM 라우팅(G13) · 정책·승인·감사·Vault·ACL 검색·콘솔 | Phase별 DB 스모크 + read-back SQL PASS(CI) | C01~C17 병합 · 보안 강화 PR #34 · 구조 정리·`members` 권한 수정 진행 중 · 런타임 연결(서비스 API)·콘솔 조치·OAuth·성능·키 교체는 후속 |
+| **P2 — Company** | C01~C17 · 선택 연동(G11·G12) · 멀티 LLM 라우팅(G13) · 정책·승인·감사·Vault·ACL 검색·콘솔 | Phase별 DB 스모크 + read-back SQL PASS(CI) | C01~C17 병합 · 보안 강화 PR #34 · 구조 정리·`members` 권한(PR #37) · 운영 보안 O4~O9(복구 드릴 키 복원·RTO, Vault 키 회전, 정의자 역할 분리, 무root 백업·보존, 증거 JSON, 콘솔 표 쓰기 제한 — PR #40) 완료 · 런타임 연결(서비스 API, ADR 0001 제안)·콘솔 조치·OAuth·성능 하네스는 후속 |
 
 | V 트랙(별도·후속) | 대상 | 완료 판정(증거) |
 |---|---|---|
@@ -382,3 +382,4 @@ open-agent-os/
 | v2.0.x | 2026-09-26~27 | 무Docker·systemd 정합, Personal 지원 OS(Ubuntu·macOS·Windows 11) 반영 |
 | v2.1 | 2026-11-16 | Project 게이트·봇 계정 원칙·백업/복구·바인딩·무Docker 반영(PR #35) · Company 보안 강화 반영(§4.3 과금 승인·DB 수준 거버넌스, §6 역할 분리·보존·백업 — PR #34) · 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
 | v2.1.1 | 2026-11-17 | Personal G5를 선택 설치 단계 `mail`로 구현(§2.4 G5 행: 주소 저장 = 선택, 미선택 `SKIP(not_selected)`, IMAP·SMTP 저장 후 검증, Himalaya 비밀번호 명령 · verify 20번 행) · 위키 로컬 bare 중계 `~/data/wiki.git` 구현(§2.5 — 시드·일일 백업 push, 중계 복원, verify 21번 행, Personal→Project 이전 시 중계 원격 제거) · Project `outline-wiki` 스킬 제공(§4.2 — G8 후 `team` 설치, verify "Outline skill" 행) · 메일 점검·`.env` 도우미를 `bootstrap/lib/mail.sh`·`secret.sh`로 공용화(§5.2) |
+| v2.1.2 | 2026-11-17 | 로드맵 P2 — Company 행 현행화: 운영 보안 O4~O9 구현(PR #40) 반영, 런타임 연결은 ADR 0001 제안 단계 |

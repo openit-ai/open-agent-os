@@ -180,12 +180,12 @@ bash bootstrap/verify/company-verify.sh --phase cNN --read-back
 | O1 | ~~001 `member_scope`가 같은 조직의 모든 세션에 `members` UPDATE를 허용(역할 상승 가능)~~ | **수정됨(T16, 019).** 본인 정지·퇴사도 다른 관리자가 처리(본인 역할·상태 변경은 일괄 거부) |
 | O2 | 정책·JIT·Vault·라우팅이 DB 수준에서만 강제되고 런타임 비서 요청 경로가 호출하지 않음 | 서비스 API에서 `authorize_action`·`identity_isolation_decision`·`llm_route_decision`을 단일 진입점으로 호출 — 설계 제안 [ADR 0001](adr/0001-company-runtime-governance.md) |
 | O3 | OAuth 콜백·Slack 이벤트 수신 미구현, 왕복 증거를 쓰는 주체 없음 | 런타임 어댑터가 실제 왕복 후 `integration/external_roundtrip` 감사 행 기록 |
-| O4 | 키 백업 복원과 RTO 4시간 실측 미실시 | C17 드릴에 키 복원·시간 측정 추가 |
-| O5 | Vault 키 회전 미구현 | 키 버전별 재암호화 절차와 read-back |
-| O6 | 011 콘솔 함수가 SECURITY DEFINER로 소유 역할 권한 실행 | **호출자 검사는 수정됨(T17, 020).** 남은 부분: 소유 역할이 DDL 권한을 가지므로 INVOKER 전환 또는 DDL 없는 함수 소유 역할 분리 검토 |
-| O7 | 백업·보존 유닛이 비대화형 root(sudo)에 의존해 `NoNewPrivileges`를 쓸 수 없음 | 전용 백업 역할(BYPASSRLS 읽기 전용)·전용 자격으로 대체 검토 |
-| O8 | 5/25/50명 성능·큐 실측, Phase 증거 JSON 미구현 | 부하 하네스와 증거 JSON 생성기 |
-| O9 | 런타임 세션이 `console_lockouts`를 직접 삭제(잠금 해제)하거나 `pending` G10에 `console_setup_codes`를 직접 추가 가능 | 두 표 쓰기를 정의자 함수 전용으로 좁히고 C10 read-back 만료/잠금 고정값을 유지보수 경로로 이전 |
+| O4 | ~~키 백업 복원과 RTO 4시간 실측 미실시~~ | **수정됨(PR #40).** C17 드릴이 유지보수 계정으로 덤프를 복원하고 최신 Vault 키 백업을 0700 디렉터리에 복원해 모든 활성 키 포함을 확인(`vault.py check-backup`), 복원본에서 C04 격리·C07 감사·C08 ACL read-back을 재실행한다. 경과 시간을 RTO로 기록하고 4시간 초과 시 실패, `rto_seconds` 등 증거가 없으면 C17 read-back 실패 |
+| O5 | ~~Vault 키 회전 미구현~~ | **수정됨(PR #40, 024).** EnvironmentFile에 버전별 키(`OAOS_COMPANY_VAULT_KEY_V<n>`·`_CURRENT`), 새 봉투는 키 버전을 AAD에 결합(구 V1 봉투 호환). `vault.py rotate`가 새 키 추가·백업 후 배치별(행 CAS) 재암호화, 사용 행이 0일 때만 구 키 폐기·재실행 시 재개. 재암호화는 유지보수 로그인의 `vault_rekey_secret`만 가능하고 `rekeyed`로 감사. C05 read-back이 런타임의 회전 불가·사용 중 키 버전 존재(`vault.py check-usage`) 확인 |
+| O6 | ~~011 콘솔 함수가 SECURITY DEFINER로 소유 역할 권한 실행~~ | **수정됨(T17·020 호출자 검사, PR #40·022 소유 역할).** 콘솔 정의자 함수 16개를 DDL·CREATE 권한 없는 NOLOGIN 역할 `oaos_company_definer`가 소유(`db-definers.sql`). C03/C07/C10 read-back이 정의자 함수 소유자가 슈퍼유저·로그인 역할·CREATE 보유·소유 역할 구성원이면 실패 |
+| O7 | ~~백업·보존 유닛이 비대화형 root(sudo)에 의존해 `NoNewPrivileges`를 쓸 수 없음~~ | **수정됨(PR #40, 023).** 백업은 읽기 전용 `oaos_company_backup`(BYPASSRLS·쓰기 없음), 보존 정리는 `oaos_company_maint` 로그인이 `oaos_company_maintenance` 소유 `maintenance_purge`만 실행. 비밀번호는 Company 계정 0600 libpq 파일에만 둔다. 두 유닛에 `NoNewPrivileges`·`PrivateTmp`·`ProtectSystem=strict`·`ProtectHome=read-only` 등 적용, C02·C17 read-back이 확인 |
+| O8 | 5/25/50명 성능·큐 실측 미실시 (~~Phase 증거 JSON 미구현~~) | **증거 JSON은 수정됨(PR #40, §9).** `company-verify --read-back`마다 `~/.oaos-install/evidence/company-<phase>-<UTC>.json`(0700/0600)에 행·MANUAL·롤백 참조·체크포인트·비밀값 가린 출력과 SHA-256 기록. **남은 부분**: 부하 하네스(5/25/50명) |
+| O9 | ~~런타임 세션이 `console_lockouts`를 직접 삭제(잠금 해제)하거나 `pending` G10에 `console_setup_codes`를 직접 추가 가능~~ | **수정됨(PR #40, 021).** 런타임의 `console_lockouts`·`console_setup_codes`·`console_setup` 쓰기 권한 회수, 011/020 정의자 함수만 쓴다. C10 read-back은 유지보수 경로로 실행하고 런타임의 코드 저장·설정 변경·잠금 해제 불가를 확인 |
 
 ## 11. 착수 순서와 남은 확인
 
