@@ -35,7 +35,7 @@ Open Agent OS(OAOS)에 대해 자주 나오는 질문과 답입니다. 더 깊�
 네 — 설계 목표입니다. Hermes Agent 설치 → 채팅에 이 저장소 URL 전달 → 에이전트가 README → START-HERE → 부트스트랩 스킬 순서로 진행합니다. 설치 스크립트 자동화(`bootstrap/`)가 포함되어 있습니다.
 
 **Q. 설치 중 제가 해야 하는 건 뭔가요?**
-Personal은 에디션 선택·Hermes 설치 승인과 필수 게이트 3개(LLM 플랜, Telegram 봇 토큰, Telegram 사용자 ID)입니다. Project는 필수 게이트 8개입니다: G0 서버(VPS에 Hermes 설치 후 에이전트에게 저장소 URL 전달), G1~G3(Personal과 같음), G6 도메인 A 레코드, G9 봇 전용 메일함, G7 Mattermost 봇 계정·허용 사용자 ID, G8 Outline AI 에이전트 계정의 API 토큰. Personal의 선택 게이트 G4·G5는 Project에 없습니다. 키·토큰은 내 터미널에서 `bash bootstrap/bin/oaos-secret-set KEY`의 숨김 입력으로 넣습니다(채팅에 붙여넣지 않음). 값은 즉시 확인합니다: LLM은 모델 테스트 응답, 봇 토큰은 Telegram getMe, 사용자 ID는 숫자 목록 형식. Project는 추가로 DNS 전파(최대 10분 대기), 메일 IMAP·SMTP 로그인, Mattermost 토큰이 관리자 아닌 봇인지, Outline 토큰이 봇 메일함 주소의 관리자 아닌 에이전트 계정인지 확인합니다.
+Personal은 에디션 선택·Hermes 설치 승인과 필수 게이트 3개(LLM 플랜, Telegram 봇 토큰, Telegram 사용자 ID)이고, 개인 메일(G5)은 원할 때만 고르는 선택 게이트입니다 — 메일 주소(`OAOS_PERSONAL_MAIL_ADDRESS`)를 저장하면 선택되고, 앱 비밀번호(`OAOS_PERSONAL_MAIL_APP_PASSWORD`)를 넣으면 IMAP·SMTP 로그인을 둘 다 확인합니다. 고르지 않으면 `SKIP(not_selected)`으로 기록되고 설치는 그대로 끝납니다. Project는 필수 게이트 8개입니다: G0 서버(VPS에 Hermes 설치 후 에이전트에게 저장소 URL 전달), G1~G3(Personal과 같음), G6 도메인 A 레코드, G9 봇 전용 메일함, G7 Mattermost 봇 계정·허용 사용자 ID, G8 Outline AI 에이전트 계정의 API 토큰. Personal의 선택 게이트 G4·G5는 Project에 없습니다. 키·토큰은 내 터미널에서 `bash bootstrap/bin/oaos-secret-set KEY`의 숨김 입력으로 넣습니다(채팅에 붙여넣지 않음). 값은 즉시 확인합니다: LLM은 모델 테스트 응답, 봇 토큰은 Telegram getMe, 사용자 ID는 숫자 목록 형식. Project는 추가로 DNS 전파(최대 10분 대기), 메일 IMAP·SMTP 로그인, Mattermost 토큰이 관리자 아닌 봇인지, Outline 토큰이 봇 메일함 주소의 관리자 아닌 에이전트 계정인지 확인합니다.
 
 **Q. 설치가 중간에 실패하면?**
 진행 상태가 `~/.oaos-install/state.json`에 에디션별로 기록되어 이어서 재개할 수 있습니다(`install.sh --status`로 확인). 완료된 단계는 건너뛰고, 검증(verify)은 재실행할 때마다 다시 돕니다. 단계 안의 명령이 하나라도 실패하면 그 단계는 `failed`로 남습니다.
@@ -70,7 +70,10 @@ Personal은 에디션 선택·Hermes 설치 승인과 필수 게이트 3개(LLM 
 에이전트에게 "백업하고 업데이트한 다음 점검해줘"라고 하면 됩니다(`hermes update`). 업데이트 전 백업이 기본 안전장치로 동작합니다.
 
 **Q. 백업은?**
-Personal 설치 스크립트가 매일 03:00 Hermes 홈과 위키를 묶은 `~/.oaos/backups/oaos-*.tar.gz`를 만드는 Hermes 예약 작업(`oaos-daily-backup`, 최근 7개 보관)을 등록합니다. 이 작업은 게이트웨이가 켜져 있을 때 실행됩니다. 백업 폴더는 소유자 전용(700), 파일은 600입니다. 위키는 로컬 git 저장소일 뿐 원격으로 자동 백업되지 않습니다 — 다른 장소에 보관하려면 원격 저장소나 외부 디스크 복사를 직접 구성하세요. 전체 상태는 `hermes backup`으로도 만들 수 있습니다. Project는 같은 시각에 `~/.oaos/backups/oaos-project-*.tar`(700/600, 최근 7개)를 만들며 Hermes 홈·위키·`~/oaos/stack`에 더해 PostgreSQL(mattermost·outline) 덤프, `/etc/oaos`, Mattermost 설정·데이터, Outline 데이터를 담습니다. 복원은 `bash editions/project/restore.sh --dry-run <아카이브>`로 먼저 점검한 뒤 `--yes`로 실행합니다. 백업에는 시크릿이 들어 있으니 서버 밖으로 옮길 때 암호화하세요.
+Personal 설치 스크립트가 매일 03:00 Hermes 홈과 위키를 묶은 `~/.oaos/backups/oaos-*.tar.gz`를 만드는 Hermes 예약 작업(`oaos-daily-backup`, 최근 7개 보관)을 등록합니다. 이 작업은 게이트웨이가 켜져 있을 때 실행됩니다. 백업 폴더는 소유자 전용(700), 파일은 600입니다. 위키(`~/data/wiki`)는 같은 머신의 bare 중계 저장소 `~/data/wiki.git`(700)을 `origin`으로 두고, 설치 때와 일일 백업 때마다 push합니다. 다른 기기에서는 SSH로 `git clone <사용자>@<호스트>:data/wiki.git`처럼 받아 쓸 수 있고, 위키 폴더가 사라지면 설치 스크립트의 `wiki` 스테이지가 중계에서 복원합니다. 중계도 같은 디스크에 있으므로 디스크 고장 대비는 외부 저장소나 외부 디스크 복사를 따로 구성하세요. 전체 상태는 `hermes backup`으로도 만들 수 있습니다. Project는 같은 시각에 `~/.oaos/backups/oaos-project-*.tar`(700/600, 최근 7개)를 만들며 Hermes 홈·위키·`~/oaos/stack`에 더해 PostgreSQL(mattermost·outline) 덤프, `/etc/oaos`, Mattermost 설정·데이터, Outline 데이터를 담습니다. 복원은 `bash editions/project/restore.sh --dry-run <아카이브>`로 먼저 점검한 뒤 `--yes`로 실행합니다. 백업에는 시크릿이 들어 있으니 서버 밖으로 옮길 때 암호화하세요.
+
+**Q. 에이전트가 Outline 문서를 직접 찾고 쓸 수 있나요?**
+네(Project). G8에서 Outline AI 에이전트 계정의 토큰이 확인되면 `team` 스테이지가 `outline-wiki` 스킬을 Hermes 스킬 폴더에 설치합니다. 에이전트는 이 스킬로 문서를 검색·읽기·생성·수정하며, 만든 문서는 에이전트 계정 명의로 남습니다. 토큰은 스킬 헬퍼가 Hermes `.env`에서 직접 읽어 HTTPS 헤더로만 보내고, 관리자 API는 호출하지 않습니다. Outline MCP 서버는 제공하지 않습니다.
 
 **Q. 모델을 바꾸고 싶어요.**
 채팅에서 `/model` 또는 CLI에서 `hermes model`로 바꿉니다. 작업별로 상위/저가 모델을 나누는 라우팅도 가능합니다.

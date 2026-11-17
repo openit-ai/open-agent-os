@@ -8,6 +8,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$repo_root/bootstrap/lib/platform.sh"
 # shellcheck source=bootstrap/lib/secret.sh
 . "$repo_root/bootstrap/lib/secret.sh"
+# shellcheck source=bootstrap/lib/mail.sh
+. "$repo_root/bootstrap/lib/mail.sh"
 # shellcheck source=editions/project/lib.sh
 . "$repo_root/editions/project/lib.sh"
 
@@ -381,6 +383,18 @@ outline_token=''
 note=$(stack_get NOTE_DOMAIN)
 if [[ -n $note && $(project_env_get OUTLINE_URL || true) == "https://$note" ]]; then record 'Outline URL' PASS 'OUTLINE_URL points at the note domain'
 else record 'Outline URL' FAIL 'OUTLINE_URL is absent or does not match the note domain; rerun team'; fi
+# The outline-wiki skill helper, as installed, answers read-only calls with the agent token.
+outline_helper="$hermes_home/skills/outline-wiki/scripts/outline.py"
+if [[ ! -f $outline_helper ]]; then record 'Outline skill' FAIL 'outline-wiki skill is not installed; rerun the team stage after G8'
+elif ! oaos_secret_present OUTLINE_API_TOKEN; then record 'Outline skill' FAIL 'OUTLINE_API_TOKEN is not in the Hermes .env (G8)'
+elif outline_check_token=$(oaos_secret_value OUTLINE_API_TOKEN) &&
+     OUTLINE_URL=$(project_env_get OUTLINE_URL || true) OUTLINE_API_TOKEN=$outline_check_token \
+       OUTLINE_API_BASE=${OAOS_OUTLINE_API:-http://127.0.0.1:3000} python3 "$outline_helper" whoami >/dev/null 2>&1 &&
+     OUTLINE_URL=$(project_env_get OUTLINE_URL || true) OUTLINE_API_TOKEN=$outline_check_token \
+       OUTLINE_API_BASE=${OAOS_OUTLINE_API:-http://127.0.0.1:3000} python3 "$outline_helper" search --query OAOS --limit 1 >/dev/null 2>&1; then
+  record 'Outline skill' PASS 'outline-wiki helper: auth.info and a read-only search succeeded as the agent account'
+else record 'Outline skill' FAIL 'outline-wiki helper could not call auth.info or search; check OUTLINE_URL, the token and Outline health'; fi
+outline_check_token=''
 manual_or_confirmed 'Outline page' outline-page 'the agent created a page under its own account' \
   'Ask the agent to create an Outline page and confirm it is authored by the agent account; rerun with --confirm outline-page'
 

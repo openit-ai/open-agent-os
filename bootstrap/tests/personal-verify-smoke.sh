@@ -25,6 +25,10 @@ git init -q -b main "$HOME/data/wiki"
 printf 'wiki\n' > "$HOME/data/wiki/index.md"
 git -C "$HOME/data/wiki" add index.md
 git -C "$HOME/data/wiki" -c user.name=Test -c user.email=test@localhost commit -qm seed
+git init -q --bare -b main "$HOME/data/wiki.git"
+chmod 700 "$HOME/data/wiki.git"
+git -C "$HOME/data/wiki" remote add origin "$HOME/data/wiki.git"
+git -C "$HOME/data/wiki" push -q origin main
 cat > "$temp_root/bin/hermes" <<'SH'
 #!/usr/bin/env bash
 case $1 in
@@ -91,8 +95,8 @@ import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     result = json.load(f)
 rows = result['checks']
-assert len(rows) == 19, len(rows)
-assert [row['number'] for row in rows] == list(range(1, 20))
+assert len(rows) == 21, len(rows)
+assert [row['number'] for row in rows] == list(range(1, 22))
 names = [row['check'] for row in rows]
 assert names[3] == 'Autostart registered' and names[4] == 'Reboot survival', names
 for number in (1, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
@@ -101,7 +105,9 @@ assert rows[1]['status'] == 'SKIP' and rows[7]['status'] == 'SKIP'
 assert rows[4]['status'] == rows[5]['status'] == rows[6]['status'] == 'MANUAL'
 assert rows[18]['status'] in ('PASS', 'FAIL')
 assert int(sys.argv[2]) == (2 if rows[18]['status'] == 'PASS' else 1)
-assert sum(result['summary'].values()) == 19
+assert rows[19]['check'] == 'Personal mail' and rows[19]['status'] == 'SKIP', rows[19]
+assert rows[20]['check'] == 'Wiki relay' and rows[20]['status'] == 'PASS', rows[20]
+assert sum(result['summary'].values()) == 21
 PY
 grep -Fq 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' "$temp_root/result.json" && { printf 'FAIL: token in verifier output\n' >&2; exit 1; }
 backups=("$HOME"/.oaos/backups/hermes-verify-*.zip)
@@ -109,7 +115,7 @@ backups=("$HOME"/.oaos/backups/hermes-verify-*.zip)
 [[ $(head -n 1 "$MOCK_BACKUP_ARGS") == "$HOME"/* ]] || { printf 'FAIL: Linux backup path was not POSIX\n' >&2; exit 1; }
 [[ $(stat -c %a "$HOME/.oaos/backups") == 700 ]] || { printf 'FAIL: backup dir not 700\n' >&2; exit 1; }
 [[ $(stat -c %a "${backups[0]}") == 600 ]] || { printf 'FAIL: verify archive not 600\n' >&2; exit 1; }
-printf 'PASS: Personal verifier has 19 JSON checks, offline SKIPs, MANUAL exit 2, owner-only backup\n'
+printf 'PASS: Personal verifier has 21 JSON checks, offline SKIPs, MANUAL exit 2, owner-only backup\n'
 
 # Exit 0 needs owner-confirmed MANUAL checks and no FAIL; each policy breach FAILs its row.
 code=0
@@ -124,14 +130,16 @@ chmod 644 "$HOME/.hermes/.env"
 printf '{{NAME}}\n' >> "$HOME/.hermes/memories/USER.md"
 printf 'telegram_token: "123456789:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"\n' >> "$HOME/.hermes/config.yaml"
 rm -f "$HOME/.config/systemd/user/oaos-gateway-watchdog.timer"
+git -C "$HOME/data/wiki" -c user.name=Test -c user.email=test@localhost commit -q --allow-empty -m 'not pushed'
 code=0
 MOCK_USERS='@someone' MOCK_APPROVAL=approve MOCK_LISTENER='0.0.0.0:9119' \
   bash "$repo_root/bootstrap/verify/personal-verify.sh" --json --offline > "$temp_root/breach.json" || code=$?
 python3 - "$temp_root/breach.json" "$code" <<'PY'
 import json, sys
 rows = {row['check']: row for row in json.load(open(sys.argv[1]))['checks']}
-for name in ('Allowlist configured', 'Scheduled jobs', 'Hermes .env protected', 'Config secret-free', 'Unattended approvals', 'Dashboard loopback'):
+for name in ('Allowlist configured', 'Scheduled jobs', 'Hermes .env protected', 'Config secret-free', 'Unattended approvals', 'Dashboard loopback', 'Wiki relay'):
     assert rows[name]['status'] == 'FAIL', rows[name]
+assert '1 commit(s) behind' in rows['Wiki relay']['evidence'], rows['Wiki relay']
 assert rows['Harness files']['status'] == 'MANUAL', rows['Harness files']
 assert int(sys.argv[2]) == 1
 PY
@@ -140,13 +148,15 @@ chmod 600 "$HOME/.hermes/.env"
 printf 'test document\n' > "$HOME/.hermes/memories/USER.md"
 printf 'model:\n  default: test\n' > "$HOME/.hermes/config.yaml"
 printf '[Timer]\n' > "$HOME/.config/systemd/user/oaos-gateway-watchdog.timer"
+git -C "$HOME/data/wiki" push -q origin main
 MOCK_LISTENER='127.0.0.1:9119' bash "$repo_root/bootstrap/verify/personal-verify.sh" --json --offline > "$temp_root/loopback.json" || true
 python3 - "$temp_root/loopback.json" <<'PY'
 import json, sys
 rows = {row['check']: row for row in json.load(open(sys.argv[1]))['checks']}
 assert rows['Dashboard loopback']['status'] == 'PASS', rows['Dashboard loopback']
+assert rows['Wiki relay']['status'] == 'PASS', rows['Wiki relay']
 PY
-printf 'PASS: --confirm resolves MANUAL; .env mode, config secrets, allowlist, approvals, watchdog, non-loopback Dashboard FAIL\n'
+printf 'PASS: --confirm resolves MANUAL; .env mode, config secrets, allowlist, approvals, watchdog, non-loopback Dashboard, stale wiki relay FAIL\n'
 
 mkdir -p "$temp_root/verify-tmp"
 for backup_case in success skipped missing unreported; do

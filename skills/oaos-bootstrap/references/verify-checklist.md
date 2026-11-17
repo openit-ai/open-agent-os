@@ -1,6 +1,6 @@
 # Verify Checklist
 
-Personal: run `bash bootstrap/verify/personal-verify.sh --json` (or table output) on the target host; the installer's `verify` stage runs the same script on every rerun. Exit codes: **0** every check PASS (SKIP allowed), **2** no FAIL but MANUAL checks pending, **1** any FAIL. `--offline` records checks 2 and 8 as SKIP, not PASS. MANUAL rows need human evidence: after observing them, rerun with `--confirm reboot,chat,allowlist`. Project uses `bash bootstrap/verify/project-verify.sh` (see the Project extension below); Company has its own verifiers.
+Personal: run `bash bootstrap/verify/personal-verify.sh --json` (or table output) on the target host; the installer's `verify` stage runs the same script on every rerun. Exit codes: **0** every check PASS (SKIP allowed), **2** no FAIL but MANUAL checks pending, **1** any FAIL. `--offline` records checks 2 and 8 (and 20 when G5 is selected) as SKIP, not PASS. MANUAL rows need human evidence: after observing them, rerun with `--confirm reboot,chat,allowlist` (plus `mail` for an owner-configured Himalaya, row 20). Project uses `bash bootstrap/verify/project-verify.sh` (see the Project extension below); Company has its own verifiers.
 
 | # | Check | Common decision | Ubuntu Personal | Apple Silicon macOS Personal | Windows 11 Git Bash Personal |
 |---|---|---|---|---|---|
@@ -23,6 +23,8 @@ Personal: run `bash bootstrap/verify/personal-verify.sh --json` (or table output
 | 17 | Dashboard loopback | Port 9119 (or `OAOS_DASHBOARD_PORT`) has no listener, or only loopback ones | `ss` | `lsof` | `netstat`; MANUAL if unavailable |
 | 18 | Backup works | Fresh `hermes backup` archive under `~/.oaos/backups`; directory 700, archives 600 | Mode check | Mode check | Git Bash paths; NTFS profile ACLs |
 | 19 | Host capacity | Target volume >10% free; RAM ≥16 GiB or swap/pagefile present | `df`, `/proc` RAM/swap | `df`, `sysctl hw.memsize`, `sysctl vm.swapusage` | `df` plus PowerShell CIM RAM/pagefile |
+| 20 | Personal mail | Optional G5. SKIP when `OAOS_PERSONAL_MAIL_ADDRESS` is not stored (not selected) or offline; FAIL when the app password is absent or the IMAP or SMTP login fails (password never printed); MANUAL while Himalaya is the owner's step (`--confirm mail`); PASS when both logins pass and the OAOS-managed Himalaya account `oaos-personal` lists the inbox | `~/.config/himalaya/config.toml` | Same | Logins as Linux; Himalaya always MANUAL |
+| 21 | Wiki relay | `~/data/wiki.git` is a bare repository, owner-only (700), a remote of the wiki (`origin` or `oaos-relay`), and holds the wiki's latest commit; behind or diverged is FAIL with the push command | Mode check | Mode check | Git Bash paths; NTFS profile ACLs |
 
 For checks 5–7, attach real device evidence (OS/architecture, timestamp, observed gateway status and account interaction) before using `--confirm`. A CI mock, `--dry-run`, service registration, or an unrun action cannot be counted as that evidence. Mark SKIP only when a check was deliberately omitted, such as `--offline`; explain the omission. Do not mark a failed or unavailable required check as SKIP.
 
@@ -50,6 +52,7 @@ Run `bash bootstrap/verify/project-verify.sh` (`--json`, `--offline`) on the Pro
 | Mattermost allowlist | `MATTERMOST_ALLOWED_USERS`; `/api/v4/users/ids` | 26-character IDs that all exist |
 | Outline agent token | `POST /api/auth.info` with `OUTLINE_API_TOKEN` | Account e-mail = `OAOS_MAIL_ADDRESS`; role not admin |
 | Outline URL | `OUTLINE_URL` in the Hermes `.env` | `https://<note domain>` |
+| Outline skill | Installed `$HERMES_HOME/skills/outline-wiki/scripts/outline.py`: `whoami` (`auth.info`) and `search` against `127.0.0.1:3000` | Skill installed and both read-only calls succeed with the agent token |
 | Bot mailbox IMAP / SMTP | Login with the G9 values, password never printed | Login succeeds; a failed login with values present is FAIL; absent values are FAIL |
 | MANUAL: Reboot survival, Telegram chat / allowlist, Mattermost chat / deny, Outline page, Mail flow | Human evidence | Rerun with `--confirm reboot,chat,allowlist,mm-chat,mm-deny,outline-page,mail-flow` after observing each |
 

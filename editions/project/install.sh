@@ -8,6 +8,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$repo_root/bootstrap/lib/platform.sh"
 # shellcheck source=bootstrap/lib/secret.sh
 . "$repo_root/bootstrap/lib/secret.sh"
+# shellcheck source=bootstrap/lib/mail.sh
+. "$repo_root/bootstrap/lib/mail.sh"
 # shellcheck source=editions/project/lib.sh
 . "$repo_root/editions/project/lib.sh"
 
@@ -617,19 +619,19 @@ do_mail() {
   for key in OAOS_MAIL_ADDRESS OAOS_MAIL_PASSWORD OAOS_MAIL_IMAP_HOST OAOS_MAIL_SMTP_HOST; do migrate_stack_secret "$key" || return $?; done
   address=$(project_gate_value OAOS_MAIL_ADDRESS || true)
   [[ -n $address ]] || { warn "G9: create a dedicated bot mailbox (not a person's), then store its address with '$(secret_hint OAOS_MAIL_ADDRESS)'."; return 3; }
-  [[ $address =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || {
+  oaos_mail_valid_address "$address" || {
     warn 'G9: use a standard address with letters, digits, dot, underscore, plus, or hyphen.'; return 3; }
   imap=$(project_gate_value OAOS_MAIL_IMAP_HOST || project_mail_default_host imap "$address" || true)
   smtp=$(project_gate_value OAOS_MAIL_SMTP_HOST || project_mail_default_host smtp "$address" || true)
   [[ -n $imap && -n $smtp ]] || {
     warn "G9: store the provider's IMAP and SMTP hosts with '$(secret_hint OAOS_MAIL_IMAP_HOST)' and '$(secret_hint OAOS_MAIL_SMTP_HOST)' (Gmail addresses default to imap.gmail.com / smtp.gmail.com)."; return 3; }
-  [[ $imap =~ ^[A-Za-z0-9.-]+$ && $smtp =~ ^[A-Za-z0-9.-]+$ ]] || { warn 'G9: invalid IMAP or SMTP host name.'; return 3; }
+  { oaos_mail_valid_host "$imap" && oaos_mail_valid_host "$smtp"; } || { warn 'G9: invalid IMAP or SMTP host name.'; return 3; }
   project_env_put OAOS_MAIL_IMAP_HOST "$imap" || return 1
   project_env_put OAOS_MAIL_SMTP_HOST "$smtp" || return 1
   password=$(project_secret_value OAOS_MAIL_PASSWORD || true)
   [[ -n $password ]] || {
     warn "G9: turn on 2-step verification for the bot mailbox, create an app password (Gmail: https://myaccount.google.com/apppasswords), and store it without spaces with '$(secret_hint OAOS_MAIL_PASSWORD)'."; return 3; }
-  [[ $password =~ ^[A-Za-z0-9_-]+$ ]] || { password=''; warn "G9: the app password must be one word without spaces; store it again with '$(secret_hint OAOS_MAIL_PASSWORD)'."; return 3; }
+  oaos_mail_valid_app_password "$password" || { password=''; warn "G9: the app password must be one word without spaces; store it again with '$(secret_hint OAOS_MAIL_PASSWORD)'."; return 3; }
   password=''
   result=$(project_mail_login imap "$address" "$imap") || {
     warn "G9: IMAP login to $imap failed ($result). Check the address, IMAP access and the app password, store it again with '$(secret_hint OAOS_MAIL_PASSWORD)', and rerun mail."; return 3; }
@@ -672,6 +674,37 @@ write_onboarding() {
 
 자세한 절차는 editions/project/README.md의 "G7·G8 — 봇 계정 원칙"을 따릅니다.
 EOF2
+}
+
+# The outline-wiki skill (search/read/create/update through the Outline API as the G8 agent
+# account) is copied into the Hermes skills directory once G8 passes. A copy carrying the
+# .oaos-managed marker is replaced on change; an owner's own copy is preserved.
+install_outline_skill() {
+  local source="$repo_root/skills/outline-wiki" skills target staged old
+  skills="$(platform_hermes_home)/skills"
+  target="$skills/outline-wiki"
+  [[ -f $source/SKILL.md && -f $source/scripts/outline.py ]] || { warn 'skills/outline-wiki is missing from this checkout.'; return 1; }
+  if [[ -e $target ]]; then
+    diff -rq -x .oaos-managed -x __pycache__ "$source" "$target" >/dev/null 2>&1 && return 0
+    if [[ ! -f $target/.oaos-managed ]]; then
+      warn "An outline-wiki skill not installed by OAOS exists at $target; preserving it (verify runs its helper)."
+      return 0
+    fi
+  fi
+  mkdir -p "$skills"
+  staged=$(mktemp -d "$skills/.outline-wiki.tmp.XXXXXX")
+  cp -R "$source/." "$staged/" || { rm -rf -- "$staged"; return 1; }
+  printf 'Installed by editions/project/install.sh (team stage) from skills/outline-wiki; local edits are replaced on the next team run.\n' > "$staged/.oaos-managed"
+  chmod -R go-w "$staged"
+  if [[ -e $target ]]; then
+    old="$skills/.outline-wiki.old.$$"
+    mv -- "$target" "$old" || { rm -rf -- "$staged"; return 1; }
+    mv -- "$staged" "$target" || { mv -- "$old" "$target"; return 1; }
+    rm -rf -- "$old"
+  else
+    mv -- "$staged" "$target" || { rm -rf -- "$staged"; return 1; }
+  fi
+  info "Installed the outline-wiki skill at $target (Outline search, read, create, update as the agent account)."
 }
 
 do_team() {
@@ -726,6 +759,7 @@ do_team() {
   fi
   outline_token=''
   project_env_put OUTLINE_URL "https://$note" || return 1
+  install_outline_skill || return 1
   restart_gateway_if_running 'Mattermost and Outline'
 }
 

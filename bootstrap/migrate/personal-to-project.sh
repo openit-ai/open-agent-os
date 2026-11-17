@@ -24,7 +24,9 @@ and harness into this account:
                      (for example an extracted backup) instead of SSH.
 --source-hermes-home Personal HERMES_HOME (default: the source's $HERMES_HOME or ~/.hermes).
 --wiki-remote URL    set the migrated wiki's origin; otherwise every remote copied from the
-                     Personal wiki (its relay) is removed so pushes cannot go back there.
+                     Personal wiki is removed so pushes cannot go back there. That includes
+                     the Personal relay (origin or oaos-relay -> ~/data/wiki.git on the
+                     Personal host), which is never copied: the wiki carries its full history.
 The Hermes gateway is stopped during the swap and started again if it was running.
 Hermes .env is never copied; re-enter credentials on the Project server.
 Exit: 0 migrated (or planned); 3 source missing or tool unavailable; 1 error.
@@ -114,7 +116,8 @@ for item in "${items[@]}"; do
   printf 'Optional source absent, skipped: %s\n' "$(src_label "$from")"
 done
 if ((dry_run)); then
-  printf 'PLAN gateway stop during swap; wiki remote %s\n' "${wiki_remote:+set to the given URL}${wiki_remote:-removed}"
+  printf 'PLAN gateway stop during swap; wiki remotes (Personal relay included) removed%s\n' "${wiki_remote:+, origin set to the given URL}"
+  printf 'PLAN Personal relay ~/data/wiki.git stays on the Personal host (not copied)\n'
   exit 0
 fi
 command -v rsync >/dev/null || { printf 'rsync is required.\n' >&2; exit 3; }
@@ -189,13 +192,19 @@ for entry in ${staged[@]+"${staged[@]}"}; do
 done
 staged=()
 
-# 4. The Personal wiki's remotes point at its relay; never push Project data there.
+# 4. The Personal wiki's remotes point at its relay (~/data/wiki.git, a path on the Personal
+#    host) or at the owner's own remotes; never push Project data there.
 wiki="$HOME/data/wiki"
 if [[ -d $wiki/.git ]]; then
   while IFS= read -r name; do
     [[ -n $name ]] || continue
+    url=$(git -C "$wiki" remote get-url "$name" 2>/dev/null || true)
     git -C "$wiki" remote remove "$name"
-    printf 'Removed wiki remote %s (it pointed at the Personal relay).\n' "$name"
+    case $url in
+      */data/wiki.git|*\\data\\wiki.git)
+        printf 'Removed wiki remote %s (the Personal relay ~/data/wiki.git; it stays on the Personal host).\n' "$name" ;;
+      *) printf 'Removed wiki remote %s (copied from the Personal wiki).\n' "$name" ;;
+    esac
   done < <(git -C "$wiki" remote)
   if [[ -n $wiki_remote ]]; then
     git -C "$wiki" remote add origin "$wiki_remote"

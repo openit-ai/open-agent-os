@@ -2,8 +2,9 @@
 set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temp_root=$(mktemp -d)
-trap 'rm -rf -- "$temp_root"' EXIT
-for name in ${!OAOS_@}; do unset "$name"; done
+outline_mock_pid=''
+trap '[[ -z $outline_mock_pid ]] || kill "$outline_mock_pid" 2>/dev/null; rm -rf -- "$temp_root"' EXIT
+for name in ${!OAOS_@} ${!OUTLINE_@}; do unset "$name"; done
 unset HERMES_HOME SSH_CONNECTION
 # Forks run the same smoke; the owner check itself is exercised explicitly below.
 export OAOS_ALLOW_FORK=1
@@ -370,10 +371,15 @@ done
 [[ $(stat -c '%a' "$team_home/.hermes/.env") == 600 ]] || fail 'Hermes .env lost mode 600'
 grep -Fq -e "$mm_token" -e "$ol_token" "$temp_root/argv.log" && fail 'a token reached a command argument'
 [[ -f $team_home/oaos/team-onboarding.md ]] || fail 'team onboarding note missing'
+skill="$team_home/.hermes/skills/outline-wiki"
+[[ -f $skill/SKILL.md && -f $skill/scripts/outline.py && -f $skill/.oaos-managed ]] || fail 'outline-wiki skill not installed after G8'
+diff -rq -x .oaos-managed "$repo_root/skills/outline-wiki" "$skill" >/dev/null || fail 'installed outline-wiki skill differs from the repository'
 mkdir -p "$team_home/.config/systemd/user"
 touch "$team_home/.config/systemd/user/hermes-gateway.service"
 rm -rf "$team_home/.oaos-install"
+printf 'stale\n' > "$skill/SKILL.md"
 run_team "$team_home" OAOS_FAKE_GW=running >"$temp_root/team-restart.out" 2>"$temp_root/team-restart.err" || fail 'team rerun with a running gateway'
+cmp -s "$repo_root/skills/outline-wiki/SKILL.md" "$skill/SKILL.md" || fail 'managed outline-wiki skill was not refreshed'
 grep -Fq 'hermes gateway restart' "$temp_root/argv.log" || fail 'team did not restart a running gateway'
 expect_team_block() {
   local label=$1 message=$2 code=0; shift 2
@@ -390,7 +396,14 @@ OAOS_CASE='outline-admin' expect_team_block outline-admin 'workspace admin' true
 OAOS_CASE='' expect_team_block allowlist 'Mattermost user IDs allowed' sed -i '/^MATTERMOST_ALLOWED_USERS=/d' "$team_home/.hermes/.env"
 OAOS_CASE='' expect_team_block unknown-id 'allowlisted ID(s) not found' sed -i "s/^MATTERMOST_ALLOWED_USERS=.*/MATTERMOST_ALLOWED_USERS=$(printf 'z%.0s' {1..26})/" "$team_home/.hermes/.env"
 OAOS_CASE='' expect_team_block no-mailbox 'G8 needs the G9 bot mailbox' sed -i '/^OAOS_MAIL_ADDRESS=/d' "$team_home/.hermes/.env"
-printf 'PASS: team accepts only a non-admin Mattermost bot and the Outline agent account, needs the allowlist, keeps tokens off argv, restarts only a running gateway\n'
+[[ ! -e $team_home/.hermes/skills/outline-wiki ]] || fail 'outline-wiki skill installed before G8 passed'
+team_setup "$team_home"
+mkdir -p "$team_home/.hermes/skills/outline-wiki"
+printf 'owner copy\n' > "$team_home/.hermes/skills/outline-wiki/SKILL.md"
+run_team "$team_home" >"$temp_root/team-own-skill.out" 2>"$temp_root/team-own-skill.err" || fail 'team with an owner outline-wiki skill'
+[[ $(cat "$team_home/.hermes/skills/outline-wiki/SKILL.md") == 'owner copy' ]] || fail 'owner outline-wiki skill overwritten'
+grep -Fq 'not installed by OAOS exists' "$temp_root/team-own-skill.err" || fail 'owner outline-wiki skill not reported'
+printf 'PASS: team accepts only a non-admin Mattermost bot and the Outline agent account, installs the outline-wiki skill after G8, needs the allowlist, keeps tokens off argv, restarts only a running gateway\n'
 
 # --- ingress: DNS polling, ACME e-mail default, managed vhost re-render ----------------------
 ing_bin="$temp_root/ing-bin"
@@ -471,6 +484,8 @@ grep -Fqx 'OAOS_MAIL_PASSWORD=abcdefghijklmnop' "$mail_home/.hermes/.env" || fai
   . "$repo_root/bootstrap/lib/platform.sh"
   # shellcheck source=bootstrap/lib/secret.sh
   . "$repo_root/bootstrap/lib/secret.sh"
+  # shellcheck source=bootstrap/lib/mail.sh
+  . "$repo_root/bootstrap/lib/mail.sh"
   # shellcheck source=editions/project/lib.sh
   . "$repo_root/editions/project/lib.sh"
   [[ $(project_mail_default_host imap Bot@GMail.com) == imap.gmail.com && $(project_mail_default_host smtp x@googlemail.com) == smtp.gmail.com ]] || exit 1
@@ -550,7 +565,7 @@ grep -Eq 'nginx config[[:space:]]+PASS' "$temp_root/verify-perm.out" || fail 'no
 grep -Eq 'Gateway service[[:space:]]+FAIL' "$temp_root/verify-perm.out" || fail 'not-running gateway verified as healthy'
 [[ $(grep -Fcx openssl "$temp_root/sudo.log") == 3 && $(grep -Fcx nginx "$temp_root/sudo.log") == 1 ]] || fail 'privileged verifier checks were not routed through sudo'
 for row in 'Unattended approvals' 'Firewall' 'Loopback :5432' 'Loopback :6379' 'Loopback :8065' 'Loopback :3000' 'PostgreSQL bind' \
-  'Service secret files' 'Mattermost bot' 'Mattermost allowlist' 'Outline agent token' 'Outline URL' 'Gateway mattermost' 'Backup works' 'Restore dry run'; do
+  'Service secret files' 'Mattermost bot' 'Mattermost allowlist' 'Outline agent token' 'Outline URL' 'Outline skill' 'Gateway mattermost' 'Backup works' 'Restore dry run'; do
   grep -Eq "^[0-9]+ +$row +FAIL" "$temp_root/verify-perm.out" || fail "verify row '$row' is not FAIL on an empty host"
 done
 for row in 'Mattermost chat' 'Mattermost deny' 'Outline page' 'Mail flow' 'Reboot survival'; do
@@ -560,6 +575,23 @@ OAOS_FAKE_GW_STATE=running_service run_verify bash "$verify" --offline --confirm
 grep -Eq 'Gateway service[[:space:]]+PASS' "$temp_root/verify-perm-up.out" || fail 'service-mode gateway was not verified as running'
 grep -Eq 'Mattermost chat +PASS +Owner confirmed' "$temp_root/verify-perm-up.out" || fail '--confirm mm-chat not recorded'
 printf 'PASS: verify routes root reads through sudo and reports Project rows (approvals, UFW, loopback, bots, backup) as FAIL/MANUAL\n'
+
+# The installed outline-wiki helper answers auth.info and a read-only search (mock Outline API).
+ol_mock_token='ol_api_agenttoken0123456789abcdefghijklmnopqr'
+MOCK_OUTLINE_TOKEN=$ol_mock_token MOCK_OUTLINE_LOG="$temp_root/outline-requests.log" \
+  python3 "$repo_root/bootstrap/tests/fixtures/outline_api_mock.py" "$temp_root/outline.port" &
+outline_mock_pid=$!
+for _ in $(seq 1 50); do [[ -s $temp_root/outline.port ]] && break; sleep 0.1; done
+outline_port=$(cat "$temp_root/outline.port") || fail 'mock Outline API did not start'
+mkdir -p "$verify_perm_home/.hermes/skills"
+cp -R "$repo_root/skills/outline-wiki" "$verify_perm_home/.hermes/skills/outline-wiki"
+printf 'OUTLINE_URL=https://note.example.invalid\nOUTLINE_API_TOKEN=%s\n' "$ol_mock_token" > "$verify_perm_home/.hermes/.env"
+chmod 600 "$verify_perm_home/.hermes/.env"
+run_verify OAOS_OUTLINE_API="http://127.0.0.1:$outline_port" bash "$verify" --offline >"$temp_root/verify-outline.out" 2>"$temp_root/verify-outline.err" || true
+grep -Eq '^[0-9]+ +Outline skill +PASS' "$temp_root/verify-outline.out" || fail 'Outline skill row did not PASS against the mock API'
+grep -Fxq 'auth.info ok' "$temp_root/outline-requests.log" && grep -Fxq 'documents.search ok' "$temp_root/outline-requests.log" || fail 'Outline skill row did not call auth.info and search'
+grep -Fq "$ol_mock_token" "$temp_root/verify-outline.out" "$temp_root/verify-outline.err" && fail 'Outline token printed by the verifier'
+printf 'PASS: Outline skill row runs the installed helper (auth.info + read-only search)\n'
 
 # A G9 login that fails while the values exist is FAIL, not MANUAL.
 printf 'OAOS_MAIL_ADDRESS=bot@example.com\nOAOS_MAIL_PASSWORD=abcdefghijklmnop\nOAOS_MAIL_IMAP_HOST=127.0.0.1\nOAOS_MAIL_SMTP_HOST=127.0.0.1\n' > "$verify_perm_home/.hermes/.env"

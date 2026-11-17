@@ -102,7 +102,7 @@
 ## 저장소 구조
 
 ```text
-skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oaos-ops (+ 옵션: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
+skills/        OAOS와 함께 배포되는 Hermes 스킬 — oaos-bootstrap, oaos-ops, outline-wiki(Project) (+ 옵션: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
 harness/       설정 파일 템플릿(SOUL/USER/MEMORY/AGENTS) + 시딩 가이드
 editions/      에디션별 안내 페이지 — personal / project / company
 docs/          architecture.md · cookbook.md · faq.md
@@ -115,6 +115,7 @@ OAOS와 함께 **코어 스킬**이 배포됩니다 — Hermes로 설치 가능�
 
 - **[`skills/oaos-bootstrap`](skills/oaos-bootstrap/SKILL.md)** — 부트스트랩 오케스트레이터: 환경 점검 → 에디션 선택 → 구축 → 게이트 → 검증 → 보고. 사용자가 이 저장소의 URL을 에이전트에게 건네면 실행되는 절차입니다.
 - **[`skills/oaos-ops`](skills/oaos-ops/SKILL.md)** — 운영(day-2): 상태 점검, 백업, 업데이트, 복구, 로그 확인.
+- **[`skills/outline-wiki`](skills/outline-wiki/SKILL.md)** — Project: 비관리자 AI 에이전트 계정(G8)으로 Outline 문서를 검색·읽기·생성·수정합니다. Project 설치기가 G8 통과 후 설치하며, 토큰은 Hermes `.env`에만 있습니다.
 
 ```bash
 hermes skills install openit-ai/open-agent-os/skills/oaos-bootstrap

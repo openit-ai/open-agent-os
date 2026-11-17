@@ -19,6 +19,13 @@
 #
 #   oaos_hermes_env_file      prints the Hermes .env path.
 #   oaos_secret_present KEY   exit 0 when KEY has a non-empty assignment in the .env; prints nothing.
+#   oaos_env_get KEY          prints KEY's value from the .env (unquoted the way oaos_secret_set
+#                             writes it); exit 0 when set and non-empty, 1 otherwise.
+#   oaos_gate_value KEY       non-secret gate value: the .env first, otherwise the same-named
+#                             process variable, which is then stored in the .env.
+#   oaos_secret_value KEY     secret gate value: the .env only; a same-named process variable is
+#                             refused with a warning (it usually came from a command line).
+#   oaos_env_put KEY VALUE    stores a non-secret VALUE (URL, host, allowlist) without argv.
 #
 # Command-line wrapper: bash bootstrap/bin/oaos-secret-set KEY
 # Typical use is the owner typing at the hidden prompt in their own terminal, so the
@@ -117,4 +124,54 @@ oaos_secret_set() {
     return 3
   fi
   printf 'Stored %s in %s (value hidden; owner-only protection read back).\n' "$key" "$env_file" >&2
+}
+
+oaos_env_get() {
+  local key=$1 env_file line value found=''
+  oaos_secret_valid_key "$key" || return 1
+  env_file=$(oaos_hermes_env_file) || return 1
+  [[ -f $env_file ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    oaos_env_line_defines "$line" "$key" || continue
+    value=${line#*=}
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    if [[ $value == \"*\" && ${#value} -ge 2 ]]; then
+      value=${value:1:${#value}-2}
+      value=${value//\\\"/\"}
+      value=${value//\\\\/\\}
+    elif [[ $value == \'*\' && ${#value} -ge 2 ]]; then
+      value=${value:1:${#value}-2}
+    fi
+    found=$value
+  done < "$env_file"
+  [[ -n $found ]] || return 1
+  printf '%s' "$found"
+}
+
+oaos_gate_value() {
+  local key=$1 value
+  if value=$(oaos_env_get "$key"); then printf '%s' "$value"; return 0; fi
+  oaos_secret_valid_key "$key" || return 1
+  value=${!key:-}
+  [[ -n $value ]] || return 1
+  if [[ ${OAOS_DRY_RUN:-0} != 1 ]]; then
+    printf '%s' "$value" | oaos_secret_set "$key" 2>/dev/null || return 1
+  fi
+  printf '%s' "$value"
+}
+
+oaos_secret_value() {
+  local key=$1
+  oaos_secret_valid_key "$key" || return 1
+  if [[ -n ${!key:-} ]]; then
+    warn "$key in the process environment is ignored; store it with: bash bootstrap/bin/oaos-secret-set $key"
+  fi
+  oaos_env_get "$key"
+}
+
+oaos_env_put() {
+  [[ ${OAOS_DRY_RUN:-0} != 1 ]] || return 0
+  [[ $(oaos_env_get "$1" 2>/dev/null || true) == "$2" ]] && return 0
+  printf '%s' "$2" | oaos_secret_set "$1" 2>/dev/null
 }

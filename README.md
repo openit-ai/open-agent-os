@@ -102,7 +102,7 @@ The agent does the reading, the file edits, and the commands. You only handle th
 ## Repository map
 
 ```text
-skills/        Hermes skills shipped with OAOS — oaos-bootstrap, oaos-ops (+ optional: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
+skills/        Hermes skills shipped with OAOS — oaos-bootstrap, oaos-ops, outline-wiki (Project) (+ optional: promo-video-generation, higgsfield-media-generation, figma-design-generation, naver-cafe-manager, naver-blog-manager, sketchup-design-generation, vps-youtube-content)
 harness/       config file templates (SOUL/USER/MEMORY/AGENTS) + seeding guide
 editions/      Edition landing pages — personal / project / company
 docs/          architecture.md · cookbook.md · faq.md
@@ -115,6 +115,7 @@ Core skills ship with OAOS — plain `SKILL.md` packages installable with Hermes
 
 - **[`skills/oaos-bootstrap`](skills/oaos-bootstrap/SKILL.md)** — the bootstrap orchestrator: environment check → edition selection → setup → gates → verify → report. This is what runs when you hand your agent this repository's URL.
 - **[`skills/oaos-ops`](skills/oaos-ops/SKILL.md)** — day-2 operations: health checks, backups, updates, restores, log inspection.
+- **[`skills/outline-wiki`](skills/outline-wiki/SKILL.md)** — Project: search, read, create and update Outline documents as the non-admin AI-agent account (gate G8). The Project installer installs it after G8; the token stays in the Hermes `.env`.
 
 ```bash
 hermes skills install openit-ai/open-agent-os/skills/oaos-bootstrap
