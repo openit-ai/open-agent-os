@@ -123,13 +123,26 @@ company_c10_verify() {
              (SELECT count(*) FROM company.members WHERE role = 'member' AND state = 'active')" \
     2>/dev/null) || evidence=''
   IFS='|' read -r complete login mapped <<< "${evidence%%$'\n'*}"
+  # O6: the console definer functions run as a role without DDL rights.
+  if ! company_db_runtime_boundary; then
+    printf '%-30s FAIL\n' 'Definer and runtime roles'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
   printf '%-30s PASS\n' 'Migration SHA-256/version 11'
   printf '%-30s PASS\n' 'HTTPS G10 setup link'
   printf '%-30s PASS\n' 'Console service and loopback health'
   if [[ $complete != t ]]; then
     # The SQL contract creates a fixture organization, which the single-org
-    # G10 flow only accepts before the real setup completes.
-    if ! psql -X -q -v ON_ERROR_STOP=1 \
+    # G10 flow only accepts before the real setup completes. It runs through
+    # the maintenance path so the fixtures the runtime may no longer write
+    # (021) use the owner role; every check itself runs as the runtime login.
+    local runtime
+    runtime=$(psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT current_user' 2>/dev/null) || runtime=''
+    if [[ ! $runtime =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || ! company_maint_socket_ok ||
+       ! company_maint psql --host="$(company_maint_socket)" --port="${PGPORT:-5432}" \
+        --dbname="$PGDATABASE" -X -q -v ON_ERROR_STOP=1 -v runtime="$runtime" \
+        -v owner="$OAOS_COMPANY_DB_OWNER" \
         -f "$repo_root/editions/company/readback/c10-readback.sql" >/dev/null 2>&1; then
       printf '%-30s FAIL\n' 'G10 setup/login SQL contract'
       printf 'Summary: PASS=3 FAIL=1 MANUAL=0 SKIP=0\n'

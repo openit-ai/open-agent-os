@@ -207,3 +207,28 @@ for i in "${!amend_files[@]}"; do
   apply_file "$file" "$version" "$checksum" || die "Migration $version failed; transaction rolled back."
   info "Migration $version applied."
 done
+
+# SECURITY DEFINER functions belong to a role without DDL rights (O6/O7). A
+# function owner needs CREATE on its schema, so db-definers.sql hands them over
+# through the maintenance account after the migrations of a run; --check reports
+# a still owner-owned definer function as pending.
+if [[ -n $owner ]]; then
+  definers_pending=$(db_query "SELECT EXISTS (
+      SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'company' AND p.prosecdef
+         AND has_schema_privilege(p.proowner, n.oid, 'CREATE')
+         AND (p.proname NOT LIKE 'console\\_%'
+              OR (to_regclass('company.schema_migrations') IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM company.schema_migrations WHERE version = 22))))") ||
+    die 'Cannot inspect definer function ownership.'
+  if [[ $definers_pending == t ]]; then
+    if ((check_only)); then
+      info 'Definer function ownership is pending.'
+      exit 3
+    fi
+    prepare_roles
+    privileged_psql -f "$repo_root/editions/company/migrations/db-definers.sql" >/dev/null 2>&1 ||
+      die 'Definer function ownership transfer failed.'
+    info 'Definer functions handed to their roles without DDL rights.'
+  fi
+fi

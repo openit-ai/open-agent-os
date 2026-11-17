@@ -40,13 +40,22 @@ company_c05_verify() {
     printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
     return 1
   fi
+  # O5: every key version an active credential uses is in the EnvironmentFile
+  # (read back through the maintenance login, counts only).
+  if ! python3 "$repo_root/editions/company/app/vault.py" check-usage \
+      "$HOME/.config/oaos-company/.env" >/dev/null 2>&1; then
+    printf '%-28s FAIL\n' 'Key versions in use'
+    printf 'Summary: PASS=0 FAIL=1 MANUAL=0 SKIP=0\n'
+    return 1
+  fi
   printf '%-28s PASS\n' 'Migration SHA-256/version 4'
   printf '%-28s PASS\n' 'Restricted AES-GCM key'
   printf '%-28s PASS\n' 'Owner envelope and use'
   printf '%-28s PASS\n' 'Other owner denied'
   printf '%-28s PASS\n' 'Rotation and old generation'
+  printf '%-28s PASS\n' 'Key versions in use'
   printf '%-28s PASS\n' 'Revocation and audit history'
   printf '%-28s PASS\n' 'Tenant isolation and rollback'
-  printf 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0\n'
+  printf 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0\n'
   stage_mark c05 verified 'C05 E personal credential SQL responses passed; fixture rolled back'
 }

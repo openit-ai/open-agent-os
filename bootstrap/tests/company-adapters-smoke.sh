@@ -244,7 +244,7 @@ grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01-regression" ||
 bash "$verify" --phase c04 --read-back > "$temp_root/c04-regression" || fail 'C04 read-back after migration 7'
 grep -Fq 'Summary: PASS=5 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c04-regression" || fail 'C04 regression summary'
 bash "$verify" --phase c05 --read-back > "$temp_root/c05-regression" || fail 'C05 read-back after migration 7'
-grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c05-regression" || fail 'C05 regression summary'
+grep -Fq 'Summary: PASS=8 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c05-regression" || fail 'C05 regression summary'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'adapt-%'") == 0 ]] || fail 'fixture rollback'
 printf 'PASS: idempotence, backups and C01/C04/C05 regression\n'
 

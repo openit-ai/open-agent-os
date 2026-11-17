@@ -11,6 +11,8 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 mkdir -p "$temp_root/home/.oaos-install" "$temp_root/home/.config/oaos-company" \
   "$temp_root/bin" "$temp_root/backup" "$temp_root/key-backup" "$temp_root/rollback"
 chmod 700 "$temp_root/backup" "$temp_root/key-backup" "$temp_root/rollback"
+# C02 creates the Company config directory 0700 (the job password file lives there).
+chmod 700 "$temp_root/home/.config/oaos-company"
 printf 'server { listen 443 ssl; }\n' > "$temp_root/vhost.conf"
 python3 - "$temp_root/home/.oaos-install/company-state.json" <<'PY'
 import json, sys

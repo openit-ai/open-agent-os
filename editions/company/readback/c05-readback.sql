@@ -128,6 +128,23 @@ BEGIN
         AND resource_ref = secret_a::text AND metadata->>'generation' = '2') <> 1 THEN
     RAISE EXCEPTION 'rotation audit event missing';
   END IF;
+  -- 024: key rotation functions are maintenance-only, and a runtime session
+  -- that sets the re-encryption marker itself still performs an ordinary
+  -- rotation (new generation, 'rotated' audit), never a silent re-encryption.
+  IF has_function_privilege('company.vault_rekey_secret(uuid, integer, bytea, bytea, bytea, integer)', 'EXECUTE')
+     OR has_function_privilege('company.vault_key_inventory(integer, integer, uuid)', 'EXECUTE')
+     OR has_function_privilege('company.vault_key_usage()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'runtime may run the vault key rotation';
+  END IF;
+  PERFORM set_config('company.vault_rekey', 'on', true);
+  UPDATE company.secrets SET ciphertext = old_envelope, nonce = old_nonce, key_version = 3
+   WHERE id = secret_a;
+  PERFORM set_config('company.vault_rekey', 'off', true);
+  IF (SELECT generation FROM company.secrets WHERE id = secret_a) <> generation_a + 2
+     OR (SELECT count(*) FROM company.audit_events
+          WHERE resource_ref = secret_a::text AND action = 'rekeyed') <> 0 THEN
+    RAISE EXCEPTION 'runtime re-encrypted a credential without a new generation';
+  END IF;
   -- The runtime role has no UPDATE on audit rows (migration 013); a
   -- permission error is the expected append-only answer.
   changed := 0;

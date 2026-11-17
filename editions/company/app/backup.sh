@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Company edition: see LICENSE-COMPANY at the repository root.
 # Installed by C02 as the oaos-company-backup.service ExecStart. The
-# EnvironmentFile supplies only non-secret paths and PGDATABASE.
+# EnvironmentFile supplies only non-secret paths, PGDATABASE and PGPORT.
 #
-# FORCE RLS makes a runtime-role pg_dump fail ("query would be affected by
-# row-level security policy"), so the dump runs through the local postgres
-# maintenance account, exactly like the C03-C17 pre-migration dumps; the Company
-# account only receives the output stream. No credential is passed.
+# FORCE RLS makes a dump fail for any role that does not bypass RLS, so the dump
+# runs as the dedicated read-only job role oaos_company_backup (BYPASSRLS,
+# pg_read_all_data, no write privilege; db-jobs.sql) over loopback TCP with the
+# Company account's own 0600 libpq password file. No root, postgres account or
+# privilege change is involved, so the unit runs with NoNewPrivileges.
 #
 # Retention: 7 newest daily dumps plus the newest dump of each of the 4 most
 # recent older ISO weeks. The matching state and EnvironmentFile copies follow
@@ -15,10 +16,10 @@
 set -Eeuo pipefail
 umask 077
 [[ ${PGDATABASE:-} =~ ^[A-Za-z_][A-Za-z0-9_]*$ && ${OAOS_COMPANY_BACKUP_DIR:-} && ${OAOS_COMPANY_KEY_BACKUP_DIR:-} ]] || exit 1
-socket_dir=${OAOS_COMPANY_PG_SOCKET_DIR:-/var/run/postgresql}
 port=${PGPORT:-5432}
-[[ $socket_dir =~ ^/[A-Za-z0-9_./-]+$ && -d $socket_dir && $port =~ ^[0-9]{1,5}$ ]] || exit 1
-maintenance() { if ((EUID == 0)); then "$@"; else sudo -n "$@"; fi; }
+passfile="${HOME:?}/.config/oaos-company/db-jobs.pgpass"
+[[ $port =~ ^[0-9]{1,5}$ && -f $passfile && ! -L $passfile ]] || exit 1
+[[ $(stat -c %a "$passfile") == 600 && $(stat -c %u "$passfile") == "$(id -u)" ]] || exit 1
 
 mkdir -p "$OAOS_COMPANY_BACKUP_DIR" "$OAOS_COMPANY_KEY_BACKUP_DIR"
 chmod 700 "$OAOS_COMPANY_BACKUP_DIR" "$OAOS_COMPANY_KEY_BACKUP_DIR"
@@ -26,9 +27,10 @@ stamp=$(date -u +%Y%m%dT%H%M%SZ)
 target="$OAOS_COMPANY_BACKUP_DIR/company-$stamp.dump"
 tmp=$(mktemp "$target.tmp.XXXXXX")
 trap 'rm -f -- "$tmp"' EXIT
-maintenance runuser -u postgres -- env -u PGOPTIONS -u PGHOSTADDR -u PGHOST -u PGUSER \
-  -u PGSERVICE -u PGPASSFILE -u PGPASSWORD \
-  pg_dump --host="$socket_dir" --port="$port" --dbname="$PGDATABASE" --format=custom > "$tmp"
+env -u PGOPTIONS -u PGSERVICE -u PGSERVICEFILE -u PGPASSWORD \
+  PGHOST=127.0.0.1 PGHOSTADDR=127.0.0.1 PGPORT="$port" PGUSER=oaos_company_backup \
+  PGPASSFILE="$passfile" PGCONNECT_TIMEOUT=10 \
+  pg_dump --dbname="$PGDATABASE" --format=custom > "$tmp"
 test -s "$tmp"
 pg_restore --list "$tmp" >/dev/null
 chmod 600 "$tmp"
