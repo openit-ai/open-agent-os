@@ -178,7 +178,7 @@ bash bootstrap/verify/company-verify.sh --phase cNN --read-back
 | # | 위협 | 현재 상태와 다음 조치 |
 |---|---|---|
 | O1 | ~~001 `member_scope`가 같은 조직의 모든 세션에 `members` UPDATE를 허용(역할 상승 가능)~~ | **수정됨(T16, 019).** 본인 정지·퇴사도 다른 관리자가 처리(본인 역할·상태 변경은 일괄 거부) |
-| O2 | 정책·JIT·Vault·라우팅이 DB 수준에서만 강제되고 런타임 비서 요청 경로가 호출하지 않음 | 서비스 API에서 `authorize_action`·`identity_isolation_decision`·`llm_route_decision`을 단일 진입점으로 호출 |
+| O2 | 정책·JIT·Vault·라우팅이 DB 수준에서만 강제되고 런타임 비서 요청 경로가 호출하지 않음 | 서비스 API에서 `authorize_action`·`identity_isolation_decision`·`llm_route_decision`을 단일 진입점으로 호출 — 설계 제안 [ADR 0001](adr/0001-company-runtime-governance.md) |
 | O3 | OAuth 콜백·Slack 이벤트 수신 미구현, 왕복 증거를 쓰는 주체 없음 | 런타임 어댑터가 실제 왕복 후 `integration/external_roundtrip` 감사 행 기록 |
 | O4 | 키 백업 복원과 RTO 4시간 실측 미실시 | C17 드릴에 키 복원·시간 측정 추가 |
 | O5 | Vault 키 회전 미구현 | 키 버전별 재암호화 절차와 read-back |
