@@ -3,6 +3,7 @@
 # Company edition: see LICENSE-COMPANY at the repository root.
 # Shared Company helpers. Sourced (after bootstrap/lib/common.sh) by the phase
 # scripts, verify scripts and install.sh. Never prints credentials.
+repo_root=${repo_root:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
 
 # Absolute, normalized path without traversal or shell metacharacters.
 company_valid_path() {
@@ -36,6 +37,63 @@ company_maint_dump() {
     --dbname="$PGDATABASE" --format=custom > "$target" 2>/dev/null) || return 1
   [[ -s $target ]] || return 1
   chmod 600 "$target"
+}
+
+# Job roles (O7). The daily backup and retention jobs, the C17 recovery drill's
+# key check and the vault rotation connect over loopback TCP as a dedicated
+# login role with the Company account's 0600 libpq password file, so no job
+# needs root or the postgres account. company_db_job <role> <command...> runs a
+# command with only that role's connection settings.
+company_db_jobs_passfile() { printf '%s' "$HOME/.config/oaos-company/db-jobs.pgpass"; }
+company_db_job() {
+  local role=$1
+  shift
+  env -u PGOPTIONS -u PGSERVICE -u PGSERVICEFILE -u PGPASSWORD -u PGSSLMODE \
+    PGHOST=127.0.0.1 PGHOSTADDR=127.0.0.1 PGPORT="${PGPORT:-5432}" PGUSER="$role" \
+    PGPASSFILE="$(company_db_jobs_passfile)" PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-5}" "$@"
+}
+company_db_job_login() {
+  [[ $(company_db_job "$1" psql -X -q -A -t --dbname="$PGDATABASE" -c 'SELECT 1' 2>/dev/null) == 1 ]]
+}
+# Creates or re-asserts the job roles (db-jobs.sql) through the maintenance
+# account and, when a job login does not work yet, stores generated passwords
+# in the password file and sends only their SCRAM verifiers on standard input.
+company_db_jobs_ensure() {
+  local socket file port=${PGPORT:-5432}
+  socket=$(company_maint_socket)
+  file=$(company_db_jobs_passfile)
+  company_maint_socket_ok || return 1
+  company_maint psql --host="$socket" --port="$port" --dbname="$PGDATABASE" -X -q \
+    -v ON_ERROR_STOP=1 --single-transaction \
+    -f "$repo_root/editions/company/migrations/db-jobs.sql" >/dev/null 2>&1 || return 1
+  if [[ -f $file ]] && company_db_job_login oaos_company_backup &&
+     company_db_job_login oaos_company_maint; then
+    return 0
+  fi
+  python3 "$repo_root/editions/company/app/db-jobs.py" ensure "$file" "$port" |
+    company_maint psql --host="$socket" --port="$port" --dbname="$PGDATABASE" -X -q \
+      -v ON_ERROR_STOP=1 --single-transaction >/dev/null 2>&1 || return 1
+  company_db_job_login oaos_company_backup && company_db_job_login oaos_company_maint
+}
+
+# Hardening lines of the backup and maintenance oneshot units (O7). Both jobs
+# run without root, so they keep NoNewPrivileges. [writable paths] become the
+# only ReadWritePaths. company_job_unit_hardened checks a unit and its script.
+# shellcheck disable=SC2120 # C02 passes the writable backup paths
+company_job_unit_hardening() {
+  printf '%s\n' NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict \
+    ProtectHome=read-only RestrictSUIDSGID=yes LockPersonality=yes
+  if [[ -n ${1:-} ]]; then printf 'ReadWritePaths=%s\n' "$1"; fi
+}
+company_job_unit_hardened() {
+  local unit=$1 script=$2 line
+  [[ -f $unit && -f $script ]] || return 1
+  while IFS= read -r line; do
+    [[ $line == ReadWritePaths=* ]] && continue
+    grep -Fxq "$line" "$unit" || return 1
+  done < <(company_job_unit_hardening)
+  # A job that still escalates (sudo, runuser, su) cannot run under these units.
+  ! grep -v '^[[:space:]]*#' "$script" | grep -Eq '(^|[^A-Za-z0-9_-])(sudo|runuser|su)([^A-Za-z0-9_-]|$)'
 }
 
 # Runtime-role statement inside the session context of one organization and

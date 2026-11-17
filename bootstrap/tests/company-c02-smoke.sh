@@ -40,9 +40,11 @@ if [[ ${1:-} == --user ]]; then
       unit="$HOME/.config/systemd/user/$2"
       env_file=$(sed -n 's/^EnvironmentFile=//p' "$unit")
       exec_start=$(sed -n 's/^ExecStart=//p' "$unit")
-      ! grep -Fxq 'NoNewPrivileges=yes' "$unit" || { printf 'sudo blocked by NoNewPrivileges\n' >&2; exit 1; }
+      # NoNewPrivileges: any sudo/runuser inside the job fails, as on systemd.
+      nnp=0
+      if grep -Fxq 'NoNewPrivileges=yes' "$unit"; then nnp=1; fi
       mapfile -t vars < <(grep -E '^[A-Z_]+=' "$env_file")
-      env -i HOME="$HOME" PATH="$PATH" "${vars[@]}" $exec_start ;;
+      env -i HOME="$HOME" PATH="$PATH" OAOS_C02_NNP="$nnp" "${vars[@]}" $exec_start ;;
     show) printf 'success\n' ;;
   esac
 else
@@ -73,12 +75,28 @@ set -Eeuo pipefail
 for arg in "$@"; do
   if [[ $arg == --file=* ]]; then printf 'mock custom dump\n' > "${arg#--file=}"; exit 0; fi
 done
-# The daily job must dump as the postgres maintenance account (FORCE RLS).
-[[ ${OAOS_C02_AS_POSTGRES:-0} == 1 ]] || { printf 'query would be affected by row-level security policy\n' >&2; exit 1; }
+# The pre-install dump runs as the postgres maintenance account; the daily job
+# runs as the read-only BYPASSRLS job role with the Company password file.
+if [[ ${OAOS_C02_AS_POSTGRES:-0} != 1 ]]; then
+  [[ ${PGUSER:-} == oaos_company_backup && ${PGHOST:-} == 127.0.0.1 && -z ${PGPASSWORD:-} ]] || { printf 'query would be affected by row-level security policy\n' >&2; exit 1; }
+  [[ $(stat -c %a "${PGPASSFILE:-/nonexistent}" 2>/dev/null) == 600 ]] || { printf 'password authentication failed\n' >&2; exit 1; }
+fi
 printf 'mock custom dump\n'
+EOF
+cat > "$temp_root/bin/psql" <<'EOF'
+#!/usr/bin/env bash
+# Maintenance-account role setup (-f / stdin) and job-role login probes (-c).
+for arg in "$@"; do
+  case $arg in
+    -c) printf '1\n'; exit 0 ;;
+    -f) exit 0 ;;
+  esac
+done
+cat > /dev/null
 EOF
 cat > "$temp_root/bin/runuser" <<'EOF'
 #!/usr/bin/env bash
+[[ ${OAOS_C02_NNP:-0} != 1 ]] || { printf 'runuser: cannot set groups: Operation not permitted\n' >&2; exit 1; }
 [[ ${1:-} == -u && ${2:-} == postgres && ${3:-} == -- ]] || exit 1
 shift 3
 OAOS_C02_AS_POSTGRES=1 exec "$@"
@@ -93,6 +111,7 @@ exit 0
 EOF
 cat > "$temp_root/bin/sudo" <<'EOF'
 #!/usr/bin/env bash
+[[ ${OAOS_C02_NNP:-0} != 1 ]] || { printf 'sudo: no new privileges flag is set\n' >&2; exit 1; }
 shift
 "$@"
 EOF
@@ -148,6 +167,15 @@ grep -Fq 'location /company/' "$temp_root/vhost.conf" || fail 'Company nginx rou
 grep -Fq 'location = /company/oauth/callback' "$temp_root/vhost.conf" || fail 'OAuth callback nginx route'
 [[ $(stat -c %a "$HOME/.config/oaos-company/.env") == 600 ]] || fail 'environment permissions'
 [[ $(stat -c %a "$HOME/.config/oaos-company") == 700 ]] || fail 'environment directory permissions'
+# O7: the backup unit is hardened and the job password file is 0600.
+unit="$HOME/.config/systemd/user/oaos-company-backup.service"
+for line in NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict ProtectHome=read-only; do
+  grep -Fxq "$line" "$unit" || fail "backup unit lacks $line"
+done
+grep -Fxq "ReadWritePaths=$temp_root/backup $temp_root/key-backup" "$unit" || fail 'backup unit writable paths'
+[[ $(stat -c %a "$HOME/.config/oaos-company/db-jobs.pgpass") == 600 ]] || fail 'job password file mode'
+[[ $(grep -c '^127\.0\.0\.1:5432:\*:oaos_company_\(backup\|maint\):[0-9a-f]\{64\}$' "$HOME/.config/oaos-company/db-jobs.pgpass") == 2 ]] || fail 'job password file entries'
+! grep -Eq '[0-9a-f]{64}' "$temp_root/first" || fail 'job password printed by the installer'
 python3 - "$HOME/.oaos-install/company-state.json" <<'PY' || fail 'applied state'
 import json, sys
 assert json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c02']['status'] == 'applied'
@@ -192,7 +220,23 @@ systemctl --user start oaos-company-backup.service || fail 'backup job'
 ! find "$temp_root/backup" "$temp_root/key-backup" -type f ! -perm 0600 | grep . >/dev/null || fail 'backup file modes'
 latest=$(< "$temp_root/backup/last-success")
 [[ -s $temp_root/backup/company-$latest.dump && -s $temp_root/key-backup/company-env-$latest ]] || fail 'latest backup set'
-printf 'PASS: daily backup runs as the maintenance account with 7+4 rotation and 0700/0600 modes\n'
+printf 'PASS: daily backup runs as the read-only job role under NoNewPrivileges with 7+4 rotation and 0700/0600 modes\n'
+
+# A backup unit without NoNewPrivileges, or a job that escalates again, fails
+# the read-back hardening row.
+cp -p "$unit" "$temp_root/unit.saved"
+sed -i '/^NoNewPrivileges=yes$/d' "$unit"
+code=0
+env -i PATH="$PATH" HOME="$HOME" OAOS_C02_CALLS="$OAOS_C02_CALLS" OAOS_NO_LOG_FILE=1 bash "$verify" --phase c02 --read-back > "$temp_root/verify-weak" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Backup unit hardening +FAIL' "$temp_root/verify-weak" || { cat "$temp_root/verify-weak" >&2; fail 'unhardened backup unit accepted'; }
+cp -p "$temp_root/unit.saved" "$unit"
+cp -p "$HOME/.local/lib/oaos-company/backup.sh" "$temp_root/backup.saved"
+printf 'sudo -n true\n' >> "$HOME/.local/lib/oaos-company/backup.sh"
+code=0
+env -i PATH="$PATH" HOME="$HOME" OAOS_C02_CALLS="$OAOS_C02_CALLS" OAOS_NO_LOG_FILE=1 bash "$verify" --phase c02 --read-back > "$temp_root/verify-sudo" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Backup unit hardening +FAIL' "$temp_root/verify-sudo" || { cat "$temp_root/verify-sudo" >&2; fail 'escalating backup job accepted'; }
+cp -p "$temp_root/backup.saved" "$HOME/.local/lib/oaos-company/backup.sh"
+printf 'PASS: backup unit hardening and no-escalation read-back\n'
 
 # A failed nginx syntax check must restore the original vhost and leave C02 unverified.
 sed -i '/# OAOS Company C02 begin/,/# OAOS Company C02 end/d' "$temp_root/vhost.conf"

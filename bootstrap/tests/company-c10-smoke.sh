@@ -241,6 +241,35 @@ print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c10']['status'])
 PY
 ) == applied ]] || fail 'MANUAL read-back must keep C10 applied'
 [[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.organizations WHERE slug LIKE 'c10-%'") == 0 ]] || fail 'fixture rollback'
+# O9 (migration 021): the runtime role cannot lift a lockout or store a setup
+# code; the read-back fails when such a write is possible again.
+[[ $(psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.schema_migrations WHERE version = 21") == 1 ]] || fail 'migration 021 applied'
+! psql -X -q -v ON_ERROR_STOP=1 -c 'DELETE FROM company.console_lockouts' >/dev/null 2>&1 || fail 'runtime deleted console_lockouts'
+! psql -X -q -v ON_ERROR_STOP=1 -c "INSERT INTO company.console_setup_codes(org_id, project_user_id, code_hash, expires_at, request_id) VALUES (gen_random_uuid(), 'x', repeat('a', 64), now() + interval '1 minute', 'r')" >/dev/null 2>&1 || fail 'runtime inserted console_setup_codes'
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'GRANT DELETE ON company.console_lockouts TO oaos_company_runtime' >/dev/null
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/o9-regressed" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Fq 'G10 setup/login SQL contract' "$temp_root/o9-regressed" || { cat "$temp_root/o9-regressed" >&2; fail 'read-back must fail when the runtime can delete lockouts'; }
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'REVOKE DELETE ON company.console_lockouts FROM oaos_company_runtime' >/dev/null
+# O6 (migration 022 + db-definers.sql): every console SECURITY DEFINER function
+# belongs to oaos_company_definer, which has no DDL rights and no login.
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'company' AND p.prosecdef AND p.proname LIKE 'console%' AND p.proowner <> 'oaos_company_definer'::regrole") == 0 ]] || fail 'definer functions owned by oaos_company_definer'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'company' AND p.prosecdef AND p.proname LIKE 'console%'") == 16 ]] || fail 'console definer functions present'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT has_schema_privilege('oaos_company_definer', 'company', 'CREATE') OR has_database_privilege('oaos_company_definer', current_database(), 'CREATE') OR rolcanlogin OR rolbypassrls OR pg_has_role('oaos_company_definer', 'oaos_company_owner', 'MEMBER') FROM pg_roles WHERE rolname = 'oaos_company_definer'") == f ]] || fail 'definer role has DDL, login or owner rights'
+! env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'SET ROLE oaos_company_definer; CREATE TABLE company.o6_probe(id int)' >/dev/null 2>&1 || fail 'definer role created a table'
+! env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'SET ROLE oaos_company_definer; ALTER TABLE company.console_lockouts DISABLE ROW LEVEL SECURITY' >/dev/null 2>&1 || fail 'definer role altered a table'
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'ALTER FUNCTION company.console_setup_status() OWNER TO oaos_company_owner' >/dev/null
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/o6-regressed" 2>&1 || code=$?
+[[ $code == 3 ]] && grep -Fq 'C10 migration is pending' "$temp_root/o6-regressed" || { cat "$temp_root/o6-regressed" >&2; fail 'read-back must not pass with an owner-owned definer function'; }
+code=0
+(OAOS_NO_LOG_FILE=1; . "$repo_root/bootstrap/lib/common.sh"; . "$repo_root/editions/company/verify/c02-verify.sh"; company_db_runtime_boundary) || code=$?
+[[ $code == 1 ]] || fail 'runtime/definer boundary must reject an owner-owned definer function'
+code=0
+OAOS_COMPANY_DB_OWNER=oaos_company_owner bash "$repo_root/editions/company/lib/migrate.sh" --check --through 11 >/dev/null 2>&1 || code=$?
+[[ $code == 3 ]] || fail 'migrate --check must report pending definer ownership'
+OAOS_COMPANY_DB_OWNER=oaos_company_owner bash "$repo_root/editions/company/lib/migrate.sh" --through 11 >/dev/null 2>&1 || fail 'migrate restores definer ownership'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT proowner::regrole::text FROM pg_proc WHERE oid = 'company.console_setup_status()'::regprocedure") == oaos_company_definer ]] || fail 'definer ownership restored'
 # A plain-HTTP-only console (no working HTTPS path) fails the G10 link check.
 code=0
 OAOS_C10_NO_TLS=1 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c10 --read-back > "$temp_root/no-https" 2>&1 || code=$?
@@ -329,3 +358,32 @@ print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c10']['status'])
 PY
 ) == verified ]] || fail 'verified checkpoint'
 printf 'PASS: C10 verified only after a real admin login over the HTTPS link\n'
+
+# O8: every read-back left an evidence JSON (0600 in a 0700 directory) and no
+# EnvironmentFile or job password value appears in any of them.
+evidence_dir="$HOME/.oaos-install/evidence"
+[[ $(stat -c %a "$evidence_dir") == 700 ]] || fail 'evidence directory mode'
+[[ $(find "$evidence_dir" -name 'company-c10-*.json' | wc -l) -ge 3 ]] || fail 'c10 evidence files'
+! find "$evidence_dir" -type f ! -perm 0600 | grep . >/dev/null || fail 'evidence file modes'
+secrets_seen=0
+while IFS='=' read -r name value; do
+  [[ $name =~ (KEY|SECRET|TOKEN|PASSWORD) && ${#value} -ge 6 ]] || continue
+  secrets_seen=$((secrets_seen + 1))
+  ! grep -rFq -- "$value" "$evidence_dir" || fail "secret value of $name reached evidence"
+done < "$HOME/.config/oaos-company/.env"
+((secrets_seen >= 1)) || fail 'no seeded secret to check'
+while IFS=: read -r _ _ _ _ value; do
+  ! grep -rFq -- "$value" "$evidence_dir" || fail 'job password reached evidence'
+done < "$HOME/.config/oaos-company/db-jobs.pgpass"
+python3 - "$evidence_dir" <<'PY' || fail 'verified evidence content'
+import glob, hashlib, json, os, sys
+docs = [json.load(open(p, encoding='utf-8')) for p in glob.glob(os.path.join(sys.argv[1], 'company-c10-*.json'))]
+ok = [d for d in docs if d['verify']['exit_code'] == 0 and d['final_state'] == 'verified']
+assert ok, 'no verified evidence'
+d = ok[0]
+assert d['environment'].startswith('E-') and d['checks'] and all(c['status'] == 'PASS' for c in d['checks'])
+assert d['summary']['fail'] == 0 and d['manual'] == []
+assert hashlib.sha256(d['stdout']['redacted'].encode()).hexdigest() == d['stdout']['sha256']
+assert any(x['verify']['exit_code'] != 0 for x in docs), 'failed or manual runs are recorded too'
+PY
+printf 'PASS: c10 read-back evidence JSON without secrets\n'

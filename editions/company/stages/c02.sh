@@ -128,10 +128,11 @@ NoNewPrivileges=yes
 [Install]
 WantedBy=default.target
 EOF
-  # The dump must run as the local postgres maintenance account (FORCE RLS
-  # blocks a runtime-role pg_dump), reached with the same non-interactive root
-  # access C02 requires; NoNewPrivileges would block that, so this oneshot unit
-  # omits it. The script accepts no input and writes only the backup paths.
+  # The dump runs as the read-only BYPASSRLS job role oaos_company_backup with
+  # the Company account's own password file (O7), so the oneshot unit needs no
+  # root and is hardened: no privilege gain, private /tmp, read-only system
+  # and home, writes only to the two backup directories.
+  company_db_jobs_ensure || { warn 'C02 BLOCKED: database job roles or their password file could not be prepared.'; return 3; }
   cat > "$unit_dir/oaos-company-backup.service" <<EOF
 [Unit]
 Description=OAOS Company daily E backup
@@ -141,6 +142,7 @@ Type=oneshot
 EnvironmentFile=$config_dir/.env
 ExecStart=$app_dir/backup.sh
 UMask=0077
+$(company_job_unit_hardening "$OAOS_COMPANY_BACKUP_DIR $OAOS_COMPANY_KEY_BACKUP_DIR")
 EOF
   cat > "$unit_dir/oaos-company-backup.timer" <<'EOF'
 [Unit]

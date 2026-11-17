@@ -2,7 +2,16 @@
 -- Company edition: see LICENSE-COMPANY at the repository root.
 -- C10 uses synthetic fixtures and always rolls back. Only code/token hashes are
 -- created; no plaintext credential, DM code or browser token appears here.
+--
+-- Run through the local maintenance path with psql variables :runtime (the
+-- libpq runtime login) and :owner (the NOLOGIN Company owner role). Every check
+-- runs as :runtime; only the fixtures that the runtime may not write itself
+-- (an already expired G10 setup code, migration 021) switch to :owner for the
+-- single statement and back.
 BEGIN;
+SELECT set_config('oaos.readback_runtime', :'runtime', true),
+       set_config('oaos.readback_owner', :'owner', true);
+SET LOCAL ROLE :"runtime";
 DO $verify$
 DECLARE
   suffix text := replace(gen_random_uuid()::text, '-', '');
@@ -47,11 +56,35 @@ BEGIN
     RAISE EXCEPTION 'setup code hash was not stored exactly once';
   END IF;
 
-  -- An expired code never creates the administrator and stays consumed.
+  -- 021: while G10 is pending the runtime cannot store a setup code itself
+  -- (a known hash would make it the initial administrator) or edit the setup.
+  BEGIN
+    INSERT INTO company.console_setup_codes(org_id, project_user_id, code_hash,
+      expires_at, request_id)
+    VALUES (org, admin_project, wrong_code, now() + interval '5 minutes',
+      gen_random_uuid()::text);
+    RAISE EXCEPTION 'runtime stored a G10 setup code';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE company.console_setup SET requested_project_user_id = locked_project
+     WHERE org_id = org;
+    RAISE EXCEPTION 'runtime rewrote the G10 setup state';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- An expired code never creates the administrator and stays consumed. The
+  -- expired fixture is written on the owner path (021), then checks continue
+  -- as the runtime role.
+  EXECUTE format('SET LOCAL ROLE %I', current_setting('oaos.readback_owner'));
   INSERT INTO company.console_setup_codes(org_id, project_user_id, code_hash,
     issued_at, expires_at, request_id)
   VALUES (org, admin_project, expired_code, now() - interval '20 minutes',
     now() - interval '10 minutes', gen_random_uuid()::text);
+  EXECUTE format('SET LOCAL ROLE %I', current_setting('oaos.readback_runtime'));
+  IF current_user IS DISTINCT FROM current_setting('oaos.readback_runtime') THEN
+    RAISE EXCEPTION 'read-back did not return to the runtime role';
+  END IF;
   SELECT r.decision INTO decision
     FROM company.console_confirm_admin(org, admin_project, expired_code) r;
   IF decision IS DISTINCT FROM 'expired' THEN
@@ -189,7 +222,6 @@ BEGIN
   END IF;
   -- Lockout is exercised on a real member by writing five bad login attempts.
   DELETE FROM company.console_login_codes WHERE org_id = org;
-  DELETE FROM company.console_lockouts WHERE org_id = org;
   FOR attempt IN 1..5 LOOP
     SELECT r.decision INTO decision
       FROM company.console_consume_login_code(member_two_project, wrong_code,
@@ -211,7 +243,31 @@ BEGIN
   IF decision IS DISTINCT FROM 'locked' THEN
     RAISE EXCEPTION 'locked account received a login code';
   END IF;
-  DELETE FROM company.console_lockouts WHERE org_id = org;
+  -- 021: the runtime cannot lift its own lock (DELETE/UPDATE) or pre-seed one.
+  BEGIN
+    DELETE FROM company.console_lockouts
+     WHERE org_id = org AND project_user_id = member_two_project;
+    RAISE EXCEPTION 'runtime deleted a console lockout';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE company.console_lockouts SET locked_until = NULL, failures = 0
+     WHERE org_id = org AND project_user_id = member_two_project;
+    RAISE EXCEPTION 'runtime cleared a console lockout';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO company.console_lockouts(org_id, project_user_id, failures)
+    VALUES (org, member_one_project, 0);
+    RAISE EXCEPTION 'runtime wrote a console lockout row';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  SELECT r.decision INTO decision
+    FROM company.console_begin_login(member_two_project, member_code,
+      interval '10 minutes') r;
+  IF decision IS DISTINCT FROM 'locked' THEN
+    RAISE EXCEPTION 'lock did not survive the runtime write attempts';
+  END IF;
 
   -- A registered member logs in once. The same code cannot be consumed twice.
   SELECT r.decision INTO decision

@@ -81,6 +81,18 @@ cat > "$temp_root/bin/runuser" <<'MOCK'
 shift 3
 "$@"
 MOCK
+# Drill clock: with OAOS_C17_CLOCK_STEP each "date +%s" call moves that many
+# seconds further, so a drill can be made to exceed the 4-hour RTO.
+cat > "$temp_root/bin/date" <<'MOCK'
+#!/usr/bin/env bash
+if [[ ${1:-} == +%s && -n ${OAOS_C17_CLOCK_STEP:-} ]]; then
+  calls=$(cat "$OAOS_C17_CLOCK_FILE" 2>/dev/null || printf 0)
+  printf '%s\n' "$((calls + 1))" > "$OAOS_C17_CLOCK_FILE"
+  printf '%s\n' "$(( $(/usr/bin/date +%s) + calls * OAOS_C17_CLOCK_STEP ))"
+  exit 0
+fi
+exec /usr/bin/date "$@"
+MOCK
 chmod 700 "$temp_root/bin/"*
 
 export HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" OAOS_NO_LOG_FILE=1
@@ -102,6 +114,8 @@ chmod 600 "$HOME/.config/oaos-company/deployment.conf"
 printf 'PGDATABASE=%s\nOAOS_COMPANY_PG_SOCKET_DIR=/tmp\nPGPORT=%s\nOAOS_COMPANY_BACKUP_DIR=%s\nOAOS_COMPANY_KEY_BACKUP_DIR=%s\n' \
   "$PGDATABASE" "$PGPORT" "$OAOS_COMPANY_BACKUP_DIR" "$OAOS_COMPANY_KEY_BACKUP_DIR" > "$HOME/.config/oaos-company/.env"
 chmod 600 "$HOME/.config/oaos-company/.env"
+# The C05 vault master key (C17 restores its backup in the recovery drill).
+python3 "$repo_root/editions/company/app/vault.py" ensure-key "$HOME/.config/oaos-company/.env" || fail 'vault key fixture'
 
 # C17 requires C10, C15 and C16 in addition to the C02 host gates.
 code=0
@@ -142,8 +156,53 @@ INSERT INTO company.members(org_id, project_user_id, role, state)
     FROM company.organizations WHERE slug = 'install-org';
 SQL
 
+# One real sealed credential, so the recovery drill has to open it with the
+# restored key backup.
+read -r seed_org seed_admin < <(env -u PGOPTIONS psql -X -q -A -t -F ' ' -v ON_ERROR_STOP=1 -c \
+  "SELECT org_id, id FROM company.members WHERE project_user_id = 'c17-install-admin'")
+seed_sql=$(python3 - "$repo_root/editions/company/app" "$HOME/.config/oaos-company/.env" "$seed_org" "$seed_admin" <<'FIXTURE'
+import base64, sys
+sys.path.insert(0, sys.argv[1])
+import vault
+current, keys = vault.load_store(sys.argv[2])
+ciphertext, nonce = vault.seal(b'c17-drill-credential', keys[current], sys.argv[3], sys.argv[4],
+                               'slack', 'delegation', current)
+print("SELECT set_config('company.org_id', '%s', false), set_config('company.member_id', '%s', false);"
+      % (sys.argv[3], sys.argv[4]))
+print("SELECT company.register_personal_assistant();")
+print("SELECT company.store_personal_secret('slack', 'delegation', decode('%s', 'base64'), decode('%s', 'base64'), %d);"
+      % (base64.b64encode(ciphertext).decode(), base64.b64encode(nonce).decode(), current))
+FIXTURE
+)
+psql -X -q -v ON_ERROR_STOP=1 <<< "$seed_sql" >/dev/null || fail 'sealed credential fixture'
+
+# O4 recovery drill: no key backup blocks; a key backup without the live vault
+# key fails; a drill over the 4-hour RTO fails and is recorded as failed.
+code=0
+bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/no-key-backup" 2>&1 || code=$?
+[[ $code == 3 ]] && grep -Fq 'no vault key backup' "$temp_root/no-key-backup" || { cat "$temp_root/no-key-backup" >&2; fail 'missing key backup gate'; }
+(umask 077; printf 'PGDATABASE=%s\nOAOS_COMPANY_VAULT_KEY_V1=%s\n' "$PGDATABASE" \
+  "$(python3 -c 'import base64,os; print(base64.b64encode(os.urandom(32)).decode())')" \
+  > "$OAOS_COMPANY_KEY_BACKUP_DIR/company-env-20000101T000000Z")
+code=0
+bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/wrong-key" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Fq 'could not restore every vault key' "$temp_root/wrong-key" || { cat "$temp_root/wrong-key" >&2; fail 'wrong key backup accepted'; }
+rm -f -- "$OAOS_COMPANY_KEY_BACKUP_DIR/company-env-20000101T000000Z"
+mkdir -m 700 "$OAOS_COMPANY_KEY_BACKUP_DIR/c05-20260101T000000Z.fixture"
+(umask 077; cp -- "$HOME/.config/oaos-company/.env" "$OAOS_COMPANY_KEY_BACKUP_DIR/c05-20260101T000000Z.fixture/company.env")
+code=0
+OAOS_C17_CLOCK_STEP=20000 OAOS_C17_CLOCK_FILE="$temp_root/clock" \
+  bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/slow" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Fq 'exceeded the 4-hour RTO' "$temp_root/slow" || { cat "$temp_root/slow" >&2; fail 'drill over RTO accepted'; }
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.recovery_drills WHERE state = 'failed' AND evidence->>'failed_step' = 'rto' AND (evidence->>'rto_seconds')::int > 14400 AND evidence->>'key_restored' = 'true'") == 1 ]] || fail 'failed RTO drill evidence'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.handover_state WHERE state = 'verified'") == 0 ]] || fail 'handover verified after a failed drill'
+
 # A clean handover without a selected integration records evidence and verifies.
 bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/installed" || fail 'C17 install'
+grep -Eq 'restored DB and vault keys in [0-9]+s \(RTO limit 14400s\)' "$temp_root/installed" || fail 'measured RTO reported'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.recovery_drills WHERE state = 'passed' AND evidence->>'key_restored' = 'true' AND (evidence->>'rto_seconds')::int <= 14400 AND evidence->'isolation' @> '[\"c04_assistants\", \"c07_audit\", \"c08_acl_search\"]' AND evidence->>'key_source' = 'company.env' AND evidence->>'vault_rows_opened' = '1'") == 1 ]] || fail 'passing drill evidence'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT (h.evidence->>'rto_seconds') = (r.evidence->>'rto_seconds') FROM company.handover_state h JOIN company.recovery_drills r ON r.state = 'passed'") == t ]] || fail 'handover evidence carries the measured RTO'
+! grep -Fq "$(sed -n 's/^OAOS_COMPANY_VAULT_KEY_V1=//p' "$HOME/.config/oaos-company/.env")" "$temp_root/installed" || fail 'vault key printed by the drill'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(version) FROM company.schema_migrations WHERE version < 13') == 12 ]] || fail 'migration 12 missing'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'pre-migration backup'
 [[ $(find "$OAOS_COMPANY_BACKUP_DIR" -name 'company-c17-*.dump' | wc -l) == 1 ]] || fail 'handover backup'
@@ -152,6 +211,20 @@ bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/installe
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.recovery_drills WHERE state = 'passed'") == 1 ]] || fail 'recovery record'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'oaos_company_c17_restore_%'") == 0 ]] || fail 'scratch database leak'
 ! grep -Eq 'password|secret|token' "$temp_root/installed" || fail 'secret leaked to install output'
+
+# The C02 backup unit and job as C02 installs them (hardened, no root; O7).
+install -d -m 700 "$HOME/.local/lib/oaos-company" "$HOME/.config/systemd/user"
+install -m 700 "$repo_root/editions/company/app/backup.sh" "$HOME/.local/lib/oaos-company/backup.sh"
+{
+  printf '[Service]\nType=oneshot\nEnvironmentFile=%s\nExecStart=%s\nUMask=0077\n' \
+    "$HOME/.config/oaos-company/.env" "$HOME/.local/lib/oaos-company/backup.sh"
+  (OAOS_NO_LOG_FILE=1; . "$repo_root/bootstrap/lib/common.sh"; . "$repo_root/editions/company/lib/company.sh"
+   company_job_unit_hardening "$OAOS_COMPANY_BACKUP_DIR $OAOS_COMPANY_KEY_BACKUP_DIR")
+} > "$HOME/.config/systemd/user/oaos-company-backup.service"
+for line in NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict ProtectHome=read-only; do
+  grep -Fxq "$line" "$HOME/.config/systemd/user/oaos-company-maintenance.service" || fail "maintenance unit lacks $line"
+done
+[[ $(stat -c %a "$HOME/.config/oaos-company/db-jobs.pgpass") == 600 ]] || fail 'job password file mode'
 
 # Without a daily backup in the last 24 hours the handover read-back fails.
 code=0
@@ -163,7 +236,12 @@ if pg_dump --format=custom --dbname="$PGDATABASE" > "$temp_root/app-role.dump" 2
   fail 'runtime-role pg_dump unexpectedly bypassed FORCE RLS'
 fi
 cp "$repo_root/editions/company/app/backup.sh" "$temp_root/backup.sh"
-env -i HOME="$HOME" PATH="$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" \
+# The jobs never escalate (O7): sudo and runuser fail as under NoNewPrivileges.
+mkdir -p "$temp_root/nnp-bin"
+printf '#!/usr/bin/env bash\nprintf "no new privileges\\n" >&2\nexit 1\n' > "$temp_root/nnp-bin/sudo"
+cp "$temp_root/nnp-bin/sudo" "$temp_root/nnp-bin/runuser"
+chmod 700 "$temp_root/nnp-bin/sudo" "$temp_root/nnp-bin/runuser"
+env -i HOME="$HOME" PATH="$temp_root/nnp-bin:$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" \
   OAOS_COMPANY_PG_SOCKET_DIR=/tmp OAOS_COMPANY_BACKUP_DIR="$OAOS_COMPANY_BACKUP_DIR" \
   OAOS_COMPANY_KEY_BACKUP_DIR="$OAOS_COMPANY_KEY_BACKUP_DIR" bash "$temp_root/backup.sh" || fail 'daily backup job under FORCE RLS'
 latest=$(< "$OAOS_COMPANY_BACKUP_DIR/last-success")
@@ -175,7 +253,7 @@ if ! OAOS_C17_VERIFY_DEBUG=1 bash "$repo_root/bootstrap/verify/company-verify.sh
   cat "$temp_root/verified-skip" >&2 || true
   fail 'C17 read-back'
 fi
-grep -Fq 'Summary: PASS=9 FAIL=0 MANUAL=0 SKIP=1' "$temp_root/verified-skip" || fail 'C17 SKIP read-back summary'
+grep -Fq 'Summary: PASS=11 FAIL=0 MANUAL=0 SKIP=1' "$temp_root/verified-skip" || fail 'C17 SKIP read-back summary'
 [[ $(python3 - "$HOME/.oaos-install/company-state.json" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1], encoding='utf-8'))['stages']['c17']['status'])
@@ -186,7 +264,7 @@ PY
 bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/rerun" || fail 'C17 idempotent rerun'
 [[ $(find "$OAOS_COMPANY_ROLLBACK_DIR" -name company.dump | wc -l) == 1 ]] || fail 'rerun created unnecessary backup'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.backup_runs") == 1 ]] || fail 'rerun duplicated backup record'
-[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.recovery_drills") == 1 ]] || fail 'rerun duplicated recovery record'
+[[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.recovery_drills") == 3 ]] || fail 'rerun duplicated recovery record'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.handover_state") == 1 ]] || fail 'rerun duplicated handover state'
 
 # A selected integration needs a real round-trip confirmation before handover.
@@ -205,7 +283,7 @@ grep -Fq 'external round-trip evidence is missing for slack' "$temp_root/roundtr
 OAOS_COMPANY_C17_ROUNDTRIP=slack bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/selected" || fail 'C17 selected round-trip install'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT external_roundtrip->>'slack' FROM company.handover_state") == confirmed ]] || fail 'round-trip evidence'
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/verified-selected" || fail 'C17 selected read-back'
-grep -Fq 'Summary: PASS=10 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified-selected" || fail 'C17 selected read-back summary'
+grep -Fq 'Summary: PASS=12 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/verified-selected" || fail 'C17 selected read-back summary'
 
 bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c01 --read-back > "$temp_root/c01-regression" || fail 'C01 read-back after migration 12'
 grep -Fq 'Summary: PASS=7 FAIL=0 MANUAL=0 SKIP=0' "$temp_root/c01-regression" || fail 'C01 regression summary'
@@ -233,9 +311,53 @@ INSERT INTO company.documents(org_id, source, source_id, owner_id, source_acl_ve
     FROM company.members WHERE project_user_id = 'c17-gone';
 SQL
 if psql -X -q -v ON_ERROR_STOP=1 -c 'SELECT company.maintenance_purge()' >/dev/null 2>&1; then fail 'runtime role ran the retention purge'; fi
-env -i HOME="$HOME" PATH="$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" OAOS_COMPANY_PG_SOCKET_DIR=/tmp \
+env -i HOME="$HOME" PATH="$temp_root/nnp-bin:$PATH" PGDATABASE="$PGDATABASE" PGPORT="$PGPORT" OAOS_COMPANY_PG_SOCKET_DIR=/tmp \
   bash "$repo_root/editions/company/app/maintenance.sh" || fail 'maintenance job'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.audit_events WHERE request_id IN ('c17-old', 'c17-kept')") == 1 ]] || fail '180-day audit purge'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM company.documents WHERE source_id = 'c17-gone-doc'") == 0 ]] || fail '30-day departed content purge'
 [[ $(env -u PGOPTIONS psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT (metadata->>'audit_deleted')::int || '|' || (metadata->>'documents_deleted')::int FROM company.audit_events WHERE action = 'retention_purged' ORDER BY at DESC LIMIT 1") == '1|1' ]] || fail 'purge audit row'
 printf 'PASS: daily backup under FORCE RLS, 24h backup age, maintenance-only 180/30-day retention\n'
+
+# O7 job roles: the backup login reads everything but writes nothing; the
+# maintenance login can only run the purge; neither reaches the owner path.
+job() {
+  local role=$1
+  shift
+  env -u PGOPTIONS -u PGPASSWORD PGHOST=127.0.0.1 PGHOSTADDR=127.0.0.1 PGUSER="$role" \
+    PGPASSFILE="$HOME/.config/oaos-company/db-jobs.pgpass" psql -X -q -A -t -v ON_ERROR_STOP=1 "$@"
+}
+[[ $(job oaos_company_backup -c 'SELECT count(*) > 0 FROM company.audit_events') == t ]] || fail 'backup role reads FORCE RLS rows'
+! job oaos_company_backup -c "INSERT INTO company.audit_events(org_id, event_type, action, decision, request_id) SELECT id, 'x', 'x', 'allow', 'x' FROM company.organizations LIMIT 1" >/dev/null 2>&1 || fail 'backup role wrote an audit row'
+! job oaos_company_backup -c 'DELETE FROM company.documents' >/dev/null 2>&1 || fail 'backup role deleted rows'
+! job oaos_company_backup -c 'CREATE TABLE company.o7_probe(id int)' >/dev/null 2>&1 || fail 'backup role created a table'
+! job oaos_company_maint -c 'SELECT count(*) FROM company.audit_events' >/dev/null 2>&1 || fail 'maintenance login read audit rows'
+! job oaos_company_maint -c 'DELETE FROM company.audit_events' >/dev/null 2>&1 || fail 'maintenance login deleted audit rows directly'
+! job oaos_company_maint -c 'SET ROLE oaos_company_maintenance' >/dev/null 2>&1 || fail 'maintenance login assumed the maintenance role'
+! job oaos_company_maint -c 'SELECT company.maintenance_purge(1, 1)' >/dev/null 2>&1 || fail 'purge accepted a window below the minimum'
+[[ $(job oaos_company_maint -c 'SELECT count(*) >= 1 FROM company.maintenance_purge()') == t ]] || fail 'maintenance login runs the purge'
+# A weakened maintenance unit fails the C17 read-back hardening row.
+maint_unit="$HOME/.config/systemd/user/oaos-company-maintenance.service"
+cp -p "$maint_unit" "$temp_root/maint-unit.saved"
+sed -i '/^NoNewPrivileges=yes$/d' "$maint_unit"
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/weak-unit" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Job unit hardening +FAIL' "$temp_root/weak-unit" || { cat "$temp_root/weak-unit" >&2; fail 'unhardened maintenance unit accepted'; }
+cp -p "$temp_root/maint-unit.saved" "$maint_unit"
+# A backup role that could write fails the job-role row.
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'GRANT INSERT ON company.audit_events TO oaos_company_backup' >/dev/null
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/weak-role" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Job and definer roles +FAIL' "$temp_root/weak-role" || { cat "$temp_root/weak-role" >&2; fail 'writable backup role accepted'; }
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c 'REVOKE INSERT ON company.audit_events FROM oaos_company_backup' >/dev/null
+printf 'PASS: O7 job roles (read-only backup, purge-only maintenance login), hardened units without root\n'
+
+# O4: a drill without the key restore or the measured RTO (a pre-O4 drill) no
+# longer counts for the handover read-back.
+env -u PGOPTIONS psql -X -q -v ON_ERROR_STOP=1 -c "UPDATE company.recovery_drills SET evidence = evidence - 'key_restored' WHERE state = 'passed'" >/dev/null
+code=0
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/old-drill" 2>&1 || code=$?
+[[ $code == 1 ]] && grep -Eq '^Recovery drill \(keys, RTO 4h\) +FAIL' "$temp_root/old-drill" || { cat "$temp_root/old-drill" >&2; fail 'drill without key restore accepted'; }
+OAOS_COMPANY_C17_ROUNDTRIP=slack bash "$repo_root/editions/company/install.sh" --stage c17 > "$temp_root/redrill" || fail 'C17 rerun runs a new drill'
+bash "$repo_root/bootstrap/verify/company-verify.sh" --phase c17 --read-back > "$temp_root/redrilled" 2>&1 || { cat "$temp_root/redrilled" >&2; fail 'read-back after a new drill'; }
+grep -Fq 'Measured recovery time:' "$temp_root/redrilled" || fail 'measured recovery time reported'
+printf 'PASS: O4 recovery drill restores DB and vault key backup, re-checks isolation/audit/ACL and enforces the 4h RTO\n'
