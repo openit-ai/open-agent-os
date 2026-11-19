@@ -166,6 +166,15 @@ grep -Fqx "MATTERMOST_TOKEN=$mm_token" "$home/.hermes/.env" || fail 'other .env 
 [[ -f $temp_root/gateway-restarted ]] || fail 'gateway not restarted after the allowlist change'
 rm -f "$temp_root/gateway-restarted"
 [[ $(env "${portal_env[@]}" python3 -I "$server" --sync-once 2>>"$temp_root/sync.err") == 0 && ! -e $temp_root/gateway-restarted ]] || fail 'sync repeated work'
+# With MATTERMOST_ALLOW_ALL_USERS the allowlist is left alone and the gateway is not restarted.
+second_user=$(printf 'q%.0s' {1..26})
+printf '{"applicant@example.com": "%s", "second@example.com": "%s"}\n' "$signed" "$second_user" > "$state/signups.json"
+printf 'MATTERMOST_ALLOW_ALL_USERS=true\n' >> "$home/.hermes/.env"
+[[ $(env "${portal_env[@]}" python3 -I "$server" --sync-once 2>>"$temp_root/sync.err") == 1 ]] || fail 'allow-all sync did not record the match'
+grep -Fqx "MATTERMOST_ALLOWED_USERS=$existing,$signed" "$home/.hermes/.env" || fail 'allow-all mode changed the allowlist'
+[[ ! -e $temp_root/gateway-restarted ]] || fail 'allow-all mode restarted the gateway'
+[[ $(sql "SELECT mattermost_user_id FROM requests WHERE id = '$rid2'") == "$second_user" ]] || fail 'allow-all match not stored'
+sed -i '/^MATTERMOST_ALLOW_ALL_USERS=true$/d' "$home/.hermes/.env"
 sql "UPDATE requests SET decided_at = decided_at - 40 * 86400 WHERE id = '$rid3'" >/dev/null
 env "${portal_env[@]}" python3 -I "$server" --sync-once >/dev/null 2>>"$temp_root/sync.err"
 [[ $(sql "SELECT COALESCE(name, '') || COALESCE(email, '') || '|' || (purged_at IS NOT NULL) FROM requests WHERE id = '$rid3'") == '|1' ]] || fail 'rejected request kept personal data past retention'
@@ -175,7 +184,7 @@ for action in apply verify notify-admins decide invite result-mail allowlist gat
   [[ -n $(sql "SELECT 1 FROM audit WHERE action = '$action' LIMIT 1") ]] || fail "audit lacks $action"
 done
 [[ -z $(sql "SELECT detail FROM audit WHERE detail LIKE '%@%'") ]] || fail 'audit holds a mail address'
-printf 'PASS: allowlist sync with one gateway restart, retention purge, append-only audit without mail addresses\n'
+printf 'PASS: allowlist sync with one gateway restart (none under MATTERMOST_ALLOW_ALL_USERS), retention purge, append-only audit without mail addresses\n'
 
 # --- limits and switch ------------------------------------------------------------------------
 open_form

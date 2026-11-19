@@ -559,6 +559,14 @@ class Portal:
         if not found:
             return 0
         env = self.config.env()
+        if env.get("MATTERMOST_ALLOW_ALL_USERS", "").strip().lower() in ("true", "1", "yes"):
+            # Hermes admits every Mattermost user before it reads the allowlist: nothing to add,
+            # no gateway restart. The match is still recorded for the Company candidates.
+            with self.store.tx() as db:
+                for request_id, user_id in found:
+                    db.execute("UPDATE requests SET mattermost_user_id = ?, allowlisted_at = ? WHERE id = ?", (user_id, now(), request_id))
+                    self.store.audit(db, "portal", "allowlist", request_id, "allow-all", "user %s" % user_id)
+            return len(found)
         current = [item for item in re.split(r"[,\s]+", env.get("MATTERMOST_ALLOWED_USERS", "")) if MM_ID_RE.match(item)]
         merged = current + [user_id for _, user_id in found if user_id not in current]
         if merged != current:
