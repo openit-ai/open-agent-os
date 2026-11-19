@@ -16,7 +16,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 json=0
 offline=0
 confirmed=' '
-confirm_items='reboot|chat|allowlist|mm-chat|mm-deny|outline-page|mail-flow'
+confirm_items='reboot|chat|allowlist|mm-chat|mm-deny|outline-page|mail-flow|portal-flow'
 usage() {
   cat <<'EOF'
 Usage: bash bootstrap/verify/project-verify.sh [--json] [--offline] [--confirm item[,item...]] [--help]
@@ -34,6 +34,8 @@ service file modes, PostgreSQL settings, and the backup job's database dump).
            mm-deny       a Mattermost member outside MATTERMOST_ALLOWED_USERS got none
            outline-page  the agent created an Outline page under its own account
            mail-flow     one message sent and one received through the bot mailbox
+           portal-flow   a portal application was approved from the Mattermost DM and the
+                         applicant got the code and result mails
 Exit: 0 = every check PASS (SKIP allowed); 2 = no FAIL but MANUAL checks pending;
       1 = one or more FAIL; 3 = the verifier could not run.
 EOF
@@ -322,7 +324,7 @@ if ((healthy)) && pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1 &&
    [[ $(redis-cli -h 127.0.0.1 ping 2>/dev/null || true) == PONG ]]; then
   record 'Native services' PASS 'PostgreSQL, Redis, Mattermost and Outline systemd services are active'
 else record 'Native services' FAIL 'One or more native services or local dependencies are unavailable'; fi
-for port in 5432 6379 8065 3000; do
+for port in 5432 6379 8065 3000 "$project_portal_port"; do
   listen_code=0
   listeners=$(platform_listeners "$port") || listen_code=$?
   if ((listen_code != 0)); then record "Loopback :$port" FAIL 'Listener tool (ss) unavailable'
@@ -411,6 +413,34 @@ for kind in IMAP SMTP; do
 done
 manual_or_confirmed 'Mail flow' mail-flow 'one message sent and one received by the bot mailbox' \
   'Ask the agent to send a test mail and read a reply; rerun with --confirm mail-flow'
+
+# --- Portal (ADR 0002) ---------------------------------------------------------------------
+
+portal_home="$home/oaos/portal"
+if [[ ! -f $home/.config/systemd/user/oaos-portal.service ]]; then
+  record 'Portal service' FAIL 'oaos-portal user unit absent; run the portal stage'
+elif result=$(project_portal_health); then
+  record 'Portal service' PASS "oaos-portal answers on 127.0.0.1:$project_portal_port ($result)"
+else record 'Portal service' FAIL "oaos-portal does not answer on 127.0.0.1:$project_portal_port"; fi
+if [[ $(stat -c '%a' "$portal_home" 2>/dev/null || true) == 700 && $(stat -c '%a %U' "$portal_home/portal.db" 2>/dev/null || true) == "600 $(id -un)" ]]; then
+  record 'Portal data' PASS "$portal_home is 700 and portal.db is 600"
+else record 'Portal data' FAIL "$portal_home must be 700 and portal.db 600 (owner only)"; fi
+portal_admins=$(project_env_get OAOS_PORTAL_ADMINS || true)
+if ! oaos_secret_present OAOS_PORTAL_CALLBACK_SECRET; then
+  record 'Portal approval' FAIL 'OAOS_PORTAL_CALLBACK_SECRET is absent from the Hermes .env; rerun portal'
+elif [[ -z $portal_admins ]] || ! project_valid_mattermost_ids "$portal_admins"; then
+  record 'Portal approval' FAIL 'OAOS_PORTAL_ADMINS has no Mattermost administrator ID; rerun portal'
+elif [[ ! $(project_env_get OAOS_PORTAL_TEAM_ID || true) =~ ^[a-z0-9]{26}$ ]]; then
+  record 'Portal approval' FAIL 'OAOS_PORTAL_TEAM_ID is absent; rerun portal'
+else record 'Portal approval' PASS 'Callback secret, administrator IDs and team ID are set'; fi
+portal_domain=$(stack_get PORTAL_DOMAIN)
+if ((offline)); then record 'Portal route' SKIP 'Offline mode: HTTPS request not sent'
+elif [[ -n $portal_domain ]] && portal_route=$(curl -fsS --max-time 10 "https://$portal_domain/api/portal/health" 2>/dev/null) &&
+     [[ $portal_route =~ \"status\":\ *\"ok\" ]]; then
+  record 'Portal route' PASS "https://$portal_domain/api/portal/ reaches the portal service"
+else record 'Portal route' FAIL 'The portal HTTPS route to /api/portal/ failed; rerun ingress --recheck'; fi
+manual_or_confirmed 'Portal approval flow' portal-flow 'an application was approved from Mattermost and the result mail arrived' \
+  'Apply on the portal, approve from the Mattermost DM, and check the code and result mails; rerun with --confirm portal-flow'
 
 pass=0 fail=0 manual=0 skip=0
 for status in "${statuses[@]}"; do

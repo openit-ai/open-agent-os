@@ -57,6 +57,12 @@ for db in ${databases[@]+"${databases[@]}"}; do
   [[ -s $work/$db.dump ]] || fail "$db.dump is missing."
   pg_restore --list "$work/$db.dump" >/dev/null 2>&1 || fail "$db.dump is not a readable pg_dump archive."
 done
+portal_line=$(grep '^portal ' "$work/manifest.txt" || true)
+if [[ -n $portal_line ]]; then
+  [[ -s $work/portal.db ]] || fail 'portal.db is missing.'
+  [[ $(python3 -I -c 'import sqlite3, sys; print(sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True).execute("PRAGMA integrity_check").fetchone()[0])' "$work/portal.db" 2>/dev/null) == ok ]] ||
+    fail 'portal.db failed the SQLite integrity check.'
+fi
 system_line=$(grep '^system ' "$work/manifest.txt" || true)
 if [[ -n $system_line ]]; then
   [[ -s $work/system.tar.gz ]] && tar -tzf "$work/system.tar.gz" >/dev/null || fail 'system.tar.gz is missing or damaged.'
@@ -67,6 +73,7 @@ printf 'Would restore Hermes home %s/%s (current copy moved aside)\n' "$(dirname
 for item in $home_items; do printf 'Would restore %s/%s (current copy moved aside)\n' "$HOME" "$item"; done
 for db in ${databases[@]+"${databases[@]}"}; do printf 'Would restore database %s (pg_restore --clean --if-exists)\n' "$db"; done
 [[ -z $system_line ]] || printf 'Would restore system files: %s\n' "${system_line#system }"
+[[ -z $portal_line ]] || printf 'Would restore the portal database %s/oaos/portal/portal.db\n' "$HOME"
 
 if [[ $mode == dry ]]; then
   printf 'Dry run: archive is complete and readable; nothing was changed.\n'
@@ -78,6 +85,7 @@ if ((EUID != 0)) && ! sudo -n true >/dev/null 2>&1; then
 fi
 stamp=$(date +%Y%m%d-%H%M%S)
 hermes gateway stop >/dev/null 2>&1 || true
+systemctl --user stop oaos-portal.service >/dev/null 2>&1 || true
 if [[ -n $system_line || ${#databases[@]} -gt 0 ]]; then
   as_root systemctl stop oaos-outline mattermost || fail 'could not stop Outline and Mattermost.'
 fi
@@ -86,6 +94,10 @@ for path in "$(dirname "$hermes_home")/$home_leaf" $(for item in $home_items; do
 done
 tar -xzf "$work/home.tar.gz" -C "$(dirname "$hermes_home")" "$home_leaf"
 for item in $home_items; do tar -xzf "$work/home.tar.gz" -C "$HOME" "$item"; done
+if [[ -n $portal_line ]]; then
+  mkdir -p "$HOME/oaos/portal" && chmod 700 "$HOME/oaos/portal"
+  install -m 600 "$work/portal.db" "$HOME/oaos/portal/portal.db" || fail 'portal.db could not be restored.'
+fi
 if [[ -n $system_line ]]; then
   as_root tar -xzpf - -C "$system_root" < "$work/system.tar.gz" || fail 'system files could not be restored.'
 fi
@@ -95,6 +107,9 @@ for db in ${databases[@]+"${databases[@]}"}; do
 done
 if [[ -n $system_line || ${#databases[@]} -gt 0 ]]; then
   as_root systemctl start mattermost oaos-outline || fail 'Mattermost or Outline did not start.'
+fi
+if [[ -f $HOME/.config/systemd/user/oaos-portal.service ]]; then
+  systemctl --user start oaos-portal.service >/dev/null 2>&1 || printf 'WARN: start the portal with: systemctl --user start oaos-portal\n' >&2
 fi
 hermes gateway start >/dev/null 2>&1 || printf 'WARN: start the Hermes gateway with: hermes gateway start\n' >&2
 printf 'Restore complete. Previous copies end with .pre-restore-%s. Run bash bootstrap/verify/project-verify.sh.\n' "$stamp"

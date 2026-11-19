@@ -30,6 +30,9 @@ if [[ $cmd == test\ -[ed]* ]]; then
   test "${cmd:5:2}" "${OAOS_FAKE_SOURCE:?}/$rel"
   exit $?
 fi
+if [[ $cmd == 'python3 -I - "$HOME/oaos/portal/portal.db"' ]]; then
+  exec python3 -I - "${OAOS_FAKE_SOURCE:?}/oaos/portal/portal.db"
+fi
 exit 1
 MOCK
 # Real rsync on local paths: only the remote spec user@host:~/ is mapped to the
@@ -88,6 +91,33 @@ printf 'PASS: wiki and memory copy excludes credentials\n'
 HOME="$temp_root/home" PATH="$temp_root/bin:$PATH" bash "$script" --source user@host --include-config > /dev/null
 [[ -f $temp_root/home/.hermes/config.yaml ]] || fail 'settings copied with --include-config'
 printf 'PASS: settings copied with --include-config\n'
+
+# ADR 0002: approved Project portal applicants become Company member candidates (0600).
+grep -Fq 'member-candidates.json' "$temp_root/dry" || fail 'dry-run must plan the portal candidates export'
+[[ ! -e $temp_root/home/.config/oaos-company/member-candidates.json ]] || fail 'candidates written without a portal database'
+mkdir -p "$temp_root/source/oaos/portal"
+HOME="$temp_root/source" OAOS_PORTAL_HOME="$temp_root/source/oaos/portal" python3 -I "$repo_root/editions/project/portal/server.py" --init
+python3 - "$temp_root/source/oaos/portal/portal.db" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("INSERT INTO requests(id, created_at, name, email, org, purpose, state, decided_at, mattermost_user_id)"
+           " VALUES ('r1', 1, 'Kim', 'kim@example.com', 'OpenIT', 'x', 'approved', 2, ?)", ("n" * 26,))
+db.execute("INSERT INTO requests(id, created_at, name, email, org, purpose, state) VALUES ('r2', 1, 'Lee', 'lee@example.com', '', 'x', 'rejected')")
+db.execute("INSERT INTO decisions(request_id, decider_id, decision, decided_at) VALUES ('r1', ?, 'approved', 2)", ("a" * 26,))
+db.commit()
+PY
+HOME="$temp_root/home-candidates" PATH="$temp_root/bin:$PATH" bash "$script" --source user@host > "$temp_root/candidates-run"
+candidates="$temp_root/home-candidates/.config/oaos-company/member-candidates.json"
+[[ $(stat -c '%a' "$candidates") == 600 && $(stat -c '%a' "$temp_root/home-candidates/.config/oaos-company") == 700 ]] || fail 'candidates file modes'
+python3 - "$candidates" <<'PY' || fail 'candidates content'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+assert [c["email"] for c in doc["candidates"]] == ["kim@example.com"]
+assert doc["candidates"][0]["state"] == "invited" and doc["candidates"][0]["project_user_id"] == "n" * 26
+PY
+grep -Fq 'Member candidates from the Project portal: 1' "$temp_root/candidates-run" || fail 'candidate count not reported'
+rm -rf "$temp_root/source/oaos"
+printf 'PASS: approved portal applicants exported as member candidates\n'
 
 mkdir -p "$temp_root/home2/data/wiki"
 printf 'old\n' > "$temp_root/home2/data/wiki/index.md"
