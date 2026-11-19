@@ -145,7 +145,51 @@ project_gateway_running() {
 
 # Project ports and the package/unit that legitimately owns each.
 # shellcheck disable=SC2034 # used by install.sh
-project_ports='80:nginx 443:nginx 3000:oaos-outline 5432:postgresql 6379:redis-server 8065:mattermost'
+project_ports='80:nginx 443:nginx 3000:oaos-outline 5432:postgresql 6379:redis-server 8065:mattermost 8790:oaos-portal'
+# Portal service (ADR 0002) on loopback; smoke tests may move it only with OAOS_TEST_MODE=1.
+project_portal_port=8790
+if [[ ${OAOS_TEST_MODE:-0} == 1 && ${OAOS_TEST_PORTAL_PORT:-} =~ ^[0-9]+$ ]]; then project_portal_port=$OAOS_TEST_PORTAL_PORT; fi
+portal_dir() { printf '%s/oaos/portal' "$(oaos_home)"; }
+
+# The single Mattermost team the G7 bot belongs to (the portal invites applicants to it).
+# Prints the team ID, or a short reason with exit 1 when the bot is in no team or several.
+project_mattermost_bot_team() {
+  local response code body
+  response=$(project_api GET "${OAOS_MATTERMOST_API:-http://127.0.0.1:8065}/api/v4/users/me/teams" "$1") ||
+    { printf 'network error or invalid token characters'; return 1; }
+  code=${response##*$'\n'}
+  body=${response%$'\n'*}
+  [[ $code == 200 ]] || { printf 'HTTP %s' "$code"; return 1; }
+  oaos_python -c '
+import json, re, sys
+try:
+    teams = [t for t in json.load(sys.stdin) if isinstance(t, dict) and not t.get("delete_at")]
+except (ValueError, TypeError):
+    print("unreadable response", end=""); sys.exit(1)
+if len(teams) != 1:
+    print("the bot belongs to %d teams" % len(teams), end=""); sys.exit(1)
+team = str(teams[0].get("id", ""))
+if not re.match(r"^[a-z0-9]{26}$", team):
+    print("unreadable team ID", end=""); sys.exit(1)
+print(team, end="")
+' <<< "$body"
+}
+
+# 0 when the portal service on loopback answers its health endpoint; prints "apply=on|off".
+project_portal_health() {
+  local body
+  body=$(curl -fsS --max-time 5 "http://127.0.0.1:$project_portal_port/api/portal/health" 2>/dev/null) || return 1
+  oaos_python -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+if data.get("status") != "ok":
+    sys.exit(1)
+print("apply=%s" % data.get("apply", "?"), end="")
+' <<< "$body"
+}
 
 # G0 sizing. Prints "cpus mem_kib disk_kib" (disk = size of /).
 project_host_facts() {

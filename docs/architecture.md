@@ -109,9 +109,9 @@ flowchart TD
 
 | # | 게이트 | 사용자 액션(최소) | 저장 키 | 즉시 검증 |
 |---|---|---|---|---|
-| G0 | 서버 준비 | VPS 구매 → **그 VPS에 Hermes 설치** → 에이전트에 URL 전달 | — | 사양 4 vCPU·16 GB·200 GB 미만 WARN, 2 vCPU·8 GB·60 GB 미만 BLOCKED(`OAOS_ALLOW_SMALL_HOST=1` 예외) · SSH 키 로그인 여부 · 포트 80/443/3000/5432/6379/8065 선점 확인 · UFW(22·현재 SSH·80·443 허용 후 활성, `OAOS_UFW_ENABLE=0` 제외) |
+| G0 | 서버 준비 | VPS 구매 → **그 VPS에 Hermes 설치** → 에이전트에 URL 전달 | — | 사양 4 vCPU·16 GB·200 GB 미만 WARN, 2 vCPU·8 GB·60 GB 미만 BLOCKED(`OAOS_ALLOW_SMALL_HOST=1` 예외) · SSH 키 로그인 여부 · 포트 80/443/3000/5432/6379/8065/8790 선점 확인 · UFW(22·현재 SSH·80·443 허용 후 활성, `OAOS_UFW_ENABLE=0` 제외) |
 | G1–G3 | LLM·Telegram | Personal과 동일 | Personal과 동일 | Personal과 동일 |
-| G6 | 도메인 DNS(필수) | A 레코드 3개(chat/note/portal) 등록 | 도메인 값 | 전파 자동 폴링(기본 최대 600초) · ACME 이메일 기본값 = G9 주소 |
+| G6 | 도메인 DNS(필수) | A 레코드 3개(chat/note/portal) 등록 | 도메인 값 | 전파 자동 폴링(기본 최대 600초) · ACME 이메일 기본값 = G9 주소 · `portal` = 팀 단일 입구(소개·사용 안내·이용 신청, §4.2·ADR 0002) |
 | G7 | Mattermost | 사람 관리자 가입 → **봇 계정** 토큰 + 허용 사용자 ID | `MATTERMOST_TOKEN` · `MATTERMOST_ALLOWED_USERS` | 토큰이 봇(`is_bot`)이고 `system_admin` 아님 · 허용 ID 26자 형식·실존 확인 |
 | G8 | Outline | 사람 관리자가 먼저 가입 → **AI 에이전트 계정**(G9 봇 메일함, 멤버·편집자) 초대 → 그 계정의 API 토큰 | `OUTLINE_API_TOKEN` (+ `OUTLINE_URL` 자동) | `auth.info` 이메일 = G9 주소 · 관리자 아님 |
 | G9 | 봇 전용 메일 | 전용 Gmail + 앱 비밀번호 | `OAOS_MAIL_ADDRESS` 등(IMAP/SMTP 호스트는 Gmail 기본값) | IMAP·SMTP 로그인 둘 다(실패 = FAIL) |
@@ -186,6 +186,7 @@ flowchart TD
 - **자원**: 4 vCPU / 16GB / 200GB급 VPS 1대(예: Hostinger KVM 4). 요금은 프로모션 변동 — 공식 KR 페이지 기준 KVM 전 플랜 월 ₩10,059~₩40,259(2026-09-25 확인, 구매 시점 확인)
 - **메일 분리 원칙**: 외부 소통은 **봇 전용 Gmail + Himalaya** — 개인 Google 계정 연동 시 정보보안 문제를 구조적으로 차단
 - **기준 실측**(2026-09-22): 5개 서비스 동시 구동, 메모리 여유 12 GiB(4 vCPU/15 GiB)
+- **포털**([ADR 0002](adr/0002-project-portal-onboarding.md)): `portal.<도메인>` = 팀 단일 입구. 소개·사용 안내(정적, 운영자 문구 `~/oaos/portal/site.md` 보존) + 이용 신청(`/apply`, G9 봇 메일 6자리 확인 코드) → 관리자 Mattermost DM의 [승인]/[거절] 버튼(서명 콜백 + 누른 사람 역할 재조회, 신청자 본인 거부) → 팀 초대 메일(또는 초대 링크)·Outline 멤버 초대·가입 확인 후 `MATTERMOST_ALLOWED_USERS` 추가와 게이트웨이 1회 재시작·결과 메일·감사. 봇은 사람 계정을 만들지 않는다(G7·G8). `oaos-portal.service`(사용자 단위 systemd, 127.0.0.1:8790, 표준 라이브러리 Python) + SQLite `~/oaos/portal/portal.db`(600, 감사 추가 전용), `OAOS_PORTAL_APPLY=off`로 신청 중단, 백업·복원 포함, Company 이관 시 승인 건 = 구성원 후보
 - **차별점**: 팀 협업(웹·모바일·권한) + git 위키 정본 하이브리드
 
 ### 4.3 Company — 5~50인 중소기업
@@ -382,3 +383,4 @@ open-agent-os/
 | v2.0.x | 2026-09-26~27 | 무Docker·systemd 정합, Personal 지원 OS(Ubuntu·macOS·Windows 11) 반영 |
 | v2.1 | 2026-11-16 | Project 게이트·봇 계정 원칙·백업/복구·바인딩·무Docker 반영(PR #35) · Company 보안 강화 반영(§4.3 과금 승인·DB 수준 거버넌스, §6 역할 분리·보존·백업 — PR #34) · 게이트 규칙(숨김 입력·저장 후 검증·변수명 지정)·Personal 게이트 표·자동화 범위·실패/재개(에디션별 상태·verify 상시 실행·종료코드 0/2/1)·보안 표 현행화(PR #33 반영) · 최종본 단일 파일화(`docs/architecture.md`), 저장소 구조 현행화, 로드맵을 개발(D)·실설치 검증(V) 트랙으로 분리, 미결 결정 #4·#5 해소·#6·#7 추가 |
 | v2.1.1 | 2026-11-17 | Personal G5를 선택 설치 단계 `mail`로 구현(§2.4 G5 행: 주소 저장 = 선택, 미선택 `SKIP(not_selected)`, IMAP·SMTP 저장 후 검증, Himalaya 비밀번호 명령 · verify 20번 행) · 위키 로컬 bare 중계 `~/data/wiki.git` 구현(§2.5 — 시드·일일 백업 push, 중계 복원, verify 21번 행, Personal→Project 이전 시 중계 원격 제거) · Project `outline-wiki` 스킬 제공(§4.2 — G8 후 `team` 설치, verify "Outline skill" 행) · 메일 점검·`.env` 도우미를 `bootstrap/lib/mail.sh`·`secret.sh`로 공용화(§5.2) |
+| v2.2 | 2026-11-19 | Project 포털 구현([ADR 0002](adr/0002-project-portal-onboarding.md)): §2.4 G0 포트 8790·G6 포털 역할, §4.2 포털(소개·사용 안내·이용 신청·Mattermost 승인·허용 목록 갱신·감사·백업·Company 후보 이관) · 설치 단계 `portal`(`team` 뒤) |

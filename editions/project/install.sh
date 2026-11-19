@@ -13,7 +13,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=editions/project/lib.sh
 . "$repo_root/editions/project/lib.sh"
 
-stages=(prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify)
+stages=(prep hermes llm telegram wiki harness cron stack ingress mail team portal gateway verify)
 export OAOS_STATE_EDITION=project
 export OAOS_STAGES="${stages[*]}"
 selected=()
@@ -29,7 +29,7 @@ usage() {
 Usage: bash editions/project/install.sh [--dry-run] [--stage name[,name...]] [--status] [--yes]
                                         [--recheck] [--reverify] [--timezone Area/City] [--skip-verify] [--help]
 
-Stages: prep, hermes, llm, telegram, wiki, harness, cron, stack, ingress, mail, team, gateway, verify.
+Stages: prep, hermes, llm, telegram, wiki, harness, cron, stack, ingress, mail, team, portal, gateway, verify.
 The default runs all stages in order. Completed stages are skipped on rerun,
 except verify, which always runs again.
 --recheck   re-run selected stages even when recorded as done (each is idempotent).
@@ -203,6 +203,7 @@ host_capacity() {
 port_owner_installed() {
   case $1 in
     oaos-outline) [[ -e /etc/systemd/system/oaos-outline.service ]] ;;
+    oaos-portal) [[ -e $(oaos_home)/.config/systemd/user/oaos-portal.service ]] ;;
     *) native_installed "$1" ;;
   esac
 }
@@ -527,10 +528,26 @@ dns_wait() {
 }
 render_vhost() {
   sed -e "s/__CHAT_DOMAIN__/$(stack_get CHAT_DOMAIN)/g" -e "s/__NOTE_DOMAIN__/$(stack_get NOTE_DOMAIN)/g" \
-    -e "s/__PORTAL_DOMAIN__/$(stack_get PORTAL_DOMAIN)/g" -e "s@__PORTAL_ROOT__@$2@g" "$1"
+    -e "s/__PORTAL_DOMAIN__/$(stack_get PORTAL_DOMAIN)/g" -e "s@__PORTAL_ROOT__@$2@g" \
+    -e "s/__PORTAL_PORT__/$project_portal_port/g" "$1"
+}
+# The managed portal page (ADR 0002 §2.6): rendered from ~/oaos/portal/site.md (operator text,
+# never overwritten) plus the built-in guide. A page without the managed marker is an operator's
+# own page and is preserved.
+portal_page_install() {
+  local sys=$1 root=$2 page current
+  page=$(oaos_python "$repo_root/editions/project/portal/render-site.py" "$(portal_dir)/site.md" \
+    "$(stack_get CHAT_DOMAIN)" "$(stack_get NOTE_DOMAIN)") || return 3
+  current=$(run_root cat "$sys$root/index.html" 2>/dev/null || true)
+  if [[ -z $current || ( $current == '<!-- OAOS Project managed portal -->'* && $current != "$page" ) ]]; then
+    printf '%s\n' "$page" | run_root tee "$sys$root/index.html" >/dev/null || return 3
+    [[ -z $current ]] || info 'Portal page updated (managed page; operator text comes from ~/oaos/portal/site.md).'
+  elif [[ $current != '<!-- OAOS Project managed portal -->'* ]]; then
+    warn "Portal page $root/index.html is not managed by OAOS; preserving it."
+  fi
 }
 do_ingress() {
-  local ip key domain template target root email rendered hash current portal reinstall=() name sys
+  local ip key domain template target root email rendered hash current reinstall=() name sys
   sys=$(test_root)
   root=/var/www/oaos-portal
   if ! have_cmd nginx || ! have_cmd certbot; then warn 'nginx and certbot nginx plugin required; run prep.'; return 3; fi
@@ -544,11 +561,8 @@ do_ingress() {
   [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { warn 'Public IPv4 lookup failed; check network and retry.'; return 3; }
   dns_wait "$ip" || return 3
   run_root install -d -m 755 "$sys$root" "$sys/etc/nginx/sites-available" "$sys/etc/nginx/sites-enabled" || return 3
-  portal=$(printf '<!-- OAOS Project managed portal -->\n<!doctype html><html lang="ko"><meta charset="utf-8"><title>OAOS Project</title><h1>OAOS Project</h1><p><a href="https://%s">Mattermost</a> · <a href="https://%s">Outline</a></p></html>\n' "$(stack_get CHAT_DOMAIN)" "$(stack_get NOTE_DOMAIN)")
-  current=$(run_root cat "$sys$root/index.html" 2>/dev/null || true)
-  if [[ -z $current || ( $current == '<!-- OAOS Project managed portal -->'* && $current != "${portal%$'\n'}" ) ]]; then
-    printf '%s\n' "$portal" | run_root tee "$sys$root/index.html" >/dev/null || return 3
-  fi
+  portal_site_ensure || return 3
+  portal_page_install "$sys" "$root" || return 3
   # Managed vhosts carry the hash of their rendered template. A new template or domain
   # re-renders the file; certbot then reinstalls the certificate into it.
   for name in chat note portal; do
@@ -763,6 +777,131 @@ do_team() {
   restart_gateway_if_running 'Mattermost and Outline'
 }
 
+# --- Portal (ADR 0002): introduction, guide, access requests, Mattermost approval -------------
+
+# ~/oaos/portal (0700) holds the operator text site.md (kept across reruns), the managed service
+# copy bin/oaos-portal.py and portal.db (0600, created by the service).
+portal_site_ensure() {
+  local dir
+  dir=$(portal_dir)
+  private_dir "$dir" || return 1
+  [[ -e $dir/site.md ]] && return 0
+  oaos_python "$repo_root/editions/project/portal/render-site.py" --default-site > "$dir/site.md.tmp" &&
+    chmod 600 "$dir/site.md.tmp" && mv -- "$dir/site.md.tmp" "$dir/site.md" || return 1
+  info "Created $dir/site.md: edit the introduction and contact there, then rerun the portal stage."
+}
+
+portal_unit_render() {
+  sed -e "s@__HERMES_HOME__@$(platform_hermes_home)@g" -e "s/__PORTAL_PORT__/$project_portal_port/g" \
+    -e "s/__PORTAL_DOMAIN__/$(stack_get PORTAL_DOMAIN)/g" -e "s/__CHAT_DOMAIN__/$(stack_get CHAT_DOMAIN)/g" \
+    -e "s/__NOTE_DOMAIN__/$(stack_get NOTE_DOMAIN)/g" "$repo_root/editions/project/systemd/oaos-portal.service"
+}
+
+# Mattermost settings the portal relies on; off means a manual fallback, not a block.
+portal_mattermost_settings() {
+  local mmctl=$1 setting value
+  for setting in ServiceSettings.EnableEmailInvitations PrivacySettings.ShowEmailAddress; do
+    value=$(run_root runuser -u mattermost -- "$mmctl" --local config get "$setting" 2>/dev/null || true)
+    [[ $value == *true* ]] && continue
+    case $setting in
+      ServiceSettings.EnableEmailInvitations)
+        warn 'Portal: Mattermost e-mail invitations are off; approved applicants get the team invite link in the result mail instead.' ;;
+      PrivacySettings.ShowEmailAddress)
+        warn 'Portal: Mattermost hides e-mail addresses, so approved applicants cannot be matched to their account; add their IDs to MATTERMOST_ALLOWED_USERS by hand or turn on Show Email Address.' ;;
+    esac
+  done
+}
+
+do_portal() {
+  local dir unit_dir unit rendered current token team result="" output admins secret changed=0 sys
+  local mmctl=/opt/mattermost/bin/mmctl
+  sys=$(test_root)
+  need_hermes || return 3
+  [[ ${OAOS_TEST_MODE:-0} != 1 || -z ${OAOS_TEST_MMCTL:-} ]] || mmctl=$OAOS_TEST_MMCTL
+  [[ -n $(stack_get PORTAL_DOMAIN) && -n $(stack_get CHAT_DOMAIN) && -n $(stack_get NOTE_DOMAIN) ]] ||
+    { warn 'Stack domains absent; run stack and ingress first.'; return 3; }
+  [[ $(stage_status team) == 'done' ]] ||
+    { warn 'The portal uses the G7 bot, the G8 agent account and the G9 mailbox; complete the team stage first.'; return 3; }
+  current=$(run_root cat "$sys/etc/nginx/sites-available/oaos-portal.conf" 2>/dev/null || true)
+  [[ $current == *'/api/portal/'* ]] ||
+    { warn 'The portal vhost has no /api/portal/ route yet; rerun: bash editions/project/install.sh --stage ingress --recheck'; return 3; }
+
+  # Callback secret for the signed Mattermost button context (Hermes .env, 600).
+  if ! oaos_secret_present OAOS_PORTAL_CALLBACK_SECRET; then
+    secret=$(oaos_python -c 'import secrets; print(secrets.token_hex(32))') || return 1
+    printf '%s' "$secret" | oaos_secret_set OAOS_PORTAL_CALLBACK_SECRET >/dev/null 2>&1 || { secret=''; return 1; }
+    secret=''
+    info 'Created OAOS_PORTAL_CALLBACK_SECRET in the Hermes .env.'
+  fi
+
+  # Approval requests go to the Mattermost system administrators confirmed at G7.
+  output=$(run_root runuser -u mattermost -- "$mmctl" --local user list --role system_admin --json 2>/dev/null) || output=''
+  if [[ -n $output ]]; then
+    admins=$(oaos_python -c '
+import json, re, sys
+users = [u for u in json.load(sys.stdin) if isinstance(u, dict)]
+print(",".join(u["id"] for u in users if re.match(r"^[a-z0-9]{26}$", str(u.get("id", "")))
+               and not u.get("is_bot") and not u.get("delete_at")), end="")
+' <<< "$output" 2>/dev/null) || admins=''
+    [[ -z $admins ]] || project_env_put OAOS_PORTAL_ADMINS "$admins" || return 1
+    portal_mattermost_settings "$mmctl"
+  else
+    warn 'mmctl local mode unavailable; using OAOS_PORTAL_ADMINS from the Hermes .env and skipping the Mattermost settings check.'
+  fi
+  admins=$(project_gate_value OAOS_PORTAL_ADMINS || true)
+  if [[ -z $admins ]] || ! project_valid_mattermost_ids "$admins"; then
+    warn "Portal: no Mattermost administrator to receive approval requests; store their user IDs with '$(secret_hint OAOS_PORTAL_ADMINS)' and rerun portal."; return 3
+  fi
+
+  # The team applicants are invited to: the one team the G7 bot belongs to.
+  token=$(project_secret_value MATTERMOST_TOKEN || true)
+  [[ -n $token ]] || { warn 'G7 bot token absent from the Hermes .env; rerun team.'; return 3; }
+  team=$(project_gate_value OAOS_PORTAL_TEAM_ID || true)
+  if [[ -z $team ]]; then
+    if team=$(project_mattermost_bot_team "$token"); then project_env_put OAOS_PORTAL_TEAM_ID "$team" || { token=''; return 1; }
+    else
+      token=''
+      warn "Portal: cannot choose the Mattermost team ($team). Add the bot to exactly one team, or store the team ID with '$(secret_hint OAOS_PORTAL_TEAM_ID)', then rerun portal."; return 3
+    fi
+  fi
+  token=''
+  [[ $team =~ ^[a-z0-9]{26}$ ]] || { warn 'OAOS_PORTAL_TEAM_ID is not a Mattermost team ID.'; return 3; }
+
+  # Operator text, managed service copy, user unit.
+  portal_site_ensure || return 1
+  dir=$(portal_dir)
+  private_dir "$dir/bin" || return 1
+  if ! cmp -s "$repo_root/editions/project/portal/server.py" "$dir/bin/oaos-portal.py"; then
+    install -m 700 "$repo_root/editions/project/portal/server.py" "$dir/bin/oaos-portal.py.tmp" &&
+      mv -- "$dir/bin/oaos-portal.py.tmp" "$dir/bin/oaos-portal.py" || return 1
+    changed=1
+  fi
+  HOME=$(oaos_home) HERMES_HOME=$(platform_hermes_home) OAOS_PORTAL_HOME=$dir \
+    oaos_python -I "$dir/bin/oaos-portal.py" --init || { warn 'Portal database initialisation failed.'; return 1; }
+  unit_dir="$(oaos_home)/.config/systemd/user"
+  unit="$unit_dir/oaos-portal.service"
+  mkdir -p "$unit_dir" || return 1
+  rendered=$(portal_unit_render)
+  if [[ $(cat "$unit" 2>/dev/null || true) != "$rendered" ]]; then
+    [[ ! -e $unit || $(head -n1 "$unit") == '# OAOS Project managed unit'* ]] ||
+      { warn "$unit is not managed by OAOS; preserving it."; return 3; }
+    printf '%s\n' "$rendered" > "$unit.tmp" && chmod 644 "$unit.tmp" && mv -- "$unit.tmp" "$unit" || return 1
+    changed=1
+  fi
+  systemctl --user daemon-reload || { warn 'systemd user manager unavailable (linger is enabled by the gateway stage).'; return 3; }
+  systemctl --user enable oaos-portal.service >/dev/null 2>&1 || { warn 'Could not enable oaos-portal.service.'; return 3; }
+  if ((changed)); then systemctl --user restart oaos-portal.service || return 3
+  else systemctl --user start oaos-portal.service || return 3; fi
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    result=$(project_portal_health) && break
+    sleep 1
+  done
+  [[ -n ${result:-} ]] || { warn "oaos-portal.service does not answer on 127.0.0.1:$project_portal_port; see journalctl --user -u oaos-portal."; return 3; }
+  info "Portal service running ($result). Turn applications off with OAOS_PORTAL_APPLY=off in the Hermes .env."
+  info 'Outline: the agent account invites approved applicants only when the workspace allows members to invite; otherwise the administrator gets a to-do in the approval message.'
+  if run_root test -d "$sys/var/www/oaos-portal"; then portal_page_install "$sys" /var/www/oaos-portal || return 3; fi
+}
+
 # project-verify.sh exit: 0 all PASS; 2 MANUAL pending, no FAIL; 1 FAIL; 3 blocked.
 do_verify() { bash "$repo_root/bootstrap/verify/project-verify.sh"; }
 
@@ -772,7 +911,7 @@ run_stage() {
     prep) do_prep ;; hermes) do_hermes ;; llm) do_llm ;;
     telegram) do_telegram ;; wiki) do_wiki ;;
     harness) do_harness ;; cron) do_cron ;; stack) do_stack ;;
-    ingress) do_ingress ;; mail) do_mail ;; team) do_team ;;
+    ingress) do_ingress ;; mail) do_mail ;; team) do_team ;; portal) do_portal ;;
     gateway) do_gateway ;; verify) do_verify ;;
   esac
 }

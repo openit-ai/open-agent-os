@@ -70,7 +70,7 @@ python3 - "$first/.oaos-install/state.json" <<'PY' || fail 'state schema'
 import json,sys
 x=json.load(open(sys.argv[1], encoding='utf-8'))
 assert x['edition']=='project'
-assert list(x['stages'])==['prep','hermes','llm','telegram','wiki','harness','cron','stack','ingress','mail','team','gateway','verify']
+assert list(x['stages'])==['prep','hermes','llm','telegram','wiki','harness','cron','stack','ingress','mail','team','portal','gateway','verify']
 assert x['stages']['wiki']['status']==x['stages']['harness']['status']=='done'
 assert x['editions']['project']['stages']['wiki']['status']=='done'
 PY

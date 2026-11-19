@@ -6,7 +6,9 @@
 # One archive per run: ~/.oaos/backups/oaos-project-YYYYmmdd-HHMMSS.tar (directory 700,
 # archive 600, newest 7 kept). Inside:
 #   manifest.txt      components captured
-#   home.tar.gz       Hermes home, ~/data/wiki, ~/oaos/stack (stack .env holds DB secrets)
+#   home.tar.gz       Hermes home, ~/data/wiki, ~/oaos/stack (stack .env holds DB secrets),
+#                     ~/oaos/portal without the live database
+#   portal.db         consistent SQLite snapshot of the portal database (when the portal runs)
 #   mattermost.dump   pg_dump -Fc of the mattermost database   (when the stack is installed)
 #   outline.dump      pg_dump -Fc of the outline database      (when the stack is installed)
 #   system.tar.gz     /etc/oaos, Mattermost config.json, /opt/mattermost/data, /var/lib/outline/data
@@ -35,10 +37,24 @@ printf 'oaos-project-backup 1\ncreated %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > 
 
 # 1. User data. The Hermes home is recorded relative to its parent so restore can put it back.
 home_items=()
-for item in data/wiki oaos/stack; do [[ -e $HOME/$item ]] && home_items+=("$item"); done
-tar -czf "$work/home.tar.gz" -C "$(dirname "$hermes_home")" "$(basename "$hermes_home")" \
+for item in data/wiki oaos/stack oaos/portal; do [[ -e $HOME/$item ]] && home_items+=("$item"); done
+tar -czf "$work/home.tar.gz" --exclude='oaos/portal/portal.db*' -C "$(dirname "$hermes_home")" "$(basename "$hermes_home")" \
   ${home_items[@]+-C "$HOME" "${home_items[@]}"}
 printf 'home %s %s\n' "$(basename "$hermes_home")" "${home_items[*]}" >> "$manifest"
+
+# 1b. Portal database (ADR 0002): SQLite online backup, so a running service is not torn.
+if [[ -f $HOME/oaos/portal/portal.db ]]; then
+  python3 -I -c '
+import sqlite3, sys
+source = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+target = sqlite3.connect(sys.argv[2])
+source.backup(target)
+target.close()
+source.close()
+' "$HOME/oaos/portal/portal.db" "$work/portal.db" || die 'Portal database snapshot failed.'
+  chmod 600 "$work/portal.db"
+  printf 'portal portal.db\n' >> "$manifest"
+fi
 
 # 2–3. Databases and service data exist once the stack stage has run.
 if [[ -f $HOME/oaos/stack/.env ]]; then

@@ -1,0 +1,108 @@
+# ADR 0002 — Project 포털: 소개·사용 안내·이용 신청·승인
+
+- 상태: **승인(Accepted)** — 2026-11-19 마스터 승인(Hermes 별도 검토 생략, 마스터 지시). 구현과 함께 `docs/architecture.md` §2.4(G6)·§4.2와 `editions/project/README.md`에 반영한다
+- 구현: 2026-11-19 — §5의 1~6을 한 변경으로 구현(설치 단계 `portal`, `editions/project/portal/`, `bootstrap/tests/project-portal-smoke.sh`). 구현 때 확인: Hermes는 `MATTERMOST_ALLOWED_USERS`를 시작 때 프로세스 환경에서만 읽으므로 갱신 뒤 게이트웨이 재시작이 필요하다(같은 주기의 가입자는 묶어서 1회). Mattermost 메일 초대(`ServiceSettings.EnableEmailInvitations`)·이메일 표시(`PrivacySettings.ShowEmailAddress`)는 `portal` 단계가 `mmctl`로 확인해 꺼져 있으면 경고하고, 각각 초대 링크·수동 허용 목록으로 대체한다. Outline 구성원 초대 허용은 사전 조회 API가 없어 초대 호출 결과로 판정하고, 실패하면 승인 메시지에 관리자 할 일로 남긴다. Company 이관은 `members` 행을 직접 만들지 않고 `~/.config/oaos-company/member-candidates.json` 후보 파일로 넘긴다(G10 확정 원칙)
+- 날짜: 2026-11-19
+- 관련: `editions/project/install.sh` `do_ingress`(포털 생성), `editions/project/ingress/portal.conf`, `docs/architecture.md` §4.2·§4.3, `docs/company-design.md`(구성원·G10·JIT 승인)
+- 계기: 운영 Project 호스트에서 옛 관리자 콘솔 주소를 v2 포털(`portal.<도메인>`)로 옮기면서, 포털의 역할을 정해 달라는 운영자 요청(2026-11-19)
+
+## 1. 문제
+
+Project 설치기는 G6에서 `chat`·`note`·`portal` 세 도메인을 요구하고, `portal`에는 Mattermost·Outline 링크 두 개뿐인 정적 HTML을 만든다(`do_ingress`). 설계서와 README 어디에도 포털의 역할이 정의돼 있지 않다.
+
+그 결과 운영에서 다음이 비어 있다.
+
+1. **소개·안내**: 새 팀원이 "이 서버가 무엇이고, 어디서 무엇을 하면 되는지"를 알 수 있는 곳이 없다.
+2. **이용 신청**: 팀원을 추가하려면 운영자가 사람마다 Mattermost 계정 생성·팀 초대, Outline 초대, `MATTERMOST_ALLOWED_USERS`(봇과 대화할 수 있는 사용자 ID 목록) 수정을 손으로 해야 한다.
+3. **승인 기록**: 누가 언제 누구의 사용을 허락했는지 남지 않는다. Company로 올릴 때 구성원 매핑(G10)의 근거로 쓸 기록도 없다.
+
+## 2. 결정
+
+포털을 **Project 팀의 단일 입구**로 정의한다. 세 기능을 둔다.
+
+| 기능 | 대상 | 내용 |
+|---|---|---|
+| 소개 | 누구나 | 이 Project가 무엇인지, 무엇을 할 수 있는지, 운영 주체·문의처 |
+| 사용 안내 | 누구나 | 첫 사용 순서: 가입 → 팀 합류 → 에이전트 봇과 대화 → Outline 위키 사용. Mattermost·Outline 바로가기 |
+| 이용 신청·승인 | 신청자·Project 관리자 | 신청서 제출 → 관리자 승인/거절 → 승인 시 초대와 봇 사용 허용 → 기록 |
+
+Company 에디션의 관리 콘솔은 지금처럼 같은 vhost의 `/company/` 아래에 붙는다. 포털 첫 화면은 Company 설치 여부와 관계없이 소개·안내·신청 창구로 유지한다.
+
+### 2.1 구성
+
+```
+신청자 ──https──▶ portal.<도메인> (nginx)
+                    ├─ /            정적 소개·안내 페이지(설치기 관리, 운영자 문구는 별도 파일)
+                    ├─ /apply       신청서
+                    └─ /api/portal/ ──▶ oaos-portal.service (127.0.0.1, 표준 라이브러리 Python)
+                                           ├─ SQLite  ~/oaos/portal/portal.db (600)
+                                           ├─ SMTP(G9 봇 메일) — 신청자 메일 확인 코드·결과 통지
+                                           └─ Mattermost API(G7 봇 토큰) — 관리자에게 승인 요청 전달
+Project 관리자 ──Mattermost──▶ 승인 요청 메시지의 [승인]/[거절] 버튼
+                                  └─ 버튼 콜백 ──▶ /api/portal/decide (서명 검증)
+```
+
+- Project 원칙(무 Docker·systemd·loopback·Hermes `.env` 단일 비밀 보관)을 따른다. 새 서비스 1개(`oaos-portal.service`)만 추가하고, 새 DB 엔진은 두지 않는다(SQLite, 표준 라이브러리).
+- 승인 화면을 따로 만들지 않는다. **관리자는 이미 쓰는 Mattermost에서 버튼으로 승인한다.** 포털에 별도 관리자 로그인을 두지 않으므로 인증 표면이 늘지 않는다.
+
+### 2.2 신청 흐름
+
+1. 신청자가 `/apply`에서 이름·메일·소속·사용 목적을 입력하고 개인정보 수집 안내에 동의한다.
+2. 포털이 G9 봇 메일로 6자리 확인 코드를 보낸다(10분 유효). 코드를 입력해야 신청이 접수된다(메일 소유 확인·스팸 억제).
+3. 접수되면 봇이 **관리자 DM**(설치 때 G7에서 확인한 Mattermost `system_admin` 사용자)에게 신청 내용과 [승인]/[거절] 버튼을 보낸다.
+4. 관리자가 버튼을 누르면 Mattermost가 `/api/portal/decide`로 콜백한다. 포털은 ① 콜백 서명 토큰 ② 누른 사람의 Mattermost 역할이 `system_admin`이거나 팀 관리자인지 봇 토큰으로 다시 조회해 확인한 뒤 처리한다. 버튼을 누른 사람이 신청자 본인이면 거부한다.
+5. 결과를 신청자에게 메일로 알리고, 감사 행(누가·언제·무엇을·결과)을 남긴다.
+
+### 2.3 승인 시 자동 처리 범위
+
+봇·에이전트 계정은 관리자 권한이 없다(G7·G8 원칙). 이 원칙을 깨지 않는 범위만 자동 처리한다.
+
+| 항목 | 처리 | 근거·한계 |
+|---|---|---|
+| Mattermost 팀 합류 | 봇이 팀 **초대 메일**을 보낸다(팀 초대 권한만 필요) | 서버 설정에서 메일 초대가 켜져 있어야 한다. 꺼져 있으면 팀 초대 링크를 결과 메일에 넣는다 |
+| Outline 합류 | 에이전트 계정이 초대한다 | Outline 워크스페이스에서 **구성원 초대 허용**이 켜져 있어야 한다. 꺼져 있으면 "관리자가 초대 예정"으로 안내하고 관리자 DM에 할 일로 남긴다 |
+| 봇 사용 허용 | 신청자가 Mattermost에 가입하면(사용자 ID 확인 후) `MATTERMOST_ALLOWED_USERS`에 추가하고 게이트웨이를 재시작한다 | `.env` 원자적 쓰기 도우미 사용. 재시작이 필요한지는 구현 때 Hermes 동작으로 확인 |
+| 계정 생성 | **하지 않는다** | 사람 계정 생성은 관리자 권한이 필요하다. 신청자가 초대 링크로 직접 가입한다 |
+
+### 2.4 데이터와 보존
+
+- `requests`(신청: 이름·메일·소속·목적·상태 `pending/approved/rejected/expired`·메일 확인 시각), `decisions`(결정자 Mattermost ID·시각·사유), `audit`(추가 전용).
+- 개인정보는 신청 처리 목적에만 쓴다. 거절·만료 건은 30일 뒤 개인정보 열을 지우고 통계만 남긴다(보존 기간은 운영자 설정).
+- 백업: 기존 `backup.sh` 대상에 `portal.db`를 추가한다(600).
+- Company로 올릴 때 `project-to-company.sh`가 승인 건을 `members`(`state=invited`)의 초기 후보로 넘긴다. G10 매핑은 그대로 관리자가 확정한다.
+
+### 2.5 보안
+
+- 서비스는 127.0.0.1에만 바인딩하고 nginx가 TLS를 맡는다. 폼은 CSRF 토큰, 같은 IP·메일당 시간당 제출 횟수 제한, 숨김 필드 봇 차단을 둔다.
+- Mattermost 콜백은 설치 때 만든 임의 토큰(`.env` 600)으로 서명을 확인한다. 결정은 콜백 시점에 역할을 다시 조회해 판정한다(메시지를 받은 시점의 권한을 믿지 않는다).
+- 비밀값(봇 토큰·SMTP 비밀번호·콜백 토큰)은 Hermes `.env`에만 둔다.
+
+### 2.6 소개·안내 문구 관리
+
+- 설치기는 지금처럼 관리 표식(`<!-- OAOS Project managed portal -->`)이 있는 기본 페이지를 만든다.
+- 운영자 문구(소개·문의처·추가 안내)는 별도 파일 `~/oaos/portal/site.md`(또는 Outline 공개 문서 1개)에서 읽어 기본 페이지에 끼워 넣는다. 설치기를 다시 실행해도 운영자 문구는 보존된다.
+
+## 3. 대안과 기각 사유
+
+| 대안 | 기각 사유 |
+|---|---|
+| 포털에 관리자 로그인과 승인 화면을 따로 둔다 | 인증 표면이 하나 더 생긴다. Project 관리자는 이미 Mattermost 관리자이므로 거기서 승인하는 편이 단순하다 |
+| Mattermost 자체 가입(오픈 서버)만 쓴다 | 승인 단계와 기록이 없고, Outline·봇 허용 목록이 따로 논다 |
+| 봇에 `system_admin`을 줘 계정까지 자동 생성 | G7 원칙(봇은 관리자 아님) 위반. 토큰 유출 시 피해가 크다 |
+| Company의 JIT 승인·PostgreSQL을 Project에 내린다 | Project 범위(2~6인, 무 DB 확장)를 넘는다. Company로 올릴 때 이어받는 경로만 둔다 |
+| Hermes 에이전트가 대화로 승인을 처리 | 승인 판단을 모델 응답에 맡기게 된다. 결정은 결정적 코드(버튼 콜백 + 역할 재조회)로 한다 |
+
+## 4. 위험·한계
+
+- Mattermost 메일 초대와 Outline 구성원 초대 허용은 서버 설정에 달려 있다. 설치 단계에서 켜져 있는지 확인하고, 꺼져 있으면 경고하고 수동 안내로 대체한다.
+- `MATTERMOST_ALLOWED_USERS` 갱신 뒤 게이트웨이 재시작이 필요하면 잠깐 응답이 끊긴다. 묶어서 처리하거나 재시작 없이 반영되는 방법을 구현 때 확인한다.
+- 신청 폼은 공개 주소에 열린다. 메일 확인·횟수 제한으로 막지만, 운영자가 신청 받기를 끌 수 있어야 한다(`OAOS_PORTAL_APPLY=off`).
+
+## 5. 구현 계획
+
+1. 포털 정적 페이지 개편(소개·안내·운영자 문구 끼워 넣기, 한국어·영어) — `do_ingress` 템플릿 변경, 기존 관리 표식 페이지는 자동 갱신
+2. `oaos-portal.service` + SQLite 스키마 + 신청·메일 확인 API
+3. Mattermost 승인 메시지·콜백·역할 재조회, 결과 메일
+4. 승인 후 처리(팀 초대·Outline 초대·허용 목록 갱신)와 감사
+5. 설치 단계(`portal` 단계 추가)·verify 점검 항목·백업 대상·스모크 테스트, `project-to-company.sh` 이관
+6. 설계서 §2.4·§4.2·Project README 반영

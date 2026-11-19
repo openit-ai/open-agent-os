@@ -10,6 +10,8 @@ usage() {
   cat <<'HELP'
 Usage: bash bootstrap/migrate/project-to-company.sh --source user@host [--dry-run] [--include-config] [--help]
 Run on the Company server to copy the Project wiki, memory and settings.
+Approved Project portal applicants are written to ~/.config/oaos-company/member-candidates.json
+(0600) as member candidates (state invited); the G10 mapping stays with the administrator.
 Hermes .env and credentials are never copied; re-register them at the Company gate.
 Existing targets are preserved as .backup-<timestamp> before replacement, and the Project source is left unchanged.
 Reverse (Company->Project) conversion is out of scope.
@@ -35,6 +37,8 @@ printf 'Wiki note: the Company gate indexes only public wiki documents with a ve
 for relative in "${paths[@]}"; do
   printf '%s: %s:~/%s -> %s/%s\n' "$([[ $dry_run == 1 ]] && printf PLAN || printf COPY)" "$source_host" "$relative" "$HOME" "$relative"
 done
+printf '%s: %s:~/oaos/portal/portal.db approved applicants -> %s/.config/oaos-company/member-candidates.json (when the portal exists)\n' \
+  "$([[ $dry_run == 1 ]] && printf PLAN || printf EXPORT)" "$source_host" "$HOME"
 printf 'Reverse (Company->Project) conversion is out of scope.\n'
 ((dry_run)) && exit 0
 command -v rsync >/dev/null || { printf 'rsync is required.\n' >&2; exit 3; }
@@ -67,6 +71,25 @@ for relative in "${paths[@]}"; do
   fi
   mv -- "$staging" "$target"
 done
+# ADR 0002: approved portal applicants become Company member candidates. The export script runs
+# on the Project host from stdin, reading its portal.db read-only; nothing is changed there.
+if ssh -o BatchMode=yes -- "$source_host" "test -e \"\$HOME/oaos/portal/portal.db\""; then
+  candidates_dir="$HOME/.config/oaos-company"
+  (umask 077; mkdir -p "$candidates_dir") && chmod 700 "$candidates_dir"
+  candidates_tmp=$(mktemp "$candidates_dir/.member-candidates.XXXXXX")
+  repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  if ssh -o BatchMode=yes -- "$source_host" 'python3 -I - "$HOME/oaos/portal/portal.db"' \
+       < "$repo_root/editions/project/portal/export-candidates.py" > "$candidates_tmp" &&
+     python3 -I -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))["candidates"]' "$candidates_tmp"; then
+    chmod 600 "$candidates_tmp"
+    mv -- "$candidates_tmp" "$candidates_dir/member-candidates.json"
+    printf 'Member candidates from the Project portal: %s (confirm them at the Company G10 mapping)\n' \
+      "$(python3 -I -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["candidates"]))' "$candidates_dir/member-candidates.json")"
+  else
+    rm -f -- "$candidates_tmp"
+    printf 'WARN: portal applicants could not be exported; the copied files are unaffected.\n' >&2
+  fi
+fi
 if [[ -d $HOME/data/wiki/.git ]]; then
   git -C "$HOME/data/wiki" log -1 --format='Wiki latest commit: %h %s' 2>/dev/null || true
   printf 'Wiki files: '
