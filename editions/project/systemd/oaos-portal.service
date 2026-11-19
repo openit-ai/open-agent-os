@@ -1,0 +1,22 @@
+# OAOS Project managed unit (systemd user unit, installed by the portal stage)
+[Unit]
+Description=OAOS Project portal: access requests and Mattermost approval (ADR 0002)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I %h/oaos/portal/bin/oaos-portal.py
+Environment=OAOS_PORTAL_HOME=%h/oaos/portal
+Environment=HERMES_HOME=__HERMES_HOME__
+Environment=OAOS_PORTAL_PORT=__PORTAL_PORT__
+Environment=OAOS_PORTAL_PUBLIC_URL=https://__PORTAL_DOMAIN__
+Environment=OAOS_PORTAL_CHAT_URL=https://__CHAT_DOMAIN__
+Environment=OAOS_PORTAL_NOTE_URL=https://__NOTE_DOMAIN__
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
