@@ -20,6 +20,7 @@
 - 봇 전용 메일함 — 팀 메일 확인·초안·전달
 - 팀 계정 — 멤버별 접근 통제(허용목록/페어링)
 - 도메인 + HTTPS (nginx + TLS)
+- 포털(`portal.<도메인>`) — 팀의 단일 입구: 소개·사용 안내·이용 신청, 승인은 관리자가 Mattermost에서 버튼으로([ADR 0002](../../docs/adr/0002-project-portal-onboarding.md))
 
 ## 설치 흐름 — 필수 게이트 8개
 
@@ -46,7 +47,7 @@ Personal의 선택 게이트 G4(대용량 파일)·G5(개인 메일)는 Project�
 1. VPS(Ubuntu 22.04/24.04 LTS, 권장 4 vCPU / 16GB / 200GB)를 준비하고 SSH 키로 접속합니다.
 2. 그 VPS에 Hermes를 설치하고, 거기서 실행되는 에이전트에게 이 저장소 URL을 전달합니다. 설치는 VPS 안에서 진행됩니다.
 3. `prep` 스테이지가 사양을 점검합니다. 권장 사양 미만이면 WARN, 최소 사양(2 vCPU / 8GB / 60GB) 미만이면 BLOCKED입니다(`OAOS_ALLOW_SMALL_HOST=1`로 알고 진행 가능).
-4. 80·443·3000·5432·6379·8065 포트를 다른 프로그램이 쓰고 있으면 BLOCKED로 멈춥니다.
+4. 80·443·3000·5432·6379·8065·8790 포트를 다른 프로그램이 쓰고 있으면 BLOCKED로 멈춥니다.
 5. SSH 키 로그인 여부와 비밀번호 로그인 허용 여부를 보고합니다(설정은 바꾸지 않음).
 6. UFW에 SSH(22와 현재 SSH 포트)·80·443 허용 규칙을 **먼저** 넣은 뒤 UFW를 활성화합니다. 규칙이 먼저라 현재 SSH 세션이 끊기지 않습니다. 활성화를 미루려면 `OAOS_UFW_ENABLE=0`(검증에서 FAIL로 표시).
 
@@ -54,9 +55,10 @@ Personal의 선택 게이트 G4(대용량 파일)·G5(개인 메일)는 Project�
 
 에이전트는 Project VPS에서 `bash editions/project/install.sh --dry-run`으로 계획을 확인한 뒤 `bash editions/project/install.sh`를 실행합니다. 설치기와 `bash bootstrap/verify/project-verify.sh`는 같은 비루트 관리자 계정에서 실행하며 `sudo -n true`가 성공해야 합니다. 설치기는 공식 저장소(`github.com/openit-ai/open-agent-os`)에서만 실행됩니다(검토한 포크는 `OAOS_ALLOW_FORK=1`). 상태는 `~/.oaos-install/state.json`의 Project 전용 영역(`editions.project.stages`)에 저장되므로, 같은 호스트의 Personal 상태가 Project 단계를 건너뛰게 하지 않습니다. 완료된 단계는 건너뛰고 `verify`는 매번 다시 돕니다. `--recheck`는 완료 단계도 다시 실행하고, `--reverify`는 검증만 실행합니다. 종료 코드: 0 = 모두 PASS, 2 = FAIL 없이 MANUAL 대기, 3 = 게이트·전제 조건 대기, 1 = 오류 또는 검증 FAIL.
 
-스테이지 순서는 `prep hermes llm telegram wiki harness cron stack ingress mail team gateway verify`입니다.
+스테이지 순서는 `prep hermes llm telegram wiki harness cron stack ingress mail team portal gateway verify`입니다.
 
 - `team`은 Mattermost·Outline 자격 증명을 검증해 Hermes `.env`에 저장하고, G8이 통과하면 Outline 스킬 `outline-wiki`를 Hermes 스킬 폴더(`~/.hermes/skills/outline-wiki`)에 설치합니다(아래 "Outline 스킬"). 게이트웨이가 **이미 설치되어 실행 중일 때만** 재시작해 새 설정을 반영합니다. 새 서버에서는 아직 게이트웨이가 없으므로 재시작하지 않습니다.
+- `portal`은 `team` 뒤에 포털 서비스(`oaos-portal.service`, 사용자 단위 systemd, 127.0.0.1:8790)를 설치·기동하고 소개 페이지를 다시 만듭니다(아래 "포털").
 - `gateway`는 `telegram`이 끝난 뒤 게이트웨이를 처음 설치·기동합니다. `team`이 먼저 끝났다면 Telegram과 Mattermost가 모두 들어간 상태로 첫 기동합니다. 그 전에 `approvals.cron_mode`·`single_query_mode`·`unattended_mode`를 `deny`로 설정합니다(무인 실행 승인 거부).
 - `cron`은 일일 백업 작업 하나(`oaos-daily-backup`)를 등록합니다.
 
@@ -110,6 +112,17 @@ python3 "$OW" search --query "온보딩"
 python3 "$OW" create --title "주간 노트" --collection <컬렉션 id> --text-file notes.md
 ```
 
+### 포털 — 소개·사용 안내·이용 신청 ([ADR 0002](../../docs/adr/0002-project-portal-onboarding.md))
+
+`https://portal.<도메인>`은 팀의 단일 입구입니다.
+
+- **소개·사용 안내**(`/`): `ingress`와 `portal`이 관리 표식(`<!-- OAOS Project managed portal -->`)이 있는 정적 페이지를 만듭니다. 소개·문의처·추가 안내는 운영자가 `~/oaos/portal/site.md`(제목 `#`, 목록 `-`, `**굵게**`, `[링크](https://…)`만 해석, HTML은 이스케이프)에 쓰고 `bash editions/project/install.sh --stage portal --recheck`로 반영합니다. `site.md`는 설치기가 다시 실행돼도 덮어쓰지 않으며, 관리 표식이 없는 페이지(운영자가 직접 만든 페이지)는 보존합니다.
+- **이용 신청**(`/apply`): 이름·메일·소속·사용 목적과 개인정보 수집 동의 → G9 봇 메일로 6자리 확인 코드(10분, 5회) → 접수. CSRF 토큰(SameSite=Strict 쿠키), 같은 IP 시간당 5회·같은 메일 시간당 3회 제한, 숨김 필드 봇 차단을 둡니다. 신청을 끄려면 Hermes `.env`에 `OAOS_PORTAL_APPLY=off`를 넣습니다(재시작 불필요).
+- **승인**: 접수되면 봇이 `OAOS_PORTAL_ADMINS`(설치 때 `mmctl`로 확인한 `system_admin` 사용자)에게 DM으로 신청 내용과 [승인]/[거절] 버튼을 보냅니다. 버튼 콜백(`/api/portal/decide`)은 ① 설치 때 만든 `OAOS_PORTAL_CALLBACK_SECRET`으로 서명된 값인지 ② 누른 사람이 **지금** `system_admin`이거나 팀 관리자인지(봇 토큰으로 다시 조회) 확인하고, 신청자 본인의 결정은 거부합니다. 포털에는 별도 관리자 로그인이 없습니다.
+- **승인 후 처리**: 봇이 팀 초대 메일을 보냅니다(Mattermost 메일 초대가 꺼져 있으면 팀 초대 링크를 결과 메일에 넣음). 에이전트 계정이 Outline에 멤버로 초대합니다(워크스페이스가 구성원 초대를 허용하지 않으면 승인 메시지에 관리자 할 일로 남김). 신청자는 초대 링크로 **직접** 가입합니다(봇은 사람 계정을 만들지 않음, G7·G8 원칙). 가입이 확인되면(봇 토큰의 `/users/email` 조회 — Mattermost "이메일 주소 표시"가 켜져 있어야 함) 포털이 사용자 ID를 `MATTERMOST_ALLOWED_USERS`에 더하고 게이트웨이를 한 번 재시작합니다. Hermes는 허용 목록을 시작 때만 읽기 때문에 재시작이 필요하며, 같은 주기(기본 60초)에 가입한 사람은 묶어서 한 번만 재시작합니다.
+- **기록·보존**: `~/oaos/portal/portal.db`(SQLite, 폴더 700·파일 600)에 신청·결정·감사(추가 전용 — 수정·삭제는 트리거가 거부, 메일 주소 미기록)를 남깁니다. 거절·만료 건의 개인정보는 30일(`OAOS_PORTAL_RETENTION_DAYS`) 뒤, 확인하지 않은 신청은 하루 뒤 지웁니다. 일일 백업은 SQLite 온라인 백업으로 `portal.db` 스냅샷을 담고, `restore.sh`가 복원합니다. Company로 올릴 때 `project-to-company.sh`가 승인 건을 `~/.config/oaos-company/member-candidates.json`(600)에 구성원 후보(`state=invited`)로 넘기며, G10 매핑은 관리자가 확정합니다.
+- **설정 값**: `OAOS_PORTAL_CALLBACK_SECRET`(설치기가 생성)·`OAOS_PORTAL_ADMINS`·`OAOS_PORTAL_TEAM_ID`(봇이 속한 팀이 하나면 자동, 여럿이면 `oaos-secret-set`으로 지정) 모두 Hermes `.env`에 있습니다. Mattermost 버튼 콜백은 `https://portal.<도메인>/api/portal/decide`로 들어오므로 Mattermost 서버가 자기 공인 주소에 접속할 수 있어야 합니다.
+
 ### Outline 첫 관리자 로그인과 신원 제공자(IdP)
 
 실측한 v1.10.1은 아직 팀이 없을 때 이메일 매직링크 로그인을 제공하지 않습니다(`/api/auth.config`가 빈 목록). 첫 관리자는 다음 중 하나로 만듭니다.
@@ -121,13 +134,13 @@ python3 "$OW" create --title "주간 노트" --collection <컬렉션 id> --text-
 
 ### 백업과 복원
 
-`oaos-daily-backup`(매일 03:00, Hermes 예약 작업)은 `~/.oaos/backups/oaos-project-<시각>.tar`(폴더 700, 파일 600, 최근 7개 보관)를 만듭니다. 포함 항목: Hermes 홈, `~/data/wiki`, `~/oaos/stack`, PostgreSQL `mattermost`·`outline` 덤프(`pg_dump -Fc`), `/etc/oaos`, Mattermost `config.json`, `/opt/mattermost/data`, `/var/lib/outline/data`. 백업에는 시크릿이 들어 있으므로 서버 밖으로 옮길 때는 암호화하세요.
+`oaos-daily-backup`(매일 03:00, Hermes 예약 작업)은 `~/.oaos/backups/oaos-project-<시각>.tar`(폴더 700, 파일 600, 최근 7개 보관)를 만듭니다. 포함 항목: Hermes 홈, `~/data/wiki`, `~/oaos/stack`, `~/oaos/portal`(+ `portal.db` SQLite 스냅샷), PostgreSQL `mattermost`·`outline` 덤프(`pg_dump -Fc`), `/etc/oaos`, Mattermost `config.json`, `/opt/mattermost/data`, `/var/lib/outline/data`. 백업에는 시크릿이 들어 있으므로 서버 밖으로 옮길 때는 암호화하세요.
 
 복원은 `bash editions/project/restore.sh --dry-run <아카이브>`로 모든 부분을 먼저 점검하고(아무것도 바꾸지 않음), `--yes`로 실행합니다. 실행 시 게이트웨이·Outline·Mattermost를 멈추고, 현재 Hermes 홈·위키·stack 폴더를 `*.pre-restore-<시각>`으로 옮긴 뒤 복원하고 서비스를 다시 시작합니다. 검증기는 매번 실제 백업 작업을 실행하고 그 결과물로 복원 dry-run을 확인합니다.
 
 ### 검증
 
-`bash bootstrap/verify/project-verify.sh`(`--json`, `--offline`)는 Personal과 같은 Hermes 항목에 더해 DNS·TLS·HTTPS, nginx, 서비스 상태, 5432·6379·8065·3000 루프백 전용 리스너, PostgreSQL `listen_addresses`, 서비스 시크릿 파일 권한, UFW(활성 + 22·80·443), 무인 실행 승인 거부, Telegram getMe, 게이트웨이의 Telegram·Mattermost 연결, Mattermost 봇·허용 목록, Outline 에이전트 토큰·`OUTLINE_URL`·Outline 스킬(설치된 헬퍼로 `auth.info`와 읽기 전용 검색, 127.0.0.1:3000 경유), 봇 메일함 IMAP·SMTP 로그인, 백업·복원 dry-run을 확인합니다. 값이 있는데 메일 로그인이 실패하면 FAIL입니다. 사람이 확인해야 하는 항목(재부팅 후 생존, Telegram 허용·비허용, Mattermost 허용·비허용, 에이전트의 Outline 문서 작성, 메일 송수신)은 MANUAL이며, 확인 후 `--confirm reboot,chat,allowlist,mm-chat,mm-deny,outline-page,mail-flow`로 기록합니다. 종료 코드는 0 PASS / 2 MANUAL 대기 / 1 FAIL입니다.
+`bash bootstrap/verify/project-verify.sh`(`--json`, `--offline`)는 Personal과 같은 Hermes 항목에 더해 DNS·TLS·HTTPS, nginx, 서비스 상태, 5432·6379·8065·3000·8790 루프백 전용 리스너, PostgreSQL `listen_addresses`, 서비스 시크릿 파일 권한, UFW(활성 + 22·80·443), 무인 실행 승인 거부, Telegram getMe, 게이트웨이의 Telegram·Mattermost 연결, Mattermost 봇·허용 목록, Outline 에이전트 토큰·`OUTLINE_URL`·Outline 스킬(설치된 헬퍼로 `auth.info`와 읽기 전용 검색, 127.0.0.1:3000 경유), 봇 메일함 IMAP·SMTP 로그인, 포털(서비스 응답·`portal.db` 권한·콜백 비밀값·관리자·팀 ID·HTTPS 경로), 백업·복원 dry-run을 확인합니다. 값이 있는데 메일 로그인이 실패하면 FAIL입니다. 사람이 확인해야 하는 항목(재부팅 후 생존, Telegram 허용·비허용, Mattermost 허용·비허용, 에이전트의 Outline 문서 작성, 메일 송수신, 포털 신청→Mattermost 승인→결과 메일)은 MANUAL이며, 확인 후 `--confirm reboot,chat,allowlist,mm-chat,mm-deny,outline-page,mail-flow,portal-flow`로 기록합니다. 종료 코드는 0 PASS / 2 MANUAL 대기 / 1 FAIL입니다.
 
 ## 비용
 

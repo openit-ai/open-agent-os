@@ -1,6 +1,7 @@
 # ADR 0002 — Project 포털: 소개·사용 안내·이용 신청·승인
 
 - 상태: **승인(Accepted)** — 2026-11-19 마스터 승인(Hermes 별도 검토 생략, 마스터 지시). 구현과 함께 `docs/architecture.md` §2.4(G6)·§4.2와 `editions/project/README.md`에 반영한다
+- 구현: 2026-11-19 — §5의 1~6을 한 변경으로 구현(설치 단계 `portal`, `editions/project/portal/`, `bootstrap/tests/project-portal-smoke.sh`). 구현 때 확인: Hermes는 `MATTERMOST_ALLOWED_USERS`를 시작 때 프로세스 환경에서만 읽으므로 갱신 뒤 게이트웨이 재시작이 필요하다(같은 주기의 가입자는 묶어서 1회). Mattermost 메일 초대(`ServiceSettings.EnableEmailInvitations`)·이메일 표시(`PrivacySettings.ShowEmailAddress`)는 `portal` 단계가 `mmctl`로 확인해 꺼져 있으면 경고하고, 각각 초대 링크·수동 허용 목록으로 대체한다. Outline 구성원 초대 허용은 사전 조회 API가 없어 초대 호출 결과로 판정하고, 실패하면 승인 메시지에 관리자 할 일로 남긴다. Company 이관은 `members` 행을 직접 만들지 않고 `~/.config/oaos-company/member-candidates.json` 후보 파일로 넘긴다(G10 확정 원칙)
 - 날짜: 2026-11-19
 - 관련: `editions/project/install.sh` `do_ingress`(포털 생성), `editions/project/ingress/portal.conf`, `docs/architecture.md` §4.2·§4.3, `docs/company-design.md`(구성원·G10·JIT 승인)
 - 계기: 운영 Project 호스트에서 옛 관리자 콘솔 주소를 v2 포털(`portal.<도메인>`)로 옮기면서, 포털의 역할을 정해 달라는 운영자 요청(2026-11-19)
