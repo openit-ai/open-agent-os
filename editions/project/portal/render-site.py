@@ -33,7 +33,7 @@ DEFAULT_SITE = """# 소개
 STYLE = ("body{font-family:system-ui,-apple-system,'Noto Sans KR',sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;"
          "line-height:1.65;color:#1f2933}h1{margin-bottom:.2rem}.sub{color:#52606d;margin-top:0}section{margin:2rem 0}"
          ".links a,.apply{display:inline-block;margin:.3rem .6rem .3rem 0;padding:.55rem 1.1rem;border:1px solid #9aa5b1;"
-         "border-radius:.4rem;text-decoration:none;color:#1f2933}.apply{background:#1f2933;color:#fff;border-color:#1f2933}"
+         "border-radius:.4rem;text-decoration:none;color:#1f2933}.links a.apply,.apply{background:#1f2933;color:#fff;border-color:#1f2933}"
          "ol li{margin:.35rem 0}.en{color:#52606d;font-size:.95rem}footer{margin-top:3rem;color:#7b8794;font-size:.85rem}")
 
 
