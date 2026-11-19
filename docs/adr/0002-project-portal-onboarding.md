@@ -1,6 +1,6 @@
 # ADR 0002 — Project 포털: 소개·사용 안내·이용 신청·승인
 
-- 상태: **제안(Proposed)** — Hermes 설계 검토 후 승인 시 `docs/architecture.md` §2.4(G6)·§4.2와 `editions/project/README.md`에 반영
+- 상태: **승인(Accepted)** — 2026-11-19 마스터 승인(Hermes 별도 검토 생략, 마스터 지시). 구현과 함께 `docs/architecture.md` §2.4(G6)·§4.2와 `editions/project/README.md`에 반영한다
 - 날짜: 2026-11-19
 - 관련: `editions/project/install.sh` `do_ingress`(포털 생성), `editions/project/ingress/portal.conf`, `docs/architecture.md` §4.2·§4.3, `docs/company-design.md`(구성원·G10·JIT 승인)
 - 계기: 운영 Project 호스트에서 옛 관리자 콘솔 주소를 v2 포털(`portal.<도메인>`)로 옮기면서, 포털의 역할을 정해 달라는 운영자 요청(2026-11-19)
@@ -15,7 +15,7 @@ Project 설치기는 G6에서 `chat`·`note`·`portal` 세 도메인을 요구�
 2. **이용 신청**: 팀원을 추가하려면 운영자가 사람마다 Mattermost 계정 생성·팀 초대, Outline 초대, `MATTERMOST_ALLOWED_USERS`(봇과 대화할 수 있는 사용자 ID 목록) 수정을 손으로 해야 한다.
 3. **승인 기록**: 누가 언제 누구의 사용을 허락했는지 남지 않는다. Company로 올릴 때 구성원 매핑(G10)의 근거로 쓸 기록도 없다.
 
-## 2. 결정 (제안)
+## 2. 결정
 
 포털을 **Project 팀의 단일 입구**로 정의한다. 세 기능을 둔다.
 
@@ -97,7 +97,7 @@ Project 관리자 ──Mattermost──▶ 승인 요청 메시지의 [승인]/
 - `MATTERMOST_ALLOWED_USERS` 갱신 뒤 게이트웨이 재시작이 필요하면 잠깐 응답이 끊긴다. 묶어서 처리하거나 재시작 없이 반영되는 방법을 구현 때 확인한다.
 - 신청 폼은 공개 주소에 열린다. 메일 확인·횟수 제한으로 막지만, 운영자가 신청 받기를 끌 수 있어야 한다(`OAOS_PORTAL_APPLY=off`).
 
-## 5. 구현 계획 (승인 시)
+## 5. 구현 계획
 
 1. 포털 정적 페이지 개편(소개·안내·운영자 문구 끼워 넣기, 한국어·영어) — `do_ingress` 템플릿 변경, 기존 관리 표식 페이지는 자동 갱신
 2. `oaos-portal.service` + SQLite 스키마 + 신청·메일 확인 API
